@@ -225,6 +225,66 @@ std::vector<Span> spans_of(const nlohmann::json& task) {
   return result;
 }
 
+u128 attention_sum_kv_lengths(const Span& s) {
+  return add128(mul128(s.count,s.kv,"attention KV span sum"),
+      mul128(s.kv_stride,mul128(s.count,s.count-1,"attention KV span sum")/2,
+             "attention KV span sum"),"attention KV span sum");
+}
+
+// Full score materialization charges each query row against the complete KV
+// length declared for its request, independent of causal masking and tile size.
+u128 attention_span_rectangle_slots(const Span& s) {
+  return mul128(s.q,attention_sum_kv_lengths(s),
+                "materialized attention score slots");
+}
+
+u128 attention_span_score_slots(const Span& s,u64 qh) {
+  return mul128(mul128(attention_span_rectangle_slots(s),s.batch,
+                       "attention batch score slots"),qh,
+                "attention score heads");
+}
+
+u128 attention_span_query_rows(const Span& s,u64 qh) {
+  const u128 request_heads=mul128(mul128(s.count,s.batch,
+      "attention heads"),qh,"attention heads");
+  return mul128(s.q,request_heads,"query rows");
+}
+
+std::pair<u128,u128> attention_materialized_counts(
+    const std::vector<Span>& spans,u64 qh) {
+  u128 score_slots=0,query_rows=0;
+  for(const auto& s:spans) {
+    score_slots=add128(score_slots,attention_span_score_slots(s,qh),
+                       "attention slots");
+    query_rows=add128(query_rows,attention_span_query_rows(s,qh),
+                      "attention query rows");
+  }
+  return {score_slots,query_rows};
+}
+
+u128 attention_workspace_from_counts(u128 score_slots,u128 query_rows,
+                                     u64 head_dim,
+                                     const std::string& output_dtype,
+                                     const std::string& mode,
+                                     bool staged_full) {
+  const u128 score_bytes=mul128(score_slots,4,"score bytes");
+  if(mode=="qk") return score_bytes;
+  if(mode!="both"||!staged_full) return 0;
+  const u128 probability_bytes=score_bytes;
+  const u128 cast_bytes=output_dtype=="fp32"?0:
+      bytes(mul128(query_rows,head_dim,"attention FP32 output"),"fp32");
+  return add128(add128(score_bytes,probability_bytes,
+                       "materialized score/probability workspace"),
+                cast_bytes,"materialized attention workspace");
+}
+
+u128 ffn_workspace_from_middle_elements(u128 middle_elements,
+                                        const std::string& middle_dtype,
+                                        bool swiglu) {
+  return mul128(bytes(middle_elements,middle_dtype),swiglu?2:1,
+                "FFN workspace");
+}
+
 u128 valid_pairs_one(const Span& s) {
   const u128 q0 = s.qs, k0 = s.ks, q = s.q, kv = s.kv;
   if (q0 + q - 1 < k0) return 0;
@@ -1123,9 +1183,7 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
   const double kappa_quant=perf(hw,"kappa_quant_eqops",4);
   const double kappa_acc=perf(hw,"kappa_acc_convert_eqops",2);
   auto sum_kv_lengths=[](const Span& s)->u128 {
-    return add128(mul128(s.count,s.kv,"attention KV span sum"),
-        mul128(s.kv_stride,mul128(s.count,s.count-1,"attention KV span sum")/2,"attention KV span sum"),
-        "attention KV span sum");
+    return attention_sum_kv_lengths(s);
   };
   auto sum_storage_tensor_bytes=[&](const Span& s,u64 features,const std::string& dt)->u128 {
     const u128 elements=mul128(sum_kv_lengths(s),features,"attention source tensor elements");
@@ -1298,13 +1356,14 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
       // Only fused causal attention skips future KV blocks.
       const bool materialized=full||mode!="both";
       const auto causal_stat=causal&&!materialized?causal_counts(s,tq,tk):AttentionTileCounts{};
-      if (materialized) { sl=mul128(s.q,kv_sum,"materialized attention score slots");pr=mul128(qtiles,kv_sum,"materialized attention KV reads"); }
+      if (materialized) { sl=attention_span_rectangle_slots(s);pr=mul128(qtiles,kv_sum,"materialized attention KV reads"); }
       else if (causal) { sl=causal_stat.slots; pr=causal_stat.prefix; }
       else { sl=mul128(s.q,kv_sum,"noncausal score slots");pr=mul128(qtiles,kv_sum,"noncausal attention KV reads"); }
       const u128 request_heads=mul128(request_count,qh,"attention heads");
-      const u128 score_slots=mul128(mul128(sl,s.batch,"attention batch score slots"),qh,"attention score heads");
+      const u128 score_slots=materialized?attention_span_score_slots(s,qh):
+          mul128(mul128(sl,s.batch,"attention batch score slots"),qh,"attention score heads");
       const u128 score_valid=mul128(mul128(valid_pairs(s,causal),s.batch,"attention batch valid pairs"),qh,"attention valid heads");
-      const u128 query_count=mul128(s.q,request_heads,"query rows");
+      const u128 query_count=attention_span_query_rows(s,qh);
       output_tasks=add128(output_tasks,mul128(qtiles,request_heads,"attention output tasks"),"attention output tasks");
       const u128 active_rows_one=causal&&!materialized?causal_stat.active_rows:mul128(s.q,s.count,"attention active rows");
       const u128 active_rows=mul128(active_rows_one,s.batch,"attention batch active rows");
@@ -1470,7 +1529,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
         (mode=="qk"?qk_read:(mode=="av"?pv_read:fused_read));
     const u128 totalwrite=staged_full&&mode=="both"?add128(add128(qk_write,soft_write,"full attention writes"),add128(pv_write,cast_write,"full attention writes"),"full attention writes"):
         (mode=="qk"?qk_write:(mode=="av"?pv_write:fused_write));
-    const u128 sb=mode=="qk"?scoreb:(staged_full&&mode=="both"?add128(add128(scoreb,probb,"materialized score/probability workspace"),cast_bytes,"materialized attention workspace"):0);
+    const u128 sb=attention_workspace_from_counts(
+        slots,queryrows,hd,dtype_o,mode,staged_full);
     m.workspace=sb;m.score_bytes=(mode=="qk"||(staged_full&&mode=="both"))?scoreb:0;m.probability_bytes=probb;
     m.score_slots=slots;m.valid_pairs=valid;m.logical=logical;
     m.hbm_read=0;m.hbm_write=0;
@@ -1629,6 +1689,56 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
 }
 
 }  // namespace
+
+std::uint64_t workspace_capacity_upper_bound(
+    const Hardware& hardware,const nlohmann::json& task) {
+  const std::string op=gets(task,"op_kind");
+  if(op=="attention"||op=="attention_region"||op=="qk"||op=="av") {
+    const auto spans=spans_of(task);
+    if(spans.empty()) fail("task.spans: attention requires at least one span");
+    const u64 qh=shape_u(task,"q_heads",shape_u(task,"q_heads_local",1));
+    const u64 kvh=shape_u(task,"kv_heads",shape_u(task,"kv_heads_local",1));
+    const u64 hd=shape_u(task,"head_dim",1);
+    if(!qh||!kvh||qh%kvh)
+      fail("unsupported_head_mapping: standard GQA requires q_heads divisible by kv_heads");
+    const std::string output_dtype=dtype(task,"output");
+    if(dtype(task,"scores","fp32")!="fp32"||
+       dtype(task,"accumulator","fp32")!="fp32")
+      fail("unsupported_dtype: attention score and accumulator workspaces are fixed FP32");
+
+    const std::string mode=op=="qk"?"qk":(op=="av"?"av":"both");
+    if(mode=="av") return 0;
+    if((op=="attention"||op=="attention_region")&&
+       gets(task,"fusion_policy","auto")=="fused") return 0;
+    const auto counts=attention_materialized_counts(spans,qh);
+    const u128 executions=mul128(getu(task,"layer_instances",1),
+        getu(task,"weight_passes",1),"attention executions");
+    const u128 score_slots=mul128(counts.first,executions,
+                                   "attention executions");
+    const u128 query_rows=mul128(counts.second,executions,
+                                  "attention query executions");
+    const u128 peak=attention_workspace_from_counts(
+        score_slots,query_rows,hd,output_dtype,mode,true);
+    return as_u64(peak,"HBM workspace");
+  }
+  if(op=="ffn_region") {
+    const std::string variant=gets(task.at("tensor_shapes"),"mlp_variant","swiglu");
+    const bool swiglu=variant=="swiglu";
+    const std::string fusion=gets(task,"fusion_policy","auto");
+    if(fusion=="fused"&&!swiglu)
+      fail("unsupported_mapping: fused_output_shard_v2 supports SwiGLU only");
+    if(fusion=="fused") return 0;
+    const u64 M=shape_u(task,"m",1);
+    const u64 H=shape_u(task,"hidden",1);
+    const u64 F=shape_u(task,"ffn",H);
+    const u128 middle=mul128(M,F,"FFN intermediate");
+    const u128 peak=ffn_workspace_from_middle_elements(
+        middle,dtype(task,"activations"),swiglu);
+    return as_u64(peak,"HBM workspace");
+  }
+  (void)hardware;
+  return 0;
+}
 
 std::array<Activity, 3> gemm_os_single_core_resource_facts(
     const Hardware& hardware, const gemm_os_access_counter::Input& input) {
@@ -1845,7 +1955,8 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
       // up/gate writes already belong to their GEMM store activities. The
       // activation reuses one intermediate allocation; only two tensors are
       // live at once, independent of sequential layer/pass repetitions.
-      z.workspace=std::max(z.workspace,mul128(bytes(middle_one,middle_dtype),swiglu?2:1,"FFN workspace"));
+      z.workspace=std::max(z.workspace,
+          ffn_workspace_from_middle_elements(middle_one,middle_dtype,swiglu));
       const u128 actops=mul128(swiglu?16:15,middle,"FFN activation eqops");
       add_vector(*q,z,hardware,topo,middle,actops,mul128(middle_bytes,swiglu?2:1,"FFN activation reads"),middle_bytes,active,"ffn_activation_v2");
       add_gemm_epoch(*q,z,hardware,topo,M,H,F,middle_dtype,wdt,ydt,layers,passes,down,"ffn_down_v2");

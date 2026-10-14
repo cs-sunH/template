@@ -95,6 +95,12 @@ class Workload : public Callable {
         return dep_free_issue_timing_;
     }
     void issue(const ExecutionDriven::NodeView& node);
+    /// Issue coarse v2 after the same Plan passed rank-local workspace
+    /// admission while the node was still free.
+    void issue_prepared_coarse(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan prepared,
+        WorkspaceAdmission::Lease lease);
     void issue_metadata(const ExecutionDriven::NodeView& node);
     void issue_replay(const ExecutionDriven::NodeView& node);
     void issue_remote_mem(const ExecutionDriven::NodeView& node);
@@ -106,7 +112,10 @@ class Workload : public Callable {
     // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
     // fail-closed. Reached only under
     // sys->compute_cost_model == ComputeCostModel::Die.
-    void issue_die_comp(const ExecutionDriven::NodeView& node);
+    void issue_die_comp(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared = nullptr,
+        WorkspaceAdmission::Lease* lease = nullptr);
     void issue_comm(const ExecutionDriven::NodeView& node);
     void issue_coll_comm(const ExecutionDriven::NodeView& node);
     void issue_send_comm(const ExecutionDriven::NodeView& node);
@@ -158,6 +167,9 @@ class Workload : public Callable {
     [[nodiscard]] uint64_t hbm_join_pending_count() const {
         return hbm_join_pending_.size();
     }
+    /// Teardown-only: forget an endpoint join whose Runtime job was cancelled
+    /// without notification while Workload is being dismantled.
+    void abandon_hbm_endpoint_join(uint64_t node_id);
 
     Chakra::ETFeeder* et_feeder;
     std::unordered_map<int, std::shared_ptr<CommunicatorGroup>> comm_groups;
@@ -190,6 +202,11 @@ class Workload : public Callable {
 
   private:
     friend struct WorkloadTestAccess;
+
+    void issue_impl(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared,
+        WorkspaceAdmission::Lease* lease);
 
     // R4-14: cached "workload" logger -- fetched once in the constructor;
     // the registry returns the same logger object per name for the process

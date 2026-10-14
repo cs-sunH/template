@@ -1,0 +1,32 @@
+{
+  "baseline_file": "die/docs/evidence/workspace-envelope-20261014/public/identity-current.json",
+  "baseline_sha256": "0742247a8de06341edffb0ebafd76b28266c73402b216f27ddc87f02634226be",
+  "entire_hash_and_summary_equal": true,
+  "example_tasks_sha256": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+  "hardware_config_sha256": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+  "hardware_configs": {
+    "sha256:786f90173bccd7ea7915012d8ff84298b9685426d3a3c128da0e76ba416722bb": {
+      "kappa_acc_convert_eqops": 4.0,
+      "kappa_quant_eqops": 4.0
+    },
+    "sha256:b3bc86d49d1b419f03db953472c381d23984591447882ffa07c701da13f47914": {
+      "kappa_acc_convert_eqops": 0.3125,
+      "kappa_quant_eqops": 0.3125
+    }
+  },
+  "hash_equal_count": 62,
+  "library_path": "/workspace/template/work/build-die/lib/libcoarse_die_cabi.so",
+  "library_sha256": "c678d268a7f9e624d5389d5a11a830258f5b2a6bdbc4d6157c2a647cf231b0f1",
+  "source_sha256": {
+    "die/docs/analysis/os-foundation-20261014/identity_driver.cc": "aa2ee5bdc1efeacec7808c48aed156e4b16b92a3947911883bfec6aa12c64617",
+    "die/include/coarse_die/Capi.h": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
+    "die/include/coarse_die/Plan.hh": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
+    "die/src/Capi.cc": "d6c4ead1aabe7a82cdf331e7ea737ff19dcecdd3ed94a014c35a3f9ae1b2bb87",
+    "die/src/Compiler.cc": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+    "die/src/Mapping.cc": "5dc4a7ccea972d15e30371bc0c8534b3ffbdf5921bf759d918fd096737c0cd90",
+    "die/tests/workspace_envelope_test.cc": "dec08a00312f9798d0cff75d12fe368f8b0a8ea45b65065aa735f3943171b90f"
+  },
+  "status": "passed",
+  "summary_equal_count": 62,
+  "task_count": 62
+}

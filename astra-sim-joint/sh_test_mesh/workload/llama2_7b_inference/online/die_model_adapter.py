@@ -86,6 +86,9 @@ MANIFEST_DIE_MODEL_CONFIG_KEY = "die-model-config"
 SPEC_SCHEMA_VERSION = 1
 PROVENANCE = "transformer_pass_aggregated"
 DEFAULT_DIE_PROFILE = "mesh_die_v1"
+COARSE_DIE_PROFILE = "coarse_die_v2"
+LEGACY_DIE_TASK_SCHEMA = "die_op_spec_v1"
+COARSE_DIE_TASK_SCHEMA = "coarse_die_task_v2"
 
 # 旧 COMP 类别 -> op_kind 映射（契约 §2"语义"小节；norm/residual 在
 # attention/mlp/final 三处复用，qkv 投影恒映射 qkv_rope，是否含新 Q/K
@@ -319,12 +322,19 @@ class DieModelContext:
         num_kv_heads: int,
         ffn_size: int,
         vocab_size: int,
+        task_schema: str = LEGACY_DIE_TASK_SCHEMA,
+        execution_profile: Optional[str] = None,
     ) -> None:
         self.backend = "die"
         self.profile = profile
         self.die_config_path = Path(die_config_path)
         self.config_hash = config_hash
         self.dtype = dtype
+        if task_schema not in (LEGACY_DIE_TASK_SCHEMA, COARSE_DIE_TASK_SCHEMA):
+            raise ValueError("unsupported die task schema {!r}".format(
+                task_schema))
+        self.task_schema = task_schema
+        self.execution_profile = execution_profile
         self.model_dims = dict(model_dims)
         self._num_q_heads = num_q_heads
         self._num_kv_heads = num_kv_heads
@@ -373,6 +383,30 @@ class DieModelContext:
                 "{}".format(die_config_path))
         config_hash = hashlib.sha256(
             die_config_path.read_bytes()).hexdigest()
+        try:
+            hardware_config = json.loads(
+                die_config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                "cannot parse resolved die hardware config {}: {}".format(
+                    die_config_path, exc)) from exc
+        if not isinstance(hardware_config, dict):
+            raise ValueError("resolved die hardware config must be a JSON object")
+        task_schema = (COARSE_DIE_TASK_SCHEMA
+                       if hardware_config.get("schema") == "coarse_die_v2"
+                       else LEGACY_DIE_TASK_SCHEMA)
+        execution_profile = None
+        if task_schema == COARSE_DIE_TASK_SCHEMA:
+            performance = hardware_config.get("performance_profile")
+            if not isinstance(performance, dict):
+                raise ValueError(
+                    "coarse_die_v2 hardware config requires an explicit "
+                    "performance_profile.execution_profile")
+            execution_profile = performance.get("execution_profile")
+            if not isinstance(execution_profile, str) or not execution_profile:
+                raise ValueError(
+                    "coarse_die_v2 hardware config requires an explicit "
+                    "performance_profile.execution_profile")
 
         bytes_per_elem = int(config.bytes_per_elem)
         dtype = {2: "bf16", 4: "fp32"}.get(bytes_per_elem)
@@ -416,8 +450,18 @@ class DieModelContext:
         if system_config is not None:
             with open(system_config, "r", encoding="utf-8") as source:
                 resolved_system = json.load(source)
-            profile = str(resolved_system.get(
-                "die-model-profile", DEFAULT_DIE_PROFILE))
+            profile = str(resolved_system.get("die-model-profile",
+                                             DEFAULT_DIE_PROFILE))
+        if task_schema == COARSE_DIE_TASK_SCHEMA:
+            if profile != COARSE_DIE_PROFILE:
+                raise ValueError(
+                    "coarse_die_v2 hardware requires explicit "
+                    "die-model-profile='coarse_die_v2'; got {!r}".format(
+                        profile))
+        elif profile == COARSE_DIE_PROFILE:
+            raise ValueError(
+                "die-model-profile='coarse_die_v2' requires a "
+                "coarse_die_v2 hardware config")
         return cls(
             profile=profile,
             die_config_path=die_config_path,
@@ -428,6 +472,8 @@ class DieModelContext:
             num_kv_heads=num_kv_heads,
             ffn_size=int(config.ffn_size),
             vocab_size=int(config.vocab_size),
+            task_schema=task_schema,
+            execution_profile=execution_profile,
         )
 
     # ------------------------------------------------------------- 发射 --
@@ -499,12 +545,17 @@ class DieModelContext:
         spans: Optional[Sequence[dict[str, Any]]] = None,
         kv_identity: str = "local",
     ) -> dict[str, Any]:
-        """当前发射语境下的 die_op_spec（委托模块级 build_die_spec）。
+        """当前发射语境下的 legacy die_op_spec。
 
         spans 覆盖：缺省用 begin_emission 写入的全量 span 记录；本仓
         tail（final_norm/logits）在 D10 静默重建 span 抑制时只覆盖未被
         抑制的 span 子集（发射骨架如实传递）。kv_identity 恒 local
         （见模块 docstring）。"""
+        if self.task_schema == COARSE_DIE_TASK_SCHEMA:
+            raise RuntimeError(
+                "coarse_die_v2 graph emission is not wired to JOINT's "
+                "die_task_json/Native Runtime path yet; refusing to emit a "
+                "legacy die_op_spec (unsupported_projection_state)")
         return build_die_spec(
             op_kind,
             self,
@@ -512,6 +563,45 @@ class DieModelContext:
             layer_count=layer_count,
             weight_passes=weight_passes,
             fusion_policy=fusion_policy,
+            kv_identity=kv_identity,
+        )
+
+    def build_task(
+        self,
+        op_kind: str,
+        *,
+        layer_count: int,
+        weight_passes: int,
+        fusion_policy: str = "none",
+        spans: Optional[Sequence[dict[str, Any]]] = None,
+        kv_identity: str = "local",
+    ) -> dict[str, Any]:
+        """Build the selected wire payload while keeping both schemas typed.
+
+        The coarse branch is an additive projection of the same authored
+        category/dimension/span facts. It deliberately does not normalize a
+        legacy spec through the C++ compatibility path.
+        """
+        selected_spans = self.span_records if spans is None else spans
+        if self.task_schema == COARSE_DIE_TASK_SCHEMA:
+            if kv_identity != "local":
+                raise ValueError(
+                    "coarse_die_v2 JOINT emission only supports local KV")
+            return build_coarse_die_task(
+                op_kind, self, selected_spans,
+                layer_count=layer_count,
+                weight_passes=weight_passes,
+                fusion_policy=fusion_policy,
+            )
+        if self.task_schema != LEGACY_DIE_TASK_SCHEMA:
+            raise ValueError("unsupported die task schema {!r}".format(
+                self.task_schema))
+        return self.build_spec(
+            op_kind,
+            layer_count=layer_count,
+            weight_passes=weight_passes,
+            fusion_policy=fusion_policy,
+            spans=selected_spans,
             kv_identity=kv_identity,
         )
 
@@ -592,6 +682,161 @@ def build_die_spec(
         "provenance": PROVENANCE,
         "config_hash": ctx.config_hash,
     }
+
+
+_COARSE_DIE_OP_KINDS = frozenset({
+    "norm", "qkv_rope", "qk", "scale_mask", "softmax", "av", "o_proj",
+    "residual", "attention_region", "mlp_up", "mlp_activation", "mlp_down",
+    "ffn_region", "logits",
+})
+
+
+def _coarse_query_rows(spans: Sequence[dict[str, Any]]) -> int:
+    """Return the row extent represented by compact/ordinary span records.
+
+    This only projects already-authored graph shapes into the v2 schema; it
+    does not estimate work or latency.
+    """
+    if not spans:
+        raise ValueError("coarse_die_task_v2 requires at least one span")
+    rows = 0
+    for index, span in enumerate(spans):
+        if not isinstance(span, dict):
+            raise ValueError("span[{}] must be an object".format(index))
+        run = span.get("run")
+        fields = run if isinstance(run, dict) else span
+        q_tokens = fields.get("q_tokens", fields.get("q_len"))
+        count = fields.get("count", span.get("count", 1))
+        batch = span.get("batch", 1)
+        for name, value in (("q_tokens", q_tokens), ("count", count),
+                            ("batch", batch)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise ValueError(
+                    "span[{}].{} must be a positive integer".format(
+                        index, name))
+        rows += q_tokens * count * batch
+    return rows
+
+
+def build_coarse_die_task(
+    op_kind: str,
+    ctx: DieModelContext,
+    spans: Sequence[dict[str, Any]],
+    *,
+    layer_count: int,
+    weight_passes: int,
+    fusion_policy: str = "none",
+    storage_dtype: Optional[str | dict[str, str]] = None,
+    graph_identity: Optional[dict[str, Any]] = None,
+    residency: Optional[dict[str, Any]] = None,
+    readiness_scope: Optional[dict[str, Any]] = None,
+    causal: Optional[bool] = None,
+) -> dict[str, Any]:
+    """Build a typed ``coarse_die_task_v2`` from JOINT's typed emission data.
+
+    Category mapping, absolute span positions, TP extents, and model dimensions
+    remain owned by ``DieModelContext``/``build_die_spec``. This adapter only
+    serializes those facts into the public coarse schema. The legacy model-wide
+    dtype is passed as one explicit scalar unless a caller supplies a
+    role-specific dtype object; no storage role is guessed independently.
+    """
+    if ctx.task_schema != COARSE_DIE_TASK_SCHEMA:
+        raise ValueError(
+            "build_coarse_die_task requires a coarse_die_v2 DieModelContext")
+    if op_kind not in _COARSE_DIE_OP_KINDS:
+        raise ValueError(
+            "unsupported coarse_die_task_v2 op_kind {!r}".format(op_kind))
+    if fusion_policy not in ("auto", "none"):
+        raise ValueError(
+            "fusion_policy must be 'auto' or 'none', got {!r}".format(
+                fusion_policy))
+    layer_count = int(layer_count)
+    weight_passes = int(weight_passes)
+    if layer_count < 1 or weight_passes < 1:
+        raise ValueError("layer_count and weight_passes must be positive")
+    if not isinstance(ctx.execution_profile, str) or not ctx.execution_profile:
+        raise ValueError(
+            "coarse_die_v2 task requires an explicit execution_profile")
+    dtype = ctx.dtype if storage_dtype is None else storage_dtype
+    if isinstance(dtype, dict):
+        if not dtype:
+            raise ValueError("storage_dtype role object must not be empty")
+        if any(not isinstance(key, str) or not isinstance(value, str)
+               for key, value in dtype.items()):
+            raise ValueError("storage_dtype must map role names to strings")
+        dtype = dict(dtype)
+    elif not isinstance(dtype, str) or not dtype:
+        raise ValueError("storage_dtype must be a non-empty string or object")
+
+    # Reuse build_die_spec's established validation/mapping source and then
+    # translate its exact typed fields; this deliberately does not send the
+    # v1 object through Compiler::normalize_old_spec.
+    legacy = build_die_spec(
+        op_kind, ctx, spans,
+        layer_count=layer_count,
+        weight_passes=weight_passes,
+        fusion_policy=fusion_policy,
+    )
+    tp_slice = ctx.tp_slice()
+    dimensions = legacy["model_dims"]
+    local = tp_slice
+    shapes = {
+        "m": _coarse_query_rows(spans),
+        "hidden": int(dimensions["hidden"]),
+        "ffn": int(local["ffn_local"]),
+        "vocab": int(local["vocab_local"]),
+        "q_heads": int(local["q_heads_local"]),
+        "kv_heads": int(local["kv_heads_local"]),
+        "head_dim": int(dimensions["head_dim"]),
+        "mlp_variant": str(dimensions["mlp_variant"]),
+        "norm_type": str(dimensions["norm_type"]),
+        "position_encoding": str(dimensions["position_encoding"]),
+    }
+    # The new compiler rejects zero dimensions. Make the reason visible here,
+    # before a later ABI call obscures which source shard was empty.
+    for key in ("hidden", "ffn", "vocab", "q_heads", "kv_heads", "head_dim"):
+        if shapes[key] <= 0:
+            raise ValueError(
+                "coarse_die_task_v2 tensor_shapes.{} must be positive; "
+                "the selected TP shard is empty".format(key))
+
+    task: dict[str, Any] = {
+        "schema": COARSE_DIE_TASK_SCHEMA,
+        "op_kind": op_kind,
+        "phase": str(ctx.phase),
+        "tensor_shapes": shapes,
+        "spans": [dict(span) for span in spans],
+        "tp_slice": tp_slice,
+        "storage_dtype": dtype,
+        "execution_profile": ctx.execution_profile,
+        "layer_instances": layer_count,
+        "weight_passes": weight_passes,
+        "fusion_policy": fusion_policy,
+    }
+    for key, value in (("graph_identity", graph_identity),
+                       ("residency", residency),
+                       ("readiness_scope", readiness_scope)):
+        if value is not None:
+            if not isinstance(value, dict):
+                raise ValueError("{} must be an object".format(key))
+            task[key] = dict(value)
+    if causal is not None:
+        if not isinstance(causal, bool):
+            raise ValueError("causal must be a boolean")
+        task["causal"] = causal
+    return task
+
+
+def require_legacy_projection_context(die_context: Any) -> None:
+    """Reject coarse plans at the legacy JOINT projection boundary."""
+    if (getattr(die_context, "task_schema", LEGACY_DIE_TASK_SCHEMA)
+            == COARSE_DIE_TASK_SCHEMA
+            or getattr(die_context, "profile", None) == COARSE_DIE_PROFILE):
+        raise RuntimeError(
+            "coarse_die_v2 JOINT prediction is fail-closed: the current "
+            "provider uses legacy hbm_share_divisor/service_factor and the "
+            "frozen native projection has not been validated against the "
+            "coarse shared Runtime")
 
 
 def _fused_name(first_member: dict[str, Any], region_suffix: str) -> str:

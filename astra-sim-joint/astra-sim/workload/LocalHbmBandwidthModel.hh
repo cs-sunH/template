@@ -11,6 +11,7 @@ of this source tree.
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -98,6 +99,7 @@ class LocalHbmBandwidthModel : public Callable {
         POOL_READ,
         POOL_WRITE,
         DIE_COMPUTE,
+        CONTROL_MARKER,
         KIND_COUNT,
     };
     static constexpr size_t kJobKindCount =
@@ -109,6 +111,9 @@ class LocalHbmBandwidthModel : public Callable {
     void issue_compute(uint64_t num_ops,
                        uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
+    /// Keep the legacy micro-marker completion path while accounting its
+    /// one-byte HBM endpoint through coarse_die_v2's shared Runtime.
+    void issue_control_marker(WorkloadLayerHandlerData* wlhd);
     void issue_restore(uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
     void issue_comm_read(uint64_t bytes,
@@ -171,23 +176,26 @@ class LocalHbmBandwidthModel : public Callable {
     double hbm_shared_ns() const {
         return this->hbm_shared_ns_;
     }
-    double compute_bytes_served() const {
-        return this->bytes_served_by_kind_[kind_index(JobKind::COMPUTE)];
-    }
+    double compute_bytes_served() const;
     double restore_bytes_served() const {
-        return this->bytes_served_by_kind_[kind_index(JobKind::RESTORE)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::RESTORE)] +
+               coarse_restore_served_;
     }
     double comm_read_bytes_served() const {
-        return this->bytes_served_by_kind_[kind_index(JobKind::COMM_READ)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::COMM_READ)] +
+               coarse_comm_read_served_;
     }
     double comm_write_bytes_served() const {
-        return this->bytes_served_by_kind_[kind_index(JobKind::COMM_WRITE)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::COMM_WRITE)] +
+               coarse_comm_write_served_;
     }
     double pool_read_bytes_served() const {
-        return this->bytes_served_by_kind_[kind_index(JobKind::POOL_READ)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::POOL_READ)] +
+               coarse_pool_read_served_;
     }
     double pool_write_bytes_served() const {
-        return this->bytes_served_by_kind_[kind_index(JobKind::POOL_WRITE)];
+        return this->bytes_served_by_kind_[kind_index(JobKind::POOL_WRITE)] +
+               coarse_pool_write_served_;
     }
     // Die backend side-band (joint rollout stage 1; kept SEPARATE from
     // actual bytes by contract §7.4/§6.2: service units are the drained
@@ -294,6 +302,12 @@ class LocalHbmBandwidthModel : public Callable {
     [[nodiscard]] double bandwidth_bytes_per_ns() const;
 
   private:
+    struct CoarseJob {
+        WorkloadLayerHandlerData* wlhd = nullptr;
+        JobKind kind = JobKind::COMM_READ;
+        std::function<void()> transfer_completion;
+    };
+
     struct Job {
         JobKind kind;
         WorkloadLayerHandlerData* wlhd;
@@ -406,6 +420,13 @@ class LocalHbmBandwidthModel : public Callable {
     // compacted in bulk at safe points while their order is preserved, so
     // every per-job iteration below keeps the original issue order.
     std::vector<Job> jobs_;
+    std::map<uint64_t, CoarseJob> coarse_jobs_;
+    double coarse_comm_read_served_ = 0.0;
+    double coarse_comm_write_served_ = 0.0;
+    double coarse_restore_served_ = 0.0;
+    double coarse_pool_read_served_ = 0.0;
+    double coarse_pool_write_served_ = 0.0;
+    double coarse_control_marker_bytes_served_ = 0.0;
     std::vector<uint8_t> slot_alive_;
     size_t live_job_count_ = 0;
     size_t dead_slot_count_ = 0;

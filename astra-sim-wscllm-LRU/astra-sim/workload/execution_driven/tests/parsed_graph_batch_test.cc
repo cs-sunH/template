@@ -422,6 +422,42 @@ void test_workspace_v2_snapshot_rules() {
                parsed.workspace_capacity_snapshot[1].resident_kv_bytes == 512,
            "v2 snapshot parses the full rank/revision/capacity table");
 
+    auto bounded = response;
+    bounded["workspace_capacity_snapshot"]["ranks"][0]
+           ["prospective_workspace_bytes"] = 800;
+    bounded["workspace_capacity_snapshot"]["ranks"][1]
+           ["prospective_workspace_bytes"] = 0;
+    try {
+        const auto with_bound = parse_graph_batch(bounded, 2, 2, request_state);
+        expect(with_bound.workspace_capacity_snapshot[0].has_prospective_workspace &&
+                   with_bound.workspace_capacity_snapshot[0].prospective_workspace_bytes == 800 &&
+                   with_bound.workspace_capacity_snapshot[1].has_prospective_workspace &&
+                   with_bound.workspace_capacity_snapshot[1].prospective_workspace_bytes == 0,
+               "optional future bound preserves exact bytes and explicit zero");
+    } catch (const std::exception&) {
+        expect(false, "valid full-rank prospective workspace rejected");
+    }
+    auto invalid_bound = bounded;
+    invalid_bound["workspace_capacity_snapshot"]["ranks"][0]
+                 ["prospective_workspace_bytes"] = 801;
+    expect_v2_parse_error(invalid_bound, request_state,
+                          "prospective bound must fit with Python base",
+                          "prospective workspace plus base-used");
+    invalid_bound = bounded;
+    invalid_bound["workspace_capacity_snapshot"]["ranks"][1]
+                 .erase("prospective_workspace_bytes");
+    expect_v2_parse_error(invalid_bound, request_state,
+                          "prospective bounds cover every rank",
+                          "prospective workspace must cover every rank");
+    for (const auto& invalid : nlohmann::json::array({true, -1, 800.0})) {
+        invalid_bound = bounded;
+        invalid_bound["workspace_capacity_snapshot"]["ranks"][0]
+                     ["prospective_workspace_bytes"] = invalid;
+        expect_v2_parse_error(invalid_bound, request_state,
+                              "prospective bound requires exact unsigned bytes",
+                              "prospective_workspace_bytes");
+    }
+
     auto malformed = response;
     malformed.erase("workspace_capacity_snapshot");
     expect_v2_parse_error(malformed, request_state,

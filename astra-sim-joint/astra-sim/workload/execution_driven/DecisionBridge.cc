@@ -313,6 +313,18 @@ nlohmann::json build_request_json(const StateDelta& delta) {
                   return a.value("ingress_seq", uint64_t(0)) <
                          b.value("ingress_seq", uint64_t(0));
               });
+    if (!delta.workspace_state.empty()) {
+        nlohmann::json ranks = nlohmann::json::array();
+        for (const auto& state : delta.workspace_state) {
+            ranks.push_back({{"rank", state.rank},
+                             {"workspace_revision",
+                              state.workspace_revision},
+                             {"active_workspace_bytes",
+                              state.active_workspace_bytes}});
+        }
+        req["workspace_state"] = {
+            {"protocol_version", 1}, {"ranks", std::move(ranks)}};
+    }
     return req;
 }
 
@@ -1175,7 +1187,7 @@ GraphBatch ShmDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // abort below leaves zero state side effects anywhere.
     GraphBatch batch;
     try {
-        batch = parse_graph_batch(resp, num_ranks_);
+        batch = parse_graph_batch(resp, num_ranks_, delta.workspace_state);
     } catch (const ParseError& exc) {
         bridge_fatal(std::string("malformed GraphBatch response for "
                                  "delivery_sequence=") +

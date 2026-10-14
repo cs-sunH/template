@@ -1,0 +1,249 @@
+[compile] C++17 bounded Solo13 scratch kernel
+[check] exact Fraction and independent-prefix differential suite
+{
+  "access_counter_source_sha256": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+  "compile_command": [
+    "g++",
+    "-std=c++17",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-O2",
+    "-I astra-sim-wscllm-LRU/extern/helper",
+    "-I die/include",
+    "work/os-solo-cpp-13-20261014/solo13_kernel.cc",
+    "-o work/os-solo-cpp-13-20261014/solo13_kernel"
+  ],
+  "compiler": "g++ (Debian 14.2.0-19) 14.2.0",
+  "facts_sha256": {
+    "dense": "a5c41a4530d3d826df18b0142c6abb547ee0529bd54964138410116dcdcdfa3c",
+    "int4_converted_fractional": "667020d2ba8c32d1e9f3ff833acf634f0d4dea18ac10c120933cc79f8c9525aa",
+    "int4_converted_storage": "c4ef842e9d937f54287e143d65be3c1c1c4e8e85b167c6eb969c8677e2d39ca8",
+    "int4_native_small": "708d5231fbe8ecc53c0723860e5bb7ab0342ca40571a9c068dd5be03f92306e6",
+    "large_k": "20cee3d7aa39f03cfb255df022b8b360c4edf94d830cfbade4249fe74e6e15d9",
+    "large_outputs": "39c4232ac08d5cd6bf7baa42d8b0face2d26d10c0492720d6027252646330a07",
+    "output_pressure_k1_tiles128": "b3b2a53ef7c0b69db8ad289532ddb4e1c55bc16d76062334b23f73c7df3f2322",
+    "output_pressure_k2_tiles128": "f79d9a616b400d43db32be34e22ba07ff295ca46ef7c71c8e64810cbe585640e",
+    "output_pressure_requested": "2d6ec7c3ccafce13227d0ef5023d17dfd6571832f1c467483f7a2d00065fd057",
+    "strict_small": "b02ac3792736d8a6c4983445979a6426740c5dc7e6887378ac1ab7b277825adb"
+  },
+  "fixed_rational_source_sha256": "f7f02d21b801a0f8f4dacacb56dac86d4b047d90f6dec8a58f818c4d24079272",
+  "geometry_source_sha256": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+  "head": "fecf81c5574755209c5d58ecdb982843ff349042",
+  "kernel_binary_sha256": "d4cf45542e6ee13ed3dc8e9fb08a8619352fdce24a2eb3e46e7b162c07b1de15",
+  "kernel_header_sha256": "bc21d044ad253308e4b1e155cfcee88027bbe4ba086716244e1f0f628a2b2dd7",
+  "kernel_source_sha256": "affee811c9e8e9a956bc3b0ade26222fb60dbfcd75a06448fcb3e4ceb260fa65",
+  "resource_facts_declaration_sha256": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+  "runs": [
+    {
+      "events": 28,
+      "final_compute_waits_for_output_slot": 0,
+      "fixture": "strict_small",
+      "independent_fraction_prefix": "passed",
+      "nonfinal_compute_at_full_output": 0,
+      "output_slots_reached_two": false,
+      "peak_output_slots": 1,
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.021151933999135508
+    },
+    {
+      "events": 26,
+      "final_compute_waits_for_output_slot": 0,
+      "fixture": "int4_native_small",
+      "independent_fraction_prefix": "passed",
+      "nonfinal_compute_at_full_output": 0,
+      "output_slots_reached_two": false,
+      "peak_output_slots": 1,
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.02178595900113578
+    },
+    {
+      "events": 28,
+      "final_compute_waits_for_output_slot": 0,
+      "fixture": "int4_converted_fractional",
+      "independent_fraction_prefix": "passed",
+      "nonfinal_compute_at_full_output": 0,
+      "output_slots_reached_two": false,
+      "peak_output_slots": 1,
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.02236739799991483
+    },
+    {
+      "events": 28,
+      "final_compute_waits_for_output_slot": 0,
+      "fixture": "int4_converted_storage",
+      "independent_fraction_prefix": "passed",
+      "nonfinal_compute_at_full_output": 0,
+      "output_slots_reached_two": false,
+      "peak_output_slots": 1,
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.026496991000385606
+    },
+    {
+      "events": 72,
+      "final_compute_waits_for_output_slot": 0,
+      "fixture": "dense",
+      "independent_fraction_prefix": "passed",
+      "nonfinal_compute_at_full_output": 0,
+      "output_slots_reached_two": false,
+      "peak_output_slots": 1,
+      "scenario": "full",
+      "skipped_waves": "617",
+      "status": "passed",
+      "wall_seconds": 0.08439503000045079
+    },
+    {
+      "events": 40,
+      "final_compute_waits_for_output_slot": 0,
+      "fixture": "output_pressure_requested",
+      "independent_fraction_prefix": "passed",
+      "nonfinal_compute_at_full_output": 0,
+      "output_slots_reached_two": false,
+      "peak_output_slots": 1,
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.03199957099968742
+    },
+    {
+      "events": 40,
+      "final_compute_waits_for_output_slot": 0,
+      "fixture": "output_pressure_k2_tiles128",
+      "independent_fraction_prefix": "passed",
+      "nonfinal_compute_at_full_output": 0,
+      "output_slots_reached_two": false,
+      "peak_output_slots": 1,
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.030593130000852398
+    },
+    {
+      "events": 20,
+      "final_compute_waits_for_output_slot": 0,
+      "fixture": "output_pressure_k1_tiles128",
+      "independent_fraction_prefix": "passed",
+      "nonfinal_compute_at_full_output": 0,
+      "output_slots_reached_two": true,
+      "peak_output_slots": 2,
+      "scenario": "full",
+      "skipped_waves": "0",
+      "status": "passed",
+      "wall_seconds": 0.016935887000727234
+    },
+    {
+      "events": 72,
+      "fixture": "large_k",
+      "large_shape_oracle": "same exact Fraction model; no per-wave expansion",
+      "scenario": "full",
+      "skipped_outputs": "4",
+      "skipped_waves": "9999977",
+      "status": "passed",
+      "wall_seconds": 0.04922647199964558
+    },
+    {
+      "events": 72,
+      "fixture": "large_outputs",
+      "large_shape_oracle": "same exact Fraction model; no per-wave expansion",
+      "scenario": "full",
+      "skipped_outputs": "2000004",
+      "skipped_waves": "130000617",
+      "status": "passed",
+      "wall_seconds": 0.04774492599972291
+    },
+    {
+      "final_events": 29,
+      "fixture": "strict_small",
+      "independent_fraction_prefix": "passed",
+      "pause_events": 1,
+      "scenario": "integer-stop-resume",
+      "status": "passed",
+      "wall_seconds": 0.02226403399981791
+    },
+    {
+      "events_at_stops": [
+        3,
+        6
+      ],
+      "fixture": "strict_small",
+      "global_event_budget_preserved": true,
+      "independent_prefix": "passed",
+      "scenario": "pause-resume",
+      "status": "passed",
+      "total_events": 30,
+      "wall_seconds": 0.04031564199976856
+    },
+    {
+      "events_at_stops": [
+        3,
+        15
+      ],
+      "fixture": "int4_converted_fractional",
+      "global_event_budget_preserved": true,
+      "independent_prefix": "passed",
+      "scenario": "pause-resume",
+      "status": "passed",
+      "total_events": 30,
+      "wall_seconds": 0.043524918999537476
+    },
+    {
+      "capacity_invalidations": 1,
+      "events_after_change": 6,
+      "events_before_change": 3,
+      "fixture": "strict_small",
+      "global_event_budget_preserved": true,
+      "reverse_stop_preserved_clock": true,
+      "scenario": "capacity-change-stop-resume",
+      "status": "passed",
+      "wall_seconds": 0.03738004000115325
+    },
+    {
+      "events_at_stops": [
+        31,
+        58
+      ],
+      "fixture": "large_k",
+      "global_event_budget_preserved": true,
+      "independent_prefix": "not expanded; exact Fraction resume comparison only",
+      "scenario": "pause-resume",
+      "status": "passed",
+      "total_events": 102,
+      "wall_seconds": 0.12627333800082852
+    },
+    {
+      "events_at_stops": [
+        31,
+        57
+      ],
+      "fixture": "large_outputs",
+      "global_event_budget_preserved": true,
+      "independent_prefix": "not expanded; exact Fraction resume comparison only",
+      "scenario": "pause-resume",
+      "status": "passed",
+      "total_events": 100,
+      "wall_seconds": 0.11069583099924785
+    },
+    {
+      "events": 256,
+      "fixture": "dense",
+      "result": "fail-closed exactly at global 256-event cap",
+      "scenario": "unpowered-cap-exhaustion",
+      "status": "failed_closed",
+      "wall_seconds": 0.13462566300040635
+    }
+  ],
+  "runtime_facts_driver_binary_sha256": "d68d32e1e6d329f5a10ad58603dc426cade430b308e8a5b2cf7bb5ff6bc11dc7",
+  "runtime_facts_driver_source_sha256": "3a7a5f71e512fcf6ace805d0224727bb6f61af37d03b6a8301b4d77fe42674b5",
+  "runtime_facts_producer_identity_sha256": "c8dad0d40b83fef9deb0e263120df77452995b4368fb209266ea982e29426bb2",
+  "schema": "solo13_cpp_kernel_check_v1",
+  "scope": "scratch-only single-owner/core continuous exact-time kernel; no Runtime/C ABI/production certificate",
+  "status": "passed"
+}

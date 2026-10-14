@@ -584,7 +584,7 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
         check_key_set(rank_json,
                       {"rank", "workspace_revision", "capacity_bytes",
                        "model_weight_bytes", "resident_kv_bytes",
-                       "reserved_request_bytes"},
+                       "reserved_request_bytes", "prospective_workspace_bytes"},
                       {"rank", "workspace_revision", "capacity_bytes",
                        "model_weight_bytes", "resident_kv_bytes",
                        "reserved_request_bytes"},
@@ -614,6 +614,12 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
         entry.reserved_request_bytes = get_uint(
             rank_json["reserved_request_bytes"], "reserved_request_bytes",
             where);
+        if (rank_json.contains("prospective_workspace_bytes")) {
+            entry.has_prospective_workspace = true;
+            entry.prospective_workspace_bytes = get_uint(
+                rank_json["prospective_workspace_bytes"],
+                "prospective_workspace_bytes", where);
+        }
         const auto checked_add = [&where](const uint64_t a,
                                           const uint64_t b) {
             if (b > std::numeric_limits<uint64_t>::max() - a) {
@@ -626,6 +632,15 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
             entry.reserved_request_bytes);
         if (base > entry.capacity_bytes) {
             fail(where + ": base-used bytes exceed capacity_bytes");
+        }
+        if (entry.has_prospective_workspace &&
+            entry.prospective_workspace_bytes > entry.capacity_bytes - base) {
+            fail(where + ": prospective workspace plus base-used bytes "
+                         "exceed capacity_bytes");
+        }
+        if (!parsed.empty() && entry.has_prospective_workspace !=
+                parsed.front().has_prospective_workspace) {
+            fail(where + ": prospective workspace must cover every rank");
         }
         parsed.push_back(entry);
     }

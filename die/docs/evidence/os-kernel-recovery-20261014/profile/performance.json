@@ -1,0 +1,275 @@
+{
+  "schema": "solo13_inprocess_performance_v1",
+  "samples_per_fixture": 30,
+  "fixtures": {
+    "dense": {
+      "command": [
+        "/workspace/template/work/os-kernel-recovery/solo13_benchmark",
+        "--facts",
+        "/workspace/template/work/os-kernel-recovery/facts_input/facts_dense.json",
+        "--fixture",
+        "dense",
+        "--samples",
+        "30"
+      ],
+      "sha256_facts": "a5c41a4530d3d826df18b0142c6abb547ee0529bd54964138410116dcdcdfa3c",
+      "result": {
+        "fixture": "dense",
+        "host": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "hardware_concurrency": 3,
+          "machine": "x86_64",
+          "process_peak_rss_kib": 10752,
+          "release": "6.18.44",
+          "system": "Linux"
+        },
+        "profiled_stop_resume_exact_ops": null,
+        "proof_scope": "scratch-only single-owner/single-core exact continuous-time kernel; event cap is this harness discovery bound, not Runtime solver pivots or a production certificate",
+        "samples": 30,
+        "schema": "solo13_inprocess_benchmark_v1",
+        "sink": 84540,
+        "timing_scope": "steady_clock in-process; each cold sample includes file read, JSON parse, Facts/geometry construction, and lifecycle call; run-only resets outside timed region",
+        "timings_ns": {
+          "cold_full": {
+            "max_ns": 153544235,
+            "mean_ns": 79650566.56666666,
+            "min_ns": 36824144,
+            "p95_ns_nearest_rank": 150956077,
+            "sample_count": 30
+          },
+          "cold_stop_resume": {
+            "max_ns": 245067080,
+            "mean_ns": 142781918.0,
+            "min_ns": 97608166,
+            "p95_ns_nearest_rank": 224241991,
+            "sample_count": 30
+          },
+          "parse_construct_cold": {
+            "max_ns": 40391908,
+            "mean_ns": 4856244.666666667,
+            "min_ns": 1740610,
+            "p95_ns_nearest_rank": 36291500,
+            "sample_count": 30
+          },
+          "run_only_full": {
+            "max_ns": 224122285,
+            "mean_ns": 138306871.8,
+            "min_ns": 101427704,
+            "p95_ns_nearest_rank": 194389644,
+            "sample_count": 30
+          },
+          "run_only_stop_resume": {
+            "max_ns": 367152017,
+            "mean_ns": 259535840.36666667,
+            "min_ns": 200006443,
+            "p95_ns_nearest_rank": 360613499,
+            "sample_count": 30
+          }
+        }
+      }
+    },
+    "large_k": {
+      "command": [
+        "/workspace/template/work/os-kernel-recovery/solo13_benchmark",
+        "--facts",
+        "/workspace/template/work/os-kernel-recovery/facts_input/facts_large_k.json",
+        "--fixture",
+        "large_k",
+        "--samples",
+        "30"
+      ],
+      "sha256_facts": "20cee3d7aa39f03cfb255df022b8b360c4edf94d830cfbade4249fe74e6e15d9",
+      "result": {
+        "fixture": "large_k",
+        "host": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "hardware_concurrency": 3,
+          "machine": "x86_64",
+          "process_peak_rss_kib": 10880,
+          "release": "6.18.44",
+          "system": "Linux"
+        },
+        "profiled_stop_resume_exact_ops": null,
+        "proof_scope": "scratch-only single-owner/single-core exact continuous-time kernel; event cap is this harness discovery bound, not Runtime solver pivots or a production certificate",
+        "samples": 30,
+        "schema": "solo13_inprocess_benchmark_v1",
+        "sink": 1200007740,
+        "timing_scope": "steady_clock in-process; each cold sample includes file read, JSON parse, Facts/geometry construction, and lifecycle call; run-only resets outside timed region",
+        "timings_ns": {
+          "cold_full": {
+            "max_ns": 199134581,
+            "mean_ns": 135582342.83333334,
+            "min_ns": 109330466,
+            "p95_ns_nearest_rank": 188346025,
+            "sample_count": 30
+          },
+          "cold_stop_resume": {
+            "max_ns": 349975208,
+            "mean_ns": 247650540.16666666,
+            "min_ns": 204065973,
+            "p95_ns_nearest_rank": 314453793,
+            "sample_count": 30
+          },
+          "parse_construct_cold": {
+            "max_ns": 44503199,
+            "mean_ns": 9313280.533333333,
+            "min_ns": 1719609,
+            "p95_ns_nearest_rank": 40267207,
+            "sample_count": 30
+          },
+          "run_only_full": {
+            "max_ns": 206040753,
+            "mean_ns": 130927805.3,
+            "min_ns": 40189141,
+            "p95_ns_nearest_rank": 194189752,
+            "sample_count": 30
+          },
+          "run_only_stop_resume": {
+            "max_ns": 394729632,
+            "mean_ns": 222248104.06666666,
+            "min_ns": 102763706,
+            "p95_ns_nearest_rank": 374318217,
+            "sample_count": 30
+          }
+        }
+      }
+    },
+    "large_outputs": {
+      "command": [
+        "/workspace/template/work/os-kernel-recovery/solo13_benchmark",
+        "--facts",
+        "/workspace/template/work/os-kernel-recovery/facts_input/facts_large_outputs.json",
+        "--fixture",
+        "large_outputs",
+        "--samples",
+        "30"
+      ],
+      "sha256_facts": "39c4232ac08d5cd6bf7baa42d8b0face2d26d10c0492720d6027252646330a07",
+      "result": {
+        "fixture": "large_outputs",
+        "host": {
+          "cpu_model": "AMD EPYC 9V74 80-Core Processor",
+          "hardware_concurrency": 3,
+          "machine": "x86_64",
+          "process_peak_rss_kib": 10880,
+          "release": "6.18.44",
+          "system": "Linux"
+        },
+        "profiled_stop_resume_exact_ops": null,
+        "proof_scope": "scratch-only single-owner/single-core exact continuous-time kernel; event cap is this harness discovery bound, not Runtime solver pivots or a production certificate",
+        "samples": 30,
+        "schema": "solo13_inprocess_benchmark_v1",
+        "sink": 15840084480,
+        "timing_scope": "steady_clock in-process; each cold sample includes file read, JSON parse, Facts/geometry construction, and lifecycle call; run-only resets outside timed region",
+        "timings_ns": {
+          "cold_full": {
+            "max_ns": 178553411,
+            "mean_ns": 102412815.73333333,
+            "min_ns": 40940939,
+            "p95_ns_nearest_rank": 159630752,
+            "sample_count": 30
+          },
+          "cold_stop_resume": {
+            "max_ns": 295475134,
+            "mean_ns": 168328796.7,
+            "min_ns": 67806099,
+            "p95_ns_nearest_rank": 276133782,
+            "sample_count": 30
+          },
+          "parse_construct_cold": {
+            "max_ns": 40336987,
+            "mean_ns": 5317368.2,
+            "min_ns": 1759318,
+            "p95_ns_nearest_rank": 36336981,
+            "sample_count": 30
+          },
+          "run_only_full": {
+            "max_ns": 192919627,
+            "mean_ns": 89638098.6,
+            "min_ns": 37558940,
+            "p95_ns_nearest_rank": 170885984,
+            "sample_count": 30
+          },
+          "run_only_stop_resume": {
+            "max_ns": 267041815,
+            "mean_ns": 139525441.23333332,
+            "min_ns": 58899559,
+            "p95_ns_nearest_rank": 220970006,
+            "sample_count": 30
+          }
+        }
+      }
+    }
+  },
+  "manual_exact_operation_profile": {
+    "fixture": "large_outputs",
+    "sample_count": 1,
+    "command": [
+      "/workspace/template/work/os-kernel-recovery/solo13_benchmark_profile",
+      "--facts",
+      "/workspace/template/work/os-kernel-recovery/facts_input/facts_large_outputs.json",
+      "--fixture",
+      "large_outputs",
+      "--samples",
+      "1"
+    ],
+    "facts_sha256": "39c4232ac08d5cd6bf7baa42d8b0face2d26d10c0492720d6027252646330a07",
+    "ops": {
+      "add": {
+        "calls": 14058,
+        "inclusive_ns": 35019484
+      },
+      "compare": {
+        "calls": 3851,
+        "inclusive_ns": 635832
+      },
+      "divide": {
+        "calls": 3995,
+        "inclusive_ns": 43745194
+      },
+      "floor_u128": {
+        "calls": 9,
+        "inclusive_ns": 3524604
+      },
+      "multiply": {
+        "calls": 9723,
+        "inclusive_ns": 13928190
+      },
+      "multiply_repeat": {
+        "calls": 481,
+        "inclusive_ns": 940519
+      },
+      "subtract": {
+        "calls": 1614,
+        "inclusive_ns": 9019056
+      },
+      "timing_note": "operation scopes are inclusive and may overlap (floor includes internal compare/conversion work); profile-enabled timings are not benchmark samples",
+      "u128_to_rational": {
+        "calls": 1173,
+        "inclusive_ns": 3280924
+      }
+    },
+    "interpretation": "Separate compile-time instrumented run after reusable Kernel construction. Inclusive rational operation scopes overlap; these figures locate arithmetic work, not wall-time samples."
+  },
+  "perf": {
+    "available": false,
+    "tool_version": null,
+    "stat": null,
+    "record": null
+  },
+  "identities": {
+    "git_head": "ad865f11b6466dcc1d07a75be442740b8db20d01",
+    "git_branch": "die-development",
+    "kernel_header_sha256": "2b65003a1b5b82c8af377d8eb92db4695a0f2efc33af087141a369e1874b76e0",
+    "kernel_source_sha256": "affee811c9e8e9a956bc3b0ade26222fb60dbfcd75a06448fcb3e4ceb260fa65",
+    "benchmark_source_sha256": "fd2edea3e040e18012542f9331f553edfb7a1424c9317dc06ee2978f764fc055",
+    "benchmark_driver_sha256": "089d12dcc9d99d75578341fd1e6cd3e56083e9170861003a26490a43d19691d2",
+    "rational_source_sha256": "f7f02d21b801a0f8f4dacacb56dac86d4b047d90f6dec8a58f818c4d24079272",
+    "geometry_source_sha256": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "access_counter_source_sha256": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+    "normal_binary_sha256": "aa12b174e5d0c43959005044dfe23ea59ab199660864e6e6b4bfc3a54ac61d8c",
+    "profile_binary_sha256": "fc29b3d93e3fa04f83000c41853d75492ddb5c2f80a16ccb7be25ac3150f4823",
+    "compiler": "g++ (Debian 14.2.0-19) 14.2.0"
+  },
+  "scope": "single-owner/single-core scratch exact continuous-time kernel; no public integer-ns clock; no Runtime, production timing, or descriptor certificate"
+}

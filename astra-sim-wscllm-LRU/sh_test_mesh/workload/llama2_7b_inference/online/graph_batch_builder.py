@@ -119,6 +119,7 @@ class OnlineTraceBuilder:
         self.next_id = 0
         self.previous_id = None
         self.pending_extra_dependencies = []
+        self.before_capacity_comp = None
         # M1 收集即释放(2026-08-29):这两个 list 只保存自上次 _collect
         # 以来尚未交付的记录；交付后立即 clear，跨批状态只由 next_id、
         # previous_id 与账本保存。禁止按 list 位置回读节点(id 来自
@@ -371,6 +372,9 @@ class OnlineTraceBuilder:
         节点,runtime_ns 保持缺省 0——die_op_spec 存在 ⇒ runtime_ns 必为
         0);op_role 缺省 "compute"(不写键,schema 缺省即 compute),仅
         marker/哨兵显式写 "control_marker"(契约 §7 裁定 8)。"""
+        if (self.before_capacity_comp is not None
+                and op_role != "control_marker"):
+            self.before_capacity_comp()
         node = self._new_node(name, COMP_NODE)
         node["compute"]["num_ops"] = self._uint64(num_ops)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
@@ -426,10 +430,13 @@ class GraphBatchBuilder:
     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界
     发射 prefill 整段 / decode 实例迭代列车,并维护 completion_gates 账本。"""
 
-    def __init__(self, config):
+    def __init__(self, config, *, source_release_capacity_gates=False):
         # digest_sink 形参已删(2026-09-26 死代码清理):收下即弃、全仓
         # 调用方只传 config,digest 行由基类 build_graph_batch 落。
         self.config = config
+        if not isinstance(source_release_capacity_gates, bool):
+            raise TypeError("source_release_capacity_gates must be bool")
+        self.source_release_capacity_gates = source_release_capacity_gates
         # die 后端发射语境(阶段 C;None = legacy)。online_service.py 构造
         # 本构图器时不感知 backend——语境由 OnlineSchedulerBase 从 manifest
         # 的 compute-cost-model/die-model-config 键构造后在每批发射前经
@@ -442,6 +449,15 @@ class GraphBatchBuilder:
                 rank, remote_operand_loads=config.remote_operand_loads)
             for rank in range(config.npus_count)
         }
+        # Source HBM release ordering is independent from same-session pool
+        # write tails.  Keep the two ledgers separate so cross-session reuse
+        # cannot consume or retire a pool-read dependency.
+        self.pending_source_release_tails = {}
+        if self.source_release_capacity_gates:
+            for rank, builder in self.builders.items():
+                builder.before_capacity_comp = (
+                    lambda rank=rank:
+                    self._consume_source_release_tails(rank))
         self.group_by_index = dict(enumerate(config.inference_groups))
         # session_id -> (decode_instance_index, {rank: end_barrier_id});
         # completion_gates 只保存下一同 session turn 尚未消费的 interval
@@ -669,7 +685,7 @@ class GraphBatchBuilder:
                 transfer.kind,
             )
         )
-        return _emit_kv_transfer(
+        record = _emit_kv_transfer(
             config=self.config,
             builders=self.builders,
             group_by_index=self.group_by_index,
@@ -679,7 +695,26 @@ class GraphBatchBuilder:
             pending_gate=gate,
             trigger_gate=trigger_gate,
             extra_arm_ids=extra_arm_ids,
+            source_release_arm_ids=(
+                self._take_source_release_arms(transfer)
+                if self.source_release_capacity_gates else {}),
         )
+        if transfer.kind == "noc_migrate":
+            self._register_source_release_record(record)
+        return record
+
+    def _take_source_release_arms(self, transfer: KVTransfer) -> dict:
+        """Take prior source releases at the earliest destination KV write."""
+        if transfer.kind not in ("remote_load", "noc_migrate"):
+            return {}
+        arms = {}
+        for shard in transfer.shards:
+            rank = shard.target_rank
+            if rank is not None and rank not in arms:
+                tails = self._take_source_release_tails(rank)
+                if tails:
+                    arms[rank] = tails
+        return arms
 
     # --------------------------------------- 逐出旁路支链(2026-09-13) --
 
@@ -811,6 +846,40 @@ class GraphBatchBuilder:
                     shard["edge_rank"],
                     shard["edge_store_node_id"],
                 ))
+            self._register_source_release_record(record)
+
+    def _register_source_release_record(self, record) -> None:
+        """Track source HBM release independently from per-session pool tails."""
+        if (not self.source_release_capacity_gates
+                or record.get("kind") not in ("remote_store", "noc_migrate")):
+            return
+        for shard in record.get("shards", ()):
+            source_rank = shard.get("source_rank")
+            release_node_id = shard.get("source_release_node_id")
+            if (isinstance(source_rank, bool)
+                    or not isinstance(source_rank, int)
+                    or source_rank not in self.builders):
+                raise RuntimeError(
+                    "source-release record is missing a valid source rank")
+            if (isinstance(release_node_id, bool)
+                    or not isinstance(release_node_id, int)
+                    or release_node_id < 0):
+                raise RuntimeError(
+                    "source-release record is missing its node id")
+            if release_node_id >= self.builders[source_rank].next_id:
+                raise RuntimeError(
+                    "source-release node is not emitted on its source rank")
+            self.pending_source_release_tails.setdefault(
+                source_rank, []).append(release_node_id)
+
+    def _take_source_release_tails(self, rank: int) -> tuple[int, ...]:
+        if not self.source_release_capacity_gates:
+            return ()
+        return tuple(self.pending_source_release_tails.pop(rank, ()))
+
+    def _consume_source_release_tails(self, rank: int) -> None:
+        for node_id in self._take_source_release_tails(rank):
+            self.builders[rank].arm_dependency(node_id)
 
     def _arm_store_tail_dependencies(self, transfer: KVTransfer,
                                      name_prefix: str) -> dict:

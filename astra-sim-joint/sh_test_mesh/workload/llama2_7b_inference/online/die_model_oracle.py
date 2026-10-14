@@ -46,6 +46,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 
 CABI_LIBRARY_NAME = "libdie_model_cabi.so"
 CABI_LIBRARY_ENV = "DIE_MODEL_CABI_PATH"
+COARSE_CABI_LIBRARY_NAME = "libcoarse_die_cabi.so"
+COARSE_CABI_LIBRARY_ENV = "DIE_COARSE_CABI_PATH"
 DIE_MODEL_CONFIG_ENV = "DIE_MODEL_CONFIG_PATH"
 # manifest 新键(契约 §7 裁定 2):resolved_die_model.json 绝对路径。
 MANIFEST_COMPUTE_COST_MODEL_KEY = "compute-cost-model"
@@ -91,6 +93,27 @@ def discover_cabi_library(lib_path: Optional[str] = None) -> Path:
             name=CABI_LIBRARY_NAME,
             tried=", ".join(str(path) for path in candidates),
         ))
+
+
+def discover_coarse_cabi_library(lib_path: Optional[str] = None) -> Path:
+    """Find the coarse v2 C ABI without ever substituting the legacy ABI."""
+    candidates: list[Path] = []
+    if lib_path:
+        candidates.append(Path(lib_path))
+    env_value = os.environ.get(COARSE_CABI_LIBRARY_ENV)
+    if env_value:
+        candidates.append(Path(env_value))
+    build = _REPO_ROOT / "build" / "astra_analytical" / "build_congestion_aware"
+    candidates.extend((build / "lib" / COARSE_CABI_LIBRARY_NAME,
+                       build / "bin" / COARSE_CABI_LIBRARY_NAME))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    raise RuntimeError(
+        "coarse_die_v2 requires the coarse v2 C ABI; build "
+        "libcoarse_die_cabi.so or set {}. Tried: {}".format(
+            COARSE_CABI_LIBRARY_ENV,
+            ", ".join(str(path) for path in candidates)))
 
 
 def resolve_die_model_config_path(
@@ -150,7 +173,6 @@ class DieModelOracle:
 
     def __init__(self, lib_path: Optional[str] = None,
                  config_json_path: Optional[str] = None):
-        resolved_lib = discover_cabi_library(lib_path)
         if config_json_path is None:
             env_value = os.environ.get(DIE_MODEL_CONFIG_ENV)
             if env_value:
@@ -171,6 +193,18 @@ class DieModelOracle:
                 "cannot read die model config {!r}: {}".format(
                     str(config_path), exc)) from exc
 
+        try:
+            config_value = json.loads(config_text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                "invalid die model config {!r}: {}".format(
+                    str(config_path), exc)) from exc
+        if not isinstance(config_value, dict):
+            raise RuntimeError("die model config must be a JSON object")
+        self.coarse = config_value.get("schema") == "coarse_die_v2"
+        resolved_lib = (discover_coarse_cabi_library(lib_path) if self.coarse
+                        else discover_cabi_library(lib_path))
+
         self.lib_path = resolved_lib
         self.config_json_path = config_path
         self._lib = ctypes.CDLL(str(resolved_lib))
@@ -179,11 +213,6 @@ class DieModelOracle:
         # 逐条 estimate 错误的最近一次快照(诊断用;错误位以 None 返回)。
         self.last_errors: list[Optional[str]] = []
 
-        self._model = self._lib.die_create_model(config_text.encode("utf-8"))
-        if not self._model:
-            raise RuntimeError(
-                "die_create_model failed for config {!r}: {}".format(
-                    str(config_path), self._last_error()))
         # 墙时埋点(2026-10-05):die_estimate_batch ctypes 调用的批量次数/
         # 总 spec 数/累计墙时——estimate() 内逐次入账,run 末由调用方
         # 经 estimate_timing_snapshot() 汇总。纯披露,不进计价。
@@ -192,6 +221,23 @@ class DieModelOracle:
             "specs_total": 0,
             "wall_ns_total": 0,
         }
+        if self.coarse:
+            model_out = ctypes.c_uint64()
+            status = self._lib.die_coarse_create_model_v2(
+                config_text.encode("utf-8"), ctypes.byref(model_out))
+            if status != 0 or not model_out.value:
+                raise RuntimeError(
+                    "die_coarse_create_model_v2 failed for config {!r}: "
+                    "{} (status={})".format(
+                        str(config_path), self._last_error(), status))
+            self._model = model_out.value
+        else:
+            self._model = self._lib.die_create_model(
+                config_text.encode("utf-8"))
+            if not self._model:
+                raise RuntimeError(
+                    "die_create_model failed for config {!r}: {}".format(
+                        str(config_path), self._last_error()))
         # 单元自检(契约:构造后 hardware_summary 必须非空)——同时把
         # 摘要缓存在实例上,后续 hardware_summary()/config_hash 零开销。
         self._hardware_summary: Optional[dict] = None
@@ -212,6 +258,22 @@ class DieModelOracle:
         (堆损坏)。取文用 ctypes.string_at,释放仍传原 c_void_p。
         """
         lib = self._lib
+        if self.coarse:
+            lib.die_coarse_create_model_v2.argtypes = [
+                ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
+            lib.die_coarse_create_model_v2.restype = ctypes.c_int
+            lib.die_coarse_hardware_summary_v2.argtypes = [ctypes.c_uint64]
+            lib.die_coarse_hardware_summary_v2.restype = ctypes.c_void_p
+            lib.die_coarse_estimate_batch_v2.argtypes = [
+                ctypes.c_uint64, ctypes.c_char_p]
+            lib.die_coarse_estimate_batch_v2.restype = ctypes.c_void_p
+            lib.die_coarse_destroy_model_v2.argtypes = [ctypes.c_uint64]
+            lib.die_coarse_destroy_model_v2.restype = ctypes.c_int
+            lib.die_coarse_free_result_v2.argtypes = [ctypes.c_void_p]
+            lib.die_coarse_free_result_v2.restype = None
+            lib.die_coarse_last_error_v2.argtypes = []
+            lib.die_coarse_last_error_v2.restype = ctypes.c_char_p
+            return
         lib.die_create_model.restype = ctypes.c_void_p
         lib.die_create_model.argtypes = [ctypes.c_char_p]
         lib.die_hardware_summary.restype = ctypes.c_void_p
@@ -239,7 +301,8 @@ class DieModelOracle:
         lib.die_last_error.argtypes = []
 
     def _last_error(self) -> str:
-        raw = self._lib.die_last_error()
+        raw = (self._lib.die_coarse_last_error_v2() if self.coarse
+               else self._lib.die_last_error())
         return raw.decode("utf-8", "replace") if raw else ""
 
     def _require_model(self) -> int:
@@ -253,7 +316,9 @@ class DieModelOracle:
         """契约 §3.3 摘要(schema_version/profile/die/derived);缓存。"""
         if self._hardware_summary is not None:
             return self._hardware_summary
-        handle = self._lib.die_hardware_summary(self._require_model())
+        handle = (self._lib.die_coarse_hardware_summary_v2(
+            self._require_model()) if self.coarse else
+            self._lib.die_hardware_summary(self._require_model()))
         if not handle:
             raise RuntimeError(
                 "die_hardware_summary failed: {}".format(self._last_error()))
@@ -261,7 +326,12 @@ class DieModelOracle:
             summary = json.loads(
                 ctypes.string_at(handle).decode("utf-8"))
         finally:
-            self._lib.die_free_result(handle)
+            if self.coarse:
+                self._lib.die_coarse_free_result_v2(handle)
+            else:
+                self._lib.die_free_result(handle)
+        if self.coarse and "derived" not in summary:
+            summary["derived"] = summary.get("derived_hardware")
         self._hardware_summary = summary
         return summary
 
@@ -282,8 +352,9 @@ class DieModelOracle:
         payload = json.dumps({"specs": list(spec_dicts)})
         # 墙时埋点:ctypes 调用本体(die_estimate_batch 一次批量)。
         _estimate_t0 = time.perf_counter_ns()
-        handle = self._lib.die_estimate_batch(
-            model, payload.encode("utf-8"))
+        handle = (self._lib.die_coarse_estimate_batch_v2(
+            model, payload.encode("utf-8")) if self.coarse else
+            self._lib.die_estimate_batch(model, payload.encode("utf-8")))
         self.estimate_timing["batch_calls"] += 1
         self.estimate_timing["specs_total"] += len(spec_dicts)
         self.estimate_timing["wall_ns_total"] += (
@@ -294,7 +365,10 @@ class DieModelOracle:
         try:
             out = json.loads(ctypes.string_at(handle).decode("utf-8"))
         finally:
-            self._lib.die_free_result(handle)
+            if self.coarse:
+                self._lib.die_coarse_free_result_v2(handle)
+            else:
+                self._lib.die_free_result(handle)
         results = out.get("results")
         errors = out.get("errors")
         if not isinstance(results, list) or not isinstance(errors, list) \
@@ -303,14 +377,26 @@ class DieModelOracle:
             raise RuntimeError(
                 "die_estimate_batch returned a malformed envelope for {} "
                 "specs".format(len(spec_dicts)))
-        self.last_errors = [error if isinstance(error, str) else None
-                            for error in errors]
+        self.last_errors = [
+            (error if isinstance(error, str) else
+             error.get("reason") if isinstance(error, dict) else None)
+            for error in errors]
         typed: list[Optional[dict]] = []
         for result in results:
             if result is None:
                 typed.append(None)
             else:
-                if not COST_RESULT_FIELDS.issubset(result):
+                if not isinstance(result, dict):
+                    raise RuntimeError(
+                        "die_estimate_batch result entries must be objects")
+                if self.coarse:
+                    latency = result.get("estimated_latency_ns")
+                    if (isinstance(latency, bool)
+                            or not isinstance(latency, int) or latency < 0):
+                        raise RuntimeError(
+                            "coarse_die_v2 result is missing a valid "
+                            "estimated_latency_ns")
+                elif not COST_RESULT_FIELDS.issubset(result):
                     raise RuntimeError(
                         "die_estimate_batch CostResult field set mismatch: "
                         "missing {}".format(
@@ -341,6 +427,11 @@ class DieModelOracle:
         """按单个 DieOpSpec 创建执行协议句柄(§9.6 第 2/3 条:可暂停的
         计划推进原语)。计划编译走库内 PlanCache(同 spec 复用;执行句柄
         本身每腿每候选独立,不入缓存)。"""
+        if self.coarse:
+            raise RuntimeError(
+                "coarse_die_v2 execution cannot use the legacy timer/memory "
+                "projection protocol; JOINT native Runtime/projection parity "
+                "is not validated (unsupported_projection_state)")
         model = self._require_model()
         handle = self._lib.die_create_execution(
             model, json.dumps(spec_dict).encode("utf-8"))
@@ -356,7 +447,18 @@ class DieModelOracle:
 
     def close(self) -> None:
         if not self._closed and self._model:
-            self._lib.die_destroy_model(self._model)
+            if self.coarse:
+                model = self._model
+                status = self._lib.die_coarse_destroy_model_v2(model)
+                if status != 0:
+                    self._model = None
+                    self._closed = True
+                    raise RuntimeError(
+                        "die_coarse_destroy_model_v2 failed for model {}: "
+                        "{} (status={})".format(
+                            model, self._last_error(), status))
+            else:
+                self._lib.die_destroy_model(self._model)
         self._model = None
         self._closed = True
         # 连缓存摘要一并失效:close 后一切查询 fail-closed(测试钉子)。

@@ -375,6 +375,19 @@ const char* die_coarse_workspace_envelope_v2(DieHandle h,const char* input) {
             {"op_kind",envelope.op_kind},{"phase",envelope.phase},
             {"normalized_task",envelope.normalized_task}};});
 }
+const char* die_coarse_workspace_capacity_bound_v2(DieHandle h,const char* input) {
+    return result([&]{auto& m=require(models,h); const auto task=parse(input);
+        const auto bound=compile_workspace_capacity_bound(m->hardware,task);
+        return json{{"schema_version",2},
+            {"workspace_capacity_bound_schema_version",1},
+            {"capacity_model_revision","workspace_lifetimes_v1"},
+            {"capacity_bound_kind","all_template_lifetimes_without_sram_filter"},
+            {"hbm_workspace_upper_bound_bytes",bound.hbm_workspace_upper_bound_bytes},
+            {"hardware_fingerprint",bound.hardware_fingerprint},
+            {"normalized_task_fingerprint",bound.normalized_task_fingerprint},
+            {"op_kind",bound.op_kind},{"phase",bound.phase},
+            {"normalized_task",bound.normalized_task}};});
+}
 const char* die_coarse_compile_batch_v2(DieHandle m,const char* s) { return compile_batch_result(m,s); }
 const char* die_coarse_estimate_batch_v2(DieHandle m,const char* s) { return result([&]{return estimate_batch(m,s);}); }
 int die_coarse_create_runtime_v2(DieHandle m,DieHandle* out) {

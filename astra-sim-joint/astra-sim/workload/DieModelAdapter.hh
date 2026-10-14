@@ -28,12 +28,18 @@ Responsibilities (one adapter per Workload, owned by the Workload):
 
 #include <cstdint>
 #include <memory>
+#include <map>
 #include <string>
 #include <vector>
 
 #include <json/json.hpp>
 
 #include "astra-sim/workload/execution_driven/GraphSource.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
+
+namespace coarse_die {
+struct Plan;
+}
 
 namespace AstraSim {
 
@@ -43,6 +49,12 @@ class DieExecution;
 
 class DieModelAdapter {
   public:
+    struct PreparedCoarsePlan {
+        std::shared_ptr<const coarse_die::Plan> plan;
+        uint64_t workspace_bytes = 0;
+        uint64_t node_id = 0;
+        uint64_t generation = 0;
+    };
     // Cumulative host-side timings for ordinary DIE dispatch. These are
     // diagnostics only; child phases are nested inside total_issue_ns and
     // must not be added to it. The simulator drives Workloads on one event
@@ -78,6 +90,17 @@ class DieModelAdapter {
     // die_op_spec (fail-closed, never a silent roofline fallback).
     void issue_die(const ExecutionDriven::NodeView& node);
 
+    /// Compile/cache before graph take/COMP occupy. The same immutable Plan
+    /// then passes through workspace admission and Runtime submission.
+    PreparedCoarsePlan prepare_coarse_plan(
+        const ExecutionDriven::NodeView& node);
+    WorkspaceAdmission::AcquireResult try_acquire_workspace(
+        const PreparedCoarsePlan& prepared);
+    void issue_prepared_coarse_plan(
+        const ExecutionDriven::NodeView& node,
+        PreparedCoarsePlan prepared,
+        WorkspaceAdmission::Lease lease);
+
     // Whether any outer node still has a live DieExecution. Purges retired
     // entries first (they linger only until the next adapter entry point).
     bool has_active_die_executions();
@@ -104,6 +127,13 @@ class DieModelAdapter {
     Workload* workload_;
     Sys* sys_;
     std::vector<std::unique_ptr<DieExecution>> active_;
+    struct CoarseActiveRecord {
+        uint64_t node_id = 0;
+        uint64_t generation = 0;
+        std::shared_ptr<const coarse_die::Plan> plan;
+        WorkspaceAdmission::Lease lease;
+    };
+    std::map<uint64_t, CoarseActiveRecord> coarse_active_;
     uint64_t completed_execution_count_ = 0;
     uint64_t completed_window_count_ = 0;
     uint64_t completed_refinement_count_ = 0;

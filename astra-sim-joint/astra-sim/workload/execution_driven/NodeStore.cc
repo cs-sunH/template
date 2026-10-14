@@ -735,13 +735,10 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
                 nv.compute.remote_weight_bytes =
                     node->remote_weight_bytes<uint64_t>();
             }
-            // Die backend (joint rollout stage 1, contract §2): the ET
-            // static path carries op_role / die_op_spec as ordinary string
-            // attributes; the spec arrives as the JSON serialization of the
-            // same DieOpSpec the online GraphBatch carries (design doc
-            // §8.3). Both stay optional; a shape-less historical ET simply
-            // leaves die_spec null and the die backend fails closed on real
-            // COMP nodes at issue time.
+            // Die backend: ET static attributes carry the selected typed
+            // payload as JSON text. Legacy die_op_spec keeps its strict
+            // parser; coarse die_task_v2 is preserved immutably for the
+            // shared Runtime compiler and never normalized through legacy.
             {
                 const std::string op_role =
                     node->get_attr<std::string>("op_role", "compute");
@@ -757,6 +754,12 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
                     std::exit(EXIT_FAILURE);
                 }
                 if (node->has_attr("die_op_spec")) {
+                    if (node->has_attr("die_task")) {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_op_spec and die_task are "
+                                     "mutually exclusive" << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
                     const std::string spec_json_text =
                         node->get_attr<std::string>("die_op_spec", "");
                     nlohmann::json spec_json;
@@ -779,6 +782,44 @@ NodeView ETFeederGraphSource::view_of(uint64_t node_id) const {
                                   << e.what() << std::endl;
                         std::exit(EXIT_FAILURE);
                     }
+                }
+                if (node->has_attr("die_task")) {
+                    if (nv.compute.runtime_ns != 0) {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_task requires runtime_ns == "
+                                     "0" << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
+                    if (nv.compute.op_role != OpRole::Compute) {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_task requires op_role=compute"
+                                  << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
+                    const std::string task_json_text =
+                        node->get_attr<std::string>("die_task", "");
+                    nlohmann::json task_json;
+                    try {
+                        task_json = nlohmann::json::parse(task_json_text);
+                    } catch (const std::exception& e) {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_task attribute is not "
+                                     "valid JSON: " << e.what() << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
+                    if (!task_json.is_object() ||
+                        !task_json.contains("schema") ||
+                        !task_json["schema"].is_string() ||
+                        task_json["schema"].get<std::string>() !=
+                            "coarse_die_task_v2") {
+                        std::cerr << "[Error] (execution_driven/node_store) "
+                                     "view_of: die_task must be an object with "
+                                     "schema=coarse_die_task_v2" << std::endl;
+                        std::exit(EXIT_FAILURE);
+                    }
+                    nv.compute.die_task_json =
+                        std::make_shared<const nlohmann::json>(
+                            std::move(task_json));
                 }
             }
             break;

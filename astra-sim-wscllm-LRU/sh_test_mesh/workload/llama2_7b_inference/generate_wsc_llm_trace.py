@@ -853,6 +853,7 @@ def _emit_kv_transfer(
     pending_gate: Optional[PendingHistoryGate] = None,
     trigger_gate: Optional[TransferTriggerGate] = None,
     extra_arm_ids: Optional[dict] = None,
+    source_release_arm_ids: Optional[dict] = None,
 ) -> dict[str, object]:
     """发射一个 KV 转移动作(照抄 sh_2.0（按函数名对应）,适配本仓 config/组
     类型;HBM 计费三险逐节点核对见策略文档 §9 地图):
@@ -860,6 +861,10 @@ def _emit_kv_transfer(
     extra_arm_ids（死锁真修 方案①,2026-10-11）:store→restore 补偿边的
     显式传参形态 {rank: [节点 id]};remote_load 链在对应 rank 的首节点
     显式 arm（数据面中立化后主链 pending 不再被传输链消费）。
+
+    source_release_arm_ids:跨会话容量释放边 {target_rank: [节点 id]}。
+    remote_load 在目标 HBM restore 写、noc_migrate 在 recv_kv 数据落地处
+    显式 arm；pool store→restore 顺序仍由 extra_arm_ids 独立维护。
 
     - local_hit:无数据 shard,仅按 pending 门 arm 到达/interval gates;
     - noc_migrate:shard send/recv(两端默认 charged)+ 1B ack 对(源端
@@ -975,7 +980,9 @@ def _emit_kv_transfer(
                     src=shard.source_rank,
                     dst=shard.target_rank,
                     comm_size=shard.bytes,
-                    comm_tag=data_tag))
+                    comm_tag=data_tag),
+                *((source_release_arm_ids or {}).get(
+                    shard.target_rank) or ()))
             ack_tag = tag_allocator.take()
             # 2026-10-11 死锁真修(裁决8 第二轮,run5 census 六边环):
             # ack 对是簿记节点(仓内无消费者),裸挂主链 frontier 会与集合
@@ -991,7 +998,7 @@ def _emit_kv_transfer(
                     comm_size=1,
                     comm_tag=ack_tag),
                 recv_kv_id)
-            _frontier_neutral(
+            source_release_node_id = _frontier_neutral(
                 builders[shard.source_rank],
                 lambda: builders[shard.source_rank].comm_recv(
                     f"{action_name}_shard{shard_index}_ack_from_rank{shard.target_rank}",
@@ -1010,6 +1017,7 @@ def _emit_kv_transfer(
                     "data_tag": data_tag,
                     "ack_tag": ack_tag,
                     "source_release_dependency": "noc_migration_ack_recv",
+                    "source_release_node_id": source_release_node_id,
                     "history_arrival_node_ids": {
                         shard.target_rank: recv_kv_id},
                 }
@@ -1058,6 +1066,7 @@ def _emit_kv_transfer(
                     {
                         "direct_edge_access": True,
                         "source_release_dependency": "mem_store_completion",
+                        "source_release_node_id": edge_store_node_id,
                         "edge_store_node_id": edge_store_node_id,
                     }
                 )
@@ -1107,7 +1116,7 @@ def _emit_kv_transfer(
                         comm_size=1,
                         comm_tag=ack_tag),
                     edge_store_node_id)
-                _frontier_neutral(
+                source_release_node_id = _frontier_neutral(
                     builders[source_rank],
                     lambda: builders[source_rank].comm_recv(
                         f"{action_name}_shard{shard_index}_ack_from_edge{edge_rank}",
@@ -1115,14 +1124,15 @@ def _emit_kv_transfer(
                         dst=source_rank,
                         comm_size=1,
                         comm_tag=ack_tag))
-                # 源端 ack recv 节点 id 此前曾落盘 shard 行,全仓零读者
-                # (2026-09-25 审计删除);ack 发射链本体不变。
+                # The source-side ACK receive is the physical release point;
+                # keep the edge mem_store ID separately for pool ordering.
                 record.update(
                     {
                         "direct_edge_access": False,
                         "data_tag": data_tag,
                         "ack_tag": ack_tag,
                         "source_release_dependency": "remote_store_ack_recv",
+                        "source_release_node_id": source_release_node_id,
                         "edge_store_node_id": edge_store_node_id,
                     }
                 )
@@ -1216,7 +1226,8 @@ def _emit_kv_transfer(
                     # WP5 三段分解的 restore 窗口据此取真值)。
                     f"{action_name}_shard{shard_index}_target_hbm_write_kv",
                     shard.bytes),
-                restore_gate)
+                restore_gate,
+                *((source_release_arm_ids or {}).get(target_rank) or ()))
             if target_hbm_completion_node_id is None:
                 raise RuntimeError("target HBM restore did not generate a node")
             record.update(

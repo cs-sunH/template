@@ -112,12 +112,29 @@ struct WorkspaceEnvelope {
 };
 WorkspaceEnvelope compile_workspace_envelope(const Hardware&,
                                               const nlohmann::json& task);
+// Candidate-independent capacity upper bound for every template permitted by
+// the normalized task. This intentionally omits SRAM feasibility filtering and
+// does not prove that the task has an executable mapping.
+struct WorkspaceCapacityBound {
+    std::uint64_t hbm_workspace_upper_bound_bytes = 0;
+    std::string hardware_fingerprint;
+    std::string normalized_task_fingerprint;
+    std::string op_kind;
+    std::string phase;
+    nlohmann::json normalized_task;
+};
+WorkspaceCapacityBound compile_workspace_capacity_bound(
+    const Hardware&, const nlohmann::json& task);
 nlohmann::json estimate_alone(const Hardware&, const Plan&);
 std::string stable_hash(const std::string& text);
 nlohmann::json plan_to_json(const Plan&);
 std::shared_ptr<const Plan> plan_from_json(const nlohmann::json&);
 
 namespace detail {
+// Checked-u128 lifetime formula shared by mapping workspace assignment and
+// the candidate-independent compiler bound.
+std::uint64_t workspace_capacity_upper_bound(
+    const Hardware&, const nlohmann::json& normalized_task);
 // Run the structural checks used by plan_to_json() without allocating a JSON
 // payload or computing its canonical hash. Compiler-only unsealed candidates
 // use this before their Runtime trial; public Plans still use plan_to_json().

@@ -211,7 +211,10 @@ def main(argv=None) -> int:
     workspace_admission = _workspace_admission_mode(config)
 
     # 根因 #5(主控裁决 2026-08-15 第三项):strategy 模式保持物理链。
-    graph = GraphBatchBuilder(config)
+    graph = GraphBatchBuilder(
+        config,
+        source_release_capacity_gates=(workspace_admission == "required"),
+    )
     # C2/D2(2026-08-28):digest 默认关(SH_GRAPH_DIGESTS=1 恢复恒写)。
     # 把每次 GraphBatch 产出的 digest 行顺带追加写入 bridge_dir(_JsonlSink
     # 常驻 fd 形态;语义/输出字节不变)。
@@ -293,6 +296,15 @@ def main(argv=None) -> int:
         raise ValueError(
             "strategy 模式不支持 kv_cache_policy {!r}".format(
                 config.kv_cache_policy))
+    certificate = scheduler.workspace_envelope_certificate
+    if certificate is not None:
+        certificate_path = os.path.join(args.bridge_dir, "workspace_envelope_certificate.json")
+        with open(certificate_path, "w", encoding="utf-8") as target:
+            target.write(certificate.canonical_json + "\n")
+        # Retain only the immutable rank margins and identity in the hot path.
+        # The larger proof is recorded once beside the run's bridge evidence.
+        scheduler.workspace_envelope_certificate = certificate.without_proof()
+        del certificate
     # Scheduler 已提取构造期所需字段；不要让 main() 的局部变量再额外钉住
     # 完整 manifest。
     del manifest

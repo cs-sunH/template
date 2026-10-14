@@ -50,6 +50,7 @@ Exit code 0 on ALL PASS.
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 using namespace AstraSim::ExecutionDriven;
+using AstraSim::WorkspaceRankState;
 
 namespace {
 
@@ -363,6 +364,86 @@ void test_top_level_rules() {
     }
 }
 
+void test_coarse_workspace_capacity_snapshot_rules() {
+    const std::vector<WorkspaceRankState> request_state{
+        {0, 3, 128}, {1, 5, 0}, {2, 0, 32}};
+    nlohmann::json base = max_shape_response();
+    base["workspace_capacity_snapshot"] = {
+        {"protocol_version", 1},
+        {"ranks", nlohmann::json::array({
+            {{"rank", 0}, {"workspace_revision", 3},
+             {"capacity_bytes", 1000}, {"model_weight_bytes", 100},
+             {"resident_kv_bytes", 200}, {"reserved_request_bytes", 50}},
+            {{"rank", 1}, {"workspace_revision", 5},
+             {"capacity_bytes", 1000}, {"model_weight_bytes", 100},
+             {"resident_kv_bytes", 200}, {"reserved_request_bytes", 50}},
+            {{"rank", 2}, {"workspace_revision", 0},
+             {"capacity_bytes", 1000}, {"model_weight_bytes", 100},
+             {"resident_kv_bytes", 200}, {"reserved_request_bytes", 50}}
+        })}};
+    try {
+        const ParsedGraphBatch parsed =
+            parse_graph_batch(base, 3, request_state);
+        expect(parsed.has_workspace_capacity_snapshot &&
+                   parsed.workspace_capacity_snapshot.size() == 3 &&
+                   parsed.workspace_capacity_snapshot[0].rank == 0 &&
+                   parsed.workspace_capacity_snapshot[0]
+                           .workspace_revision == 3 &&
+                   parsed.workspace_capacity_snapshot[2]
+                           .reserved_request_bytes == 50,
+               "coarse response parses complete echoed capacity rows");
+    } catch (const std::exception& exc) {
+        std::fprintf(stderr,
+                     "[parsed_graph_batch_test] unexpected workspace parse "
+                     "error: %s\n", exc.what());
+        g_ok = false;
+    }
+
+    const auto expect_workspace_reject =
+        [&request_state](nlohmann::json resp, const char* what,
+                         const char* message) {
+            try {
+                (void)parse_graph_batch(resp, 3, request_state);
+                expect(false, what);
+            } catch (const ParseError& exc) {
+                expect(std::string(exc.what()).find(message) !=
+                           std::string::npos,
+                       what);
+            }
+        };
+    {
+        nlohmann::json missing = max_shape_response();
+        expect_workspace_reject(std::move(missing),
+                                "coarse response requires capacity snapshot",
+                                "workspace_capacity_snapshot");
+    }
+    {
+        nlohmann::json stale = base;
+        stale["workspace_capacity_snapshot"]["ranks"][1]
+             ["workspace_revision"] = 4;
+        expect_workspace_reject(std::move(stale),
+                                "coarse response rejects stale revision",
+                                "does not echo request view");
+    }
+    {
+        nlohmann::json over_capacity = base;
+        over_capacity["workspace_capacity_snapshot"]["ranks"][0]
+                     ["resident_kv_bytes"] = 2000;
+        expect_workspace_reject(
+            std::move(over_capacity),
+            "coarse response rejects base use above capacity",
+            "base-used bytes exceed capacity_bytes");
+    }
+    try {
+        (void)parse_graph_batch(base, 3);
+        expect(false, "legacy schema-v3 parser rejects coarse snapshot");
+    } catch (const ParseError& exc) {
+        expect(std::string(exc.what()).find("unknown field") !=
+                   std::string::npos,
+               "legacy schema-v3 response remains closed to workspace data");
+    }
+}
+
 // --------------------------------------------------------------- Part N ----
 void test_node_rules() {
     const nlohmann::json base = max_shape_response();
@@ -517,6 +598,27 @@ void test_node_rules() {
                        DieModel::OpKind::Norm,
                    "N12: parsed spec carries op_kind norm");
         }
+        // Accept the additive coarse typed payload as immutable JSON. It is
+        // schema-discriminated and intentionally does not pass through the
+        // legacy DieOpSpec parser/normalizer.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            const nlohmann::json task = {
+                {"schema", "coarse_die_task_v2"},
+                {"op_kind", "norm"},
+                {"execution_profile", "mesh_die_v1"},
+            };
+            resp["nodes"][0]["compute"]["die_task"] = task;
+            const ParsedGraphBatch parsed =
+                parse_ok(resp, "N12: coarse die_task accepted");
+            expect(parsed.nodes[0].node.compute.die_task_json != nullptr,
+                   "N12: die_task retained as immutable JSON");
+            expect(*parsed.nodes[0].node.compute.die_task_json == task,
+                   "N12: die_task JSON survives parse exactly");
+            expect(parsed.nodes[0].node.compute.die_spec == nullptr,
+                   "N12: coarse die_task is not normalized to legacy spec");
+        }
         // Reject: unknown op_role spelling.
         {
             nlohmann::json resp = base;
@@ -588,6 +690,39 @@ void test_node_rules() {
             resp["nodes"][0]["compute"]["die_op_spec"] = spec;
             expect_parse_error(resp, "N12: die_op_spec negative layer_count",
                                "die_op_spec rejected");
+        }
+        // Reject coarse task conflicts and wrong payload/schema shape.
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_task"] =
+                {{"schema", "coarse_die_task_v2"}};
+            resp["nodes"][0]["compute"]["die_op_spec"] =
+                valid_die_op_spec();
+            expect_parse_error(resp, "N12: both die payloads",
+                               "mutually exclusive");
+        }
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_task"] = "norm";
+            expect_parse_error(resp, "N12: die_task string",
+                               "die_task is not an object");
+        }
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["runtime_ns"] = 0;
+            resp["nodes"][0]["compute"]["die_task"] =
+                {{"schema", "die_op_spec_v1"}};
+            expect_parse_error(resp, "N12: die_task wrong schema",
+                               "coarse_die_task_v2");
+        }
+        {
+            nlohmann::json resp = base;
+            resp["nodes"][0]["compute"]["die_task"] =
+                {{"schema", "coarse_die_task_v2"}};
+            expect_parse_error(resp, "N12: die_task with calibrated runtime",
+                               "runtime_ns == 0");
         }
     }
     {  // N12m: sh_3.0 mem sub-object -- optional node key, optional fields,
@@ -987,6 +1122,7 @@ void test_max_shape_round_trip() {
 
 int main() {
     test_top_level_rules();
+    test_coarse_workspace_capacity_snapshot_rules();
     test_node_rules();
     test_edge_rules();
     test_watch_rules();

@@ -148,11 +148,88 @@ void test_raii_move_identity_and_invalid_snapshot() {
            "overflowing or invalid snapshots fail without ledger mutation");
 }
 
+void test_immutable_prospective_bound() {
+    WorkspaceAdmission ledger(0);
+    auto bounded = snapshot(0);
+    bounded.has_prospective_workspace = true;
+    bounded.prospective_workspace_bytes = 600;
+    ledger.validate_capacity_snapshot(bounded);
+    ledger.install_capacity_snapshot_unchecked(bounded);
+    expect(ledger.active_workspace_bytes() == 0 &&
+               ledger.workspace_revision() == 0 &&
+               ledger.capacity_snapshot_view().prospective_workspace_bytes == 600,
+           "a future margin does not fabricate an active lease or revision");
+
+    bool uncovered = false;
+    try {
+        (void)ledger.try_acquire(50, 0, 601);
+    } catch (const std::runtime_error&) {
+        uncovered = true;
+    }
+    expect(uncovered && ledger.active_lease_count() == 0 &&
+               ledger.workspace_revision() == 0,
+           "an uncovered actual Plan fails before mutation");
+    auto actual = ledger.try_acquire(51, 0, 600);
+    expect(actual.status == WorkspaceAdmission::AcquireStatus::Acquired,
+           "a covered actual Plan can use the whole reserved fit margin");
+    auto live = bounded;
+    live.workspace_revision = ledger.workspace_revision();
+    ledger.validate_capacity_snapshot(live);
+    expect(ledger.active_workspace_bytes() == 600,
+           "the active lease and future margin are combined by max");
+    actual.lease.release();
+
+    auto invalid = bounded;
+    invalid.workspace_revision = ledger.workspace_revision();
+    invalid.resident_kv_bytes += 1;
+    bool insufficient = false;
+    try {
+        ledger.validate_capacity_snapshot(invalid);
+    } catch (const std::runtime_error&) {
+        insufficient = true;
+    }
+    expect(insufficient && ledger.active_workspace_bytes() == 0,
+           "a capacity view must preserve the future margin after release");
+    invalid = bounded;
+    invalid.workspace_revision = ledger.workspace_revision();
+    invalid.prospective_workspace_bytes = 599;
+    bool changed = false;
+    try {
+        ledger.validate_capacity_snapshot(invalid);
+    } catch (const std::runtime_error&) {
+        changed = true;
+    }
+    invalid.has_prospective_workspace = false;
+    invalid.prospective_workspace_bytes = 0;
+    bool removed = false;
+    try {
+        ledger.validate_capacity_snapshot(invalid);
+    } catch (const std::runtime_error&) {
+        removed = true;
+    }
+    expect(changed && removed,
+           "a future bound cannot change or disappear across deliveries");
+
+    WorkspaceAdmission zero(0);
+    auto zero_bound = snapshot(0);
+    zero_bound.has_prospective_workspace = true;
+    zero.validate_capacity_snapshot(zero_bound);
+    zero.install_capacity_snapshot_unchecked(zero_bound);
+    bool nonzero = false;
+    try {
+        (void)zero.try_acquire(1, 0, 1);
+    } catch (const std::runtime_error&) {
+        nonzero = true;
+    }
+    expect(nonzero, "an explicit zero bound remains distinct from no bound");
+}
+
 }  // namespace
 
 int main() {
     test_snapshot_and_checked_admission();
     test_raii_move_identity_and_invalid_snapshot();
+    test_immutable_prospective_bound();
     if (!g_ok) return 1;
     std::puts("[workspace_admission_test] ALL PASS");
     return 0;

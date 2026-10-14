@@ -1,0 +1,57 @@
+{
+  "fixedwidth_256bit_denominator_overflow": {
+    "reason": "normalized rational exceeds 256-bit state slot",
+    "status": "failed_closed"
+  },
+  "fixedwidth_256bit_numerator_max": {
+    "denominator_bits": 1,
+    "numerator_bits": 256,
+    "status": "passed"
+  },
+  "fixedwidth_256bit_numerator_overflow": {
+    "reason": "normalized rational exceeds 256-bit state slot",
+    "status": "failed_closed"
+  },
+  "fixedwidth_floor_u128_overflow": {
+    "reason": "stop-clamped identity count exceeds checked u128",
+    "status": "failed_closed",
+    "stop": "340282366920938463463374607431768211456/1"
+  },
+  "fixedwidth_repeat_u128_max": {
+    "status": "passed",
+    "value": "340282366920938463463374607431768211455"
+  },
+  "fixedwidth_repeat_u128_overflow": {
+    "reason": "repeat count exceeds checked u128 range",
+    "status": "failed_closed"
+  },
+  "geometry_u128_overflow": {
+    "reason": "overflow: GEMM OS geometry consumption wave count",
+    "status": "failed_closed"
+  },
+  "reset_after_capacity_update": {
+    "capacity_invalidations_after_reset_run": 0,
+    "events_after_reset_run": 72,
+    "status": "passed"
+  },
+  "sanitizer_scope": "scratch reset, exact 256-bit rational and checked-u128 boundaries, zero capacity, stop-clamp overflow, and global event boundary smoke",
+  "status": "passed",
+  "stop_clamp_u128_overflow": {
+    "error": "stop-clamped identity count exceeds checked u128",
+    "events": 5,
+    "skipped_waves": "0",
+    "status": "failed_closed"
+  },
+  "unpowered_event_cap": {
+    "error": "global expanded-event cap reached",
+    "events": 256,
+    "skipped_waves": "0",
+    "status": "failed_closed"
+  },
+  "zero_capacity": {
+    "error": "deadlock: all active rates are zero",
+    "events": 0,
+    "skipped_waves": "0",
+    "status": "failed_closed"
+  }
+}

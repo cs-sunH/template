@@ -40,6 +40,19 @@ class WorkspaceEnvelope:
     normalized_task: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class WorkspaceCapacityBound:
+    """Candidate-independent lifetime bound; not an executability result."""
+
+    capacity_model_revision: str
+    hbm_workspace_upper_bound_bytes: int
+    hardware_fingerprint: str
+    normalized_task_fingerprint: str
+    op_kind: str
+    phase: str
+    normalized_task: dict[str, Any]
+
+
 def _default_repo_root() -> Path:
     # Match config_resolver.py's root, which is sh_test_mesh/../.
     return Path(__file__).resolve().parents[4]
@@ -441,6 +454,56 @@ class DieWorkspaceEnvelopeClient:
             "workspace envelope",
         )
         return self._validate_envelope(raw_envelope)
+
+    def query_capacity_bound(self, task: Mapping[str, Any]) -> WorkspaceCapacityBound:
+        """Ask C++ for all allowed lifetimes before SRAM feasibility filtering."""
+        model_handle = self._require_open()
+        if not isinstance(task, Mapping):
+            raise WorkspaceEnvelopeError("task must be a JSON object mapping")
+        _validate_task_u64s(task)
+        symbol = "die_coarse_workspace_capacity_bound_v2"
+        if not hasattr(self._library, symbol):
+            raise WorkspaceEnvelopeError(f"coarse DIE library lacks {symbol}")
+        query = getattr(self._library, symbol)
+        query.argtypes = [ctypes.c_uint64, ctypes.c_char_p]
+        query.restype = ctypes.c_void_p
+        try:
+            encoded = json.dumps(task, ensure_ascii=False, separators=(",", ":"),
+                                 allow_nan=False).encode("utf-8")
+        except (TypeError, ValueError, UnicodeEncodeError) as error:
+            raise WorkspaceEnvelopeError(f"task is not valid UTF-8 JSON: {error}") from error
+        pointer = query(model_handle, encoded)
+        if not pointer:
+            raise WorkspaceEnvelopeError(f"{symbol} failed: {_last_error(self._library)}")
+        raw = _require_object(_read_owned_json(self._library, pointer, symbol),
+                              "workspace capacity bound")
+        if (_require_u64(raw.get("schema_version"), "schema_version") != 2 or
+                _require_u64(raw.get("workspace_capacity_bound_schema_version"),
+                             "workspace_capacity_bound_schema_version") != 1):
+            raise WorkspaceEnvelopeError("unsupported workspace capacity bound schema")
+        if (raw.get("capacity_model_revision") != "workspace_lifetimes_v1" or
+                raw.get("capacity_bound_kind") !=
+                "all_template_lifetimes_without_sram_filter"):
+            raise WorkspaceEnvelopeError("unsupported workspace capacity lifetime model")
+        peak = _require_u64(raw.get("hbm_workspace_upper_bound_bytes"),
+                            "hbm_workspace_upper_bound_bytes")
+        hardware = _require_fingerprint(raw.get("hardware_fingerprint"),
+                                        "hardware_fingerprint")
+        if hardware != self.hardware_fingerprint:
+            raise WorkspaceEnvelopeError("capacity bound hardware identity mismatch")
+        normalized = _require_object(raw.get("normalized_task"), "normalized_task")
+        _validate_task_u64s(normalized, "normalized_task")
+        fingerprint = _require_fingerprint(raw.get("normalized_task_fingerprint"),
+                                           "normalized_task_fingerprint")
+        if fingerprint != _canonical_task_fingerprint(normalized):
+            raise WorkspaceEnvelopeError("capacity bound normalized task identity mismatch")
+        op, phase = raw.get("op_kind"), raw.get("phase")
+        if (normalized.get("schema") != "coarse_die_task_v2" or
+                not isinstance(op, str) or not isinstance(phase, str) or
+                normalized.get("op_kind") != op or normalized.get("phase") != phase):
+            raise WorkspaceEnvelopeError("capacity bound operation/phase identity mismatch")
+        return WorkspaceCapacityBound("workspace_lifetimes_v1", peak, hardware,
+                                      fingerprint, op, phase, normalized)
 
     def _validate_envelope(self, raw: dict[str, Any]) -> WorkspaceEnvelope:
         schema_version = _require_u64(raw.get("schema_version"), "schema_version")

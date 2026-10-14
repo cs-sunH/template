@@ -149,6 +149,32 @@ StateDelta build_state_delta_v1(
     return delta;
 }
 
+StateDelta build_state_delta_v2(
+    std::vector<DecisionEvent> events, const uint64_t tick,
+    const uint64_t delivery_sequence, const uint64_t deferred_from_tick,
+    std::vector<CompletedNodeFact> completed_nodes,
+    std::vector<int> affected_ranks,
+    std::vector<WorkspaceRankState> workspace_state,
+    std::vector<RankInjectedSummary> injected_unfinished) {
+    if (workspace_state.empty()) {
+        throw std::invalid_argument(
+            "coarse_die_v2 workspace_state must include rank zero");
+    }
+    for (size_t rank = 0; rank < workspace_state.size(); ++rank) {
+        if (workspace_state[rank].rank != static_cast<int>(rank)) {
+            throw std::invalid_argument(
+                "coarse_die_v2 workspace_state must cover contiguous ranks "
+                "starting at zero");
+        }
+    }
+    StateDelta delta = build_state_delta_v1(
+        std::move(events), tick, delivery_sequence, deferred_from_tick,
+        std::move(completed_nodes), std::move(affected_ranks),
+        std::move(injected_unfinished));
+    delta.workspace_state = std::move(workspace_state);
+    return delta;
+}
+
 void DecisionMailbox::push(DecisionEvent e) {
     const Identity identity{static_cast<int>(e.reason), e.request_id, e.stage,
                             e.generation};

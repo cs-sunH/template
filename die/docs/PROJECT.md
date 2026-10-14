@@ -14,6 +14,8 @@
 
 TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作为目标 INT4/HBM3E 的独立实测训练集。source/cache、reference、粒度、目标硬件、五仓工程证据分别报告。
 
+建模复杂度遵守用户 2026-10-14 新增要求：与硬件设计参数、软件任务输入参数不直接相关的细节，能用简单数学公式直接计算时，采用公式，不深入建模。优先闭式/解析计数和固定数量分段表达；内部状态只为必要的参数响应、容量/工作量守恒和外部可观察的就绪/竞争保留。新增复杂机制须指出简单公式不足的具体证据和运行成本；硬件自变量与任务输入的正确覆盖继续是硬约束。
+
 持续开发以有意义的验证检查点同步 GitHub，不按阶段结束自动停工。检查点同步不等于模型精度或五仓工程验收。
 
 ## 当前代码与运行方式
@@ -21,7 +23,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 硬件 `die/src/Hardware.cc`；计划/任务/映射 `Plan.cc`、`Compiler.cc`、`Mapping.cc`；执行 `Execution.cc`；ABI `Capi.cc`。
 - 接口在 `die/include/coarse_die/`；配置、工具、测试分别在 `configs/`、`tools/`、`tests/`。
 - 依赖 C++17、CMake、Python3 和 vendored `astra-sim-wscllm/extern/helper/json/json.hpp`；TX8 工具仅 Python 标准库。
-- 下一环境应核实真实工具安装。本轮 Cloud 使用 `/workspace/cloud-setup/activate.sh`、CMake3.31.10、protoc3.21.12/Python protobuf6.33.5，`PROTOBUF_FROM_SOURCE` unset；前轮work/tooling与work/deps为历史忽略目录，不是跨账号依赖交付。
+- 下一环境应核实真实工具安装。本 Session 使用本地 ignored `work/activate.sh`、CMake3.31.10、GCC14.2、protoc3.21.12/Python protobuf4.25.8、`PROTOBUF_FROM_SOURCE=True`。依赖 prefix 在 work/tooling 与 work/deps，不是跨账号依赖交付；重建入口随证据保存。
 - `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release` 是公共库入口；benchmark 宏缺失已修复。实际最新构建/CTest 状态以 HANDOFF 为准。
 - 独立 Runtime/hardware_search 和 TX8 审计的真实命令、日志与结果在 HANDOFF 与 `docs/evidence/`。
 
@@ -41,9 +43,13 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-当前持续开发分支 `codex/die-workspace-envelope-20261014`；共享分支 `main`。已fetch/ff到用户新JOINT导入的 `fecf81c5574755209c5d58ecdb982843ff349042`，包含 [PR #9](https://github.com/cs-sunH/template/pull/9) merge928f053/source cef6790b/CI38552490061 success。新workspace API/client/optional manager floor及双Plan压力诊断已验证，canonical23五仓新digest e0b6fd…cbbf78。新活动JOINT目前只接纯库，业务coarse适配待按新实现移植，joint_old存档不改。用户已要求本轮GitHub交接后停止，所有有效研究/部分脚本已冻结保存。交付源 `2e3e0294eecdbe54cd6c645adefa1d078fe085fc` 已推送，[交接 PR #10](https://github.com/cs-sunH/template/pull/10) 需merged并fetch核main含交接版后安全接棒。scheduler E与store/migration物理释放门、OS C++ solo13 scratch待下一Session继续；生产精度/性能、TX8目标heldout及完整GQA输入仍未验收。
+本轮交付分支 `codex/die-capacity-joint-20261014`；已同步共享 main `ad865f11b6466dcc1d07a75be442740b8db20d01`，包含已合并 PR #10 / 源码 `2e3e0294`。用户现已要求停止新任务，完成当前收尾和 GitHub 交接后立即停止。仅使用活动 `astra-sim-joint`，`astra-sim-joint_old` 保持档案。本检查点把 compiler-derived future bound 接入 LRU finite manifest 与实际 Plan 准入，并验证源迁移 ACK 释放排序；新 JOINT additive 接口和 Runtime 单独记录范围。提交/PR/远端核实结果见 HANDOFF 和对应 GitHub evidence，不提前宣称合并。
 
 ## 重要决定及变更记录
+
+- 2026-10-14 容量/源释放检查点：新增独立 `die_coarse_workspace_capacity_bound_v2`，以共享 checked-u128 生命周期公式覆盖 SRAM 筛选前模板，不证明 task 可执行，不改变旧 envelope/Plan identity。LRU finite request-aggregated manifest 为各 rank 安装不可变 E，fit 使用 max(A,E)，真实 Plan 超界在 acquire 前拒绝。源 store/migrate ACK 在复用容量的 COMP/目的 KV 写前形成依赖。公共30/30、62 identity全等、旧240 envelope查询全等；LRU Python182pass/2skip、实际 Online 默认/迭代cap2均0/0，480/560 typed Plans全部受界。完整 source/binary 与局限见新 evidence。生产 E5 精度、全业务压力、完整 GQA 与 host预算仍未验收。
+
+- 2026-10-14 用户新增复杂度原则已写入 AGENTS、本项目说明和根设计 §1.4；本 Session 已从已合并 main `ad865f11` 恢复持续开发，上轮停止指令属于历史交接。后续研究与实现按上述公式优先原则收紧，保存已有有效成果。
 
 - 2026-10-14 workspace上界基础：一个task的全部Mapping候选由C++输出max exact u64，不改旧Plan identities；public30/30+62hash/summary全等、真实legacy240queries和生产ABI全等重放。LRU optional E默认0，fit取串行max(A,E)，永久E不可行fail、临时A可retry，不进KV/active/remote账；manager57与online154pass1skip/44通过。五仓ABI10build/config83、四仓Online/focused18通过；新main JOINT替换后仅纯库发布，旧业务结果不套用。scheduler E尚未激活，source-release门须早于KV容量复用。
 

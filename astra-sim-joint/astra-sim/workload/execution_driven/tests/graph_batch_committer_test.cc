@@ -113,6 +113,9 @@ Exit code 0 on ALL PASS.
 
 using namespace AstraSim::ExecutionDriven;
 using namespace NetworkAnalytical;
+using AstraSim::WorkspaceAdmission;
+using AstraSim::WorkspaceCapacityRank;
+using AstraSim::WorkspaceRankState;
 
 namespace AstraSim {
 namespace ExecutionDriven {
@@ -292,6 +295,8 @@ struct Fixture {
     WatchRegistry registry;
     std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
     std::vector<int> issue_calls;
+    bool workspace_enabled = false;
+    std::vector<std::unique_ptr<WorkspaceAdmission>> workspace_ledgers;
     GraphBatchCommitter committer;
 
     static GraphBatchCommitter::Context make_context(Fixture* fixture) {
@@ -303,6 +308,45 @@ struct Fixture {
         ctx.issue_rank = [fixture](int rank) {
             fixture->issue_calls.push_back(rank);
         };
+        ctx.workspace_admission_required = fixture->workspace_enabled;
+        if (fixture->workspace_enabled) {
+            ctx.validate_workspace_capacity_snapshot =
+                [fixture](const std::vector<WorkspaceRankState>& request,
+                          const std::vector<WorkspaceCapacityRank>& snapshot)
+                    -> std::optional<std::string> {
+                if (request.size() != fixture->workspace_ledgers.size() ||
+                    snapshot.size() != fixture->workspace_ledgers.size()) {
+                    return "test workspace rank count mismatch";
+                }
+                for (size_t rank = 0; rank < request.size(); ++rank) {
+                    try {
+                        fixture->workspace_ledgers[rank]
+                            ->validate_request_state(request[rank]);
+                        fixture->workspace_ledgers[rank]
+                            ->validate_capacity_snapshot(snapshot[rank]);
+                    } catch (const std::exception& error) {
+                        return "rank " + std::to_string(rank) + ": " +
+                               error.what();
+                    }
+                }
+                return std::nullopt;
+            };
+            ctx.install_workspace_capacity_snapshot =
+                [fixture](const std::vector<WorkspaceCapacityRank>& snapshot,
+                          std::vector<int>& changed) {
+                changed.clear();
+                for (size_t rank = 0; rank < snapshot.size(); ++rank) {
+                    if (fixture->workspace_ledgers[rank]
+                            ->capacity_snapshot_changes(snapshot[rank])) {
+                        changed.push_back(static_cast<int>(rank));
+                    }
+                }
+                for (size_t rank = 0; rank < snapshot.size(); ++rank) {
+                    fixture->workspace_ledgers[rank]
+                        ->install_capacity_snapshot_unchecked(snapshot[rank]);
+                }
+            };
+        }
         ctx.communicator_members_for_pg =
             [](const std::string& pg_name,
                const std::vector<int>& /* participant_ranks */)
@@ -318,14 +362,19 @@ struct Fixture {
         return ctx;
     }
 
-    Fixture()
-        : ingress(4096), committer(make_context(this)) {
+    explicit Fixture(bool enable_workspace = false)
+        : ingress(4096), workspace_enabled(enable_workspace),
+          committer(make_context(this)) {
         ingress.bind(&eq, &mailbox, &svc);
         // One DISTINCT NodeStore per rank (a fill-constructed vector would
         // share a single store across all three "ranks").
         sources.reserve(3);
         for (int rank = 0; rank < 3; ++rank) {
             sources.push_back(std::make_shared<NodeStoreGraphSource>());
+            if (workspace_enabled) {
+                workspace_ledgers.push_back(
+                    std::make_unique<WorkspaceAdmission>(rank));
+            }
         }
     }
 };
@@ -638,6 +687,80 @@ nlohmann::json empty_response(uint64_t sequence) {
     resp["source_delivery_sequence"] = sequence;
     resp["touched_ranks"] = nlohmann::json::array();
     return resp;
+}
+
+std::vector<WorkspaceRankState> empty_workspace_state() {
+    return {{0, 0, 0}, {1, 0, 0}, {2, 0, 0}};
+}
+
+GraphBatch workspace_batch(uint64_t sequence,
+                           const std::vector<WorkspaceRankState>& request,
+                           const std::vector<uint64_t>& resident_kv) {
+    nlohmann::json response = empty_response(sequence);
+    nlohmann::json rows = nlohmann::json::array();
+    for (size_t rank = 0; rank < request.size(); ++rank) {
+        rows.push_back({{"rank", rank},
+                        {"workspace_revision",
+                         request[rank].workspace_revision},
+                        {"capacity_bytes", 1000000},
+                        {"model_weight_bytes", 100},
+                        {"resident_kv_bytes", resident_kv[rank]},
+                        {"reserved_request_bytes", 100}});
+    }
+    response["workspace_capacity_snapshot"] = {
+        {"protocol_version", 1}, {"ranks", std::move(rows)}};
+    return parse_graph_batch(response, 3, request);
+}
+
+StateDelta workspace_delta(uint64_t sequence,
+                           std::vector<WorkspaceRankState> request) {
+    return build_state_delta_v2({}, sequence + 1, sequence, 0, {}, {},
+                                std::move(request), {});
+}
+
+void test_workspace_capacity_commit_is_atomic_and_reissues_changed_ranks() {
+    Fixture fixture(true);
+    const auto request = empty_workspace_state();
+    GraphBatch first = workspace_batch(0, request, {200, 200, 200});
+    fixture.committer.commit(workspace_delta(0, request), first);
+    expect(fixture.issue_calls == std::vector<int>({0, 1, 2}),
+           "coarse first capacity install issues every newly-ready rank");
+    for (size_t rank = 0; rank < fixture.workspace_ledgers.size(); ++rank) {
+        const auto view = fixture.workspace_ledgers[rank]->capacity_snapshot_view();
+        expect(fixture.workspace_ledgers[rank]->has_capacity_snapshot() &&
+                   view.capacity_bytes == 1000000 &&
+                   view.resident_kv_bytes == 200,
+               "coarse first install publishes every validated rank snapshot");
+    }
+
+    const Snapshot before_bad_commit = snapshot_of(fixture);
+    GraphBatch invalid = workspace_batch(1, request, {200, 200, 200});
+    invalid.workspace_capacity_snapshot[1].resident_kv_bytes = 1000000;
+    bool rejected = false;
+    try {
+        fixture.committer.commit(workspace_delta(1, request), invalid);
+    } catch (const std::runtime_error& error) {
+        rejected = std::string(error.what()).find(
+                       "workspace capacity snapshot rejected") !=
+                   std::string::npos;
+    }
+    expect(rejected && snapshot_of(fixture) == before_bad_commit &&
+               fixture.issue_calls == std::vector<int>({0, 1, 2}) &&
+               fixture.workspace_ledgers[1]->capacity_snapshot_view()
+                       .resident_kv_bytes == 200,
+           "invalid coarse row rejects before ledger install or issue pass");
+
+    GraphBatch unchanged = workspace_batch(1, request, {200, 200, 200});
+    fixture.committer.commit(workspace_delta(1, request), unchanged);
+    expect(fixture.issue_calls == std::vector<int>({0, 1, 2}),
+           "identical coarse snapshot does not duplicate legacy issue pass");
+
+    GraphBatch changed = workspace_batch(2, request, {200, 256, 200});
+    fixture.committer.commit(workspace_delta(2, request), changed);
+    expect(fixture.issue_calls == std::vector<int>({0, 1, 2, 1}) &&
+               fixture.workspace_ledgers[1]->capacity_snapshot_view()
+                       .resident_kv_bytes == 256,
+           "capacity-only change retries exactly its affected rank");
 }
 
 void test_ordinary_id_overlap_preflight_atomicity() {
@@ -2435,6 +2558,7 @@ int main() {
     test_gc_amortized_tracking_bound();
     test_preseeded_store_id_is_captured();
     test_affine_drift_fails_closed();
+    test_workspace_capacity_commit_is_atomic_and_reissues_changed_ranks();
     test_affine_metadata_under_million_node_pressure();
     if (g_ok) {
         std::printf("[graph_batch_committer_test] ALL PASS\n");

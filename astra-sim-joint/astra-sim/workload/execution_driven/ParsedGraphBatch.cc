@@ -215,7 +215,7 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
     }
 
     // N12: compute -- required {num_ops, tensor_size, runtime_ns}; optional
-    // {remote_weight_bytes, op_role, die_op_spec} (sh_3.0: the HBM access
+    // {remote_weight_bytes, op_role, die_op_spec, die_task} (sh_3.0: the HBM access
     // mode lives in the "mem" sub-object below, not under compute). Schema 3
     // (D16): the retired remote-read anchor sub-keys under compute
     // were removed from the allowed set -- reappearing fails closed.
@@ -225,7 +225,8 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
     }
     check_key_set(compute,
                   {"num_ops", "tensor_size", "runtime_ns",
-                   "remote_weight_bytes", "op_role", "die_op_spec"},
+                   "remote_weight_bytes", "op_role", "die_op_spec",
+                   "die_task"},
                   {"num_ops", "tensor_size", "runtime_ns"},
                   where + ".compute");
     node.compute.num_ops = get_uint(compute["num_ops"], "num_ops",
@@ -273,6 +274,31 @@ ParsedNode parse_node(const nlohmann::json& node_json, size_t index,
         } catch (const std::exception& e) {
             fail(where + ": compute.die_op_spec rejected: " + e.what());
         }
+    }
+    if (compute.contains("die_task")) {
+        if (compute.contains("die_op_spec")) {
+            fail(where + ": compute.die_task and compute.die_op_spec are "
+                        "mutually exclusive");
+        }
+        if (node.compute.runtime_ns != 0) {
+            fail(where + ": compute.die_task requires runtime_ns == 0 "
+                        "(coarse die nodes execute a compiled task, never a "
+                        "calibrated runtime)");
+        }
+        if (node.compute.op_role != OpRole::Compute) {
+            fail(where + ": compute.die_task requires op_role=compute");
+        }
+        const nlohmann::json& task_json = compute["die_task"];
+        if (!task_json.is_object()) {
+            fail(where + ": compute.die_task is not an object");
+        }
+        if (!task_json.contains("schema") || !task_json["schema"].is_string() ||
+            task_json["schema"].get<std::string>() != "coarse_die_task_v2") {
+            fail(where + ": compute.die_task.schema must be "
+                        "\"coarse_die_task_v2\"");
+        }
+        node.compute.die_task_json =
+            std::make_shared<const nlohmann::json>(task_json);
     }
 
     // N12m (sh_3.0): mem -- the repo's MemAttrs sub-object; optional at the
@@ -558,24 +584,130 @@ ParsedAlarm parse_alarm(const nlohmann::json& alarm_json, size_t index) {
     return alarm;
 }
 
+std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
+    const nlohmann::json& snapshot, const int num_ranks,
+    const std::vector<WorkspaceRankState>& expected_workspace_state) {
+    if (!snapshot.is_object()) {
+        fail("workspace_capacity_snapshot is not an object");
+    }
+    check_key_set(snapshot, {"protocol_version", "ranks"},
+                  {"protocol_version", "ranks"},
+                  "workspace_capacity_snapshot");
+    if (get_uint(snapshot["protocol_version"], "protocol_version",
+                 "workspace_capacity_snapshot") != 1) {
+        fail("workspace_capacity_snapshot protocol_version mismatch");
+    }
+    const auto& ranks = snapshot["ranks"];
+    if (!ranks.is_array()) {
+        fail("workspace_capacity_snapshot.ranks is not an array");
+    }
+    if (num_ranks < 0 || expected_workspace_state.size() !=
+                             static_cast<size_t>(num_ranks)) {
+        fail("coarse_die_v2 request workspace_state does not cover every "
+             "configured rank");
+    }
+    if (ranks.size() != static_cast<size_t>(num_ranks)) {
+        fail("workspace_capacity_snapshot.ranks must cover every configured "
+             "rank exactly once");
+    }
+
+    std::vector<WorkspaceCapacityRank> parsed;
+    parsed.reserve(ranks.size());
+    for (size_t i = 0; i < ranks.size(); ++i) {
+        const std::string where =
+            "workspace_capacity_snapshot.ranks[" + std::to_string(i) + "]";
+        const auto& rank_json = ranks[i];
+        if (!rank_json.is_object()) {
+            fail(where + " is not an object");
+        }
+        check_key_set(rank_json,
+                      {"rank", "workspace_revision", "capacity_bytes",
+                       "model_weight_bytes", "resident_kv_bytes",
+                       "reserved_request_bytes",
+                       "prospective_workspace_bytes"},
+                      {"rank", "workspace_revision", "capacity_bytes",
+                       "model_weight_bytes", "resident_kv_bytes",
+                       "reserved_request_bytes"},
+                      where);
+        WorkspaceCapacityRank entry;
+        entry.rank = get_int(rank_json["rank"], "rank", where);
+        check_rank_domain(entry.rank, num_ranks, where);
+        if (entry.rank != static_cast<int>(i)) {
+            fail(where + ": ranks must be complete, unique, and ascending");
+        }
+        entry.workspace_revision = get_uint(
+            rank_json["workspace_revision"], "workspace_revision", where);
+        const WorkspaceRankState& request_state =
+            expected_workspace_state[i];
+        if (request_state.rank != entry.rank ||
+            request_state.workspace_revision != entry.workspace_revision) {
+            fail(where + ": workspace_revision does not echo request view");
+        }
+        entry.capacity_bytes =
+            get_uint(rank_json["capacity_bytes"], "capacity_bytes", where);
+        entry.model_weight_bytes = get_uint(
+            rank_json["model_weight_bytes"], "model_weight_bytes", where);
+        entry.resident_kv_bytes = get_uint(
+            rank_json["resident_kv_bytes"], "resident_kv_bytes", where);
+        entry.reserved_request_bytes = get_uint(
+            rank_json["reserved_request_bytes"], "reserved_request_bytes",
+            where);
+        if (rank_json.contains("prospective_workspace_bytes")) {
+            entry.has_prospective_workspace = true;
+            entry.prospective_workspace_bytes = get_uint(
+                rank_json["prospective_workspace_bytes"],
+                "prospective_workspace_bytes", where);
+        }
+        const auto checked_add = [&where](const uint64_t a,
+                                          const uint64_t b) {
+            if (b > std::numeric_limits<uint64_t>::max() - a) {
+                fail(where + ": base-used byte sum overflows uint64");
+            }
+            return a + b;
+        };
+        const uint64_t base = checked_add(
+            checked_add(entry.model_weight_bytes, entry.resident_kv_bytes),
+            entry.reserved_request_bytes);
+        if (base > entry.capacity_bytes) {
+            fail(where + ": base-used bytes exceed capacity_bytes");
+        }
+        if (entry.has_prospective_workspace &&
+            entry.prospective_workspace_bytes > entry.capacity_bytes - base) {
+            fail(where + ": prospective workspace plus base-used bytes "
+                         "exceed capacity_bytes");
+        }
+        if (!parsed.empty() && entry.has_prospective_workspace !=
+                                   parsed.front().has_prospective_workspace) {
+            fail(where + ": prospective workspace must cover every rank");
+        }
+        parsed.push_back(entry);
+    }
+    return parsed;
+}
+
 }  // namespace
 
 ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
-                                   const int num_ranks) {
+                                   const int num_ranks,
+                                   const std::vector<WorkspaceRankState>&
+                                       expected_workspace_state) {
     if (!resp.is_object()) {
         fail("response is not an object (rule T0)");
     }
     // T6: schema 3 keeps the immutable kernel contract mandatory (D4) and
     // drops the retired descriptor array from the allowed key set (D16) --
     // including for an otherwise empty batch.
-    check_key_set(resp,
-                  {"schema_version", "batch_id", "source_delivery_sequence",
-                   "error", "nodes", "parent_edges", "watches", "assignments",
-                   "kv_actions", "future_alarms", "touched_ranks",
-                   "kernel_contract"},
-                  {"schema_version", "source_delivery_sequence",
-                   "kernel_contract"},
-                  "response");
+    std::vector<const char*> allowed_keys{
+        "schema_version", "batch_id", "source_delivery_sequence", "error",
+        "nodes", "parent_edges", "watches", "assignments", "kv_actions",
+        "future_alarms", "touched_ranks", "kernel_contract"};
+    std::vector<const char*> required_keys{
+        "schema_version", "source_delivery_sequence", "kernel_contract"};
+    if (!expected_workspace_state.empty()) {
+        allowed_keys.push_back("workspace_capacity_snapshot");
+        required_keys.push_back("workspace_capacity_snapshot");
+    }
+    check_key_set(resp, allowed_keys, required_keys, "response");
 
     ParsedGraphBatch batch;
     const int64_t schema_version = get_int64(
@@ -588,6 +720,12 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
         get_uint(resp["source_delivery_sequence"], "source_delivery_sequence",
                  "response");  // T2 (equality with the request seq is the
                                // bridge's check -- it knows the seq)
+    if (!expected_workspace_state.empty()) {
+        batch.workspace_capacity_snapshot = parse_workspace_capacity_snapshot(
+            resp["workspace_capacity_snapshot"], num_ranks,
+            expected_workspace_state);
+        batch.has_workspace_capacity_snapshot = true;
+    }
     if (resp.contains("batch_id")) {
         batch.batch_id = get_uint(resp["batch_id"], "batch_id", "response");
     }

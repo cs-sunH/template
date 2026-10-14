@@ -1,0 +1,16 @@
+[compile] C++17 bounded Solo13 scratch kernel
+[check] exact Fraction and independent-prefix differential suite
+Traceback (most recent call last):
+  File "/workspace/template/work/os-kernel-recovery/check_kernel.py", line 367, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/workspace/template/work/os-kernel-recovery/check_kernel.py", line 317, in main
+    (ROOT / "work/os-fixedwidth-13-20261014/checked_rational256.hh").read_bytes()).hexdigest(),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/pathlib.py", line 1019, in read_bytes
+    with self.open(mode='rb') as f:
+         ^^^^^^^^^^^^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/pathlib.py", line 1013, in open
+    return io.open(self, mode, buffering, encoding, errors, newline)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/workspace/template/work/os-fixedwidth-13-20261014/checked_rational256.hh'

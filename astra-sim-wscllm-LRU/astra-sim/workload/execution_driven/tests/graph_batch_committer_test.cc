@@ -90,6 +90,12 @@ future arrival) through:
           rejected fail-closed with zero side effects, and a watch-member
           mutation is blocked by the preflight BEFORE any Phase-B assembly
           runs (two-phase atomicity under the typed batch).
+  Part Q  source-HBM release: a P-triggered remote-store send/recv/ACK graph,
+          cross-batch ACK -> destination restore/COMP blocking while ACKs
+          remain live, release after terminal observation, and collected
+          ACK parents satisfying later cross-batch edges. A test-local
+          combined parent + matched-communication DAG oracle also catches a
+          cycle that is invisible to the committer's rank-local edge check.
 
 Also asserts the pre-phase-5 fixture tolerance: a batch WITHOUT the
 touched_ranks field validates identically (has_touched_ranks == false).
@@ -111,6 +117,7 @@ Exit code 0 on ALL PASS.
 
 #include <astra-network-analytical/common/EventQueue.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -118,6 +125,7 @@ Exit code 0 on ALL PASS.
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include <json/json.hpp>
@@ -188,6 +196,10 @@ std::vector<uint64_t> free_ids_of(const NodeStore& store) {
     std::vector<uint64_t> ids;
     store.fill_free_node_snapshot(ids);
     return ids;
+}
+
+bool contains(const std::vector<uint64_t>& ids, uint64_t id) {
+    return std::find(ids.begin(), ids.end(), id) != ids.end();
 }
 
 // Test-local unfinished-count oracle: the phase-3 sensing summary's
@@ -425,7 +437,7 @@ nlohmann::json compute_node(int rank, uint64_t id, const std::string& req,
 }
 
 nlohmann::json comm_node(int rank, uint64_t id, int type, int src, int dst,
-                         int tag) {
+                         int tag, uint64_t bytes = 100) {
     return {
         {"rank", rank}, {"id", id}, {"type", type},
         {"name", type == 5 ? "send" : "recv"},
@@ -433,8 +445,37 @@ nlohmann::json comm_node(int rank, uint64_t id, int type, int src, int dst,
         {"request_id", "r1"}, {"stage", "prefill"}, {"generation", 0},
         {"compute", {{"num_ops", 1000}, {"tensor_size", 4096},
                      {"runtime_ns", 10000}}},
-        {"comm", {{"bytes", 100}, {"src", src}, {"dst", dst}, {"tag", tag}}},
+        {"comm", {{"bytes", bytes}, {"src", src}, {"dst", dst}, {"tag", tag}}},
         {"coll", coll_defaults()},
+    };
+}
+
+nlohmann::json remote_store_node(int rank, uint64_t id,
+                                 const std::string& request_id,
+                                 const std::string& name) {
+    return {
+        {"rank", rank}, {"id", id}, {"type", 3}, {"name", name},
+        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
+        {"request_id", request_id}, {"stage", "prefill"}, {"generation", 0},
+        {"compute", {{"num_ops", 1000}, {"tensor_size", 4096},
+                     {"runtime_ns", 10000}}},
+        {"comm", comm_defaults()}, {"coll", coll_defaults()},
+    };
+}
+
+nlohmann::json local_kv_restore_node(int rank, uint64_t id,
+                                     const std::string& request_id,
+                                     const std::string& stage,
+                                     const std::string& name) {
+    return {
+        {"rank", rank}, {"id", id}, {"type", 2}, {"name", name},
+        {"is_cpu_op", false}, {"is_timer_op", false}, {"inputs_values", ""},
+        {"request_id", request_id}, {"stage", stage},
+        {"generation", stage == "decode" ? 1 : 0},
+        {"is_local_hbm_kv_restore", true},
+        {"compute", {{"num_ops", 1000}, {"tensor_size", 4096},
+                     {"runtime_ns", 10000}}},
+        {"comm", comm_defaults()}, {"coll", coll_defaults()},
     };
 }
 
@@ -1852,8 +1893,11 @@ struct GcFixture {
     std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
     std::unique_ptr<GraphBatchCommitter> committer;
 
-    explicit GcFixture(size_t preseed_nodes = 0) : ingress(4096) {
-        sources.push_back(std::make_shared<NodeStoreGraphSource>());
+    explicit GcFixture(size_t preseed_nodes = 0, int num_ranks = 1)
+        : ingress(4096) {
+        for (int rank = 0; rank < num_ranks; ++rank) {
+            sources.push_back(std::make_shared<NodeStoreGraphSource>());
+        }
         OnlineNode preseed;
         preseed.kind = NodeKind::Compute;
         preseed.name = "gc-preseed";
@@ -1861,7 +1905,7 @@ struct GcFixture {
             sources[0]->store().add_node(preseed);
         }
         GraphBatchCommitter::Context ctx;
-        ctx.num_ranks = 1;
+        ctx.num_ranks = num_ranks;
         ctx.graph_sources = &sources;
         ctx.watch_registry = &registry;
         ctx.ingress = &ingress;
@@ -1938,6 +1982,291 @@ void finish_gc_json_id(GcFixture& fixture, uint64_t json_id,
     if (store_id.has_value()) {
         fixture.sources[0]->store().finish_node(*store_id);
     }
+}
+
+using GraphNodeKey = std::pair<int, uint64_t>;
+
+// Test oracle for the producer's full dependency DAG: GraphBatch parent
+// edges plus tag-matched p2p send -> recv arcs. The committer's in-batch
+// parent-edge check is intentionally per rank, so this catches P-trigger
+// cycles that only close through a matched cross-rank communication.
+bool parent_and_comm_graph_is_acyclic(
+    const std::vector<GraphBatch>& batches) {
+    using CommKey = std::tuple<int, int, uint64_t>;
+    struct PairEndpoints {
+        std::optional<GraphNodeKey> send;
+        std::optional<GraphNodeKey> recv;
+    };
+    std::map<GraphNodeKey, std::vector<GraphNodeKey>> successors;
+    std::map<GraphNodeKey, size_t> indegree;
+    std::map<CommKey, PairEndpoints> comm_pairs;
+
+    for (const GraphBatch& batch : batches) {
+        for (const ParsedNode& parsed : batch.nodes) {
+            const OnlineNode& node = parsed.node;
+            const GraphNodeKey key{node.rank, parsed.json_id};
+            if (!indegree.emplace(key, 0).second) {
+                return false;
+            }
+            if (node.node_type == 5 || node.node_type == 6) {
+                PairEndpoints& pair = comm_pairs[CommKey{
+                    node.comm.src, node.comm.dst, node.comm.tag}];
+                std::optional<GraphNodeKey>& endpoint =
+                    node.node_type == 5 ? pair.send : pair.recv;
+                if (endpoint.has_value()) {
+                    return false;
+                }
+                endpoint = key;
+            }
+        }
+    }
+
+    auto add_edge = [&](const GraphNodeKey& parent,
+                        const GraphNodeKey& child) {
+        if (indegree.count(parent) == 0 || indegree.count(child) == 0) {
+            return false;
+        }
+        successors[parent].push_back(child);
+        ++indegree[child];
+        return true;
+    };
+
+    for (const GraphBatch& batch : batches) {
+        for (const ParsedEdge& edge : batch.parent_edges) {
+            if (!add_edge(GraphNodeKey{edge.rank, edge.from_json},
+                          GraphNodeKey{edge.rank, edge.to_json})) {
+                return false;
+            }
+        }
+    }
+    for (const auto& entry : comm_pairs) {
+        if (!entry.second.send.has_value() ||
+            !entry.second.recv.has_value() ||
+            !add_edge(*entry.second.send, *entry.second.recv)) {
+            return false;
+        }
+    }
+
+    std::vector<GraphNodeKey> ready;
+    ready.reserve(indegree.size());
+    for (const auto& entry : indegree) {
+        if (entry.second == 0) {
+            ready.push_back(entry.first);
+        }
+    }
+    size_t visited = 0;
+    while (!ready.empty()) {
+        const GraphNodeKey current = ready.back();
+        ready.pop_back();
+        ++visited;
+        for (const GraphNodeKey& child : successors[current]) {
+            if (--indegree[child] == 0) {
+                ready.push_back(child);
+            }
+        }
+    }
+    return visited == indegree.size();
+}
+
+GraphBatch p_trigger_remote_store_batch(uint64_t sequence,
+                                       bool include_followup_compute = false) {
+    nlohmann::json resp = empty_response(sequence);
+    auto p2p = [](int rank, uint64_t id, int type, int src, int dst, int tag,
+                  uint64_t bytes) {
+        nlohmann::json node = comm_node(rank, id, type, src, dst, tag, bytes);
+        node["request_id"] = "p_evict";
+        return node;
+    };
+    nlohmann::json nodes = nlohmann::json::array({
+        compute_node(0, 0, "p_evict", "prefill", "p_segment_end"),
+        p2p(0, 1, 5, 0, 1, 70, 1),  // P-trigger send
+        p2p(1, 0, 6, 0, 1, 70, 1),  // source-side trigger recv
+        p2p(1, 1, 5, 1, 2, 71, 100),
+        p2p(1, 2, 5, 1, 2, 73, 100),
+        p2p(1, 3, 6, 2, 1, 72, 1),  // source-release ACK receives
+        p2p(1, 4, 6, 2, 1, 74, 1),
+        p2p(2, 0, 6, 1, 2, 71, 100),
+        remote_store_node(2, 1, "p_evict", "store_a"),
+        p2p(2, 2, 5, 2, 1, 72, 1),
+        p2p(2, 3, 6, 1, 2, 73, 100),
+        remote_store_node(2, 4, "p_evict", "store_b"),
+        p2p(2, 5, 5, 2, 1, 74, 1),
+    });
+    if (include_followup_compute) {
+        nodes.push_back(
+            compute_node(1, 5, "p_evict", "prefill", "after_p_store"));
+    }
+    resp["nodes"] = std::move(nodes);
+    resp["parent_edges"] = nlohmann::json::array({
+        data_edge(0, 0, 1),
+        data_edge(1, 0, 1), data_edge(1, 0, 2),
+        data_edge(2, 0, 1), data_edge(2, 1, 2),
+        data_edge(2, 3, 4), data_edge(2, 4, 5),
+    });
+    if (include_followup_compute) {
+        resp["parent_edges"].push_back(data_edge(1, 3, 5));
+    }
+    resp["touched_ranks"] = nlohmann::json::array({0, 1, 2});
+    return parse_batch(resp, 3);
+}
+
+GraphBatch source_release_consumer_batch(uint64_t sequence,
+                                        uint64_t restore_id,
+                                        uint64_t compute_id,
+                                        uint64_t restore_release_id,
+                                        uint64_t compute_release_id,
+                                        const std::string& request_suffix) {
+    nlohmann::json resp = empty_response(sequence);
+    resp["nodes"] = nlohmann::json::array({
+        local_kv_restore_node(
+            1, restore_id, "restore_" + request_suffix, "prefill",
+            "restore_after_source_release_target_hbm_write_kv"),
+        compute_node(1, compute_id, "compute_" + request_suffix, "prefill",
+                     "compute_after_source_release"),
+    });
+    resp["parent_edges"] = nlohmann::json::array({
+        data_edge(1, restore_release_id, restore_id),
+        data_edge(1, compute_release_id, compute_id),
+    });
+    resp["touched_ranks"] = nlohmann::json::array({1});
+    return parse_batch(resp, 3);
+}
+
+void finish_gc_node(GcFixture& fixture, int rank, uint64_t json_id,
+                    const char* what) {
+    const auto store_id = fixture.committer->resolve_store_id(rank, json_id);
+    expect(store_id.has_value(), what);
+    if (!store_id.has_value()) {
+        return;
+    }
+    NodeStore& store = fixture.sources[rank]->store();
+    store.mark_issued(*store_id);
+    expect(store.mark_terminal_observed(*store_id), what);
+    store.finish_node(*store_id);
+}
+
+void test_source_release_cross_batch_and_p_trigger_dag() {
+    GcFixture fixture(0, 3);
+    const GraphBatch source = p_trigger_remote_store_batch(0);
+    if (!commit_gc_batch(fixture, source,
+                         "Q: P-triggered remote stores validate and commit")) {
+        return;
+    }
+
+    const auto release_a = fixture.committer->resolve_store_id(1, 3);
+    const auto release_b = fixture.committer->resolve_store_id(1, 4);
+    expect(release_a.has_value() && release_b.has_value(),
+           "Q: source ACK receives keep stable affine ids");
+    if (!release_a.has_value() || !release_b.has_value()) {
+        return;
+    }
+    fixture.sources[1]->store().mark_issued(*release_a);
+    fixture.sources[1]->store().mark_issued(*release_b);
+
+    // Let the P trigger, data sends, remote pool writes and ACK sends finish,
+    // while the source-side ACK receives remain in flight.
+    finish_gc_node(fixture, 0, 0, "Q: P segment terminal observed");
+    finish_gc_node(fixture, 0, 1, "Q: trigger send terminal observed");
+    for (uint64_t id : {uint64_t(0), uint64_t(1), uint64_t(2)}) {
+        finish_gc_node(fixture, 1, id,
+                       "Q: trigger/data source node terminal observed");
+    }
+    for (uint64_t id : {uint64_t(0), uint64_t(1), uint64_t(2),
+                        uint64_t(3), uint64_t(4), uint64_t(5)}) {
+        finish_gc_node(fixture, 2, id,
+                       "Q: remote store and ACK send terminal observed");
+    }
+    fixture.committer->finalize_node_garbage();
+    expect(fixture.sources[1]->store().node_ptr(*release_a) != nullptr &&
+               fixture.sources[1]->store().node_ptr(*release_b) != nullptr,
+           "Q: live source ACK receives are retained through GC");
+
+    const GraphBatch blocked = source_release_consumer_batch(
+        1, 5, 6, 3, 4, "blocked");
+    if (!commit_gc_batch(fixture, blocked,
+                         "Q: cross-batch source release consumers validate")) {
+        return;
+    }
+    const auto restore_store_id = fixture.committer->resolve_store_id(1, 5);
+    const auto compute_store_id = fixture.committer->resolve_store_id(1, 6);
+    expect(restore_store_id.has_value() && compute_store_id.has_value(),
+           "Q: destination restore and COMP resolve to store ids");
+    const std::vector<uint64_t> blocked_free =
+        free_ids_of(fixture.sources[1]->store());
+    if (restore_store_id.has_value() && compute_store_id.has_value()) {
+        expect(!contains(blocked_free, *restore_store_id),
+               "Q: live source ACK blocks the next destination KV restore");
+        expect(!contains(blocked_free, *compute_store_id),
+               "Q: live source ACK blocks the next COMP");
+    }
+    expect(parent_and_comm_graph_is_acyclic({source, blocked}),
+           "Q: P-trigger, matched sends/recvs and source-release edges are acyclic");
+
+    // A terminal ACK releases only its own consumer; the other source ACK
+    // remains live and continues to gate its independent COMP branch.
+    fixture.sources[1]->store().mark_issued(*release_a);
+    expect(fixture.sources[1]->store().mark_terminal_observed(*release_a),
+           "Q: first source ACK terminal transition is observed once");
+    fixture.sources[1]->store().finish_node(*release_a);
+    const std::vector<uint64_t> one_released_free =
+        free_ids_of(fixture.sources[1]->store());
+    if (restore_store_id.has_value() && compute_store_id.has_value()) {
+        expect(contains(one_released_free, *restore_store_id),
+               "Q: terminal ACK releases its destination KV restore");
+        expect(!contains(one_released_free, *compute_store_id),
+               "Q: second live ACK still blocks its COMP");
+    }
+
+    finish_gc_node(fixture, 1, 5, "Q: restore terminal observed");
+    fixture.sources[1]->store().mark_issued(*release_b);
+    expect(fixture.sources[1]->store().mark_terminal_observed(*release_b),
+           "Q: second source ACK terminal transition is observed once");
+    fixture.sources[1]->store().finish_node(*release_b);
+    if (compute_store_id.has_value()) {
+        expect(contains(free_ids_of(fixture.sources[1]->store()),
+                        *compute_store_id),
+               "Q: second terminal ACK releases its COMP");
+    }
+    finish_gc_node(fixture, 1, 6, "Q: COMP terminal observed");
+    fixture.committer->finalize_node_garbage();
+    expect(fixture.sources[1]->store().erased(*release_a) &&
+               fixture.sources[1]->store().erased(*release_b),
+           "Q: terminal source ACK records are collected after their children");
+
+    const GraphBatch after_gc = source_release_consumer_batch(
+        2, 7, 8, 3, 4, "after_gc");
+    if (!commit_gc_batch(fixture, after_gc,
+                         "Q: cross-batch parents still resolve after ACK GC")) {
+        return;
+    }
+    const auto after_gc_restore =
+        fixture.committer->resolve_store_id(1, 7);
+    const auto after_gc_compute =
+        fixture.committer->resolve_store_id(1, 8);
+    const std::vector<uint64_t> after_gc_free =
+        free_ids_of(fixture.sources[1]->store());
+    expect(after_gc_restore.has_value() && after_gc_compute.has_value() &&
+               contains(after_gc_free, *after_gc_restore),
+           "Q: collected ACK parent makes the next KV restore immediately free");
+    expect(after_gc_restore.has_value() && after_gc_compute.has_value() &&
+               contains(after_gc_free, *after_gc_compute),
+           "Q: collected ACK parent makes the next COMP immediately free");
+
+    // A P-trigger cycle can be invisible to the committer's rank-local
+    // parent-edge Kahn pass: closing edge COMP -> trigger-recv becomes a
+    // cycle only after the tag-matched send->recv arcs are included. The
+    // producer-side combined-DAG gate must reject that shape.
+    GcFixture dag_fixture(0, 3);
+    GraphBatch p_trigger_with_comp = p_trigger_remote_store_batch(0, true);
+    if (!commit_gc_batch(dag_fixture, p_trigger_with_comp,
+                         "Q: P-trigger DAG probe validates in GraphBatchCommitter")) {
+        return;
+    }
+    expect(parent_and_comm_graph_is_acyclic({p_trigger_with_comp}),
+           "Q: valid P-trigger graph is acyclic after matched comm arcs");
+    p_trigger_with_comp.parent_edges.push_back(ParsedEdge{1, 5, 0});
+    expect(!parent_and_comm_graph_is_acyclic({p_trigger_with_comp}),
+           "Q: matched P-trigger cycle oracle catches cross-rank closure");
 }
 
 void test_gc_bounded_id_history_and_pruning() {
@@ -2272,6 +2601,7 @@ int main() {
     test_train_batch_drain_and_exit_markers(f);
     test_hbm_charge_key_parsing(f);
     test_gc_bounded_id_history_and_pruning();
+    test_source_release_cross_batch_and_p_trigger_dag();
     test_gc_amortized_tracking_bound();
     test_preseeded_store_id_is_captured();
     test_affine_drift_fails_closed();

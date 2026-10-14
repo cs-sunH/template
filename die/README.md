@@ -1,6 +1,6 @@
 # Coarse Die v2
 
-> Development checkpoint: read [docs/HANDOFF.md](docs/HANDOFF.md) before continuing. The default build is blocked by the benchmark target's missing `COARSE_DIE_SOURCE_DIR` definition; operator and five-repository acceptance remains incomplete. This checkpoint is preserved for repair, not a completed release.
+> Development checkpoint: read [docs/HANDOFF.md](docs/HANDOFF.md) before continuing. The default public build and 30 CTest tests pass. Production timing accuracy and complete five-repository business integration remain unaccepted.
 
 `die/` is the canonical source for a coarse architectural model of one Die: a source-derived hardware resolver, a task-to-plan compiler, a shared service runtime, and a C ABI. Results describe a versioned set of engineering assumptions. They are not target-device measurements or a claim of silicon prediction accuracy.
 
@@ -13,7 +13,6 @@ The TX8 reconstruction is a separate reference profile. The workbook has cached 
 With CMake, a C++17 compiler, and the repository JSON header available:
 
 ```bash
-source /workspace/cloud-setup/activate.sh
 cmake -S die -B build/coarse_die_v2 \
   -DCMAKE_BUILD_TYPE=Release \
   -DCOARSE_DIE_JSON_INCLUDE="$PWD/astra-sim-wscllm/extern/helper"
@@ -66,11 +65,12 @@ Apply the same configure/build/test sequence to `astra-sim-wscllm`, `astra-sim-w
 |---|---|
 | Workbook cached source/formula reconciliation | `passed` for the independent Python audit; source values are not raw measurement evidence |
 | TX8 13-group/Attention/FFN reconstruction | `passed` as conditional source-formula reproduction; not performance accuracy |
-| Compiler/Mapping/Plan source syntax checks | `passed` as individual translation-unit checks; this does not establish a linked library |
-| v2 Release library build, CTest, and example C ABI estimates | Static/shared library targets compiled during handoff; default all-target build failed at the benchmark macro definition. Full CTest and example estimates remain `not_run`; see committed handoff evidence. |
-| Minimal standalone Runtime semantic check | `passed` for the narrow check reported at this checkpoint; full CTest/C ABI snapshot and metric coverage remains `not_run` |
-| Five-repository v2 adapter integration | `in_progress`; source wiring is being edited, but release sync, five builds, complete CTest, and COMP+COMM/RESTORE metric fixtures are not yet verified |
+| Public Release build, CTest and Plan compatibility | `passed`: 30/30 tests; 62/62 prior Plan hashes and complete summaries unchanged at the capacity-bound checkpoint |
+| Capacity-only compiler bound and LRU admission | `passed` for the finite request-aggregated manifest fixtures; both actual Online runs finished, with all 480/560 typed Plans below their immutable rank bounds |
+| Runtime, endpoints and snapshot semantics | Focused public and adapter tests pass; these do not establish production timing accuracy or every business path |
+| Five-repository v2 adapter integration | `in_progress`; canonical publication and per-variant ABI/config checks are recorded separately from workload/runtime integration |
+| Production timing granularity | `failed`: E5 finish/busy oracle remains outside the original 3%/5% limits; E8/E16 evidence is unavailable |
 | Independent target-hardware held-out validation | `not_available`; no eligible target timing samples are present |
-| Legacy joint baseline | `passed` before the current v2 work: 28/28 CTest and 72 pytest tests plus 12 subtests. It ran old binaries and is not v2 verification. |
+| New active joint | Additive coarse adapter/runtime work uses `astra-sim-joint`; `astra-sim-joint_old` is archival. Current verification scope is in HANDOFF. |
 
-The engineering project remains incomplete: the full-library, C ABI, and five-repository acceptance gates have not passed. Exact reference reconstruction, a narrow Runtime semantic check, or source-table golden checks cannot upgrade target performance accuracy or physical-topology evidence.
+The engineering project remains incomplete. Follow the design §1.4 formula-first principle: auxiliary details that are not directly tied to hardware design or software task inputs use simple mathematical formulas where sufficient. Necessary parameter coverage, readiness and shared-resource constraints remain required. Current evidence and reproduction instructions are in [docs/evidence/lru-future-workspace-20261014](docs/evidence/lru-future-workspace-20261014/README.md).
