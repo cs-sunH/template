@@ -15,6 +15,8 @@ of this source tree.
 #include <utility>
 #include <vector>
 
+#include <json/json.hpp>
+
 #include "astra-sim/system/Callable.hh"
 #include "astra-sim/system/Common.hh"
 
@@ -278,6 +280,13 @@ class LocalHbmBandwidthModel : public Callable {
 
     [[nodiscard]] std::vector<JobSnapshotEntry> job_snapshot();
 
+    /// Bind active external local-HBM jobs to the immutable sample exported
+    /// by CoarseDieRuntime::sample_snapshot_at. This reads only that sample
+    /// and the jobs' stable issue-time identities; it never advances either
+    /// runtime or dispatches a completion callback.
+    [[nodiscard]] nlohmann::json coarse_snapshot_bindings(
+        const nlohmann::json& local_sample) const;
+
     /// Jobs' remaining_* are integrated through this tick (the model's own
     /// fluid clock; the caller exports it as the frame's as_of_tick).
     [[nodiscard]] Tick jobs_as_of_tick() const {
@@ -305,7 +314,9 @@ class LocalHbmBandwidthModel : public Callable {
     struct CoarseJob {
         WorkloadLayerHandlerData* wlhd = nullptr;
         JobKind kind = JobKind::COMM_READ;
-        std::function<void()> transfer_completion;
+        int completion_sys_id = -1;
+        uint64_t node_id = 0;
+        bool has_transfer_sink = false;
     };
 
     struct Job {

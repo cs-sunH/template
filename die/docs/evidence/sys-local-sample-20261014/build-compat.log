@@ -1,0 +1,119 @@
+[  4%] Built target coarse_die
+[ 23%] Built target yaml-cpp
+[ 28%] Built target die_model
+[ 33%] Built target joint_ledger
+[ 33%] Built target fmt
+[ 38%] Built target spdlog
+[ 47%] Built target Analytical_Congestion_Aware
+[ 52%] Built target joint_pipeline_core
+[ 85%] Built target AstraSim
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/congestion_aware/CongestionAwareNetworkApi.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/common/CallbackTracker.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/common/CallbackTrackerEntry.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/common/ChunkIdGenerator.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/common/ChunkIdGeneratorEntry.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/common/CmdLineParser.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/common/CommonNetworkApi.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/tests/die_model_adapter_test.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/CompletionObserver.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionBridge.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionMailbox.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/GraphBatchCommitter.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/NodeStore.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/OnlineCli.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ParsedGraphBatch.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/RequestIngress.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ServiceCoordinator.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ShmFrameChannel.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WatchRegistry.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WindowedTraceReader.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2Publisher.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2RuntimeSnapshot.cc.o
+[100%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+[  5%] Built target coarse_die
+[ 25%] Built target yaml-cpp
+[ 30%] Built target die_model
+[ 35%] Built target joint_ledger
+[ 35%] Built target fmt
+[ 40%] Built target spdlog
+[ 50%] Built target Analytical_Congestion_Aware
+[ 55%] Built target joint_pipeline_core
+[ 90%] Built target AstraSim
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/congestion_aware/CongestionAwareNetworkApi.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/common/CallbackTracker.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/common/CallbackTrackerEntry.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/common/ChunkIdGenerator.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/common/ChunkIdGeneratorEntry.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/common/CmdLineParser.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/common/CommonNetworkApi.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/CompletionObserver.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionBridge.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionMailbox.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/GraphBatchCommitter.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/NodeStore.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/OnlineCli.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ParsedGraphBatch.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/RequestIngress.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ServiceCoordinator.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ShmFrameChannel.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WatchRegistry.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WindowedTraceReader.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2Publisher.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2RuntimeSnapshot.cc.o
+[100%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[  5%] Built target coarse_die
+[ 25%] Built target yaml-cpp
+[ 30%] Built target die_model
+[ 35%] Built target joint_ledger
+[ 35%] Built target fmt
+[ 40%] Built target spdlog
+[ 50%] Built target Analytical_Congestion_Aware
+[ 55%] Built target joint_pipeline_core
+[ 90%] Built target AstraSim
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/common/CallbackTracker.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/congestion_aware/CongestionAwareNetworkApi.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/common/CallbackTrackerEntry.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/common/ChunkIdGenerator.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/common/ChunkIdGeneratorEntry.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/common/CmdLineParser.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/common/CommonNetworkApi.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/tests/local_hbm_die_memory_test.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/CompletionObserver.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionBridge.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionMailbox.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/GraphBatchCommitter.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/NodeStore.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/OnlineCli.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ParsedGraphBatch.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/RequestIngress.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ServiceCoordinator.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ShmFrameChannel.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WatchRegistry.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WindowedTraceReader.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2Publisher.cc.o
+[100%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2RuntimeSnapshot.cc.o
+[100%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+[  4%] Built target coarse_die
+[ 23%] Built target yaml-cpp
+[ 28%] Built target die_model
+[ 28%] Built target fmt
+[ 33%] Built target joint_ledger
+[ 38%] Built target spdlog
+[ 47%] Built target Analytical_Congestion_Aware
+[ 52%] Built target joint_pipeline_core
+[ 85%] Built target AstraSim
+[ 85%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionBridge.cc.o
+[ 85%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/congestion_aware/main_online.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionMailbox.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/GraphBatchCommitter.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ParsedGraphBatch.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/RequestIngress.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WatchRegistry.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WindowedTraceReader.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_Online.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2RuntimeSnapshot.cc.o
+[ 95%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_Online
+[100%] Built target AstraSim_Analytical_Congestion_Aware_Online

@@ -48,6 +48,11 @@ class CoarseDieRuntime final : public Callable {
     // dispatching graph/network callbacks. Time reversal is rejected.
     nlohmann::json counters_at(uint64_t now_ns) const;
     nlohmann::json export_snapshot(uint64_t now_ns);
+    // Read-only local sample at the active Sys decision tick. Advances a
+    // private Runtime copy and retains completion bindings even when that
+    // copy reaches terminal. Never dispatches callbacks or changes the live
+    // event, adapter/workspace lease or outer graph state.
+    nlohmann::json sample_snapshot_at(uint64_t now_ns) const;
     const coarse_die::Hardware& hardware() const { return hardware_; }
     const nlohmann::json& hardware_summary() const { return hardware_.derived; }
     bool has_active_executions() const { return !completion_.empty(); }

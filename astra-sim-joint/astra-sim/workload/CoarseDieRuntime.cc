@@ -196,6 +196,55 @@ nlohmann::json CoarseDieRuntime::export_snapshot(uint64_t now_ns) {
     };
 }
 
+nlohmann::json CoarseDieRuntime::sample_snapshot_at(
+    const uint64_t now_ns) const {
+    if (dispatching_) {
+        throw std::runtime_error(
+            "coarse_die_v2 local sample cannot be taken during terminal callback dispatch");
+    }
+    if (now_ns != Sys::boostedTick()) {
+        throw std::runtime_error(
+            "coarse_die_v2 local sample tick must match the active Sys decision tick");
+    }
+    const auto live_handles = runtime_.execution_handles();
+    if (live_handles.size() != completion_.size()) {
+        throw std::logic_error(
+            "coarse_die_v2 Runtime and completion bindings are not a bijection");
+    }
+    for (const auto handle : live_handles) {
+        if (!completion_.count(handle)) {
+            throw std::logic_error(
+                "coarse_die_v2 Runtime execution lacks its completion binding");
+        }
+    }
+    coarse_die::Runtime sampled(runtime_);
+    sampled.advance_to(now_ns);
+    nlohmann::json bindings = nlohmann::json::array();
+    for (const auto& entry : completion_) {
+        const auto progress = sampled.query_progress(entry.first);
+        bindings.push_back({
+            {"handle", entry.first},
+            {"owner", progress.at("owner")},
+            {"state_at_sample", progress.at("state")},
+            {"terminal_at_sample", progress.at("terminal")},
+            {"finish_ns_at_sample", progress.at("finish_ns")},
+        });
+    }
+    return {
+        {"schema", "coarse_die_local_sample_v1"},
+        {"rank", sys_->id},
+        {"sampled_at_ns", now_ns},
+        {"live_runtime_now_ns", runtime_.now_ns()},
+        {"hardware_config", hardware_.input},
+        {"hardware_fingerprint", hardware_.fingerprint},
+        {"runtime_snapshot", sampled.export_snapshot()},
+        {"completion_bindings", std::move(bindings)},
+        {"scope", "rank_local_runtime_only"},
+        {"callbacks_dispatched", false},
+        {"production_world_import_supported", false},
+    };
+}
+
 nlohmann::json CoarseDieRuntime::counters_at(const uint64_t now_ns) const {
     // Runtime copies mutable execution/accounting state and shares only the
     // immutable Hardware/Plans. The sample owns no external callbacks.

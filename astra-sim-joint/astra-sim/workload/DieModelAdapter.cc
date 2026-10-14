@@ -10,6 +10,7 @@ LICENSE file in the root directory of this source tree.
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <utility>
 
@@ -186,37 +187,79 @@ DieModelAdapter::PreparedCoarsePlan DieModelAdapter::prepare_coarse_plan(
     const uint64_t workspace_bytes =
         coarse_die::hbm_workspace_peak_bytes(*plan);
     return PreparedCoarsePlan{std::move(plan), workspace_bytes,
-                              node.global_id, node.generation};
+                              node.global_id, node.generation,
+                              node.compute.die_task_json};
 }
 
 WorkspaceAdmission::AcquireResult DieModelAdapter::try_acquire_workspace(
     const PreparedCoarsePlan& prepared) {
-    if (sys_->workspace_admission == nullptr || !prepared.plan) {
+    if (sys_ == nullptr || sys_->coarse_die_runtime == nullptr ||
+        sys_->workspace_admission == nullptr || !prepared.plan ||
+        !prepared.task) {
         throw std::runtime_error(
             "workspace acquisition requires a prepared coarse Plan");
     }
+    const uint64_t canonical_workspace_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
+    if (sys_->workspace_admission->rank() != sys_->id ||
+        prepared.workspace_bytes != canonical_workspace_bytes ||
+        prepared.plan->fingerprint.empty() ||
+        prepared.plan->hardware_fingerprint !=
+            sys_->coarse_die_runtime->hardware().fingerprint) {
+        throw std::runtime_error(
+            "prepared coarse Plan workspace or hardware identity is not canonical");
+    }
     return sys_->workspace_admission->try_acquire(
         prepared.node_id, prepared.generation, prepared.workspace_bytes);
+}
+
+void DieModelAdapter::validate_prepared_coarse_plan(
+    const ExecutionDriven::NodeView& node,
+    const PreparedCoarsePlan& prepared,
+    const WorkspaceAdmission::Lease& lease) const {
+    if (sys_ == nullptr || sys_->coarse_die_runtime == nullptr ||
+        sys_->workspace_admission == nullptr || !prepared.plan ||
+        !prepared.task || !lease.active()) {
+        throw std::runtime_error(
+            "coarse issue requires a live prepared Plan and workspace lease");
+    }
+    if (node.node_type != ChakraNodeType::COMP_NODE || node.is_timer_op ||
+        node.is_cpu_op ||
+        node.compute.op_role != ExecutionDriven::OpRole::Compute ||
+        node.compute.die_task_json == nullptr || node.compute.die_spec != nullptr) {
+        throw std::runtime_error(
+            "prepared coarse issue requires a typed GPU COMP node");
+    }
+    const uint64_t canonical_workspace_bytes =
+        coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
+    if (sys_->workspace_admission->rank() != sys_->id ||
+        prepared.node_id != node.global_id ||
+        prepared.generation != node.generation ||
+        *prepared.task != *node.compute.die_task_json ||
+        prepared.workspace_bytes != canonical_workspace_bytes ||
+        prepared.plan->fingerprint.empty() ||
+        prepared.plan->hardware_fingerprint !=
+            sys_->coarse_die_runtime->hardware().fingerprint ||
+        !sys_->workspace_admission->owns_lease(
+            lease, canonical_workspace_bytes)) {
+        throw std::runtime_error(
+            "prepared Plan/workspace lease identity or canonical workspace "
+            "does not match COMP node and rank ledger");
+    }
+    const auto& key = lease.key();
+    if (key.rank != sys_->id || key.node_id != node.global_id ||
+        key.generation != node.generation) {
+        throw std::runtime_error(
+            "workspace lease key differs from the prepared COMP identity");
+    }
 }
 
 void DieModelAdapter::issue_prepared_coarse_plan(
     const ExecutionDriven::NodeView& node,
     PreparedCoarsePlan prepared,
     WorkspaceAdmission::Lease lease) {
+    validate_prepared_coarse_plan(node, prepared, lease);
     purge_finished_executions();
-    if (sys_->coarse_die_runtime == nullptr ||
-        sys_->workspace_admission == nullptr || !prepared.plan ||
-        !lease.active()) {
-        throw std::runtime_error(
-            "coarse issue requires a live prepared Plan and workspace lease");
-    }
-    const auto& key = lease.key();
-    if (prepared.node_id != node.global_id ||
-        prepared.generation != node.generation || key.rank != sys_->id ||
-        key.node_id != node.global_id || key.generation != node.generation) {
-        throw std::runtime_error(
-            "prepared Plan/workspace lease identity does not match COMP node");
-    }
 
     coarse_die::Owner owner;
     owner.request_id = stable_request_id(node.request_id);
@@ -327,6 +370,241 @@ void DieModelAdapter::issue_prepared_coarse_plan(
         }
         throw;
     }
+}
+
+nlohmann::json DieModelAdapter::coarse_snapshot_bindings(
+    const nlohmann::json& local_sample) const {
+    using Json = nlohmann::json;
+    const auto reject = [](const std::string& reason) {
+        throw std::runtime_error("coarse DIE sample binding: " + reason);
+    };
+    if (workload_ == nullptr || sys_ == nullptr ||
+        sys_->coarse_die_runtime == nullptr ||
+        sys_->workspace_admission == nullptr) {
+        reject("requires a live coarse_die_v2 Runtime and workspace ledger");
+    }
+    if (!local_sample.is_object()) reject("sample envelope must be an object");
+    const auto member = [&](const Json& object, const char* name) -> const Json& {
+        if (!object.is_object() || !object.contains(name)) {
+            reject(std::string("sample is missing ") + name);
+        }
+        return object.at(name);
+    };
+    const auto uint64_value = [&](const Json& value, const char* name) {
+        if (value.is_number_unsigned()) return value.get<uint64_t>();
+        if (value.is_number_integer()) {
+            const int64_t signed_value = value.get<int64_t>();
+            if (signed_value >= 0) return static_cast<uint64_t>(signed_value);
+        }
+        reject(std::string(name) + " must be an exact nonnegative integer");
+        return uint64_t{0};
+    };
+    const auto string_value = [&](const Json& value, const char* name) {
+        if (!value.is_string()) reject(std::string(name) + " must be a string");
+        return value.get<std::string>();
+    };
+    const auto bool_value = [&](const Json& value, const char* name) {
+        if (!value.is_boolean()) reject(std::string(name) + " must be a boolean");
+        return value.get<bool>();
+    };
+
+    if (string_value(member(local_sample, "schema"), "schema") !=
+        "coarse_die_local_sample_v1") {
+        reject("unsupported local sample schema");
+    }
+    if (sys_->id < 0 || uint64_value(member(local_sample, "rank"), "rank") !=
+                            static_cast<uint64_t>(sys_->id)) {
+        reject("sample rank differs from this Sys");
+    }
+    const uint64_t sample_tick =
+        uint64_value(member(local_sample, "sampled_at_ns"), "sampled_at_ns");
+    if (sample_tick != Sys::boostedTick()) {
+        reject("sample clock differs from the active Sys decision tick");
+    }
+    const std::string hardware_fingerprint =
+        sys_->coarse_die_runtime->hardware().fingerprint;
+    if (hardware_fingerprint.empty() ||
+        string_value(member(local_sample, "hardware_fingerprint"),
+                     "hardware_fingerprint") != hardware_fingerprint) {
+        reject("sample hardware fingerprint differs from this Runtime");
+    }
+
+    const Json& runtime_snapshot = member(local_sample, "runtime_snapshot");
+    if (!runtime_snapshot.is_object() ||
+        string_value(member(runtime_snapshot, "schema"),
+                     "runtime_snapshot.schema") != "coarse_die_snapshot_v3" ||
+        uint64_value(member(runtime_snapshot, "snapshot_version"),
+                     "runtime_snapshot.snapshot_version") != 3) {
+        reject("Runtime snapshot must use coarse_die_snapshot_v3");
+    }
+    if (string_value(member(runtime_snapshot, "hardware_fingerprint"),
+                     "runtime_snapshot.hardware_fingerprint") !=
+            hardware_fingerprint ||
+        uint64_value(member(runtime_snapshot, "now_ns"),
+                     "runtime_snapshot.now_ns") != sample_tick) {
+        reject("Runtime snapshot hardware or clock differs from the sample");
+    }
+    const Json& executions = member(runtime_snapshot, "executions");
+    if (!executions.is_array()) reject("Runtime executions must be an array");
+    std::map<uint64_t, const Json*> executions_by_handle;
+    for (const auto& execution : executions) {
+        const uint64_t handle = uint64_value(
+            member(execution, "handle"), "Runtime execution handle");
+        if (!executions_by_handle.emplace(handle, &execution).second) {
+            reject("Runtime snapshot contains a duplicate execution handle");
+        }
+    }
+
+    const Json& callbacks = member(local_sample, "completion_bindings");
+    if (!callbacks.is_array()) reject("completion_bindings must be an array");
+    std::map<uint64_t, const Json*> callbacks_by_handle;
+    for (const auto& callback : callbacks) {
+        const uint64_t handle = uint64_value(
+            member(callback, "handle"), "completion binding handle");
+        if (!callbacks_by_handle.emplace(handle, &callback).second) {
+            reject("sample contains a duplicate completion binding handle");
+        }
+    }
+
+    if (workload_->graph_source_ == nullptr) {
+        reject("Workload has no graph source for live COMP metadata");
+    }
+    Json result = Json::array();
+    for (const auto& entry : coarse_active_) {
+        const uint64_t handle = entry.first;
+        const CoarseActiveRecord& active = entry.second;
+        if (!active.plan || !active.lease.active()) {
+            reject("adapter has a missing Plan or inactive workspace lease");
+        }
+        const uint64_t workspace_bytes =
+            coarse_die::hbm_workspace_peak_bytes(*active.plan);
+        if (!sys_->workspace_admission->owns_lease(active.lease,
+                                                    workspace_bytes)) {
+            reject("adapter workspace lease is not owned by this rank ledger");
+        }
+        const auto& lease_key = active.lease.key();
+        if (lease_key.rank != sys_->id || lease_key.node_id != active.node_id ||
+            lease_key.generation != active.generation) {
+            reject("workspace lease key differs from its adapter record");
+        }
+
+        const ExecutionDriven::NodeView* node =
+            workload_->graph_source_->lookup_ptr(active.node_id);
+        std::optional<ExecutionDriven::NodeView> owned_node;
+        if (node == nullptr) {
+            owned_node = workload_->graph_source_->lookup(active.node_id);
+            if (!owned_node.has_value()) {
+                reject("active COMP node is absent from the Workload graph");
+            }
+            node = &*owned_node;
+        }
+        if (node->global_id != active.node_id || node->rank != sys_->id ||
+            node->generation != active.generation ||
+            node->node_type != ChakraNodeType::COMP_NODE || node->is_cpu_op ||
+            node->is_timer_op ||
+            node->compute.op_role != ExecutionDriven::OpRole::Compute ||
+            node->compute.die_task_json == nullptr ||
+            node->compute.die_spec != nullptr) {
+            reject("adapter record no longer identifies the same typed COMP node");
+        }
+
+        if (active.plan->fingerprint.empty() ||
+            active.plan->hardware_fingerprint != hardware_fingerprint) {
+            reject("adapter Plan identity differs from the sampled hardware");
+        }
+        coarse_die::Owner expected_owner;
+        expected_owner.request_id = stable_request_id(node->request_id);
+        expected_owner.node_id = node->global_id;
+        expected_owner.execution_id = node->generation;
+        expected_owner.generation = std::max<uint64_t>(node->generation, 1);
+
+        const auto execution_found = executions_by_handle.find(handle);
+        const auto callback_found = callbacks_by_handle.find(handle);
+        if (execution_found == executions_by_handle.end() ||
+            callback_found == callbacks_by_handle.end()) {
+            reject("Runtime execution or live callback is missing an adapter handle");
+        }
+        const Json& sampled_execution = *execution_found->second;
+        const Json& sampled_callback = *callback_found->second;
+        const Json& sampled_plan = member(sampled_execution, "plan");
+        const Json& sampled_execution_owner = member(sampled_execution, "owner");
+        const Json& sampled_callback_owner = member(sampled_callback, "owner");
+        const auto owner_matches = [&](const Json& owner) {
+            return uint64_value(member(owner, "request_id"), "owner.request_id") ==
+                       expected_owner.request_id &&
+                   uint64_value(member(owner, "node_id"), "owner.node_id") ==
+                       expected_owner.node_id &&
+                   uint64_value(member(owner, "execution_id"), "owner.execution_id") ==
+                       expected_owner.execution_id &&
+                   uint64_value(member(owner, "generation"), "owner.generation") ==
+                       expected_owner.generation &&
+                   string_value(member(owner, "key"), "owner.key") ==
+                       expected_owner.key();
+        };
+        if (string_value(member(sampled_plan, "fingerprint"),
+                         "Runtime Plan fingerprint") != active.plan->fingerprint ||
+            string_value(member(sampled_plan, "hardware_fingerprint"),
+                         "Runtime Plan hardware fingerprint") != hardware_fingerprint ||
+            !owner_matches(sampled_execution_owner) ||
+            !owner_matches(sampled_callback_owner)) {
+            reject("Runtime execution or callback metadata differs from live COMP identity");
+        }
+
+        const bool terminal = bool_value(
+            member(sampled_callback, "terminal_at_sample"),
+            "callback terminal_at_sample");
+        const std::string callback_state = string_value(
+            member(sampled_callback, "state_at_sample"), "callback state_at_sample");
+        const Json& callback_finish = member(
+            sampled_callback, "finish_ns_at_sample");
+        const bool runtime_terminal = bool_value(
+            member(sampled_execution, "terminal"), "Runtime execution terminal");
+        const bool runtime_cancelled = bool_value(
+            member(sampled_execution, "cancelled"), "Runtime execution cancelled");
+        const Json& runtime_finish = member(sampled_execution, "finish_ns");
+        uint64_t finish_ns = 0;
+        if (terminal) {
+            if (callback_state != "finished" && callback_state != "cancelled") {
+                reject("terminal callback state is not finished or cancelled");
+            }
+            if ((callback_state == "cancelled") != runtime_cancelled ||
+                !runtime_terminal || callback_finish.is_null() ||
+                runtime_finish.is_null()) {
+                reject("terminal callback metadata differs from Runtime execution");
+            }
+            finish_ns = uint64_value(callback_finish,
+                                     "callback finish_ns_at_sample");
+            if (finish_ns != uint64_value(runtime_finish,
+                                          "Runtime execution finish_ns") ||
+                finish_ns > sample_tick) {
+                reject("terminal finish time differs or lies after the sample");
+            }
+        } else if (callback_state == "finished" || callback_state == "cancelled" ||
+                   runtime_terminal || runtime_cancelled ||
+                   !callback_finish.is_null() || !runtime_finish.is_null()) {
+            reject("nonterminal callback metadata differs from Runtime execution");
+        }
+
+        result.push_back({
+            {"handle", handle},
+            {"rank", sys_->id},
+            {"node_id", node->global_id},
+            {"generation", node->generation},
+            {"request_id", node->request_id},
+            {"stage", node->stage},
+            {"plan_fingerprint", active.plan->fingerprint},
+            {"owner", sampled_callback_owner},
+            {"workspace_lease", {
+                {"rank", lease_key.rank},
+                {"node_id", lease_key.node_id},
+                {"generation", lease_key.generation},
+                {"lease_id", lease_key.lease_id},
+                {"bytes", workspace_bytes}}},
+            {"terminal_at_sample", terminal},
+            {"finish_ns_at_sample", terminal ? Json(finish_ns) : Json(nullptr)},
+        });
+    }
+    return result;
 }
 
 DieModelAdapter::IssueTiming&

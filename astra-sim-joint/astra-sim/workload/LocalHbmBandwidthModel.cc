@@ -417,6 +417,305 @@ LocalHbmBandwidthModel::job_snapshot() {
     return snapshot;
 }
 
+nlohmann::json LocalHbmBandwidthModel::coarse_snapshot_bindings(
+    const nlohmann::json& local_sample) const {
+    using Json = nlohmann::json;
+    const auto reject = [](const std::string& reason) {
+        throw std::invalid_argument(
+            "coarse_die_v2 local HBM sample: " + reason);
+    };
+    const auto member = [&](const Json& object,
+                            const char* key,
+                            const std::string& path) -> const Json& {
+        if (!object.is_object() || !object.contains(key)) {
+            reject(path + " is missing " + key);
+        }
+        return object.at(key);
+    };
+    const auto uint_value = [&](const Json& value,
+                                const std::string& path) -> uint64_t {
+        if (value.is_number_unsigned()) {
+            return value.get<uint64_t>();
+        }
+        if (value.is_number_integer()) {
+            const int64_t parsed = value.get<int64_t>();
+            if (parsed >= 0) return static_cast<uint64_t>(parsed);
+        }
+        reject(path + " must be a nonnegative integer");
+        return 0;
+    };
+    const auto bool_value = [&](const Json& value,
+                                const std::string& path) -> bool {
+        if (!value.is_boolean()) reject(path + " must be boolean");
+        return value.get<bool>();
+    };
+    const auto string_value = [&](const Json& value,
+                                  const std::string& path) -> std::string {
+        if (!value.is_string()) reject(path + " must be a string");
+        return value.get<std::string>();
+    };
+
+    if (sys == nullptr || sys->coarse_die_runtime == nullptr) {
+        reject("requires an active coarse DIE Runtime");
+    }
+    if (!local_sample.is_object() ||
+        string_value(member(local_sample, "schema", "sample"),
+                     "sample.schema") != "coarse_die_local_sample_v1") {
+        reject("incompatible sample schema");
+    }
+    if (string_value(member(local_sample, "scope", "sample"),
+                     "sample.scope") != "rank_local_runtime_only" ||
+        bool_value(member(local_sample, "callbacks_dispatched", "sample"),
+                   "sample.callbacks_dispatched") ||
+        bool_value(member(local_sample,
+                          "production_world_import_supported", "sample"),
+                   "sample.production_world_import_supported")) {
+        reject("sample scope or callback status is incompatible");
+    }
+
+    const Json& rank_wire = member(local_sample, "rank", "sample");
+    int sample_rank = 0;
+    if (rank_wire.is_number_unsigned()) {
+        const uint64_t parsed = rank_wire.get<uint64_t>();
+        if (parsed > static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+            reject("rank is out of range");
+        }
+        sample_rank = static_cast<int>(parsed);
+    } else if (rank_wire.is_number_integer()) {
+        const int64_t parsed = rank_wire.get<int64_t>();
+        if (parsed < std::numeric_limits<int>::min() ||
+            parsed > std::numeric_limits<int>::max()) {
+            reject("rank is out of range");
+        }
+        sample_rank = static_cast<int>(parsed);
+    } else {
+        reject("rank must be an integer");
+    }
+    if (sample_rank != sys->id) reject("rank does not match the local Sys");
+
+    const uint64_t sampled_at_ns = uint_value(
+        member(local_sample, "sampled_at_ns", "sample"),
+        "sample.sampled_at_ns");
+    if (sampled_at_ns != Sys::boostedTick()) {
+        reject("sample tick does not match the active Sys decision tick");
+    }
+    const uint64_t live_runtime_now_ns = uint_value(
+        member(local_sample, "live_runtime_now_ns", "sample"),
+        "sample.live_runtime_now_ns");
+    if (live_runtime_now_ns > sampled_at_ns) {
+        reject("live Runtime clock is after the sample tick");
+    }
+
+    const auto& hardware = sys->coarse_die_runtime->hardware();
+    const std::string expected_fingerprint = hardware.fingerprint;
+    if (string_value(member(local_sample, "hardware_fingerprint", "sample"),
+                     "sample.hardware_fingerprint") != expected_fingerprint ||
+        member(local_sample, "hardware_config", "sample") != hardware.input) {
+        reject("sample hardware does not match the local Runtime");
+    }
+
+    const Json& runtime = member(local_sample, "runtime_snapshot", "sample");
+    if (!runtime.is_object() ||
+        string_value(member(runtime, "schema", "runtime_snapshot"),
+                     "runtime_snapshot.schema") != "coarse_die_snapshot_v3" ||
+        uint_value(member(runtime, "snapshot_version", "runtime_snapshot"),
+                   "runtime_snapshot.snapshot_version") != 3 ||
+        string_value(member(runtime, "hardware_fingerprint", "runtime_snapshot"),
+                     "runtime_snapshot.hardware_fingerprint") != expected_fingerprint ||
+        uint_value(member(runtime, "now_ns", "runtime_snapshot"),
+                   "runtime_snapshot.now_ns") != sampled_at_ns) {
+        reject("Runtime snapshot schema, hardware, or clock does not match the sample");
+    }
+
+    const Json& executions = member(runtime, "executions", "runtime_snapshot");
+    const Json& bindings = member(local_sample, "completion_bindings", "sample");
+    if (!executions.is_array() || !bindings.is_array()) {
+        reject("Runtime executions and completion bindings must be arrays");
+    }
+    std::map<uint64_t, const Json*> executions_by_handle;
+    std::map<uint64_t, const Json*> bindings_by_handle;
+    for (const auto& execution : executions) {
+        if (!execution.is_object()) reject("Runtime execution must be an object");
+        const uint64_t handle = uint_value(
+            member(execution, "handle", "runtime execution"),
+            "runtime execution.handle");
+        if (!executions_by_handle.emplace(handle, &execution).second) {
+            reject("Runtime snapshot contains a duplicate handle");
+        }
+    }
+    for (const auto& binding : bindings) {
+        if (!binding.is_object()) reject("completion binding must be an object");
+        const uint64_t handle = uint_value(
+            member(binding, "handle", "completion binding"),
+            "completion binding.handle");
+        if (!bindings_by_handle.emplace(handle, &binding).second) {
+            reject("completion bindings contain a duplicate handle");
+        }
+    }
+    if (executions_by_handle.size() != bindings_by_handle.size()) {
+        reject("Runtime execution and callback-binding sets differ");
+    }
+    for (const auto& entry : executions_by_handle) {
+        const auto binding_it = bindings_by_handle.find(entry.first);
+        if (binding_it == bindings_by_handle.end()) {
+            reject("Runtime execution has no completion binding");
+        }
+        const Json& execution = *entry.second;
+        const Json& binding = *binding_it->second;
+        const Json& execution_owner = member(execution, "owner", "runtime execution");
+        if (member(binding, "owner", "completion binding") != execution_owner) {
+            reject("completion binding owner differs from its Runtime execution");
+        }
+        const bool terminal = bool_value(
+            member(execution, "terminal", "runtime execution"),
+            "runtime execution.terminal");
+        const bool cancelled = bool_value(
+            member(execution, "cancelled", "runtime execution"),
+            "runtime execution.cancelled");
+        const bool terminal_at_sample = bool_value(
+            member(binding, "terminal_at_sample", "completion binding"),
+            "completion binding.terminal_at_sample");
+        const Json& execution_finish = member(
+            execution, "finish_ns", "runtime execution");
+        const Json& binding_finish = member(
+            binding, "finish_ns_at_sample", "completion binding");
+        if (terminal != terminal_at_sample ||
+            terminal != !execution_finish.is_null() ||
+            execution_finish.is_null() != binding_finish.is_null()) {
+            reject("completion binding terminal state differs from its Runtime execution");
+        }
+        if (!execution_finish.is_null() &&
+            uint_value(execution_finish, "runtime execution.finish_ns") !=
+                uint_value(binding_finish,
+                           "completion binding.finish_ns_at_sample")) {
+            reject("completion binding finish tick differs from its Runtime execution");
+        }
+        const std::string state = string_value(
+            member(binding, "state_at_sample", "completion binding"),
+            "completion binding.state_at_sample");
+        if ((terminal && state != (cancelled ? "cancelled" : "finished")) ||
+            (!terminal && (state == "cancelled" || state == "finished"))) {
+            reject("completion binding state differs from its Runtime execution");
+        }
+    }
+
+    struct Metadata {
+        const char* name;
+        const char* owner_kind;
+        const char* direction;
+        const char* path_class;
+        bool initial_delay;
+    };
+    const auto kind_metadata = [&](JobKind kind) -> Metadata {
+        switch (kind) {
+            case JobKind::RESTORE:
+                return Metadata{"restore", "restore", "write", "edge_to_hbm", false};
+            case JobKind::COMM_READ:
+                return Metadata{"comm_read", "comm", "read", "hbm_to_edge", false};
+            case JobKind::COMM_WRITE:
+                return Metadata{"comm_write", "comm", "write", "edge_to_hbm", false};
+            case JobKind::POOL_READ:
+                return Metadata{"pool_read", "pool", "read", "hbm_to_edge", false};
+            case JobKind::POOL_WRITE:
+                return Metadata{"pool_write", "pool", "write", "edge_to_hbm", false};
+            case JobKind::CONTROL_MARKER:
+                return Metadata{"control_marker", "die", "read", "hbm_to_edge", true};
+            default:
+                reject("coarse job has no external endpoint kind");
+                return Metadata{"", "", "", "", false};
+        }
+    };
+
+    Json result = Json::array();
+    for (const auto& job_entry : coarse_jobs_) {
+        const uint64_t handle = job_entry.first;
+        const CoarseJob& job = job_entry.second;
+        if (job.has_transfer_sink != (job.wlhd == nullptr)) {
+            reject("coarse job callback ownership differs from its saved identity");
+        }
+        const auto execution_it = executions_by_handle.find(handle);
+        const auto binding_it = bindings_by_handle.find(handle);
+        if (execution_it == executions_by_handle.end() ||
+            binding_it == bindings_by_handle.end()) {
+            reject("active coarse job has no matching sampled callback handle");
+        }
+        const Json& execution = *execution_it->second;
+        const Json& binding = *binding_it->second;
+        const Json& plan = member(execution, "plan", "runtime execution");
+        if (string_value(member(plan, "hardware_fingerprint", "execution plan"),
+                         "execution plan.hardware_fingerprint") != expected_fingerprint) {
+            reject("execution plan hardware differs from the sampled Runtime");
+        }
+        const Json& task = member(plan, "task", "execution plan");
+        if (string_value(member(task, "schema", "execution plan task"),
+                         "execution plan task.schema") != "coarse_die_endpoint_v2") {
+            reject("active local-HBM handle is not an endpoint Plan");
+        }
+        const Json& endpoint = member(task, "endpoint", "execution plan task");
+        const Metadata metadata = kind_metadata(job.kind);
+        const uint64_t expected_endpoint_id = coarse_endpoint_identity(
+            std::to_string(job.completion_sys_id) + ":" +
+            std::to_string(job.node_id) + ":" +
+            std::to_string(static_cast<int>(job.kind)));
+        const uint64_t expected_transaction_id = coarse_endpoint_identity(
+            std::to_string(job.node_id));
+        const Json& owner = member(execution, "owner", "runtime execution");
+        const coarse_die::Owner expected_owner_value{
+            expected_transaction_id, job.node_id, job.node_id, 1};
+        const Json expected_owner = {
+            {"request_id", expected_transaction_id},
+            {"node_id", job.node_id},
+            {"execution_id", job.node_id},
+            {"generation", 1},
+            {"key", expected_owner_value.key()}};
+        if (owner != expected_owner ||
+            member(binding, "owner", "completion binding") != expected_owner) {
+            reject("sampled owner differs from the coarse job's saved identity");
+        }
+        if (uint_value(member(endpoint, "endpoint_id", "endpoint"),
+                       "endpoint.endpoint_id") != expected_endpoint_id ||
+            uint_value(member(endpoint, "transaction_id", "endpoint"),
+                       "endpoint.transaction_id") != expected_transaction_id ||
+            string_value(member(endpoint, "owner_kind", "endpoint"),
+                         "endpoint.owner_kind") != metadata.owner_kind ||
+            string_value(member(endpoint, "direction", "endpoint"),
+                         "endpoint.direction") != metadata.direction ||
+            string_value(member(endpoint, "path_class", "endpoint"),
+                         "endpoint.path_class") != metadata.path_class) {
+            reject("sampled endpoint identity or kind metadata differs from its coarse job");
+        }
+        const Json& route = member(endpoint, "route", "endpoint");
+        if (!route.is_object() ||
+            member(route, "internal_route", "endpoint.route") != false) {
+            reject("sampled endpoint route differs from the local-HBM endpoint");
+        }
+        if (metadata.initial_delay) {
+            if (uint_value(member(endpoint, "initial_delay_ns", "endpoint"),
+                           "endpoint.initial_delay_ns") !=
+                static_cast<uint64_t>(sys->local_mem_latency)) {
+                reject("control-marker endpoint latency differs from the local HBM configuration");
+            }
+        } else if (endpoint.contains("initial_delay_ns")) {
+            reject("non-marker endpoint unexpectedly has an initial delay");
+        }
+
+        result.push_back({
+            {"handle", handle},
+            {"domain_rank", sys->id},
+            {"completion_rank", job.completion_sys_id},
+            {"node_id", job.node_id},
+            {"job_kind", metadata.name},
+            {"transfer_sink", job.has_transfer_sink},
+            {"endpoint", endpoint},
+            {"owner", owner},
+            {"terminal_at_sample",
+             member(binding, "terminal_at_sample", "completion binding")},
+            {"finish_ns_at_sample",
+             member(binding, "finish_ns_at_sample", "completion binding")}});
+    }
+    return result;
+}
+
 double LocalHbmBandwidthModel::bandwidth_bytes_per_ns() const {
     return sys->local_mem_bw / 1e9;
 }
@@ -865,7 +1164,8 @@ void LocalHbmBandwidthModel::issue_job(
                 }
             });
         try {
-            if (!coarse_jobs_.emplace(handle, CoarseJob{wlhd, kind, {}})
+            if (!coarse_jobs_.emplace(handle, CoarseJob{wlhd, kind,
+                    endpoint_sys_id, node_id, wlhd == nullptr})
                      .second) {
                 throw std::runtime_error(
                     "coarse_die_v2 endpoint handle collision");

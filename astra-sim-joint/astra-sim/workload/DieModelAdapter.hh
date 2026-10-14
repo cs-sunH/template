@@ -54,6 +54,7 @@ class DieModelAdapter {
         uint64_t workspace_bytes = 0;
         uint64_t node_id = 0;
         uint64_t generation = 0;
+        std::shared_ptr<const nlohmann::json> task;
     };
     // Cumulative host-side timings for ordinary DIE dispatch. These are
     // diagnostics only; child phases are nested inside total_issue_ns and
@@ -96,10 +97,20 @@ class DieModelAdapter {
         const ExecutionDriven::NodeView& node);
     WorkspaceAdmission::AcquireResult try_acquire_workspace(
         const PreparedCoarsePlan& prepared);
+    void validate_prepared_coarse_plan(
+        const ExecutionDriven::NodeView& node,
+        const PreparedCoarsePlan& prepared,
+        const WorkspaceAdmission::Lease& lease) const;
     void issue_prepared_coarse_plan(
         const ExecutionDriven::NodeView& node,
         PreparedCoarsePlan prepared,
         WorkspaceAdmission::Lease lease);
+
+    /// Join this adapter's live COMP/workspace records to one already-taken
+    /// rank-local Runtime sample. This is observational metadata only: it
+    /// neither retires callbacks nor creates production world identities.
+    nlohmann::json coarse_snapshot_bindings(
+        const nlohmann::json& local_sample) const;
 
     // Whether any outer node still has a live DieExecution. Purges retired
     // entries first (they linger only until the next adapter entry point).

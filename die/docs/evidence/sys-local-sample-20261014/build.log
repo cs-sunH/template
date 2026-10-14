@@ -1,0 +1,64 @@
+[  5%] Built target coarse_die
+[ 25%] Built target yaml-cpp
+[ 30%] Built target die_model
+[ 35%] Built target joint_ledger
+[ 35%] Built target fmt
+[ 40%] Built target spdlog
+[ 50%] Built target Analytical_Congestion_Aware
+[ 55%] Built target joint_pipeline_core
+[ 55%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/CollectivePhase.cc.o
+[ 55%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/BaseStream.cc.o
+[ 55%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/CommunicatorGroup.cc.o
+[ 60%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/DataSet.cc.o
+[ 60%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/LogGP.cc.o
+[ 60%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/MemBus.cc.o
+[ 60%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/MemMovRequest.cc.o
+[ 60%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/PacketBundle.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/RecvPacketEventHandlerData.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/RendezvousRecvData.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/RendezvousSendData.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/SimRecvCaller.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/SimSendCaller.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/StreamBaseline.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/Sys.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/UsageTracker.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/astraccl/Algorithm.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/astraccl/native_collectives/collective_algorithm/AllToAll.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/astraccl/native_collectives/collective_algorithm/DoubleBinaryTreeAllReduce.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/astraccl/native_collectives/collective_algorithm/HalvingDoubling.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/astraccl/native_collectives/collective_algorithm/Ring.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/astraccl/native_collectives/logical_topology/GeneralComplexTopology.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/CoarseDieRuntime.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/DieExecution.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/DieModelAdapter.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/LocalHbmBandwidthModel.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/MetricCollector.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/Statistics.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/Workload.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/execution_driven/DecisionBridge.cc.o
+[ 65%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/execution_driven/DecisionMailbox.cc.o
+[ 70%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/execution_driven/GraphBatchCommitter.cc.o
+[ 70%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/execution_driven/ParsedGraphBatch.cc.o
+[ 70%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/execution_driven/RequestIngress.cc.o
+[ 70%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/execution_driven/WatchRegistry.cc.o
+[ 70%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/execution_driven/WindowedTraceReader.cc.o
+[ 70%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/astra-sim/workload/execution_driven/WorkLedgerV2RuntimeSnapshot.cc.o
+[ 70%] Building CXX object AstraSim/CMakeFiles/AstraSim.dir/extern/remote_memory_backend/analytical/AnalyticalRemoteMemory.cc.o
+[ 70%] Linking CXX static library ../lib/libAstraSim.a
+[ 90%] Built target AstraSim
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionBridge.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/tests/coarse_workspace_runtime_test.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/DecisionMailbox.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/GraphBatchCommitter.cc.o
+[ 90%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/NodeStore.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ParsedGraphBatch.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/RequestIngress.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ServiceCoordinator.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/ShmFrameChannel.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WatchRegistry.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WindowedTraceReader.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2Publisher.cc.o
+[ 95%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest.dir/workspace/template/astra-sim-joint/astra-sim/workload/execution_driven/WorkLedgerV2RuntimeSnapshot.cc.o
+[ 95%] Linking CXX executable AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest

@@ -159,6 +159,11 @@ class Workload : public Callable {
         return die_adapter_.get();
     }
 
+    /// One read-only rank-local coarse sample with actual COMP/endpoint
+    /// owners, workspace holds and outer local-join flags. This is an input
+    /// to future live projection integration, not a complete world import.
+    nlohmann::json sample_coarse_local_state_at(uint64_t now_ns) const;
+
     // 方案 §3.4 normal-end audit: number of nodes with an armed (half-fired)
     // HBM endpoint join. Zero at a normal end; > 0 means a node whose port /
     // network leg or local-HBM leg never fired -- the online main gate must

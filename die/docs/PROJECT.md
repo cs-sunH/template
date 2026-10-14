@@ -47,6 +47,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 重要决定及变更记录
 
+- 2026-10-14 真实 Sys 采样检查点：新增 Runtime-copy 只读 envelope 及实际 COMP/endpoint/lease catalogs，Workload 验证 handle 和权威 workspace ledger 双射；terminal-before-callback 副本可采样，live Runtime/队列/回调不变。提交前拒绝 foreign ledger token、错误 canonical bytes 和 stale Prepared task。当前源8/8 CTest、重链 tiny legacy Online 0/0且192/192成功；真实 sample tick1、原 Sys COMP/transfer 完成2408ns/303318ns。下一步用显式 handle→leg 绑定做实际 sample 的 Domain 继续对拍，完整 graph/ledger/network/pool/sh30 guard仍未接通；另四仓不外推通过。公共 mapping/timing、TX8和canonical23不变，详见sys-local-sample-20261014证据。
+
 - 2026-10-14 native wire 检查点：新 JOINT domain wrapper 与同冻结输入 native session 完整 snapshot/import，复用公共 Runtime v3；恢复后的 step/drain 与未导入 source 完整 inspect 全等。补齐 forecast 同 tick 前缀、fixed pending terminal、跨 gate 唤醒、zero-service child 和 Python barrier facade；4/4 native/window、独立 fresh build4/4+Python4/4、最终 ABI18/18无skip、tiny legacy Online再次0/0且192/192成功。这里只覆盖 native session，生产 Sys/ledger/network/pool/lease 与 sh30 guard未接通；现有 Sys export_snapshot有推进/回调副作用，下一步先加 Runtime-copy只读采样。公共 mapping/timing、TX8/target先验和canonical23 digest不变，E5精度仍failed。详见HANDOFF和native-world-snapshot-20261014证据。
 
 - 2026-10-14 接续检查点：同步 main d9cc024；materialized attention/QK workspace 只取单次 lifecycle，物理 work/byte 仍重复计费，受影响 template/dataflow v3、capacity revision v2，LRU strict-v2 certificate；canonical23 五仓 digest45b7bf3d…c3264。新 JOINT native projection 使用共享公共 Runtime，支持 fresh frozen domains/Plan chains/显式本地endpoint和native gate/join，拒绝scalar活跃恢复及prediction-only倍率，sh30 guard未开放。实际 tiny legacy Online成功，coarse-intended在guard明确失败。新E5单因素可比OS场景继续failed，累计long-double尘埃与计划整数守恒分开报告；TX8不变。真实命令/范围见HANDOFF和新evidence。

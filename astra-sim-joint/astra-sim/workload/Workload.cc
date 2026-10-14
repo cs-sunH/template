@@ -12,6 +12,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/SendPacketEventHandlerData.hh"
 #include "astra-sim/system/WorkloadLayerHandlerData.hh"
 #include "astra-sim/workload/FailClosed.hh"
+#include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/MetricCollector.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
@@ -24,6 +25,7 @@ LICENSE file in the root directory of this source tree.
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <stdlib.h>
 #include <typeinfo>
 #include <unistd.h>
@@ -745,6 +747,11 @@ void Workload::issue_prepared_coarse(
     const ExecutionDriven::NodeView& node,
     DieModelAdapter::PreparedCoarsePlan prepared,
     WorkspaceAdmission::Lease lease) {
+    if (die_adapter_ == nullptr)
+        throw std::runtime_error("prepared coarse issue requires its die adapter");
+    // Validate the authoritative lease and immutable Plan before graph take,
+    // COMP occupancy or statistics publication can make the issue visible.
+    die_adapter_->validate_prepared_coarse_plan(node, prepared, lease);
     issue_impl(node, &prepared, &lease);
 }
 
@@ -1410,6 +1417,79 @@ void Workload::issue_recv_comm(const ExecutionDriven::NodeView& node) {
 bool Workload::hbm_endpoint_charge_active() const {
     return sys->hbm_bandwidth_contention &&
         local_hbm_bandwidth_model != nullptr;
+}
+
+nlohmann::json Workload::sample_coarse_local_state_at(
+    const uint64_t now_ns) const {
+    if (sys == nullptr || sys->coarse_die_runtime == nullptr ||
+        sys->workspace_admission == nullptr || die_adapter_ == nullptr ||
+        local_hbm_bandwidth_model == nullptr) {
+        throw std::runtime_error(
+            "coarse local owner sample requires the complete rank-local coarse backend");
+    }
+    auto local = sys->coarse_die_runtime->sample_snapshot_at(now_ns);
+    auto comp = die_adapter_->coarse_snapshot_bindings(local);
+    auto endpoints = local_hbm_bandwidth_model->coarse_snapshot_bindings(local);
+    std::set<uint64_t> expected, observed, lease_ids;
+    for (const auto& binding : local.at("completion_bindings")) {
+        if (!expected.insert(binding.at("handle").get<uint64_t>()).second)
+            throw std::logic_error("duplicate coarse local completion handle");
+    }
+    uint64_t workspace_bytes = 0;
+    for (const auto& binding : comp) {
+        if (!observed.insert(binding.at("handle").get<uint64_t>()).second ||
+            !lease_ids.insert(binding.at("workspace_lease").at("lease_id")
+                .get<uint64_t>()).second)
+            throw std::logic_error("duplicate coarse COMP handle or workspace lease");
+        const auto bytes = binding.at("workspace_lease").at("bytes").get<uint64_t>();
+        if (bytes > std::numeric_limits<uint64_t>::max() - workspace_bytes)
+            throw std::overflow_error("coarse COMP workspace sample sum overflows uint64");
+        workspace_bytes += bytes;
+    }
+    for (const auto& binding : endpoints)
+        if (!observed.insert(binding.at("handle").get<uint64_t>()).second)
+            throw std::logic_error("coarse endpoint has multiple local owners");
+    if (observed != expected)
+        throw std::runtime_error(
+            "coarse local sample has an unbound Runtime callback or owner");
+    const auto& admission = *sys->workspace_admission;
+    if (comp.size() != admission.active_lease_count() ||
+        workspace_bytes != admission.active_workspace_bytes())
+        throw std::runtime_error(
+            "coarse local sample has workspace holds outside the active COMP bindings");
+    const auto capacity = admission.capacity_snapshot_view();
+    nlohmann::json workspace{
+        {"rank", admission.rank()},
+        {"workspace_revision", admission.workspace_revision()},
+        {"active_workspace_bytes", admission.active_workspace_bytes()},
+        {"active_lease_count", admission.active_lease_count()},
+        {"has_capacity_snapshot", admission.has_capacity_snapshot()},
+        {"capacity_snapshot", {
+            {"rank", capacity.rank}, {"workspace_revision", capacity.workspace_revision},
+            {"capacity_bytes", capacity.capacity_bytes},
+            {"model_weight_bytes", capacity.model_weight_bytes},
+            {"resident_kv_bytes", capacity.resident_kv_bytes},
+            {"reserved_request_bytes", capacity.reserved_request_bytes},
+            {"has_prospective_workspace", capacity.has_prospective_workspace},
+            {"prospective_workspace_bytes", capacity.prospective_workspace_bytes}}},
+    };
+    std::vector<uint64_t> join_ids;
+    for (const auto& item : hbm_join_pending_) join_ids.push_back(item.first);
+    std::sort(join_ids.begin(), join_ids.end());
+    auto joins = nlohmann::json::array();
+    for (const auto id : join_ids) {
+        const auto& join = hbm_join_pending_.at(id);
+        joins.push_back({{"rank", sys->id}, {"node_id", join.node_id},
+            {"terminal_event", static_cast<int>(join.terminal_event)},
+            {"network_done", join.network_done},
+            {"local_hbm_done", join.local_hbm_done}});
+    }
+    return {{"schema", "coarse_die_workload_local_sample_v1"},
+        {"scope", "rank_local_runtime_and_owners"},
+        {"local_runtime", std::move(local)}, {"comp_bindings", std::move(comp)},
+        {"endpoint_bindings", std::move(endpoints)},
+        {"workspace", std::move(workspace)}, {"local_endpoint_joins", std::move(joins)},
+        {"production_world_import_supported", false}};
 }
 
 WorkloadLayerHandlerData* Workload::begin_hbm_join(

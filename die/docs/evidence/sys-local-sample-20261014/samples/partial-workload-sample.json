@@ -1,0 +1,2102 @@
+{
+  "comp_bindings": [
+    {
+      "finish_ns_at_sample": null,
+      "generation": 0,
+      "handle": 1,
+      "node_id": 41,
+      "owner": {
+        "execution_id": 0,
+        "generation": 1,
+        "key": "41:0:1",
+        "node_id": 41,
+        "request_id": 13487838035587183540
+      },
+      "plan_fingerprint": "92d37239b8098c6d75901e59a2f510e4207e6fa411e714247cee24de2bd6efc3",
+      "rank": 0,
+      "request_id": "coarse-request",
+      "stage": "prefill",
+      "terminal_at_sample": false,
+      "workspace_lease": {
+        "bytes": 40960,
+        "generation": 0,
+        "lease_id": 2,
+        "node_id": 41,
+        "rank": 0
+      }
+    }
+  ],
+  "endpoint_bindings": [
+    {
+      "completion_rank": 0,
+      "domain_rank": 0,
+      "endpoint": {
+        "direction": "read",
+        "endpoint_id": 666685130783199358,
+        "eta_hbm": 0.7,
+        "owner_kind": "comm",
+        "path_class": "hbm_to_edge",
+        "physical_bytes": 1000000000,
+        "route": {
+          "internal_route": false
+        },
+        "transaction_id": 10055991614793667348
+      },
+      "finish_ns_at_sample": null,
+      "handle": 2,
+      "job_kind": "comm_read",
+      "node_id": 900,
+      "owner": {
+        "execution_id": 900,
+        "generation": 1,
+        "key": "900:900:1",
+        "node_id": 900,
+        "request_id": 10055991614793667348
+      },
+      "terminal_at_sample": false,
+      "transfer_sink": true
+    }
+  ],
+  "local_endpoint_joins": [],
+  "local_runtime": {
+    "callbacks_dispatched": false,
+    "completion_bindings": [
+      {
+        "finish_ns_at_sample": null,
+        "handle": 1,
+        "owner": {
+          "execution_id": 0,
+          "generation": 1,
+          "key": "41:0:1",
+          "node_id": 41,
+          "request_id": 13487838035587183540
+        },
+        "state_at_sample": "running",
+        "terminal_at_sample": false
+      },
+      {
+        "finish_ns_at_sample": null,
+        "handle": 2,
+        "owner": {
+          "execution_id": 900,
+          "generation": 1,
+          "key": "900:900:1",
+          "node_id": 900,
+          "request_id": 10055991614793667348
+        },
+        "state_at_sample": "running",
+        "terminal_at_sample": false
+      }
+    ],
+    "hardware_config": {
+      "architecture": {
+        "core_columns_nx": 8,
+        "core_pitch_x_mm": 0,
+        "core_pitch_y_mm": 0,
+        "core_rows_ny": 11,
+        "core_type": "large",
+        "die_extra_height_mm": 0.1,
+        "die_extra_width_mm": 0.1,
+        "die_geometry": "minimum_grid",
+        "hbm_placement_mode": "two_sides_one_row_each",
+        "hbm_stacks_per_row": 2,
+        "noc_width_bits": 256,
+        "sram_mib_per_core": 0.25,
+        "system_region_height_mm": 215,
+        "system_region_width_mm": 215
+      },
+      "core_resource_table": {
+        "id": "core64_v2",
+        "rows_sha256": "8e7d393ff9a96dd556088fa7c98a6fd80ed0b277e03cde7c3909a0f118e45f36"
+      },
+      "performance_profile": {
+        "calibration_status": "assumed",
+        "eta_hbm_matrix": 0.7,
+        "eta_hbm_vector": 0.7,
+        "eta_inject": 0.7,
+        "eta_local": 0.7,
+        "eta_mesh": 0.7,
+        "eta_pe": 0.9,
+        "eta_sram": 1.0,
+        "eta_vec": 0.9,
+        "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+        "granularity_validation": "not_run",
+        "kappa_acc_convert_eqops": 2,
+        "kappa_quant_eqops": 4,
+        "launch_ns_per_macro": 1000,
+        "memory_setup_ns_per_macro": 0,
+        "physical_topology_validation": "unverified",
+        "pipeline_profile": "pipeline_fluid_v2",
+        "rho_sram": 0.9,
+        "routing_profile": "mapped_uniform_sources_v2",
+        "timing_topology_profile": "distributed_ideal_v2"
+      },
+      "schema": "coarse_die_v2",
+      "search_profile": {
+        "allow_reticle_rotation": true,
+        "area_extension_rules": [
+          "grow_width",
+          "grow_height",
+          "isotropic"
+        ],
+        "die_area_max_mm2": 800,
+        "die_area_min_mm2": 200,
+        "die_max_aspect_ratio": 2,
+        "geometry_search_mode": "core_first",
+        "hbm_n_range": {
+          "max": 14,
+          "min": 1
+        },
+        "nx_range": {
+          "max": 12,
+          "min": 1
+        },
+        "ny_range": {
+          "max": 16,
+          "min": 1
+        },
+        "objective": "compute_peak",
+        "require_hbm_row_within_die": false,
+        "require_nonnegative_d2d_budget": true,
+        "reticle_height_mm": 33,
+        "reticle_width_mm": 26
+      },
+      "source_constants": {
+        "bump_communication_fraction": 0.4,
+        "bump_pitch_mm": 0.055,
+        "bump_rate_bits_per_s": 2500000000.0,
+        "clock_hz": 1000000000.0,
+        "hbm_gap_mm": 0.15,
+        "hbm_sku": "Micron MT65B18G16120A00QH-92:A",
+        "hbm_stack_capacity_bytes": 36000000000.0,
+        "hbm_stack_height_mm": 10.98,
+        "hbm_stack_peak_bytes_per_s": 1177600000000.0,
+        "hbm_stack_thickness_mm": 0.78,
+        "hbm_stack_width_bits": 1024,
+        "hbm_stack_width_mm": 10.98,
+        "hbm_transfer_per_s": 9200000000.0,
+        "large_core_geometry_discriminant_scale": 0.6,
+        "large_core_geometry_root_denominator": 0.3,
+        "module_interconnect_fraction": 0.1,
+        "noc_base_area_fraction": 0.15,
+        "noc_base_width_bits": 256,
+        "noc_fixed_fraction": 0.2,
+        "noc_width_fraction": 0.8,
+        "pe_area_mm2": 3.76e-05,
+        "pe_int4_ops_per_mac": 2,
+        "pe_per_vec_ratio": 19.777,
+        "process_node_nm": 7,
+        "sram_quarter_mib_long_side_mm": 0.40662,
+        "sram_short_side_mm": 0.13925,
+        "sram_wordwidth_bits": 1024,
+        "vec_lane_fp32_eq_ops_per_s": 3955400000.0,
+        "vec_lane_height_mm": 0.1265,
+        "vec_lane_width_mm": 0.1897
+      },
+      "source_revision": "9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8"
+    },
+    "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+    "live_runtime_now_ns": 0,
+    "production_world_import_supported": false,
+    "rank": 0,
+    "runtime_snapshot": {
+      "allocation_updates": 2,
+      "capacities": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "endpoint_registry": [
+        {
+          "endpoint_id": 666685130783199358,
+          "transaction_id": 10055991614793667348
+        }
+      ],
+      "event_order": "completion_credit_cancel_arrival_v2",
+      "exact_ns": "1.000000000000000000000e+00",
+      "executions": [
+        {
+          "activities": [
+            {
+              "activity_id": 1,
+              "alpha": 1.0,
+              "done": false,
+              "epoch_index": 0,
+              "hbm_served": [
+                [
+                  "1.642666666666666941410e+02",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "1.642666666666666941410e+02",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.01604166666666667,
+              "rate": 16041666.666666668,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 5,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 1,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 9,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 2,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 10,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 3,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 13,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 4,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 14,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 4,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 16,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 5,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 17,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 5,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 18,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 5,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 20,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 6,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 21,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 6,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 24,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 7,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 25,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 8,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 29,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 9,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 33,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 10,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 34,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 11,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 37,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 12,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 38,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 12,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 41,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 13,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 42,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 13,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            },
+            {
+              "activity_id": 45,
+              "alpha": 0.0,
+              "done": false,
+              "epoch_index": 14,
+              "hbm_served": [
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "0.000000000000000000000e+00",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 0.0,
+              "rate": 0.0,
+              "vec_served": "0.000000000000000000000e+00"
+            }
+          ],
+          "cancelled": false,
+          "credit": [
+            0.01604166666666667,
+            0.0
+          ],
+          "credit_capacity": [
+            2.0,
+            2.0
+          ],
+          "epoch_index": 0,
+          "finish_ns": null,
+          "handle": 1,
+          "hbm_served": [
+            [
+              "1.642666666666666941410e+02",
+              "0.000000000000000000000e+00"
+            ],
+            [
+              "1.642666666666666941410e+02",
+              "0.000000000000000000000e+00"
+            ]
+          ],
+          "int4_served": "0.000000000000000000000e+00",
+          "issue_ns": 0,
+          "owner": {
+            "execution_id": 0,
+            "generation": 1,
+            "key": "41:0:1",
+            "node_id": 41,
+            "request_id": 13487838035587183540
+          },
+          "plan": {
+            "epochs": [
+              {
+                "activities": [
+                  {
+                    "canonical_q": 20480.0,
+                    "credit_delta": [
+                      1.0,
+                      0.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        10240,
+                        0
+                      ],
+                      [
+                        10240,
+                        0
+                      ]
+                    ],
+                    "id": 1,
+                    "int4_ops": 0,
+                    "private_time_s": 4e-08,
+                    "role": "load",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      0.0,
+                      20480.0,
+                      0.0,
+                      14628.57142857143,
+                      14628.57142857143,
+                      0.0,
+                      0.0,
+                      0.0,
+                      10240.0,
+                      0.0,
+                      11170.90909090909,
+                      156160.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  0.0
+                ],
+                "name": "full_score_qk_load_first",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 79936.0,
+                    "credit_delta": [
+                      -1.0,
+                      1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        0,
+                        0
+                      ]
+                    ],
+                    "id": 5,
+                    "int4_ops": 262144,
+                    "private_time_s": 8.921428571428573e-07,
+                    "role": "compute",
+                    "vec_eqops": 49152,
+                    "work": [
+                      2.3948747600298682e-08,
+                      42016.0,
+                      37920.0,
+                      79936.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  1.0,
+                  0.0
+                ],
+                "name": "full_score_qk_compute_last",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 16384.0,
+                    "credit_delta": [
+                      0.0,
+                      -1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        8192
+                      ],
+                      [
+                        0,
+                        8192
+                      ]
+                    ],
+                    "id": 9,
+                    "int4_ops": 0,
+                    "private_time_s": 3.2e-08,
+                    "role": "store",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      16384.0,
+                      0.0,
+                      0.0,
+                      11702.857142857143,
+                      11702.857142857143,
+                      0.0,
+                      0.0,
+                      8192.0,
+                      0.0,
+                      8936.727272727272,
+                      0.0,
+                      124928.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  1.0
+                ],
+                "name": "full_score_qk_store_last",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 4096.0,
+                    "credit_delta": [
+                      1.0,
+                      0.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        2048,
+                        0
+                      ],
+                      [
+                        2048,
+                        0
+                      ]
+                    ],
+                    "id": 10,
+                    "int4_ops": 0,
+                    "private_time_s": 8e-09,
+                    "role": "load",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      0.0,
+                      4096.0,
+                      0.0,
+                      2925.714285714286,
+                      2925.714285714286,
+                      0.0,
+                      0.0,
+                      0.0,
+                      2048.0,
+                      0.0,
+                      2234.181818181818,
+                      31232.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  0.0
+                ],
+                "name": "full_score_softmax_load_first",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 4096.0,
+                    "credit_delta": [
+                      1.0,
+                      0.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        2048,
+                        0
+                      ],
+                      [
+                        2048,
+                        0
+                      ]
+                    ],
+                    "id": 13,
+                    "int4_ops": 0,
+                    "private_time_s": 8e-09,
+                    "role": "load",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      0.0,
+                      4096.0,
+                      0.0,
+                      2925.714285714286,
+                      2925.714285714286,
+                      0.0,
+                      0.0,
+                      0.0,
+                      2048.0,
+                      0.0,
+                      2234.181818181818,
+                      31232.0
+                    ]
+                  },
+                  {
+                    "canonical_q": 8192.0,
+                    "credit_delta": [
+                      -1.0,
+                      1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        0,
+                        0
+                      ]
+                    ],
+                    "id": 14,
+                    "int4_ops": 0,
+                    "private_time_s": 9.142857142857144e-08,
+                    "role": "compute",
+                    "vec_eqops": 13824,
+                    "work": [
+                      4.392871924675059e-09,
+                      4096.0,
+                      4096.0,
+                      8192.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  1.0,
+                  0.0
+                ],
+                "name": "full_score_softmax_first_overlap",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 8192.0,
+                    "credit_delta": [
+                      2.0,
+                      0.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        4096,
+                        0
+                      ],
+                      [
+                        4096,
+                        0
+                      ]
+                    ],
+                    "id": 16,
+                    "int4_ops": 0,
+                    "private_time_s": 1.6e-08,
+                    "role": "load",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      0.0,
+                      8192.0,
+                      0.0,
+                      5851.428571428572,
+                      5851.428571428572,
+                      0.0,
+                      0.0,
+                      0.0,
+                      4096.0,
+                      0.0,
+                      4468.363636363636,
+                      62464.0
+                    ]
+                  },
+                  {
+                    "canonical_q": 16384.0,
+                    "credit_delta": [
+                      -2.0,
+                      2.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        0,
+                        0
+                      ]
+                    ],
+                    "id": 17,
+                    "int4_ops": 0,
+                    "private_time_s": 1.828571428571429e-07,
+                    "role": "compute",
+                    "vec_eqops": 27648,
+                    "work": [
+                      8.785743849350118e-09,
+                      8192.0,
+                      8192.0,
+                      16384.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  },
+                  {
+                    "canonical_q": 8192.0,
+                    "credit_delta": [
+                      0.0,
+                      -2.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        4096
+                      ],
+                      [
+                        0,
+                        4096
+                      ]
+                    ],
+                    "id": 18,
+                    "int4_ops": 0,
+                    "private_time_s": 1.6e-08,
+                    "role": "store",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      8192.0,
+                      0.0,
+                      0.0,
+                      5851.428571428572,
+                      5851.428571428572,
+                      0.0,
+                      0.0,
+                      4096.0,
+                      0.0,
+                      4468.363636363636,
+                      0.0,
+                      62464.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  1.0,
+                  1.0
+                ],
+                "name": "full_score_softmax_interior_repeat",
+                "repeat_count": 2
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 8192.0,
+                    "credit_delta": [
+                      -1.0,
+                      1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        0,
+                        0
+                      ]
+                    ],
+                    "id": 20,
+                    "int4_ops": 0,
+                    "private_time_s": 9.142857142857144e-08,
+                    "role": "compute",
+                    "vec_eqops": 13824,
+                    "work": [
+                      4.392871924675059e-09,
+                      4096.0,
+                      4096.0,
+                      8192.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  },
+                  {
+                    "canonical_q": 4096.0,
+                    "credit_delta": [
+                      0.0,
+                      -1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        2048
+                      ],
+                      [
+                        0,
+                        2048
+                      ]
+                    ],
+                    "id": 21,
+                    "int4_ops": 0,
+                    "private_time_s": 8e-09,
+                    "role": "store",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      4096.0,
+                      0.0,
+                      0.0,
+                      2925.714285714286,
+                      2925.714285714286,
+                      0.0,
+                      0.0,
+                      2048.0,
+                      0.0,
+                      2234.181818181818,
+                      0.0,
+                      31232.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  1.0,
+                  1.0
+                ],
+                "name": "full_score_softmax_last_overlap",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 4096.0,
+                    "credit_delta": [
+                      0.0,
+                      -1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        2048
+                      ],
+                      [
+                        0,
+                        2048
+                      ]
+                    ],
+                    "id": 24,
+                    "int4_ops": 0,
+                    "private_time_s": 8e-09,
+                    "role": "store",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      4096.0,
+                      0.0,
+                      0.0,
+                      2925.714285714286,
+                      2925.714285714286,
+                      0.0,
+                      0.0,
+                      2048.0,
+                      0.0,
+                      2234.181818181818,
+                      0.0,
+                      31232.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  1.0
+                ],
+                "name": "full_score_softmax_store_last",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 32768.0,
+                    "credit_delta": [
+                      1.0,
+                      0.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        16384,
+                        0
+                      ],
+                      [
+                        16384,
+                        0
+                      ]
+                    ],
+                    "id": 25,
+                    "int4_ops": 0,
+                    "private_time_s": 6.4e-08,
+                    "role": "load",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      0.0,
+                      32768.0,
+                      0.0,
+                      23405.714285714286,
+                      23405.714285714286,
+                      0.0,
+                      0.0,
+                      0.0,
+                      16384.0,
+                      0.0,
+                      17873.454545454544,
+                      249856.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  0.0
+                ],
+                "name": "full_score_pv_load_first",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 65568.0,
+                    "credit_delta": [
+                      -1.0,
+                      1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        0,
+                        0
+                      ]
+                    ],
+                    "id": 29,
+                    "int4_ops": 262144,
+                    "private_time_s": 7.317857142857144e-07,
+                    "role": "compute",
+                    "vec_eqops": 36864,
+                    "work": [
+                      2.0043972556143074e-08,
+                      45072.0,
+                      20496.0,
+                      65568.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  1.0,
+                  0.0
+                ],
+                "name": "full_score_pv_compute_last",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 8192.0,
+                    "credit_delta": [
+                      0.0,
+                      -1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        4096
+                      ],
+                      [
+                        0,
+                        4096
+                      ]
+                    ],
+                    "id": 33,
+                    "int4_ops": 0,
+                    "private_time_s": 1.6e-08,
+                    "role": "store",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      8192.0,
+                      0.0,
+                      0.0,
+                      5851.428571428572,
+                      5851.428571428572,
+                      0.0,
+                      0.0,
+                      4096.0,
+                      0.0,
+                      4468.363636363636,
+                      0.0,
+                      62464.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  1.0
+                ],
+                "name": "full_score_pv_store_last",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 4096.0,
+                    "credit_delta": [
+                      1.0,
+                      0.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        2048,
+                        0
+                      ],
+                      [
+                        2048,
+                        0
+                      ]
+                    ],
+                    "id": 34,
+                    "int4_ops": 0,
+                    "private_time_s": 8e-09,
+                    "role": "load",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      0.0,
+                      4096.0,
+                      0.0,
+                      2925.714285714286,
+                      2925.714285714286,
+                      0.0,
+                      0.0,
+                      0.0,
+                      2048.0,
+                      0.0,
+                      2234.181818181818,
+                      31232.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  0.0
+                ],
+                "name": "full_score_output_cast_load_first",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 4096.0,
+                    "credit_delta": [
+                      1.0,
+                      0.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        2048,
+                        0
+                      ],
+                      [
+                        2048,
+                        0
+                      ]
+                    ],
+                    "id": 37,
+                    "int4_ops": 0,
+                    "private_time_s": 8e-09,
+                    "role": "load",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      0.0,
+                      4096.0,
+                      0.0,
+                      2925.714285714286,
+                      2925.714285714286,
+                      0.0,
+                      0.0,
+                      0.0,
+                      2048.0,
+                      0.0,
+                      2234.181818181818,
+                      31232.0
+                    ]
+                  },
+                  {
+                    "canonical_q": 6144.0,
+                    "credit_delta": [
+                      -1.0,
+                      1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        0,
+                        0
+                      ]
+                    ],
+                    "id": 38,
+                    "int4_ops": 0,
+                    "private_time_s": 6.857142857142859e-08,
+                    "role": "compute",
+                    "vec_eqops": 1024,
+                    "work": [
+                      3.253979203463007e-10,
+                      4096.0,
+                      2048.0,
+                      6144.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  1.0,
+                  0.0
+                ],
+                "name": "full_score_output_cast_first_overlap",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 6144.0,
+                    "credit_delta": [
+                      -1.0,
+                      1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        0
+                      ],
+                      [
+                        0,
+                        0
+                      ]
+                    ],
+                    "id": 41,
+                    "int4_ops": 0,
+                    "private_time_s": 6.857142857142859e-08,
+                    "role": "compute",
+                    "vec_eqops": 1024,
+                    "work": [
+                      3.253979203463007e-10,
+                      4096.0,
+                      2048.0,
+                      6144.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  },
+                  {
+                    "canonical_q": 2048.0,
+                    "credit_delta": [
+                      0.0,
+                      -1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        1024
+                      ],
+                      [
+                        0,
+                        1024
+                      ]
+                    ],
+                    "id": 42,
+                    "int4_ops": 0,
+                    "private_time_s": 4e-09,
+                    "role": "store",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      2048.0,
+                      0.0,
+                      0.0,
+                      1462.857142857143,
+                      1462.857142857143,
+                      0.0,
+                      0.0,
+                      1024.0,
+                      0.0,
+                      1117.090909090909,
+                      0.0,
+                      15616.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  1.0,
+                  1.0
+                ],
+                "name": "full_score_output_cast_last_overlap",
+                "repeat_count": 1
+              },
+              {
+                "activities": [
+                  {
+                    "canonical_q": 2048.0,
+                    "credit_delta": [
+                      0.0,
+                      -1.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        0,
+                        1024
+                      ],
+                      [
+                        0,
+                        1024
+                      ]
+                    ],
+                    "id": 45,
+                    "int4_ops": 0,
+                    "private_time_s": 4e-09,
+                    "role": "store",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      2048.0,
+                      0.0,
+                      0.0,
+                      1462.857142857143,
+                      1462.857142857143,
+                      0.0,
+                      0.0,
+                      1024.0,
+                      0.0,
+                      1117.090909090909,
+                      0.0,
+                      15616.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  2.0,
+                  2.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  1.0
+                ],
+                "name": "full_score_output_cast_store_last",
+                "repeat_count": 1
+              }
+            ],
+            "fingerprint": "92d37239b8098c6d75901e59a2f510e4207e6fa411e714247cee24de2bd6efc3",
+            "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+            "launch_ns": 0,
+            "schema": "coarse_die_plan_v2",
+            "summary": {
+              "active_cores": 4,
+              "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+              "activity_work_semantics": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1",
+              "alone_estimate_status": "ok_assumed",
+              "candidate_count": 1,
+              "candidate_estimate_source": "estimate_alone(shared_runtime_engine)",
+              "consumption_wave_count": 8,
+              "conversion_elements": 26624,
+              "dataflow_id": "full_score_materialization_v3",
+              "estimated_latency_ns": 2408,
+              "evidence_flags": [
+                "engineering_assumption",
+                "hardware_source_derived"
+              ],
+              "executed_int4_ops": 524288,
+              "executed_matrix_ops": 524288,
+              "executed_score_slots": 4096,
+              "granularity_validation": "not_run",
+              "hbm_read_bytes_total": 77824,
+              "hbm_workspace_peak_bytes": 40960,
+              "hbm_write_bytes_total": 45056,
+              "int4_input_bytes": 9216,
+              "kind": "attention_region",
+              "local_bus_bytes": 190560,
+              "logical_tensor_bytes": 16384,
+              "mapping_assumptions": [
+                "engineering_assumption",
+                "GQA_head_mapping",
+                "absolute_position_causal_mask",
+                "not_run_granularity_validation"
+              ],
+              "output_round_count": 8,
+              "physical_transfer_bytes": 122880,
+              "probability_bytes": 16384,
+              "recompute_matrix_ops": 258048,
+              "recomputed_matrix_ops": 258048,
+              "routing_evidence": {
+                "profile": "distributed_ideal_v2",
+                "status": "engineering_assumption"
+              },
+              "score_bytes": 16384,
+              "selected_template": "full_score_materialization_v3",
+              "selection_rule": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th",
+              "source_matrix_ops": 266240,
+              "source_vec_ops": 29088,
+              "sram_capacity_bytes_per_core": 262144,
+              "sram_peak_bytes_per_core": 17476,
+              "sram_read_bytes": 156720,
+              "sram_write_bytes": 156720,
+              "template_id": "full_score_materialization_v3",
+              "tf": 0,
+              "th": 0,
+              "tk": 64,
+              "tm": 16,
+              "tn": 64,
+              "valid_score_pairs": 2080,
+              "vec_equivalent_ops": 143360,
+              "wave_count": 8,
+              "workspace_model_revision": "workspace_lifetimes_v2"
+            },
+            "task": {
+              "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+              "fusion_policy": "materialized",
+              "layer_instances": 1,
+              "op_kind": "attention_region",
+              "phase": "prefill",
+              "schema": "coarse_die_task_v2",
+              "spans": [
+                {
+                  "count": 1,
+                  "kv_start_pos": 0,
+                  "kv_start_stride": 0,
+                  "kv_stride": 0,
+                  "kv_tokens": 64,
+                  "q_start_pos": 0,
+                  "q_start_stride": 0,
+                  "q_tokens": 64
+                }
+              ],
+              "storage_dtype": {
+                "accumulator": "fp32",
+                "activations": "bf16",
+                "kv": "bf16",
+                "output": "bf16",
+                "parameters": "bf16",
+                "scores": "fp32",
+                "weights": "bf16"
+              },
+              "tensor_shapes": {
+                "head_dim": 32,
+                "kv_heads": 1,
+                "m": 64,
+                "q_heads": 1
+              },
+              "tp_slice": {
+                "kv_heads_local": 1,
+                "q_heads_local": 1,
+                "tensor_parallel": 1,
+                "tensor_parallel_rank": 0
+              },
+              "weight_passes": 1
+            }
+          },
+          "ready_ns": 0,
+          "terminal": false,
+          "vec_served": "0.000000000000000000000e+00"
+        },
+        {
+          "activities": [
+            {
+              "activity_id": 666685130783199358,
+              "alpha": 1.0,
+              "done": false,
+              "epoch_index": 0,
+              "hbm_served": [
+                [
+                  "1.484373333333332945494e+03",
+                  "0.000000000000000000000e+00"
+                ],
+                [
+                  "1.484373333333332945494e+03",
+                  "0.000000000000000000000e+00"
+                ]
+              ],
+              "int4_served": "0.000000000000000000000e+00",
+              "progress": 2.968746666666666e-06,
+              "rate": 2968.746666666666,
+              "vec_served": "0.000000000000000000000e+00"
+            }
+          ],
+          "cancelled": false,
+          "credit": [
+            0.0,
+            0.0
+          ],
+          "credit_capacity": [
+            0.0,
+            0.0
+          ],
+          "epoch_index": 0,
+          "finish_ns": null,
+          "handle": 2,
+          "hbm_served": [
+            [
+              "1.484373333333332945494e+03",
+              "0.000000000000000000000e+00"
+            ],
+            [
+              "1.484373333333332945494e+03",
+              "0.000000000000000000000e+00"
+            ]
+          ],
+          "int4_served": "0.000000000000000000000e+00",
+          "issue_ns": 0,
+          "owner": {
+            "execution_id": 900,
+            "generation": 1,
+            "key": "900:900:1",
+            "node_id": 900,
+            "request_id": 10055991614793667348
+          },
+          "plan": {
+            "epochs": [
+              {
+                "activities": [
+                  {
+                    "canonical_q": 1000000000.0,
+                    "credit_delta": [
+                      0.0,
+                      0.0
+                    ],
+                    "hbm_bytes": [
+                      [
+                        500000000,
+                        0
+                      ],
+                      [
+                        500000000,
+                        0
+                      ]
+                    ],
+                    "id": 666685130783199358,
+                    "int4_ops": 0,
+                    "private_time_s": 0.0,
+                    "role": "endpoint",
+                    "vec_eqops": 0,
+                    "work": [
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      714285714.2857144,
+                      714285714.2857144,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0,
+                      0.0
+                    ]
+                  }
+                ],
+                "credit_capacity": [
+                  0.0,
+                  0.0
+                ],
+                "credit_initial": [
+                  0.0,
+                  0.0
+                ],
+                "name": "endpoint",
+                "repeat_count": 1
+              }
+            ],
+            "fingerprint": "a7a33617a0f88d41b515cf2a1f98eb078978ebe65a91a17e43db4ac3ca58dfd0",
+            "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+            "launch_ns": 0,
+            "schema": "coarse_die_plan_v2",
+            "summary": {
+              "allocation_evidence": "uniform_default",
+              "direction": "read",
+              "endpoint_id": 666685130783199358,
+              "eta_hbm": 0.7,
+              "internal_route": false,
+              "join_token": null,
+              "kind": "endpoint",
+              "owner_kind": "comm",
+              "path_class": "hbm_to_edge",
+              "physical_bytes": 1000000000,
+              "route_charged": false,
+              "row_fraction": [
+                0.5,
+                0.5
+              ],
+              "transaction_id": 10055991614793667348
+            },
+            "task": {
+              "endpoint": {
+                "direction": "read",
+                "endpoint_id": 666685130783199358,
+                "eta_hbm": 0.7,
+                "owner_kind": "comm",
+                "path_class": "hbm_to_edge",
+                "physical_bytes": 1000000000,
+                "route": {
+                  "internal_route": false
+                },
+                "transaction_id": 10055991614793667348
+              },
+              "schema": "coarse_die_endpoint_v2"
+            }
+          },
+          "ready_ns": 0,
+          "terminal": false,
+          "vec_served": "0.000000000000000000000e+00"
+        }
+      ],
+      "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+      "internal_events": 0,
+      "next_handle": 3,
+      "now_ns": 1,
+      "rounding": "exact_subns_internal_ceil_public_ns_v2",
+      "runtime_generation": 2,
+      "schema": "coarse_die_snapshot_v3",
+      "snapshot_version": 3,
+      "stats": {
+        "accounting_history_complete": true,
+        "compute_busy_ns": "0.000000000000000000000e+00",
+        "hbm_busy_ns": "1.000000000000000000000e+00",
+        "hbm_served": [
+          [
+            "1.648639999999999639635e+03",
+            "0.000000000000000000000e+00"
+          ],
+          [
+            "1.648639999999999639635e+03",
+            "0.000000000000000000000e+00"
+          ]
+        ],
+        "hbm_shared_ns": "1.000000000000000000000e+00",
+        "legacy_unclassified_hbm": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "row_busy_ns": [
+          "1.000000000000000000000e+00",
+          "1.000000000000000000000e+00"
+        ],
+        "row_shared_ns": [
+          "1.000000000000000000000e+00",
+          "1.000000000000000000000e+00"
+        ],
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "1484.373333333332945494",
+                "0"
+              ],
+              [
+                "1484.373333333332945494",
+                "0"
+              ]
+            ],
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "164.266666666666694141",
+                "0"
+              ],
+              [
+                "164.266666666666694141",
+                "0"
+              ]
+            ],
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops_exact_decimal": "0"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops_exact_decimal": "0"
+          }
+        },
+        "typed_totals_history_complete": true
+      },
+      "transaction_owners": [
+        {
+          "owner": {
+            "execution_id": 900,
+            "generation": 1,
+            "key": "900:900:1",
+            "node_id": 900,
+            "request_id": 10055991614793667348
+          },
+          "refcount": 1,
+          "transaction_id": 10055991614793667348
+        }
+      ]
+    },
+    "sampled_at_ns": 1,
+    "schema": "coarse_die_local_sample_v1",
+    "scope": "rank_local_runtime_only"
+  },
+  "production_world_import_supported": false,
+  "schema": "coarse_die_workload_local_sample_v1",
+  "scope": "rank_local_runtime_and_owners",
+  "workspace": {
+    "active_lease_count": 1,
+    "active_workspace_bytes": 40960,
+    "capacity_snapshot": {
+      "capacity_bytes": 41060,
+      "has_prospective_workspace": false,
+      "model_weight_bytes": 100,
+      "prospective_workspace_bytes": 0,
+      "rank": 0,
+      "reserved_request_bytes": 0,
+      "resident_kv_bytes": 0,
+      "workspace_revision": 0
+    },
+    "has_capacity_snapshot": true,
+    "rank": 0,
+    "workspace_revision": 3
+  }
+}

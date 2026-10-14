@@ -1,0 +1,79 @@
+{
+  "scope": "read-only real Sys local Runtime and ownership sample",
+  "source_base_commit": "b83525c213f5fda26a0bc26e9c0b700ebd3e68f7",
+  "source_state": "uncommitted source recorded by exact per-file SHA256",
+  "source_sha256": {
+    "astra-sim-joint/astra-sim/workload/CoarseDieRuntime.cc": "4c75e50b8b6617ed74753caa3138ada19d23a10d0044eec888c4eeac631c780a",
+    "astra-sim-joint/astra-sim/workload/CoarseDieRuntime.hh": "1275e1126a1666976679b17d5fd1d5b0f267f4e795a3b4652d6bb295389c0527",
+    "astra-sim-joint/astra-sim/workload/DieModelAdapter.cc": "ad84d66eaf672333f5fa76940c936913b920e1b96a1012efad749674e9818260",
+    "astra-sim-joint/astra-sim/workload/DieModelAdapter.hh": "9e5c61f678c94bc61a14593811e67a5e450935369415fdaf388eea125919987e",
+    "astra-sim-joint/astra-sim/workload/LocalHbmBandwidthModel.cc": "31709ea7dd3e1d44b2e6b513832262cd45c2d9863aa5cb6c6c9ae0b77333f41b",
+    "astra-sim-joint/astra-sim/workload/LocalHbmBandwidthModel.hh": "1bd0d1cd7a5faa5c36b5cd3ca44f6107488889e60e544b1ceb9db7e23acbbff6",
+    "astra-sim-joint/astra-sim/workload/Workload.cc": "d73ca957a995d5e726dc1df2e6fc3222702b01507a9d12bc02254de7310cbbda",
+    "astra-sim-joint/astra-sim/workload/Workload.hh": "82445deaeabd28b693e7b93d49ecfa54100c711ed0dd0fcff2cd996a1165e440",
+    "astra-sim-joint/astra-sim/workload/WorkspaceAdmission.hh": "5f8b1967d851c73239ccd933e0a92d44152d1f02a845a1b3cea247df1ce4ef92",
+    "astra-sim-joint/astra-sim/workload/execution_driven/tests/coarse_workspace_runtime_test.cc": "c48c75f73b503b1eff87959edcdf1412bd8cb273ffe41601cfb4dac9530ed4fb"
+  },
+  "binary_sha256": {
+    "work/build-joint/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "de9303db5bb90e30ae9bbe5295451dbb3294008234d11bddd6a5c414abfcb97f",
+    "work/build-joint/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "2b9a8beca5144507dfcf905f894d646f444e83957c307f9b63e9d544c822b9be",
+    "work/build-joint/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "f096e2c85c8560add3fc42181d3417a35cf3764ddaa7f6d9a5986aa1695240df",
+    "work/build-joint/frontend/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest": "1e424240128b3733aae55a3ac9c20630b9a047235e55d88b8991c26956c8114b",
+    "work/build-joint/bin/AstraSim_Analytical_Congestion_Aware_Online": "0bf14f776043322b2a37744b3ba25cdffc25ac7ce06756debd6a6e5b3abb3a6f",
+    "work/build-joint/lib/libjoint_projection.so": "19301229d118c838a73d56e02835435cd0f4201c514b6fa5b632760ea3a3347b"
+  },
+  "sample_sha256": {
+    "samples/drained-workload-sample.json": "2c8cd56c0c0a4f3f59855ea6f794f4e254e0ca0fad94518516e6e42594f9010e",
+    "samples/partial-workload-sample.json": "c266d39407b4e5b5ab5c079920621a5879ea089bf4dcb75539255ad42e415c97",
+    "samples/terminal-local-runtime-sample.json": "439611862fc4416cb07340bf8c80eed037a3c69e685b56fa5aebfa3675d980d4",
+    "samples/terminal-ticks.json": "1a762b95c1d5eacf446cab0e49bf1452def488c7d0043e91826d7fe4191d34f9"
+  },
+  "canonical23_digest": "45b7bf3d8df9969b8155323c79eecf1a81f8d1c7499177e811b6aedf2c4c3264",
+  "validation": {
+    "native_and_real_sys_ctest": {
+      "passed": 8,
+      "failed": 0
+    },
+    "partial": {
+      "sample_tick": 1,
+      "comp_bindings": 1,
+      "endpoint_bindings": 1,
+      "active_workspace_bytes": 40960
+    },
+    "terminal_copy": {
+      "sample_tick": 1,
+      "live_runtime_tick": 0,
+      "live_callback_count_at_sample": 0,
+      "final_real_callback_count": 1
+    },
+    "real_terminal_ticks_ns": {
+      "comp_terminal_ticks_ns": [
+        2408
+      ],
+      "local_hbm_transfer_terminal_tick_ns": 303318,
+      "schema": "coarse_die_terminal_ticks_v1"
+    },
+    "legacy_online": {
+      "cpp_exit": 0,
+      "python_exit": 0,
+      "accepted": 1,
+      "completed": 1,
+      "terminal_success": 192,
+      "graph_batches": 3,
+      "run_dir": "work/sys-local-sample-20261014/online/runs/legacy-20261014T173002Z-29615",
+      "ledger_conservation": {
+        "active_works": 48,
+        "conserved": true,
+        "inferred_progress_works": 0,
+        "stale_amount_works": 48,
+        "violations": []
+      }
+    }
+  },
+  "limitations": [
+    "no production graph/ledger/network/pool/lease import; sh30 guard remains",
+    "no public mapping/timing/calibration changes",
+    "native Domain continuation of the actual sample is the next integration slice",
+    "WSCLLM hardening and FACE admission ports are separate, not certified here"
+  ]
+}
