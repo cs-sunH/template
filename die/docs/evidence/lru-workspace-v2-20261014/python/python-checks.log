@@ -1,0 +1,350 @@
+test_blocked_attempt_evictions_survive_retry (online.test_admission_eviction_accumulation.AdmissionEvictionAccumulationTest.test_blocked_attempt_evictions_survive_retry)
+第一次 attempt 的 history 逐出(E1)不得被放行的第二次 attempt ... ok
+test_full_reserve_deep_gaps_net_reserve_fits_and_backfills (online.test_admission_net_credit.NetCreditRealManagerTests.test_full_reserve_deep_gaps_net_reserve_fits_and_backfills)
+旧 KV RESIDENT 于 decode、终态使"旧+新"≈预算 150%: ... ok
+test_scheduler_net_credit_flow_on_real_manager (online.test_admission_net_credit.NetCreditRealManagerTests.test_scheduler_net_credit_flow_on_real_manager)
+端到端:真 manager 上跑 `_try_admit_prefill` —— 全量失败自动 ... ok
+test_credit_with_mismatched_migration_source_fails_closed (online.test_admission_net_credit.NetCreditStubTests.test_credit_with_mismatched_migration_source_fails_closed)
+credit>0 蕴涵迁移源==decode;失步(如 LOCAL_HIT 源=prefill) ... ok
+test_full_fail_net_retry_success_backfills (online.test_admission_net_credit.NetCreditStubTests.test_full_fail_net_retry_success_backfills)
+全量失败 + 旧 KV RESIDENT 于 decode → 净额重试成功 → ... ok
+test_net_retry_clamps_per_rank_credit (online.test_admission_net_credit.NetCreditStubTests.test_net_retry_clamps_per_rank_credit)
+净额按 rank 钳位:credit 某分量 > 终态时该 rank 净额为 0 ... ok
+test_net_retry_failure_notes_both_attempts (online.test_admission_net_credit.NetCreditStubTests.test_net_retry_failure_notes_both_attempts)
+净额也失败 → return False,且 `_note_capacity_change` 合并覆盖 ... ok
+test_net_success_then_history_blocked_releases_and_clears (online.test_admission_net_credit.NetCreditStubTests.test_net_success_then_history_blocked_releases_and_clears)
+净额成功但 prepare_history blocked → release(pop 语义按登记 ... ok
+test_snapshot_off_decode_target_keeps_single_full_reserve (online.test_admission_net_credit.NetCreditStubTests.test_snapshot_off_decode_target_keeps_single_full_reserve)
+旧 KV 不在 decode 目标(别的实例)/ EVICTED / ABSENT → ... ok
+test_loose_request_sequences_skips_unicode_filenames (online.test_bridge_seq_ascii_guard.BridgeSeqAsciiGuardTests.test_loose_request_sequences_skips_unicode_filenames) ... ok
+test_seq_of_accepts_ascii_and_rejects_unicode_digits (online.test_bridge_seq_ascii_guard.BridgeSeqAsciiGuardTests.test_seq_of_accepts_ascii_and_rejects_unicode_digits) ... ok
+test_blocked_attempt_flushes_ungated_immediately (online.test_decode_eviction_emission_timing.ReserveEvictionFlushTimingTest.test_blocked_attempt_flushes_ungated_immediately)
+预占阻塞:本边界立即发射(无门),窗口不跨 capacity_epoch ... ok
+test_flush_without_pending_evictions_is_noop (online.test_decode_eviction_emission_timing.ReserveEvictionFlushTimingTest.test_flush_without_pending_evictions_is_noop)
+无逐出准入(常态):发射入口零调用,不产生空发射段。 ... ok
+test_prefill_ledger_row_chunks_are_positive_ceil (online.test_decode_eviction_emission_timing.ReserveEvictionFlushTimingTest.test_prefill_ledger_row_chunks_are_positive_ceil)
+M-26 回归(2026-09-30):P 侧台账行 prefill_chunks/iterations/ ... ok
+test_successful_admission_flushes_gated_at_prefill_emission (online.test_decode_eviction_emission_timing.ReserveEvictionFlushTimingTest.test_successful_admission_flushes_gated_at_prefill_emission)
+准入成功:预占逐出随 prefill 批发射(段块末触发门),决策到 ... ok
+test_emit_train_carries_pending_then_writes_off (online.test_decode_eviction_emission_timing.TrainJoinPendingEvictionTest.test_emit_train_carries_pending_then_writes_off) ... ok
+test_empty_decode_target_evictions_serializes_empty_list (online.test_decode_eviction_serialization.DecodeDecisionDictTest.test_empty_decode_target_evictions_serializes_empty_list) ... ok
+test_prefill_decode_transfer_carries_layer_domain (online.test_decode_eviction_serialization.DecodeDecisionDictTest.test_prefill_decode_transfer_carries_layer_domain)
+B2:prefill_decode_transfer 为 kind 载体 KVTransfer,含层域 ... ok
+test_serializes_decode_target_evictions (online.test_decode_eviction_serialization.DecodeDecisionDictTest.test_serializes_decode_target_evictions) ... ok
+test_emit_train_snapshots_then_clears (online.test_decode_eviction_serialization.EmitTrainSerializationTest.test_emit_train_snapshots_then_clears) ... ok
+test_empty_transfers_serialize_empty_list (online.test_decode_eviction_serialization.HistoryTransfersTest.test_empty_transfers_serialize_empty_list) ... ok
+test_eviction_source_instances_epoch_wiring (online.test_decode_eviction_serialization.HistoryTransfersTest.test_eviction_source_instances_epoch_wiring)
+纪元唤醒接线:逐出 KVTransfer 的受害实例 = source_instance_ ... ok
+test_kv_transfer_rows_hand_computed (online.test_decode_eviction_serialization.HistoryTransfersTest.test_kv_transfer_rows_hand_computed) ... ok
+test_try_admit_prefill_retains_history_transfers (online.test_decode_eviction_serialization.HistoryTransfersTest.test_try_admit_prefill_retains_history_transfers)
+_try_admit_prefill 取 decision.transfers 赋值(REMOTE_RESTORE ... ok
+test_none_transfer_serializes_none (online.test_decode_eviction_serialization.KvTransferDictCompatTest.test_none_transfer_serializes_none) ... ok
+test_shard_rows_shape (online.test_decode_eviction_serialization.KvTransferDictCompatTest.test_shard_rows_shape) ... ok
+test_spec_json_round_trip_through_cost_library (online.test_die_model_adapter.BuildSpecTests.test_spec_json_round_trip_through_cost_library)
+spec dict 直接过 die_estimate_batch 严格解析(若库可发现)。 ... skipped 'die_model_oracle unavailable'
+test_spec_schema_shape (online.test_die_model_adapter.BuildSpecTests.test_spec_schema_shape) ... ok
+test_spec_validation (online.test_die_model_adapter.BuildSpecTests.test_spec_validation) ... ok
+test_full_category_table (online.test_die_model_adapter.CategoryMappingTests.test_full_category_table) ... ok
+test_unknown_category_rejected_via_context (online.test_die_model_adapter.CategoryMappingTests.test_unknown_category_rejected_via_context) ... ok
+test_boundary_after_chain_tail_is_allowed (online.test_die_model_adapter.CompileRegionTests.test_boundary_after_chain_tail_is_allowed) ... ok
+test_boundary_inside_chain_blocks_fusion (online.test_die_model_adapter.CompileRegionTests.test_boundary_inside_chain_blocks_fusion) ... ok
+test_explicit_watch_target_blocks_fusion (online.test_die_model_adapter.CompileRegionTests.test_explicit_watch_target_blocks_fusion) ... ok
+test_external_consumer_blocks_fusion (online.test_die_model_adapter.CompileRegionTests.test_external_consumer_blocks_fusion) ... ok
+test_full_emission_order_preserved (online.test_die_model_adapter.CompileRegionTests.test_full_emission_order_preserved)
+完整 13 类序列:融合仅吸收两条链,其余原序分离。 ... ok
+test_fused_name_colliding_with_watch_anchor_fails_closed (online.test_die_model_adapter.CompileRegionTests.test_fused_name_colliding_with_watch_anchor_fails_closed) ... ok
+test_happy_path_fuses_both_regions_and_conserves_work (online.test_die_model_adapter.CompileRegionTests.test_happy_path_fuses_both_regions_and_conserves_work) ... ok
+test_heterogeneous_identity_blocks_fusion (online.test_die_model_adapter.CompileRegionTests.test_heterogeneous_identity_blocks_fusion) ... ok
+test_partial_chain_stays_separate (online.test_die_model_adapter.CompileRegionTests.test_partial_chain_stays_separate) ... ok
+test_watch_anchor_name_blocks_fusion (online.test_die_model_adapter.CompileRegionTests.test_watch_anchor_name_blocks_fusion) ... ok
+test_die_backend_constructs_context (online.test_die_model_adapter.FromServiceTests.test_die_backend_constructs_context) ... ok
+test_legacy_manifests_return_none_or_fail (online.test_die_model_adapter.FromServiceTests.test_legacy_manifests_return_none_or_fail) ... ok
+test_missing_die_config_file_fails_closed (online.test_die_model_adapter.FromServiceTests.test_missing_die_config_file_fails_closed) ... ok
+test_span_identity_restores_absolute_positions (online.test_die_model_adapter.SpanPositionTests.test_span_identity_restores_absolute_positions)
+本仓两类 span 的恒等式还原:prefill chunk(decode 列车迭代 span ... ok
+test_span_identity_violation_fails_closed (online.test_die_model_adapter.SpanPositionTests.test_span_identity_violation_fails_closed) ... ok
+test_evictions_without_segment_end_fail_closed (online.test_eviction_side_branch_structure.DecodeEvictionSideBranchTest.test_evictions_without_segment_end_fail_closed) ... ok
+test_joiner_without_evictions_needs_no_segment_end (online.test_eviction_side_branch_structure.DecodeEvictionSideBranchTest.test_joiner_without_evictions_needs_no_segment_end) ... ok
+test_segment_end_gate_preserved_on_branch (online.test_eviction_side_branch_structure.DecodeEvictionSideBranchTest.test_segment_end_gate_preserved_on_branch)
+(d):prefill 段末门 1B 触发挂分支首节点;块末登记弹出。 ... ok
+test_train_body_has_no_eviction_ancestor (online.test_eviction_side_branch_structure.DecodeEvictionSideBranchTest.test_train_body_has_no_eviction_ancestor)
+(a)+(c):列车体(迁移/join 标记/聚合体/end barrier)不含逐出 ... ok
+test_arrival_gate_on_branch_first_node (online.test_eviction_side_branch_structure.HistoryEvictionSideBranchTest.test_arrival_gate_on_branch_first_node)
+(d):到达门经 1B 触发挂分支首节点;主链屏障同样等到达门 ... ok
+test_eviction_tail_not_ancestor_of_prefill_body (online.test_eviction_side_branch_structure.HistoryEvictionSideBranchTest.test_eviction_tail_not_ancestor_of_prefill_body)
+(a):逐出支链节点不是就绪屏障/prefill 主体节点的祖先。 ... ok
+test_fork_node_is_common_ancestor (online.test_eviction_side_branch_structure.HistoryEvictionSideBranchTest.test_fork_node_is_common_ancestor)
+(b):分支首节点与主链后续节点同挂 fork 节点(fork 时 frontier)。 ... ok
+test_main_chain_parents_exclude_eviction_ids (online.test_eviction_side_branch_structure.HistoryEvictionSideBranchTest.test_main_chain_parents_exclude_eviction_ids)
+(c):主链节点直接 parent 不含逐出节点 id。 ... ok
+test_cross_instance_victim_keeps_frontier_root (online.test_eviction_side_branch_structure.PrefillEvictionGateAlignmentTest.test_cross_instance_victim_keeps_frontier_root)
+受害者在他实例:支链根 = 该 rank frontier(纯 frontier,无 ... ok
+test_same_instance_victim_branch_root_is_pure_frontier (online.test_eviction_side_branch_structure.PrefillEvictionGateAlignmentTest.test_same_instance_victim_branch_root_is_pure_frontier)
+统一契约(2026-09-13):无门逐出支链根 = 纯 fork frontier(不带 ... ok
+test_branch_trigger_leak_fails_closed (online.test_eviction_side_branch_structure.SideBranchHelperTest.test_branch_trigger_leak_fails_closed)
+分支内部 arming 而未被任何节点消费(触发门泄漏)→ fail-closed。 ... ok
+test_side_branch_restores_chain (online.test_eviction_side_branch_structure.SideBranchHelperTest.test_side_branch_restores_chain)
+正常路径:分支发射后主链 frontier 回滚到 fork 点;主链后续 ... ok
+test_stashed_main_chain_pending_is_returned (online.test_eviction_side_branch_structure.SideBranchHelperTest.test_stashed_main_chain_pending_is_returned)
+fork 点的主链 armed 依赖不进分支,恢复后归还原主链消费者。 ... ok
+test_arm_dependency_accepts_emitted_target (online.test_forward_edge_invariant.T4ForwardInvariantTest.test_arm_dependency_accepts_emitted_target) ... ok
+test_arm_dependency_rejects_foreign_magnitude (online.test_forward_edge_invariant.T4ForwardInvariantTest.test_arm_dependency_rejects_foreign_magnitude) ... ok
+test_arm_dependency_rejects_future_target (online.test_forward_edge_invariant.T4ForwardInvariantTest.test_arm_dependency_rejects_future_target) ... ok
+test_arm_timer_gate_rejects_future_target (online.test_forward_edge_invariant.T4ForwardInvariantTest.test_arm_timer_gate_rejects_future_target) ... ok
+test_none_target_is_noop (online.test_forward_edge_invariant.T4ForwardInvariantTest.test_none_target_is_noop) ... ok
+test_collect_releases_buffers_without_changing_payload (online.test_graph_batch_builder.CollectionLifecycleTest.test_collect_releases_buffers_without_changing_payload) ... ok
+test_main_intermediate_request_keeps_kv_for_following_turn (online.test_graph_batch_builder.CompletionGateLifetimeTest.test_main_intermediate_request_keeps_kv_for_following_turn) ... ok
+test_main_terminal_request_complete_retire_gate (online.test_graph_batch_builder.CompletionGateLifetimeTest.test_main_terminal_request_complete_retire_gate) ... ok
+test_turn_one_admission_consumes_gate_and_terminal_retires (online.test_graph_batch_builder.CompletionGateLifetimeTest.test_turn_one_admission_consumes_gate_and_terminal_retires) ... ok
+test_dependency_edge_order_and_state_matrix (online.test_graph_batch_builder.DependencyFastPathTest.test_dependency_edge_order_and_state_matrix) ... ok
+test_die_collectives_and_markers_unchanged (online.test_graph_batch_builder.DieBackendEmissionTest.test_die_collectives_and_markers_unchanged)
+collective 不变量 + marker op_role(契约 §7 裁定 3/8)。 ... ok
+test_die_prefill_body_attaches_specs (online.test_graph_batch_builder.DieBackendEmissionTest.test_die_prefill_body_attaches_specs)
+wscllm 特有:P 侧 emit_prefill_batch 整段发射同样附 spec ... ok
+test_die_specs_carry_absolute_span_positions (online.test_graph_batch_builder.DieBackendEmissionTest.test_die_specs_carry_absolute_span_positions) ... ok
+test_die_train_body_fuses_regions_and_attaches_specs (online.test_graph_batch_builder.DieBackendEmissionTest.test_die_train_body_fuses_regions_and_attaches_specs) ... ok
+test_scheduler_base_builds_and_injects_die_context (online.test_graph_batch_builder.DieBackendEmissionTest.test_scheduler_base_builds_and_injects_die_context)
+manifest -> DieModelContext -> 每批发射前注入构图器(唯一注入点)。 ... ok
+test_decode_length_one_exit_marker_carries_first_token (online.test_graph_batch_builder.FirstStepSplitEmissionTest.test_decode_length_one_exit_marker_carries_first_token)
+decode_length=1 边界:debut 成员 decode_length=1 不在首步批挂 ... ok
+test_no_split_marker_enhancement_and_off_equivalence (online.test_graph_batch_builder.FirstStepSplitEmissionTest.test_no_split_marker_enhancement_and_off_equivalence)
+不拆车增强(split=False,iterations==1)+ OFF 等价断言: ... ok
+test_split_batch_structure (online.test_graph_batch_builder.FirstStepSplitEmissionTest.test_split_batch_structure)
+批结构:首步批 = joiner 迁移 + join 标记 + 首迭代体(每成员 ... ok
+test_split_body_bytes_conserve_full_train (online.test_graph_batch_builder.FirstStepSplitEmissionTest.test_split_body_bytes_conserve_full_train)
+字节守恒:首步批 + 余量批的列车体 tensor_size 与 all_reduce ... ok
+test_tmax_truncation_one_plus_seven (online.test_graph_batch_builder.FirstStepSplitEmissionTest.test_tmax_truncation_one_plus_seven)
+T_max 截断:8 迭代列车(1+7≤8)拆分后首步恰 1 迭代/成员、 ... ok
+test_b2_b1_train_body_weight_bytes_equal (online.test_graph_batch_builder.TrainEmissionNailTest.test_b2_b1_train_body_weight_bytes_equal)
+(d):B=2(两成员 2 迭代,5 span,weight_passes=2)与 B=1 ... ok
+test_joiner_transfer_and_marker (online.test_graph_batch_builder.TrainEmissionNailTest.test_joiner_transfer_and_marker)
+(e):joiner 迁移 = transfer 3000 send/recv 对(prefill rank 发、 ... ok
+test_train_completion_gates_are_post_barrier (online.test_graph_batch_builder.TrainEmissionNailTest.test_train_completion_gates_are_post_barrier)
+(c):退出成员 session 的 completion gate = 列车 end barrier 节点 ... ok
+test_train_emits_no_prefill_stage_nodes (online.test_graph_batch_builder.TrainEmissionNailTest.test_train_emits_no_prefill_stage_nodes)
+(f):§3.6 无混拼——纯 decode 列车发射不产生任何 prefill 主体 ... ok
+test_train_watch_members_are_marker_nodes_pre_barrier (online.test_graph_batch_builder.TrainEmissionNailTest.test_train_watch_members_are_marker_nodes_pre_barrier)
+(a)+(b):exit 标记节点承载 DECODE_COMPLETION watch 成员 ... ok
+test_turn0_history_eviction_arms_arrival_gate (online.test_kv_transfer_emission.HistoryEvictionTriggerTest.test_turn0_history_eviction_arms_arrival_gate) ... ok
+test_turn1_history_eviction_uses_pending_gate (online.test_kv_transfer_emission.HistoryEvictionTriggerTest.test_turn1_history_eviction_uses_pending_gate) ... ok
+test_noc_migrate_send_recv_ack (online.test_kv_transfer_emission.NocMigrateChainTest.test_noc_migrate_send_recv_ack) ... ok
+test_retire_clears_session_ledgers (online.test_kv_transfer_emission.PendingHistoryLedgerTest.test_retire_clears_session_ledgers) ... ok
+test_sync_updates_gate_location (online.test_kv_transfer_emission.PendingHistoryLedgerTest.test_sync_updates_gate_location) ... ok
+test_turn0_deferred_channel (online.test_kv_transfer_emission.PendingHistoryLedgerTest.test_turn0_deferred_channel)
+有 session 键无门(turn-0 在途)→ 延迟;下一登记点消费。 ... ok
+test_remote_load_restore_only_charging (online.test_kv_transfer_emission.RemoteLoadChainTest.test_remote_load_restore_only_charging)
+edge=1 mem_load → 1→5 send/recv 均零计费 → rank5 restore。 ... ok
+test_location_mismatch_fails_closed (online.test_kv_transfer_emission.RemoteRestoreEmissionTest.test_location_mismatch_fails_closed) ... ok
+test_missing_pending_gate_fails_closed (online.test_kv_transfer_emission.RemoteRestoreEmissionTest.test_missing_pending_gate_fails_closed) ... ok
+test_multi_shard_store_registers_single_victim_tails (online.test_kv_transfer_emission.RemoteRestoreEmissionTest.test_multi_shard_store_registers_single_victim_tails)
+多 shard = 单逻辑 victim:一条两 shard 的 remote_store 整体 ... ok
+test_partial_history_action_fails_closed (online.test_kv_transfer_emission.RemoteRestoreEmissionTest.test_partial_history_action_fails_closed)
+PARTIAL 消费侧不可达:发射侧唯一拒绝触发器是恢复段数 >1 ... ok
+test_plain_history_has_no_layer_split (online.test_kv_transfer_emission.RemoteRestoreEmissionTest.test_plain_history_has_no_layer_split)
+无历史/LOCAL_HIT:无层段拆分节点(单次全层 request_aggregated)。 ... ok
+test_remote_restore_full_layer_single_segment (online.test_kv_transfer_emission.RemoteRestoreEmissionTest.test_remote_restore_full_layer_single_segment)
+REMOTE_RESTORE:全层 [0, L) 单段 remote_load + 单一 ... ok
+test_remote_store_direct_edge_pool_read (online.test_kv_transfer_emission.RemoteStoreChainTest.test_remote_store_direct_edge_pool_read)
+链 B(source==edge=1):POOL_READ 唯一计费(hbm_access_mode=1)。 ... ok
+test_remote_store_via_edge_four_step_chain (online.test_kv_transfer_emission.RemoteStoreChainTest.test_remote_store_via_edge_four_step_chain)
+链 A(source=5 内部,edge=1):源端唯一数据计费 + 过路零计费。 ... ok
+test_decode_eviction_gated_on_prefill_segment_end (online.test_kv_transfer_emission.TrainHeadDecodeEvictionTest.test_decode_eviction_gated_on_prefill_segment_end) ... ok
+test_evictions_without_segment_end_fail_closed (online.test_kv_transfer_emission.TrainHeadDecodeEvictionTest.test_evictions_without_segment_end_fail_closed) ... ok
+test_joiner_without_evictions_needs_no_segment_end (online.test_kv_transfer_emission.TrainHeadDecodeEvictionTest.test_joiner_without_evictions_needs_no_segment_end) ... ok
+test_cpp_log_nonexistent_path_fails_closed (online.test_ledger_reconcile_rules.LedgerReconcileRulesTest.test_cpp_log_nonexistent_path_fails_closed) ... [ledger_reconcile] FAIL-CLOSED: cpp.log 不存在: /tmp/ledger_reconcile_test.jysllu3r/missing.log —— R0d/R0e(service counters)与 R2c/R3a/R3c(phase-5/4 audit)以 cpp.log 审计计数器为权威数据源,缺失即全部空洞通过;传 --cpp-log <run>/cpp.log(归档态给 cpp.log.gz)
+ok
+test_cpp_log_required_arg (online.test_ledger_reconcile_rules.LedgerReconcileRulesTest.test_cpp_log_required_arg) ... usage: run_python_checks.py [-h] --bridge-dir BRIDGE_DIR --manifest MANIFEST
+                            --cpp-log CPP_LOG
+                            [--expected-requests EXPECTED_REQUESTS]
+                            [--expected-accepted-sessions EXPECTED_ACCEPTED_SESSIONS]
+                            [--report REPORT]
+run_python_checks.py: error: the following arguments are required: --cpp-log
+ok
+test_full_run_balanced_with_v2_v3_shapes (online.test_ledger_reconcile_rules.LedgerReconcileRulesTest.test_full_run_balanced_with_v2_v3_shapes) ... ok
+test_missing_audit_lines_fails_closed (online.test_ledger_reconcile_rules.LedgerReconcileRulesTest.test_missing_audit_lines_fails_closed) ... [ledger_reconcile] FAIL-CLOSED: cpp.log 在场但缺少 [online] service counters / phase-5 commit counters / phase-4 end audit 行(截断、归档损坏或日志代际不符): /tmp/ledger_reconcile_test.98_1kiv7/cpp.log
+ok
+test_missing_digests_fails_closed (online.test_ledger_reconcile_rules.LedgerReconcileRulesTest.test_missing_digests_fails_closed) ... [ledger_reconcile] FAIL-CLOSED: graph_batch_digests.jsonl 缺失/为空: /tmp/ledger_reconcile_test.kgmlho3o/bridge/graph_batch_digests.jsonl —— R2a/R2b 的 watch 总数与批级摘要无对平数据源(该产物生产缺省不写,运行需 SH_GRAPH_DIGESTS=1)
+ok
+test_missing_train_ledger_fails_closed (online.test_ledger_reconcile_rules.LedgerReconcileRulesTest.test_missing_train_ledger_fails_closed) ... [ledger_reconcile] FAIL-CLOSED: train_ledger.jsonl 缺失: /tmp/ledger_reconcile_test.6qtqqgli/bridge/train_ledger.jsonl —— R7a1/R8b 的列车成员时间线无数据源(strategy 运行恒产出该账本)
+ok
+test_r2b_bound_still_enforced (online.test_ledger_reconcile_rules.LedgerReconcileRulesTest.test_r2b_bound_still_enforced) ... ok
+test_r7a2_real_non_barrier_residual_still_fails (online.test_ledger_reconcile_rules.LedgerReconcileRulesTest.test_r7a2_real_non_barrier_residual_still_fails) ... ok
+test_arm_fail_closed_when_decided_store_not_emitted (online.test_store_restore_ordering.DecisionTimeEmissionOrderingTest.test_arm_fail_closed_when_decided_store_not_emitted)
+fail-closed 探针:空表但调度器报告该会话仍有"已决策未发射" ... ok
+test_gated_emission_requires_prefill_segment_end (online.test_store_restore_ordering.DecisionTimeEmissionOrderingTest.test_gated_emission_requires_prefill_segment_end)
+段块末触发门:准入成功形态的发射门 = prefill 段块末节点 ... ok
+test_restore_emitted_after_decision_time_store_is_gated (online.test_store_restore_ordering.DecisionTimeEmissionOrderingTest.test_restore_emitted_after_decision_time_store_is_gated)
+倒序发射场景回归:决策时点 store(批次 1)→ 受害者回迁 ... ok
+test_terminal_retire_after_decision_time_emission_leaves_no_leak (online.test_store_restore_ordering.DecisionTimeEmissionOrderingTest.test_terminal_retire_after_decision_time_emission_leaves_no_leak)
+terminal-retire 场景回归(M-25):store 支链在决策时点(会话 ... ok
+test_relay_carries_store_ordering_across_edges (online.test_store_restore_ordering.FullRestoreCrossEdgeRelayTest.test_relay_carries_store_ordering_across_edges) ... ok
+test_whole_session_store_gates_the_restore_chain (online.test_store_restore_ordering.FullRestoreSameEdgeOrderingTest.test_whole_session_store_gates_the_restore_chain) ... ok
+test_full_restore_gated_by_store_tails_with_single_barrier (online.test_store_restore_ordering.RemoteRestoreFullLayerOrderingTest.test_full_restore_gated_by_store_tails_with_single_barrier) ... ok
+test_same_request_prefill_eviction_still_registers_after_restore (online.test_store_restore_ordering.RestoreConsumesStoreTailsTest.test_same_request_prefill_eviction_still_registers_after_restore)
+同 request 内的登记次序不受弹出影响:history 回迁消费在飞尾部 ... ok
+test_second_restore_does_not_rearm_consumed_store (online.test_store_restore_ordering.RestoreConsumesStoreTailsTest.test_second_restore_does_not_rearm_consumed_store)
+多轮「逐出→回迁」:第二轮回迁只为第二轮 store 补边,首轮已 ... ok
+test_retire_completion_gate_clears_tails (online.test_store_restore_ordering.RetireClearsStoreTailsTest.test_retire_completion_gate_clears_tails) ... ok
+test_consume_first_step_wakeup_noop (online.test_train_machinery.FirstTokenPlanTest.test_consume_first_step_wakeup_noop)
+no-op 交付路径(WP9_CONTRACT §3):唤醒 id 命中 _pending_first_ ... ok
+test_debut_requires_zero_consumed_and_split_gate (online.test_train_machinery.FirstTokenPlanTest.test_debut_requires_zero_consumed_and_split_gate)
+debut 判定:joiner 且 decode_tokens_consumed == 0;迭代数 >= 2 ... ok
+test_split_spans_tmax_one_plus_seven (online.test_train_machinery.FirstTokenPlanTest.test_split_spans_tmax_one_plus_seven)
+span 切分:8 迭代列车(1+7≤8)首步 = 每成员第 1 个 span, ... ok
+test_linear_stage_consistency_and_weight_once_per_iteration (online.test_train_machinery.LayerABCrossCheckTest.test_linear_stage_consistency_and_weight_once_per_iteration)
+同一批组成(B=2 decode, 1 迭代)下: ... ok
+test_lut_is_phase_exclusive_decode_only_form (online.test_train_machinery.LayerABCrossCheckTest.test_lut_is_phase_exclusive_decode_only_form)
+§3.6 前提钉子:LUT phase-exclusive((p_chunk>0) 与 (d_batch>0) ... ok
+test_default_off_and_explicit_on (online.test_train_machinery.SplitEnvironmentTest.test_default_off_and_explicit_on) ... ok
+test_advance_is_closed_form_exact (online.test_train_machinery.TrainFinalizeTest.test_advance_is_closed_form_exact)
+闭式账本:列车核销推进 decode_tokens_consumed 恰一次 ... ok
+test_busy_gate_skips_in_flight_instance (online.test_train_machinery.TrainFinalizeTest.test_busy_gate_skips_in_flight_instance)
+busy 门:列车在飞的实例不重复发射(_admit_pass 跳过; ... ok
+test_same_tick_multi_instance_and_split_delivery_idempotent (online.test_train_machinery.TrainFinalizeTest.test_same_tick_multi_instance_and_split_delivery_idempotent)
+same-tick 多实例核销 + 同列车信号拆交付幂等:实例 0 的列车 ... ok
+test_train_spans_are_pure_decode (online.test_train_machinery.TrainPlanningTest.test_train_spans_are_pure_decode)
+§3.6 钉子:列车 span 全部 tokens==1(逐成员逐 token),绝无 ... ok
+test_uneven_decode_members_exit_in_one_train (online.test_train_machinery.TrainPlanningTest.test_uneven_decode_members_exit_in_one_train)
+异长 decode 同批:迭代 = max 剩余;两成员都在列车内退出 ... ok
+test_frontier_neutral_rejects_empty_segment (online.test_transfer_frontier_neutral.TransferFrontierNeutralTest.test_frontier_neutral_rejects_empty_segment) ... ok
+test_join_marker_arms_xfer_recv (online.test_transfer_frontier_neutral.TransferFrontierNeutralTest.test_join_marker_arms_xfer_recv) ... ok
+test_noc_migrate_records_recv_kv_as_arrival (online.test_transfer_frontier_neutral.TransferFrontierNeutralTest.test_noc_migrate_records_recv_kv_as_arrival) ... ok
+test_remote_load_records_history_arrival_ids (online.test_transfer_frontier_neutral.TransferFrontierNeutralTest.test_remote_load_records_history_arrival_ids) ... ok
+test_remote_store_transfer_keeps_main_frontier (online.test_transfer_frontier_neutral.TransferFrontierNeutralTest.test_remote_store_transfer_keeps_main_frontier) ... ok
+test_tp_ready_barrier_arms_restore_explicitly (online.test_transfer_frontier_neutral.TransferFrontierNeutralTest.test_tp_ready_barrier_arms_restore_explicitly) ... ok
+test_die_emission_conserves_totals_and_collectives (online.test_weight_passes.DieContextConservationTests.test_die_emission_conserves_totals_and_collectives) ... ok
+test_coarse_auto_requires_v2_and_legacy_auto_keeps_v1 (online.test_workspace_admission_v2.WorkspaceAdmissionModeTests.test_coarse_auto_requires_v2_and_legacy_auto_keeps_v1) ... ok
+test_coarse_cannot_be_forced_off (online.test_workspace_admission_v2.WorkspaceAdmissionModeTests.test_coarse_cannot_be_forced_off) ... ok
+test_v1_mode_preserves_legacy_response_shape_and_ack (online.test_workspace_admission_v2.WorkspaceAdmissionV2SchedulerBridgeTests.test_v1_mode_preserves_legacy_response_shape_and_ack) ... ok
+test_v2_full_rank_echo_replay_and_ack (online.test_workspace_admission_v2.WorkspaceAdmissionV2SchedulerBridgeTests.test_v2_full_rank_echo_replay_and_ack) ... ok
+test_workspace_release_advances_capacity_epoch_and_retries_real_policy (online.test_workspace_admission_v2.WorkspaceAdmissionV2SchedulerBridgeTests.test_workspace_release_advances_capacity_epoch_and_retries_real_policy) ... ok
+test_workspace_table_u64_and_atomic_rejection_before_delivery (online.test_workspace_admission_v2.WorkspaceAdmissionV2SchedulerBridgeTests.test_workspace_table_u64_and_atomic_rejection_before_delivery) ... ok
+
+----------------------------------------------------------------------
+Ran 144 tests in 0.042s
+
+OK (skipped=1)
+test_adapter_preserves_uint64_capacity_without_float_rounding (test_wsc_llm_typed_hardware.WscLlmTypedHardwareTests.test_adapter_preserves_uint64_capacity_without_float_rounding) ... ok
+test_coarse_adapter_preserves_typed_rates_and_exact_capacity (test_wsc_llm_typed_hardware.WscLlmTypedHardwareTests.test_coarse_adapter_preserves_typed_rates_and_exact_capacity) ... ok
+test_coarse_compatibility_scalar_never_becomes_generic_getter (test_wsc_llm_typed_hardware.WscLlmTypedHardwareTests.test_coarse_compatibility_scalar_never_becomes_generic_getter) ... ok
+test_coarse_profile_needs_both_finite_positive_typed_rates (test_wsc_llm_typed_hardware.WscLlmTypedHardwareTests.test_coarse_profile_needs_both_finite_positive_typed_rates) ... ok
+test_legacy_scalar_remains_valid_and_guarded_getter_returns_it (test_wsc_llm_typed_hardware.WscLlmTypedHardwareTests.test_legacy_scalar_remains_valid_and_guarded_getter_returns_it) ... ok
+test_missing_or_invalid_coarse_typed_rates_fail_closed (test_wsc_llm_typed_hardware.WscLlmTypedHardwareTests.test_missing_or_invalid_coarse_typed_rates_fail_closed) ... ok
+test_authored_templates_do_not_duplicate_managed_hardware_fields (test_config_resolver.ConfigResolverTests.test_authored_templates_do_not_duplicate_managed_hardware_fields) ... ok
+test_impl_value_combination_gate_rejects_ring_all_to_all (test_config_resolver.ConfigResolverTests.test_impl_value_combination_gate_rejects_ring_all_to_all)
+值组合门（2026-10-01 移植）：all-to-all 只许 direct/oneDirect 族 ... ok
+test_materializes_runtime_files_from_repo_local_sources (test_config_resolver.ConfigResolverTests.test_materializes_runtime_files_from_repo_local_sources) ... ok
+test_rejects_duplicate_communicators_and_non_rectangular_groups (test_config_resolver.ConfigResolverTests.test_rejects_duplicate_communicators_and_non_rectangular_groups) ... ok
+test_resolves_values_and_profile_from_the_single_hardware_source (test_config_resolver.ConfigResolverTests.test_resolves_values_and_profile_from_the_single_hardware_source) ... ok
+test_capacity_alignment_reports_both_values (test_config_resolver.DieHardwareTests.test_capacity_alignment_reports_both_values) ... ok
+test_checked_in_die_node_is_the_ruling_point (test_config_resolver.DieHardwareTests.test_checked_in_die_node_is_the_ruling_point)
+契约 §3.5 裁定点:large / 0.75 MB / 800 mm2 / HBM 4x1 / 512 bit ... ok
+test_derived_scalars_backflow (test_config_resolver.DieHardwareTests.test_derived_scalars_backflow) ... ok
+test_die_and_compute_are_mutually_exclusive (test_config_resolver.DieHardwareTests.test_die_and_compute_are_mutually_exclusive) ... ok
+test_die_conflicts_with_roofline_template (test_config_resolver.DieHardwareTests.test_die_conflicts_with_roofline_template) ... ok
+test_die_model_config_is_managed (test_config_resolver.DieHardwareTests.test_die_model_config_is_managed) ... ok
+test_die_node_six_key_structure (test_config_resolver.DieHardwareTests.test_die_node_six_key_structure) ... ok
+test_illegal_layout_and_core_table_miss_rejected_by_library (test_config_resolver.DieHardwareTests.test_illegal_layout_and_core_table_miss_rejected_by_library) ... ok
+test_missing_compute_description_is_rejected (test_config_resolver.DieHardwareTests.test_missing_compute_description_is_rejected) ... ok
+test_resolved_die_model_and_system_injection (test_config_resolver.DieHardwareTests.test_resolved_die_model_and_system_injection) ... ok
+test_kv_cache_bytes_for_tokens_requires_non_negative_int (test_wsc_llm_scheduler.InputScalarValidationTests.test_kv_cache_bytes_for_tokens_requires_non_negative_int) ... ok
+test_rank_coordinates_requires_in_range_int (test_wsc_llm_scheduler.InputScalarValidationTests.test_rank_coordinates_requires_in_range_int) ... ok
+test_combination_bound_fails_closed_and_default_bounds_are_inert (test_wsc_llm_scheduler.RouteEnumerationBoundTests.test_combination_bound_fails_closed_and_default_bounds_are_inert)
+候选组合上界:收紧到 1 时,多候选拓扑(2×2 网格,每 prefill 有 ... ok
+test_path_materialization_bound_fails_closed (test_wsc_llm_scheduler.RouteEnumerationBoundTests.test_path_materialization_bound_fails_closed)
+8×8 实例网格对角点间等价最短路 C(14,7)=3432 > 上界:递归物化 ... ok
+test_aggregated_transformer_pass_preserves_expanded_totals (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_aggregated_transformer_pass_preserves_expanded_totals) ... ok
+test_checked_in_config_is_request_neutral_and_fails_closed_without_input (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_checked_in_config_is_request_neutral_and_fails_closed_without_input)
+checked-in 配置 = request-neutral(占位队列路径,不绑定任何默认 ... ok
+test_checked_in_config_keys_all_supported (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_checked_in_config_keys_all_supported)
+C-1 守卫(2026-09-30):checked-in trace_config.csv 的全部 ... ok
+test_completion_retains_kv_without_watermark (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_completion_retains_kv_without_watermark)
+完成路径零逐出(主动驱逐已物理清除):mark_complete 返回空元组、 ... ok
+test_decode_instances_are_center_prioritized_and_validation_rejects_inverse (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_decode_instances_are_center_prioritized_and_validation_rejects_inverse) ... ok
+test_eviction_victim_order_is_real_lru_with_deterministic_ties (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_eviction_victim_order_is_real_lru_with_deterministic_ties)
+victim 顺序 = 真实 LRU 升序(last_completion_ns);同 tick 并列 ... ok
+test_exact_static_routes_are_one_hop_and_edge_disjoint (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_exact_static_routes_are_one_hop_and_edge_disjoint) ... ok
+test_kv_eviction_mode_key_rejected (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_kv_eviction_mode_key_rejected)
+主动驱逐已物理清除(2026-09-05):loader 对 kv_eviction_mode 键 ... ok
+test_llama2_7b_tp6_partition_is_exact_without_model_padding (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_llama2_7b_tp6_partition_is_exact_without_model_padding) ... ok
+test_manager_deletes_multiple_lru_victims_in_one_pool_snapshot (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_manager_deletes_multiple_lru_victims_in_one_pool_snapshot)
+一次准入逐出多个已完成 LRU 受害者,且整池快照恰好取一次。 ... ok
+test_passive_only_admission_pressure_evicts_whole_lru_sessions (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_passive_only_admission_pressure_evicts_whole_lru_sessions)
+被动逐出唯一路径 = 准入期 ensure_physical_fit 单阶段整体 LRU ... ok
+test_passive_only_exhausted_candidates_increment_deep_gap_events (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_passive_only_exhausted_candidates_increment_deep_gap_events)
+D4(2026-09-05):活跃会话占满容量、无可逐冷会话 → ... ok
+test_pg_name_guard_is_int_normalized (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_pg_name_guard_is_int_normalized)
+pg_name 零值守卫 int 规范化(Minor 2026-09-30):零值与非规范 ... ok
+test_prefill_selection_uses_request_count_then_config_order (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_prefill_selection_uses_request_count_then_config_order) ... ok
+test_pressure_event_dedup_is_request_scoped_and_retired (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_pressure_event_dedup_is_request_scoped_and_retired) ... ok
+test_real_layout_nearest_decode_is_unique (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_real_layout_nearest_decode_is_unique)
+钉住"真实布局无实例平局"（中-1 裁决 2026-08-20）。 ... ok
+test_terminal_retirement_bounds_many_single_turn_sessions (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_terminal_retirement_bounds_many_single_turn_sessions) ... ok
+test_terminal_retirement_releases_local_kv_and_fails_closed (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_terminal_retirement_releases_local_kv_and_fails_closed) ... ok
+test_trace_builder_streams_without_retaining_nodes (test_wsc_llm_scheduler.WscLlmSchedulerTests.test_trace_builder_streams_without_retaining_nodes) ... ok
+
+----------------------------------------------------------------------
+Ran 44 tests in 0.027s
+
+OK
+[ledger_reconcile] verdict: 对平 (balanced)
+[ledger_reconcile] verdict: 不平 (unbalanced)
+[ledger_reconcile] FAIL: R2a: watch 注册总数失配(每 (request, stage) 恰一次): [{'cpp_total_watches': 3, 'digest_watch_sum': 4}]
+[ledger_reconcile] FAIL: R2b: 批级 committed 摘要失配: watch 每批 ∈[0,node_count] 且空性一致 1 条 / ranks 越界 0 条 / node_count 总量 0 条
+[ledger_reconcile] verdict: 不平 (unbalanced)
+[ledger_reconcile] FAIL: R5a: 1 non-barrier residual entries at final epoch: [{'comm_bytes': 1, 'compute_ops': 0, 'estimated_remaining_ns': 0, 'node_count': 2, 'request_id': 'r0', 'stage': 'decode'}]
+[ledger_reconcile] FAIL: R5b: 1 (request, stage) injected peak > committed node count;0 注入对无 committed 记录
+[ledger_reconcile] FAIL: R7a2: 1 non-barrier residual groups in the only-C++ window (end-barrier control tails only)
+{
+  "online": {
+    "modules": [
+      "online.test_admission_eviction_accumulation",
+      "online.test_admission_net_credit",
+      "online.test_bridge_seq_ascii_guard",
+      "online.test_decode_eviction_emission_timing",
+      "online.test_decode_eviction_serialization",
+      "online.test_die_model_adapter",
+      "online.test_eviction_side_branch_structure",
+      "online.test_forward_edge_invariant",
+      "online.test_graph_batch_builder",
+      "online.test_graph_batch_rank_ledger",
+      "online.test_kv_transfer_emission",
+      "online.test_ledger_reconcile_rules",
+      "online.test_propagating_tail",
+      "online.test_store_restore_ordering",
+      "online.test_train_machinery",
+      "online.test_transfer_frontier_neutral",
+      "online.test_weight_passes",
+      "online.test_workspace_admission_v2"
+    ],
+    "run": 144,
+    "passed": 143,
+    "failures": 0,
+    "errors": 0,
+    "skipped": [
+      [
+        "test_spec_json_round_trip_through_cost_library (online.test_die_model_adapter.BuildSpecTests.test_spec_json_round_trip_through_cost_library)",
+        "die_model_oracle unavailable"
+      ]
+    ],
+    "successful": true
+  },
+  "typed_config_scheduler": {
+    "modules": [
+      "test_wsc_llm_typed_hardware",
+      "test_config_resolver",
+      "test_wsc_llm_scheduler"
+    ],
+    "run": 44,
+    "passed": 44,
+    "failures": 0,
+    "errors": 0,
+    "skipped": [],
+    "successful": true
+  },
+  "schema": {
+    "path": "/workspace/template/astra-sim-wscllm-LRU/work/chakra-python-root/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py",
+    "sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b"
+  },
+  "runner_sha256": "e436c1080977df78c3fdbce96daa9c49066a33042943f70e2588267668210398"
+}

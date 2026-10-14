@@ -1,0 +1,172 @@
+{
+  "busy_union_semantics": {
+    "compute_busy_s": "one union of active COMPUTE_GATE users",
+    "hbm_busy_s": "one union of active HBM0 or HBM1 users",
+    "hbm_shared_s": "zero for one owner; no two-owner overlap charge"
+  },
+  "capacities_13": [
+    "1",
+    "1000000000000000019884624838656",
+    "1000000000000000019884624838656",
+    "1000000000000000019884624838656",
+    "50000000",
+    "50000000",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+  ],
+  "certificate_boundary": [
+    "exact skip identity requires unchanged active stage/queue topology and exact equality of every live progress fraction",
+    "classword skip requires full facts-derived row word equality or a contiguous same-shape run; arithmetic bounds stop at M/N/K class changes",
+    "solo owner only, fixed capacities and facts; external stops/capacity changes/cancellation are outside this prototype",
+    "global expanded-event cap never resets; exceeding it fails closed without per-wave fallback",
+    "C++ Runtime integer-ns wake results are checked separately and are not claimed equal to this continuous exact internal-time model"
+  ],
+  "class_fact_ledger": {
+    "hbm_payload_row_direction": [
+      [
+        "3096",
+        "33282"
+      ],
+      [
+        "3096",
+        "33282"
+      ]
+    ],
+    "int4_ops": "0",
+    "resource_service_13": [
+      "31788400926908537739/75557863725914323419136",
+      "139320",
+      "139320",
+      "205884",
+      "36378",
+      "36378",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    "stage_counts": {
+      "compute": 18,
+      "load": 18,
+      "store": 9
+    },
+    "vec_eqops": "66564"
+  },
+  "descriptor_count": 0,
+  "descriptors": [],
+  "expanded_events": 40,
+  "facts_json": "work/os-single-owner-13-20261014/current/facts_output_pressure_requested.json",
+  "facts_source": {
+    "class_fact_limit": 32,
+    "facts_report_fixture": "synthetic_model_to_model_not_hardware_measurement",
+    "facts_report_stage_submission_status": "complete",
+    "geometry_class_count": 8,
+    "no_tile_core_arrays": true,
+    "synthetic_hardware_fingerprint": "synthetic-os-lifecycle:375ed507f13e1d63c9a43f41df5dd930eec6ac0d353302c497fc63efa148158e"
+  },
+  "geometry": {
+    "K": 2,
+    "M": 129,
+    "N": 129,
+    "dtypes": [
+      "fp32",
+      "fp32",
+      "fp32"
+    ],
+    "k_tiles": 2,
+    "kappa": [
+      "4",
+      "2"
+    ],
+    "m_tiles": 3,
+    "n_tiles": 3,
+    "outputs": "9",
+    "path": "strict_fp32_vec",
+    "tk": 1,
+    "tm": 64,
+    "tn": 64,
+    "waves": "18"
+  },
+  "global_expanded_event_cap": 4096,
+  "ledger": {
+    "compute_busy_s": "31788400926908537739/75557863725914323419136",
+    "compute_service": "31788400926908537739/75557863725914323419136",
+    "elapsed_s": "11957988848398510965789007/11805916207174113034240000000",
+    "hbm0_busy_s": "18189/25000000",
+    "hbm1_busy_s": "18189/25000000",
+    "hbm_busy_s": "18189/25000000",
+    "hbm_row_payload_bytes": [
+      [
+        "3096",
+        "33282"
+      ],
+      [
+        "3096",
+        "33282"
+      ]
+    ],
+    "hbm_shared_s": "0",
+    "int4_ops": "0",
+    "local_bytes": "205884",
+    "resource_busy_s_13": [
+      "31788400926908537739/75557863725914323419136",
+      "59276271257412329546378251/59029581035870565171200000000",
+      "59787583058751120006338187/59029581035870565171200000000",
+      "31788400926908537739/75557863725914323419136",
+      "18189/25000000",
+      "18189/25000000",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    "resource_service_13": [
+      "31788400926908537739/75557863725914323419136",
+      "139320",
+      "139320",
+      "205884",
+      "36378",
+      "36378",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    "vec_eqops": "66564"
+  },
+  "live_state": {
+    "active": [],
+    "computed_final_waves": [],
+    "finish_s": "11957988848398510965789007/11805916207174113034240000000",
+    "input_occupancy": 0,
+    "loaded_waves": [],
+    "next_compute_wave": "9",
+    "next_load_wave": "18",
+    "output_occupancy": 0,
+    "retired_outputs": "9"
+  },
+  "nonfinal_compute_started_while_output_full": 0,
+  "peak_active_stages": 3,
+  "peak_input_slots": 2,
+  "peak_output_slots": 1,
+  "reason": null,
+  "schema_version": 1,
+  "scope": "offline single-owner continuous internal-time model; compiler facts; exact Fraction; no silicon or production descriptor certificate",
+  "skipped_outputs": "0",
+  "skipped_waves": "0",
+  "status": "passed"
+}

@@ -1,0 +1,2838 @@
+{
+  "busy_union_semantics": {
+    "compute_busy_s": "one union of active COMPUTE_GATE users",
+    "hbm_busy_s": "one union of active HBM0 or HBM1 users",
+    "hbm_shared_s": "zero for one owner; no two-owner overlap charge"
+  },
+  "capacities_13": [
+    "1",
+    "1000000000000000019884624838656",
+    "1000000000000000019884624838656",
+    "1000000000000000019884624838656",
+    "50000000",
+    "50000000",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0",
+    "0"
+  ],
+  "certificate_boundary": [
+    "exact skip identity requires unchanged active stage/queue topology and exact equality of every live progress fraction",
+    "classword skip requires full facts-derived row word equality or a contiguous same-shape run; arithmetic bounds stop at M/N/K class changes",
+    "solo owner only, fixed capacities and facts; external stops/capacity changes/cancellation are outside this prototype",
+    "global expanded-event cap never resets; exceeding it fails closed without per-wave fallback",
+    "C++ Runtime integer-ns wake results are checked separately and are not claimed equal to this continuous exact internal-time model"
+  ],
+  "class_fact_ledger": {
+    "hbm_payload_row_direction": [
+      [
+        "58240000910",
+        "8450"
+      ],
+      [
+        "58240000910",
+        "8450"
+      ]
+    ],
+    "int4_ops": "0",
+    "resource_service_13": [
+      "516530481638246651091531275/151115727451828646838272",
+      "133380018720",
+      "133380018720",
+      "150280018720",
+      "58240009360",
+      "58240009360",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    "stage_counts": {
+      "compute": 10000010,
+      "load": 10000010,
+      "store": 10
+    },
+    "vec_eqops": "540800008450"
+  },
+  "descriptor_count": 7,
+  "descriptors": [
+    {
+      "category_word": "same output; full-K interior only; first/final K remain explicit",
+      "deadline_template": [
+        {
+          "active": [
+            {
+              "alpha": "5/12",
+              "canonical_q": "20480",
+              "class": 1,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "0",
+              "rate": "78125/16",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "7/12",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "0",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "112344467649391756143/180143985094819840000000",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "16/78125",
+          "owner_q": "49152",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "36893488147419103232/149237955796810859375",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "112344467649391756143/180143985094819840000000",
+          "owner_q": "28672",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        }
+      ],
+      "guard": "same live stage/queue topology, exact translated wave and class facts, exact progress equality, classword invariant; fixed solo capacities",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy_s": "1910245834199179/2305843009213693952",
+        "elapsed_s": "1910245834199179/2305843009213693952",
+        "hbm0_busy_s": "16/78125",
+        "hbm1_busy_s": "16/78125",
+        "hbm_busy_s": "16/78125",
+        "hbm_payload_0_0": "10240",
+        "hbm_payload_0_1": "0",
+        "hbm_payload_1_0": "10240",
+        "hbm_payload_1_1": "0",
+        "hbm_shared_s": "0",
+        "int4_ops": "0",
+        "resource_busy_s_0": "1910245834199179/2305843009213693952",
+        "resource_busy_s_1": "1910245834199179/2305843009213693952",
+        "resource_busy_s_10": "0",
+        "resource_busy_s_11": "0",
+        "resource_busy_s_12": "0",
+        "resource_busy_s_2": "1910245834199179/2305843009213693952",
+        "resource_busy_s_3": "1910245834199179/2305843009213693952",
+        "resource_busy_s_4": "16/78125",
+        "resource_busy_s_5": "16/78125",
+        "resource_busy_s_6": "0",
+        "resource_busy_s_7": "0",
+        "resource_busy_s_8": "0",
+        "resource_busy_s_9": "0",
+        "resource_service_0": "1910245834199179/2305843009213693952",
+        "resource_service_1": "24576",
+        "resource_service_10": "0",
+        "resource_service_11": "0",
+        "resource_service_12": "0",
+        "resource_service_2": "24576",
+        "resource_service_3": "28672",
+        "resource_service_4": "10240",
+        "resource_service_5": "10240",
+        "resource_service_6": "0",
+        "resource_service_7": "0",
+        "resource_service_8": "0",
+        "resource_service_9": "0",
+        "vec_eqops": "131072"
+      },
+      "owner_q_alpha": "one owner: alpha_i=Q_i/sum(Q); exact Q-weighted normalization cancels to the shared progress-rate tier",
+      "repeat_count": 999995,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 999995,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    },
+    {
+      "category_word": "same output; full-K interior only; first/final K remain explicit",
+      "deadline_template": [
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "746189778984054296875/2508757194024499019776",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1762567415040444722901/57646075230342348800000000",
+          "owner_q": "4352",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "34/69",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "0",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "35/69",
+              "canonical_q": "4480",
+              "class": 4,
+              "private_time_s": "1910245834199179/147573952589676412928",
+              "progress": "0",
+              "rate": "147573952589676412928/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/147573952589676412928",
+                "4416",
+                "64",
+                "4480",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "1762567415040444722901/57646075230342348800000000",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/147573952589676412928",
+          "owner_q": "8832",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        }
+      ],
+      "guard": "same live stage/queue topology, exact translated wave and class facts, exact progress equality, classword invariant; fixed solo capacities",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy_s": "1910245834199179/147573952589676412928",
+        "elapsed_s": "17/390625",
+        "hbm0_busy_s": "17/390625",
+        "hbm1_busy_s": "17/390625",
+        "hbm_busy_s": "17/390625",
+        "hbm_payload_0_0": "2176",
+        "hbm_payload_0_1": "0",
+        "hbm_payload_1_0": "2176",
+        "hbm_payload_1_1": "0",
+        "hbm_shared_s": "0",
+        "int4_ops": "0",
+        "resource_busy_s_0": "1910245834199179/147573952589676412928",
+        "resource_busy_s_1": "1910245834199179/147573952589676412928",
+        "resource_busy_s_10": "0",
+        "resource_busy_s_11": "0",
+        "resource_busy_s_12": "0",
+        "resource_busy_s_2": "17/390625",
+        "resource_busy_s_3": "1910245834199179/147573952589676412928",
+        "resource_busy_s_4": "17/390625",
+        "resource_busy_s_5": "17/390625",
+        "resource_busy_s_6": "0",
+        "resource_busy_s_7": "0",
+        "resource_busy_s_8": "0",
+        "resource_busy_s_9": "0",
+        "resource_service_0": "1910245834199179/147573952589676412928",
+        "resource_service_1": "4416",
+        "resource_service_10": "0",
+        "resource_service_11": "0",
+        "resource_service_12": "0",
+        "resource_service_2": "4416",
+        "resource_service_3": "4480",
+        "resource_service_4": "2176",
+        "resource_service_5": "2176",
+        "resource_service_6": "0",
+        "resource_service_7": "0",
+        "resource_service_8": "0",
+        "resource_service_9": "0",
+        "vec_eqops": "2048"
+      },
+      "owner_q_alpha": "one owner: alpha_i=Q_i/sum(Q); exact Q-weighted normalization cancels to the shared progress-rate tier",
+      "repeat_count": 999996,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 999996,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    },
+    {
+      "category_word": {
+        "actual_m": 16,
+        "first_row": 0,
+        "kind": "whole-row-classword",
+        "rows_per_period": 1,
+        "segments": 2
+      },
+      "deadline_template": [
+        {
+          "active": [
+            {
+              "alpha": "5/12",
+              "canonical_q": "20480",
+              "class": 1,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "0",
+              "rate": "78125/16",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "7/12",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "0",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "112344467649391756143/180143985094819840000000",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "16/78125",
+          "owner_q": "49152",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "36893488147419103232/149237955796810859375",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "112344467649391756143/180143985094819840000000",
+          "owner_q": "28672",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "5/12",
+              "canonical_q": "20480",
+              "class": 1,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "0",
+              "rate": "78125/16",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "7/12",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "0",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "112344467649391756143/180143985094819840000000",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "16/78125",
+          "owner_q": "49152",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "36893488147419103232/149237955796810859375",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "112344467649391756143/180143985094819840000000",
+          "owner_q": "28672",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "5/12",
+              "canonical_q": "20480",
+              "class": 1,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "0",
+              "rate": "78125/16",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "7/12",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "0",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "112344467649391756143/180143985094819840000000",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "16/78125",
+          "owner_q": "49152",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "36893488147419103232/149237955796810859375",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "112344467649391756143/180143985094819840000000",
+          "owner_q": "28672",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "5/453",
+              "canonical_q": "320",
+              "class": 2,
+              "private_time_s": "7136238463529799/22300745198530623141535718272648361505980416",
+              "progress": "0",
+              "rate": "312500",
+              "resource_work_13": [
+                "0",
+                "0",
+                "320",
+                "0",
+                "160",
+                "160",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "448/453",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "0",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "148661495044507435887/180143985094819840000000",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1/312500",
+          "owner_q": "28992",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "576460752303423488/149237955796810859375",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "148661495044507435887/180143985094819840000000",
+          "owner_q": "28672",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "68/201",
+              "canonical_q": "4352",
+              "class": 3,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "0",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "133/201",
+              "canonical_q": "8512",
+              "class": 2,
+              "private_time_s": "1910245834199179/147573952589676412928",
+              "progress": "0",
+              "rate": "147573952589676412928/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/147573952589676412928",
+                "4416",
+                "4096",
+                "8512",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "1762567415040444722901/57646075230342348800000000",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/147573952589676412928",
+          "owner_q": "12864",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "17/33",
+              "canonical_q": "4352",
+              "class": 3,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "746189778984054296875/2508757194024499019776",
+              "rate": "390625/33",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "16/33",
+              "canonical_q": "4096",
+              "class": 2,
+              "private_time_s": "5708990770823839/1393796574908163946345982392040522594123776",
+              "progress": "0",
+              "rate": "390625/33",
+              "resource_work_13": [
+                "0",
+                "4096",
+                "0",
+                "0",
+                "2048",
+                "2048",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "63038112528572907/2508757194024499019776",
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "58164724696334675855733/979983278915819929600000000",
+          "owner_q": "8448",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "68/201",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "0",
+              "rate": "390625/33",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 2
+            },
+            {
+              "alpha": "23/67",
+              "canonical_q": "4416",
+              "class": 3,
+              "private_time_s": "1910245834199179/147573952589676412928",
+              "progress": "0",
+              "rate": "147573952589676412928/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/147573952589676412928",
+                "4352",
+                "64",
+                "4416",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "64/201",
+              "canonical_q": "4096",
+              "class": 2,
+              "private_time_s": "5708990770823839/1393796574908163946345982392040522594123776",
+              "progress": "1762567415040444722901/2508757194024499019776",
+              "rate": "390625/33",
+              "resource_work_13": [
+                "0",
+                "4096",
+                "0",
+                "0",
+                "2048",
+                "2048",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "4123750656475267329749/57646075230342348800000000",
+              "stage": 0,
+              "wave_offset": 2
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 1
+            },
+            {
+              "margin": "1910245834199179/156797324626531188736",
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/147573952589676412928",
+          "owner_q": "12864",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "17/33",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "746189778984054296875/4869940435459321626624",
+              "rate": "390625/33",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 2
+            },
+            {
+              "alpha": "16/33",
+              "canonical_q": "4096",
+              "class": 2,
+              "private_time_s": "5708990770823839/1393796574908163946345982392040522594123776",
+              "progress": "4428121933691474931413/5174311712675529228288",
+              "rate": "390625/33",
+              "resource_work_13": [
+                "0",
+                "4096",
+                "0",
+                "0",
+                "2048",
+                "2048",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "58164724696334675855733/979983278915819929600000000",
+              "stage": 0,
+              "wave_offset": 2
+            },
+            {
+              "margin": "0",
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/156797324626531188736",
+          "owner_q": "8448",
+          "selected": [
+            {
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "746189778984054296875/2508757194024499019776",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1762567415040444722901/57646075230342348800000000",
+          "owner_q": "4352",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "34/69",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "0",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "35/69",
+              "canonical_q": "4480",
+              "class": 4,
+              "private_time_s": "1910245834199179/147573952589676412928",
+              "progress": "0",
+              "rate": "147573952589676412928/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/147573952589676412928",
+                "4416",
+                "64",
+                "4480",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "1762567415040444722901/57646075230342348800000000",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/147573952589676412928",
+          "owner_q": "8832",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "746189778984054296875/2508757194024499019776",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1762567415040444722901/57646075230342348800000000",
+          "owner_q": "4352",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "34/69",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "0",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "35/69",
+              "canonical_q": "4480",
+              "class": 4,
+              "private_time_s": "1910245834199179/147573952589676412928",
+              "progress": "0",
+              "rate": "147573952589676412928/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/147573952589676412928",
+                "4416",
+                "64",
+                "4480",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "1762567415040444722901/57646075230342348800000000",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/147573952589676412928",
+          "owner_q": "8832",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "746189778984054296875/2508757194024499019776",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1762567415040444722901/57646075230342348800000000",
+          "owner_q": "4352",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "17/1137",
+              "canonical_q": "68",
+              "class": 5,
+              "private_time_s": "6065802694000329/89202980794122492566142873090593446023921664",
+              "progress": "0",
+              "rate": "25000000/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "68",
+                "0",
+                "34",
+                "34",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "1120/1137",
+              "canonical_q": "4480",
+              "class": 4,
+              "private_time_s": "1910245834199179/147573952589676412928",
+              "progress": "0",
+              "rate": "147573952589676412928/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/147573952589676412928",
+                "4416",
+                "64",
+                "4480",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "706990447827421499691/57646075230342348800000000",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "17/25000000",
+          "owner_q": "4548",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "4480",
+              "class": 4,
+              "private_time_s": "1910245834199179/147573952589676412928",
+              "progress": "39199331156632797184/746189778984054296875",
+              "rate": "147573952589676412928/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/147573952589676412928",
+                "4416",
+                "64",
+                "4480",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "706990447827421499691/57646075230342348800000000",
+          "owner_q": "4480",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "5120/5169",
+              "canonical_q": "20480",
+              "class": 0,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "0",
+              "rate": "78125/16",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "49/5169",
+              "canonical_q": "196",
+              "class": 5,
+              "private_time_s": "1910245834199179/9444732965739290427392",
+              "progress": "0",
+              "rate": "9444732965739290427392/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/9444732965739290427392",
+                "132",
+                "64",
+                "196",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "150966489496031835978897/737869762948382064640000000",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/9444732965739290427392",
+          "owner_q": "20676",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "320/321",
+              "canonical_q": "20480",
+              "class": 0,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "149237955796810859375/151115727451828646838272",
+              "rate": "1562500/321",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "1/321",
+              "canonical_q": "64",
+              "class": 5,
+              "private_time_s": "5708990770823839/89202980794122492566142873090593446023921664",
+              "progress": "0",
+              "rate": "1562500/321",
+              "resource_work_13": [
+                "0",
+                "64",
+                "0",
+                "0",
+                "32",
+                "32",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "613188912777936459/3022314549036572936765440",
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "48460243128226219349225937/236118324143482260684800000000",
+          "owner_q": "20544",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "64/141",
+              "canonical_q": "20480",
+              "class": 1,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "0",
+              "rate": "1562500/321",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 2
+            },
+            {
+              "alpha": "128/235",
+              "canonical_q": "24576",
+              "class": 0,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "0",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "20480",
+                "4096",
+                "24576",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "1/705",
+              "canonical_q": "64",
+              "class": 5,
+              "private_time_s": "5708990770823839/89202980794122492566142873090593446023921664",
+              "progress": "150966489496031835978897/151115727451828646838272",
+              "rate": "1562500/321",
+              "resource_work_13": [
+                "0",
+                "64",
+                "0",
+                "0",
+                "32",
+                "32",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "48460243128226219349225937/236118324143482260684800000000",
+              "stage": 0,
+              "wave_offset": 2
+            },
+            {
+              "margin": "2503184230888769962421/3022314549036572936765440",
+              "stage": 1,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "613188912777936459/3022314549036572936765440",
+          "owner_q": "45120",
+          "selected": [
+            {
+              "stage": 2,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "5/11",
+              "canonical_q": "20480",
+              "class": 1,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "149237955796810859375/151115727451828646838272",
+              "rate": "78125/16",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "6/11",
+              "canonical_q": "24576",
+              "class": 0,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "321/1310720",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "20480",
+                "4096",
+                "24576",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "29450398279890993160178717/47223664828696452136960000000",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "150966489496031835978897/737869762948382064640000000",
+          "owner_q": "45056",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "24576",
+              "class": 0,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "9671436404508192759821283/39121834684399185920000000",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "20480",
+                "4096",
+                "24576",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "29450398279890993160178717/47223664828696452136960000000",
+          "owner_q": "24576",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        }
+      ],
+      "guard": "same live stage/queue topology, exact translated wave and class facts, exact progress equality, classword invariant; fixed solo capacities",
+      "kind": "output_classword_identity",
+      "ledger_per_step": {
+        "compute_busy_s": "7946622794434563862946635/9444732965739290427392",
+        "elapsed_s": "41177020824903888660384223575069/47223664828696452136960000000",
+        "hbm0_busy_s": "6208001137/25000000",
+        "hbm1_busy_s": "6208001137/25000000",
+        "hbm_busy_s": "6208001137/25000000",
+        "hbm_payload_0_0": "12416000194",
+        "hbm_payload_0_1": "2080",
+        "hbm_payload_1_0": "12416000194",
+        "hbm_payload_1_1": "2080",
+        "hbm_shared_s": "0",
+        "int4_ops": "0",
+        "resource_busy_s_0": "7946622794434563862946635/9444732965739290427392",
+        "resource_busy_s_1": "198665635211989913722580206877841/236118324143482260684800000000",
+        "resource_busy_s_10": "0",
+        "resource_busy_s_11": "0",
+        "resource_busy_s_12": "0",
+        "resource_busy_s_2": "41177020824903888660384223575069/47223664828696452136960000000",
+        "resource_busy_s_3": "7946622794434563862946635/9444732965739290427392",
+        "resource_busy_s_4": "6208001137/25000000",
+        "resource_busy_s_5": "6208001137/25000000",
+        "resource_busy_s_6": "0",
+        "resource_busy_s_7": "0",
+        "resource_busy_s_8": "0",
+        "resource_busy_s_9": "0",
+        "resource_service_0": "7946622794434563862946635/9444732965739290427392",
+        "resource_service_1": "28992004548",
+        "resource_service_10": "0",
+        "resource_service_11": "0",
+        "resource_service_12": "0",
+        "resource_service_2": "28992004548",
+        "resource_service_3": "33152004548",
+        "resource_service_4": "12416002274",
+        "resource_service_5": "12416002274",
+        "resource_service_6": "0",
+        "resource_service_7": "0",
+        "resource_service_8": "0",
+        "resource_service_9": "0",
+        "vec_eqops": "133120002080"
+      },
+      "owner_q_alpha": "one owner: alpha_i=Q_i/sum(Q); exact Q-weighted normalization cancels to the shared progress-rate tier",
+      "repeat_count": 2,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 4,
+      "skip_waves": 4000004,
+      "step_outputs": 2,
+      "step_waves": 2000002,
+      "template_events": 24
+    },
+    {
+      "category_word": "same output; full-K interior only; first/final K remain explicit",
+      "deadline_template": [
+        {
+          "active": [
+            {
+              "alpha": "5/12",
+              "canonical_q": "20480",
+              "class": 1,
+              "private_time_s": "7136238463529799/348449143727040986586495598010130648530944",
+              "progress": "0",
+              "rate": "78125/16",
+              "resource_work_13": [
+                "0",
+                "0",
+                "20480",
+                "0",
+                "10240",
+                "10240",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "7/12",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "0",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "112344467649391756143/180143985094819840000000",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "16/78125",
+          "owner_q": "49152",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 1
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "28672",
+              "class": 1,
+              "private_time_s": "1910245834199179/2305843009213693952",
+              "progress": "36893488147419103232/149237955796810859375",
+              "rate": "2305843009213693952/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2305843009213693952",
+                "24576",
+                "4096",
+                "28672",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "112344467649391756143/180143985094819840000000",
+          "owner_q": "28672",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        }
+      ],
+      "guard": "same live stage/queue topology, exact translated wave and class facts, exact progress equality, classword invariant; fixed solo capacities",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy_s": "1910245834199179/2305843009213693952",
+        "elapsed_s": "1910245834199179/2305843009213693952",
+        "hbm0_busy_s": "16/78125",
+        "hbm1_busy_s": "16/78125",
+        "hbm_busy_s": "16/78125",
+        "hbm_payload_0_0": "10240",
+        "hbm_payload_0_1": "0",
+        "hbm_payload_1_0": "10240",
+        "hbm_payload_1_1": "0",
+        "hbm_shared_s": "0",
+        "int4_ops": "0",
+        "resource_busy_s_0": "1910245834199179/2305843009213693952",
+        "resource_busy_s_1": "1910245834199179/2305843009213693952",
+        "resource_busy_s_10": "0",
+        "resource_busy_s_11": "0",
+        "resource_busy_s_12": "0",
+        "resource_busy_s_2": "1910245834199179/2305843009213693952",
+        "resource_busy_s_3": "1910245834199179/2305843009213693952",
+        "resource_busy_s_4": "16/78125",
+        "resource_busy_s_5": "16/78125",
+        "resource_busy_s_6": "0",
+        "resource_busy_s_7": "0",
+        "resource_busy_s_8": "0",
+        "resource_busy_s_9": "0",
+        "resource_service_0": "1910245834199179/2305843009213693952",
+        "resource_service_1": "24576",
+        "resource_service_10": "0",
+        "resource_service_11": "0",
+        "resource_service_12": "0",
+        "resource_service_2": "24576",
+        "resource_service_3": "28672",
+        "resource_service_4": "10240",
+        "resource_service_5": "10240",
+        "resource_service_6": "0",
+        "resource_service_7": "0",
+        "resource_service_8": "0",
+        "resource_service_9": "0",
+        "vec_eqops": "131072"
+      },
+      "owner_q_alpha": "one owner: alpha_i=Q_i/sum(Q); exact Q-weighted normalization cancels to the shared progress-rate tier",
+      "repeat_count": 999995,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 999995,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    },
+    {
+      "category_word": "same output; full-K interior only; first/final K remain explicit",
+      "deadline_template": [
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "746189778984054296875/2508757194024499019776",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1762567415040444722901/57646075230342348800000000",
+          "owner_q": "4352",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "34/69",
+              "canonical_q": "4352",
+              "class": 4,
+              "private_time_s": "6065802694000329/1393796574908163946345982392040522594123776",
+              "progress": "0",
+              "rate": "390625/17",
+              "resource_work_13": [
+                "0",
+                "0",
+                "4352",
+                "0",
+                "2176",
+                "2176",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "35/69",
+              "canonical_q": "4480",
+              "class": 4,
+              "private_time_s": "1910245834199179/147573952589676412928",
+              "progress": "0",
+              "rate": "147573952589676412928/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/147573952589676412928",
+                "4416",
+                "64",
+                "4480",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "1762567415040444722901/57646075230342348800000000",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/147573952589676412928",
+          "owner_q": "8832",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        }
+      ],
+      "guard": "same live stage/queue topology, exact translated wave and class facts, exact progress equality, classword invariant; fixed solo capacities",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy_s": "1910245834199179/147573952589676412928",
+        "elapsed_s": "17/390625",
+        "hbm0_busy_s": "17/390625",
+        "hbm1_busy_s": "17/390625",
+        "hbm_busy_s": "17/390625",
+        "hbm_payload_0_0": "2176",
+        "hbm_payload_0_1": "0",
+        "hbm_payload_1_0": "2176",
+        "hbm_payload_1_1": "0",
+        "hbm_shared_s": "0",
+        "int4_ops": "0",
+        "resource_busy_s_0": "1910245834199179/147573952589676412928",
+        "resource_busy_s_1": "1910245834199179/147573952589676412928",
+        "resource_busy_s_10": "0",
+        "resource_busy_s_11": "0",
+        "resource_busy_s_12": "0",
+        "resource_busy_s_2": "17/390625",
+        "resource_busy_s_3": "1910245834199179/147573952589676412928",
+        "resource_busy_s_4": "17/390625",
+        "resource_busy_s_5": "17/390625",
+        "resource_busy_s_6": "0",
+        "resource_busy_s_7": "0",
+        "resource_busy_s_8": "0",
+        "resource_busy_s_9": "0",
+        "resource_service_0": "1910245834199179/147573952589676412928",
+        "resource_service_1": "4416",
+        "resource_service_10": "0",
+        "resource_service_11": "0",
+        "resource_service_12": "0",
+        "resource_service_2": "4416",
+        "resource_service_3": "4480",
+        "resource_service_4": "2176",
+        "resource_service_5": "2176",
+        "resource_service_6": "0",
+        "resource_service_7": "0",
+        "resource_service_8": "0",
+        "resource_service_9": "0",
+        "vec_eqops": "2048"
+      },
+      "owner_q_alpha": "one owner: alpha_i=Q_i/sum(Q); exact Q-weighted normalization cancels to the shared progress-rate tier",
+      "repeat_count": 999996,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 999996,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    },
+    {
+      "category_word": "same output; full-K interior only; first/final K remain explicit",
+      "deadline_template": [
+        {
+          "active": [
+            {
+              "alpha": "65/132",
+              "canonical_q": "16640",
+              "class": 7,
+              "private_time_s": "2899096875808981/174224571863520493293247799005065324265472",
+              "progress": "0",
+              "rate": "78125/13",
+              "resource_work_13": [
+                "0",
+                "0",
+                "16640",
+                "0",
+                "8320",
+                "8320",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "67/132",
+              "canonical_q": "17152",
+              "class": 7,
+              "private_time_s": "1910245834199179/36893488147419103232",
+              "progress": "0",
+              "rate": "36893488147419103232/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/36893488147419103232",
+                "16896",
+                "256",
+                "17152",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "330377390119637482641/2882303761517117440000000",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/36893488147419103232",
+          "owner_q": "33792",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "16640",
+              "class": 7,
+              "private_time_s": "2899096875808981/174224571863520493293247799005065324265472",
+              "progress": "149237955796810859375/479615345916448342016",
+              "rate": "78125/13",
+              "resource_work_13": [
+                "0",
+                "0",
+                "16640",
+                "0",
+                "8320",
+                "8320",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "330377390119637482641/2882303761517117440000000",
+          "owner_q": "16640",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ]
+        }
+      ],
+      "guard": "same live stage/queue topology, exact translated wave and class facts, exact progress equality, classword invariant; fixed solo capacities",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy_s": "1910245834199179/36893488147419103232",
+        "elapsed_s": "13/78125",
+        "hbm0_busy_s": "13/78125",
+        "hbm1_busy_s": "13/78125",
+        "hbm_busy_s": "13/78125",
+        "hbm_payload_0_0": "8320",
+        "hbm_payload_0_1": "0",
+        "hbm_payload_1_0": "8320",
+        "hbm_payload_1_1": "0",
+        "hbm_shared_s": "0",
+        "int4_ops": "0",
+        "resource_busy_s_0": "1910245834199179/36893488147419103232",
+        "resource_busy_s_1": "1910245834199179/36893488147419103232",
+        "resource_busy_s_10": "0",
+        "resource_busy_s_11": "0",
+        "resource_busy_s_12": "0",
+        "resource_busy_s_2": "13/78125",
+        "resource_busy_s_3": "1910245834199179/36893488147419103232",
+        "resource_busy_s_4": "13/78125",
+        "resource_busy_s_5": "13/78125",
+        "resource_busy_s_6": "0",
+        "resource_busy_s_7": "0",
+        "resource_busy_s_8": "0",
+        "resource_busy_s_9": "0",
+        "resource_service_0": "1910245834199179/36893488147419103232",
+        "resource_service_1": "16896",
+        "resource_service_10": "0",
+        "resource_service_11": "0",
+        "resource_service_12": "0",
+        "resource_service_2": "16896",
+        "resource_service_3": "17152",
+        "resource_service_4": "8320",
+        "resource_service_5": "8320",
+        "resource_service_6": "0",
+        "resource_service_7": "0",
+        "resource_service_8": "0",
+        "resource_service_9": "0",
+        "vec_eqops": "8192"
+      },
+      "owner_q_alpha": "one owner: alpha_i=Q_i/sum(Q); exact Q-weighted normalization cancels to the shared progress-rate tier",
+      "repeat_count": 999995,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 999995,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    },
+    {
+      "category_word": "same output; full-K interior only; first/final K remain explicit",
+      "deadline_template": [
+        {
+          "active": [
+            {
+              "alpha": "1",
+              "canonical_q": "512",
+              "class": 10,
+              "private_time_s": "5708990770823839/11150372599265311570767859136324180752990208",
+              "progress": "746189778984054296875/4722366482869645213696",
+              "rate": "390625/2",
+              "resource_work_13": [
+                "0",
+                "0",
+                "512",
+                "0",
+                "256",
+                "256",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "0",
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "3976176703885590916821/922337203685477580800000000",
+          "owner_q": "512",
+          "selected": [
+            {
+              "stage": 0,
+              "wave_offset": 0
+            }
+          ]
+        },
+        {
+          "active": [
+            {
+              "alpha": "64/129",
+              "canonical_q": "512",
+              "class": 10,
+              "private_time_s": "5708990770823839/11150372599265311570767859136324180752990208",
+              "progress": "0",
+              "rate": "390625/2",
+              "resource_work_13": [
+                "0",
+                "0",
+                "512",
+                "0",
+                "256",
+                "256",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "alpha": "65/129",
+              "canonical_q": "520",
+              "class": 10,
+              "private_time_s": "1910245834199179/2361183241434822606848",
+              "progress": "0",
+              "rate": "2361183241434822606848/1910245834199179",
+              "resource_work_13": [
+                "1910245834199179/2361183241434822606848",
+                "516",
+                "4",
+                "520",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0"
+              ],
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "deadline_margin_s": [
+            {
+              "margin": "3976176703885590916821/922337203685477580800000000",
+              "stage": 0,
+              "wave_offset": 1
+            },
+            {
+              "margin": "0",
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ],
+          "delta_s": "1910245834199179/2361183241434822606848",
+          "owner_q": "1032",
+          "selected": [
+            {
+              "stage": 1,
+              "wave_offset": 0
+            }
+          ]
+        }
+      ],
+      "guard": "same live stage/queue topology, exact translated wave and class facts, exact progress equality, classword invariant; fixed solo capacities",
+      "kind": "Kmiddle_identity",
+      "ledger_per_step": {
+        "compute_busy_s": "1910245834199179/2361183241434822606848",
+        "elapsed_s": "2/390625",
+        "hbm0_busy_s": "2/390625",
+        "hbm1_busy_s": "2/390625",
+        "hbm_busy_s": "2/390625",
+        "hbm_payload_0_0": "256",
+        "hbm_payload_0_1": "0",
+        "hbm_payload_1_0": "256",
+        "hbm_payload_1_1": "0",
+        "hbm_shared_s": "0",
+        "int4_ops": "0",
+        "resource_busy_s_0": "1910245834199179/2361183241434822606848",
+        "resource_busy_s_1": "1910245834199179/2361183241434822606848",
+        "resource_busy_s_10": "0",
+        "resource_busy_s_11": "0",
+        "resource_busy_s_12": "0",
+        "resource_busy_s_2": "2/390625",
+        "resource_busy_s_3": "1910245834199179/2361183241434822606848",
+        "resource_busy_s_4": "2/390625",
+        "resource_busy_s_5": "2/390625",
+        "resource_busy_s_6": "0",
+        "resource_busy_s_7": "0",
+        "resource_busy_s_8": "0",
+        "resource_busy_s_9": "0",
+        "resource_service_0": "1910245834199179/2361183241434822606848",
+        "resource_service_1": "516",
+        "resource_service_10": "0",
+        "resource_service_11": "0",
+        "resource_service_12": "0",
+        "resource_service_2": "516",
+        "resource_service_3": "520",
+        "resource_service_4": "256",
+        "resource_service_5": "256",
+        "resource_service_6": "0",
+        "resource_service_7": "0",
+        "resource_service_8": "0",
+        "resource_service_9": "0",
+        "vec_eqops": "128"
+      },
+      "owner_q_alpha": "one owner: alpha_i=Q_i/sum(Q); exact Q-weighted normalization cancels to the shared progress-rate tier",
+      "repeat_count": 999996,
+      "return_map": "exact identity on every live progress coordinate",
+      "skip_outputs": 0,
+      "skip_waves": 999996,
+      "step_outputs": 0,
+      "step_waves": 1,
+      "template_events": 2
+    }
+  ],
+  "expanded_events": 72,
+  "facts_json": "work/os-single-owner-13-20261014/current/facts_large_k.json",
+  "facts_source": {
+    "class_fact_limit": 32,
+    "facts_report_fixture": "synthetic_model_to_model_not_hardware_measurement",
+    "facts_report_stage_submission_status": "stage_submission_cap_reached",
+    "geometry_class_count": 12,
+    "no_tile_core_arrays": true,
+    "synthetic_hardware_fingerprint": "synthetic-os-lifecycle:375ed507f13e1d63c9a43f41df5dd930eec6ac0d353302c497fc63efa148158e"
+  },
+  "geometry": {
+    "K": 64000001,
+    "M": 65,
+    "N": 65,
+    "dtypes": [
+      "fp32",
+      "fp32",
+      "fp32"
+    ],
+    "k_tiles": 1000001,
+    "kappa": [
+      "4",
+      "2"
+    ],
+    "m_tiles": 5,
+    "n_tiles": 2,
+    "outputs": "10",
+    "path": "strict_fp32_vec",
+    "tk": 64,
+    "tm": 16,
+    "tn": 64,
+    "waves": "10000010"
+  },
+  "global_expanded_event_cap": 256,
+  "ledger": {
+    "compute_busy_s": "516530481638246651091531275/151115727451828646838272",
+    "compute_service": "516530481638246651091531275/151115727451828646838272",
+    "elapsed_s": "172807888897761482539958354665747/47223664828696452136960000000",
+    "hbm0_busy_s": "728000117/625000",
+    "hbm1_busy_s": "728000117/625000",
+    "hbm_busy_s": "728000117/625000",
+    "hbm_row_payload_bytes": [
+      [
+        "58240000910",
+        "8450"
+      ],
+      [
+        "58240000910",
+        "8450"
+      ]
+    ],
+    "hbm_shared_s": "0",
+    "int4_ops": "0",
+    "local_bytes": "150280018720",
+    "resource_busy_s_13": [
+      "516530481638246651091531275/151115727451828646838272",
+      "419681148395129115693099451879259/122781528554610775556096000000",
+      "864039444479362679734052482901343/236118324143482260684800000000",
+      "516530481638246651091531275/151115727451828646838272",
+      "728000117/625000",
+      "728000117/625000",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    "resource_service_13": [
+      "516530481638246651091531275/151115727451828646838272",
+      "133380018720",
+      "133380018720",
+      "150280018720",
+      "58240009360",
+      "58240009360",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0",
+      "0"
+    ],
+    "vec_eqops": "540800008450"
+  },
+  "live_state": {
+    "active": [],
+    "computed_final_waves": [],
+    "finish_s": "172807888897761482539958354665747/47223664828696452136960000000",
+    "input_occupancy": 0,
+    "loaded_waves": [],
+    "next_compute_wave": "10",
+    "next_load_wave": "10000010",
+    "output_occupancy": 0,
+    "retired_outputs": "10"
+  },
+  "nonfinal_compute_started_while_output_full": 0,
+  "peak_active_stages": 3,
+  "peak_input_slots": 2,
+  "peak_output_slots": 1,
+  "reason": null,
+  "schema_version": 1,
+  "scope": "offline single-owner continuous internal-time model; compiler facts; exact Fraction; no silicon or production descriptor certificate",
+  "skipped_outputs": "4",
+  "skipped_waves": "9999977",
+  "status": "passed"
+}

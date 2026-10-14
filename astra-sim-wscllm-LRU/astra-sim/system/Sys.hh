@@ -19,6 +19,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/system/astraccl/CollectiveImplLookup.hh"
 #include "astra-sim/system/astraccl/native_collectives/logical_topology/RingTopology.hh"
 #include "astra-sim/workload/Workload.hh"
+#include "astra-sim/workload/WorkspaceAdmission.hh"
 #include "DieTypes.hh"
 
 namespace AstraSim {
@@ -339,6 +340,10 @@ class Sys : public Callable {
     };
     std::unique_ptr<DieModelRuntime> die_runtime;
     std::unique_ptr<CoarseDieRuntime> coarse_die_runtime;
+    // Rank-local transient Plan workspace ledger. Present only for the
+    // coarse_die_v2 backend; Online carries its absolute view through bridge
+    // schema v2 before Python makes the next capacity decision.
+    std::unique_ptr<WorkspaceAdmission> workspace_admission;
     std::string die_model_profile;
     // Resolved die-model-config path (diagnostics only; empty off the die
     // backend).

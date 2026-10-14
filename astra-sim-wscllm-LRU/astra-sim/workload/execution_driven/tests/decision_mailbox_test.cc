@@ -27,6 +27,7 @@ Exit code 0 on ALL PASS.
 
 #include "astra-sim/workload/execution_driven/DecisionMailbox.hh"
 #include "astra-sim/workload/execution_driven/CompletionObserver.hh"
+#include "astra-sim/workload/execution_driven/DecisionBridge.hh"
 
 #include <cstdio>
 #include <cstdlib>
@@ -96,6 +97,42 @@ void test_order_drain_and_delta() {
     const auto second = build_state_delta_v1({}, 99, 8, 0, {}, {});
     expect(second.events.empty() && second.delivery_sequence == 8,
            "A: empty delta is valid (no-work epochs are separate)");
+
+    const auto v1_wire = build_request_json(delta);
+    expect(v1_wire.at("schema_version") == 1 &&
+               v1_wire.at("delivery_sequence") == 7 &&
+               !v1_wire.contains("workspace_state") &&
+               !v1_wire.contains("source_delivery_sequence"),
+           "A: v1 request wire remains unchanged and carries no v2 extension");
+
+    const auto v2 = build_state_delta_v2(
+        {}, 100, 9, 0, {}, {},
+        {AstraSim::WorkspaceRankState{0, 4, 128},
+         AstraSim::WorkspaceRankState{1, 2, 0}});
+    const auto v2_wire = build_request_json(v2);
+    expect(v2_wire.at("schema_version") == 2 &&
+               v2_wire.at("delivery_sequence") == 9 &&
+               !v2_wire.contains("source_delivery_sequence") &&
+               v2_wire.at("workspace_state").at("protocol_version") == 1 &&
+               v2_wire.at("workspace_state").at("ranks").size() == 2 &&
+               v2_wire.at("workspace_state").at("ranks")[0].at("rank") == 0 &&
+               v2_wire.at("workspace_state").at("ranks")[0]
+                       .at("workspace_revision") == 4 &&
+               v2_wire.at("workspace_state").at("ranks")[0]
+                       .at("active_workspace_bytes") == 128,
+           "A: v2 request binds one delivery sequence to the complete rank view");
+
+    bool invalid_rank_order_rejected = false;
+    try {
+        (void)build_state_delta_v2(
+            {}, 101, 10, 0, {}, {},
+            {AstraSim::WorkspaceRankState{1, 1, 0},
+             AstraSim::WorkspaceRankState{0, 1, 0}});
+    } catch (const std::invalid_argument&) {
+        invalid_rank_order_rejected = true;
+    }
+    expect(invalid_rank_order_rejected,
+           "A: v2 workspace rank tables reject unsorted ranks");
 
     // The same identity is accepted again in the next epoch (dedup scope is
     // one epoch).

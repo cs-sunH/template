@@ -1,0 +1,12 @@
+{
+  "auditor_path": "work/lru-online-workspace-20261014/e2e-large-workspace-probe/audit_lru_online.py",
+  "auditor_sha256": "d07b10bc816cefb35f54131e136100580e40b23098b395ae481da3dd0cf6e9d4",
+  "command": "python3 work/lru-online-workspace-20261014/e2e-large-workspace-probe/audit_lru_online.py work/lru-online-workspace-20261014/e2e-large-workspace-probe/run",
+  "cpp_log_sha256": "807e554664642200ee4dc38ae572b2337d7a7ec7356fdf862f8dfbc7a2004b94",
+  "errors": [],
+  "exit_code": 0,
+  "result_sha256": "b74a7a9f05f098cf909b366651ee8eacac2b28cb650e21688ef5868f25e14ac4",
+  "review_kind": "post-run audit rerun after explicit coarse/capacity utilization-window checks",
+  "run_provenance_sha256": "0decb394bf59a87f254496e8a08d3b9fbdeaef9eda0d2d88713f9019a865fac5",
+  "status": "passed"
+}

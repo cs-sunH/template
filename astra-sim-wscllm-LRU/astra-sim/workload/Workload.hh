@@ -61,6 +61,12 @@ class Workload : public Callable {
     // 者).
     void issue_dep_free_nodes();
     void issue(const ExecutionDriven::NodeView& node);
+    /// Issue an immutable coarse Plan after its rank-local workspace lease
+    /// was acquired while the node was still free and before COMP occupy.
+    void issue_prepared_coarse(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan prepared,
+        WorkspaceAdmission::Lease lease);
     void issue_metadata(const ExecutionDriven::NodeView& node);
     void issue_replay(const ExecutionDriven::NodeView& node);
     void issue_remote_mem(const ExecutionDriven::NodeView& node);
@@ -81,6 +87,14 @@ class Workload : public Callable {
     // through this same single exit (contract §7.3; the HBM-delivered
     // completions already ran it from Workload::call's join tail).
     void finish_generic_node(uint64_t node_id);
+    /// Explicitly cancelled live coarse COMP terminalizes as Skipped and
+    /// releases the occupied GPU slot/dependencies once.
+    void finish_cancelled_coarse_node(uint64_t node_id);
+    /// Count explicit live coarse COMP cancellations for rank/service metrics.
+    /// Shutdown cancellation is intentionally excluded.
+    uint64_t die_cancelled_comp_count() const {
+        return die_cancelled_comp_count_;
+    }
 
     // Die backend (stage B, contract §7.6): fill the utilization fields of
     // the node's statistics state ahead of finish_generic_node -- compact
@@ -172,7 +186,13 @@ class Workload : public Callable {
     // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
     // fail-closed. Reached only under
     // sys->compute_cost_model == ComputeCostModel::Die.
-    void issue_die_comp(const ExecutionDriven::NodeView& node);
+    void issue_die_comp(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared = nullptr,
+        WorkspaceAdmission::Lease* lease = nullptr);
+    void issue_impl(const ExecutionDriven::NodeView& node,
+                    DieModelAdapter::PreparedCoarsePlan* prepared,
+                    WorkspaceAdmission::Lease* lease);
 
     // sh_2.0 N-way HBM contention: endpoint join state for nodes whose
     // completion is the JOIN of two independent async completions -- the
@@ -202,6 +222,7 @@ class Workload : public Callable {
         bool hbm_done = false;
     };
     std::unordered_map<uint64_t, HbmEndpointJoinState> hbm_endpoint_joins_;
+    uint64_t die_cancelled_comp_count_ = 0;
 };
 
 }  // namespace AstraSim

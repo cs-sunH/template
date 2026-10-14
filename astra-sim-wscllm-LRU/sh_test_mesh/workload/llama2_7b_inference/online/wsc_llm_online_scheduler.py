@@ -374,7 +374,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                  sensing: bool = False,
                  defensive_reply_cache: bool = False,
                  sensing_query_sink=None, online_stats_sink=None,
-                 ledger_sink=None):
+                 ledger_sink=None, workspace_admission: str = "off"):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -386,6 +386,7 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             sensing_query_sink=sensing_query_sink,
             online_stats_sink=online_stats_sink,
             ledger_sink=ledger_sink,
+            workspace_admission=workspace_admission,
         )
         if mode != "strategy":
             raise ValueError("WscLlmOnlineScheduler requires mode == 'strategy'")
@@ -415,6 +416,11 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             for group in config.inference_groups
         )
         self.topology = build_instances(config.hardware, specs)
+        self._workspace_rank_to_instance = {
+            rank: instance.index
+            for instance in self.topology.instances
+            for rank in instance.ranks
+        }
         self.static_mapping = build_static_pd_mapping(self.topology)
         # Hop-Bytes 覆盖调查(2026-08-26,W B2wp9py 任务 4):prefill 决策
         # 的 history NOC_MIGRATE 迁移此前无路由字段(基线 60s 覆盖 70.4%,
@@ -544,6 +550,23 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # 真哨兵信号;唤醒只作余量批的交付边界,不进任何决策/核销路径
         # (no-op 交付,WP9_CONTRACT §3)。
         self._pending_first_steps = {}
+
+    def _apply_delivery_extension(self, delta: dict) -> None:
+        if self.workspace_admission != "required":
+            return
+        revision_by_rank, bytes_by_rank = self._workspace_state_maps(
+            delta["workspace_state"])
+        changed_ranks = self.kv_manager.set_external_workspace_view(
+            revision_by_rank, bytes_by_rank)
+        if changed_ranks:
+            self._note_capacity_change(*(
+                self._workspace_rank_to_instance[rank]
+                for rank in changed_ranks))
+
+    def _attach_response_extension(self, delta: dict, batch: dict) -> None:
+        if self.workspace_admission == "required":
+            batch["workspace_capacity_snapshot"] = (
+                self.kv_manager.workspace_capacity_snapshot())
 
     # ------------------------------------------------------------- 策略 --
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import math
 from typing import Optional, Sequence
 
 
@@ -40,10 +41,13 @@ class WscLlmHardware:
     local_hbm_capacity_bytes: int
     local_hbm_bandwidth_gbps: float
     d2d_bandwidth_gbps: float
-    peak_perf_tflops: float
+    peak_perf_tflops: Optional[float]
     d2d_latency_ns: int
     local_hbm_latency_ns: int
     label: str = "WSC-LLM"
+    die_profile: str = ""
+    die_peak_int4_ops_s: Optional[float] = None  # INT4 operations / s
+    die_peak_vec_eqops_s: Optional[float] = None  # FP32-equivalent ops / s
 
     def __post_init__(self) -> None:
         integer_fields = {
@@ -63,10 +67,53 @@ class WscLlmHardware:
         for name, value in {
             "local_hbm_bandwidth_gbps": self.local_hbm_bandwidth_gbps,
             "d2d_bandwidth_gbps": self.d2d_bandwidth_gbps,
-            "peak_perf_tflops": self.peak_perf_tflops,
         }.items():
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+            if (isinstance(value, bool) or not isinstance(value, (int, float))
+                    or not self._is_finite(value) or value <= 0):
                 raise ValueError(f"{name} must be positive")
+        if not isinstance(self.die_profile, str):
+            raise ValueError("die_profile must be a string")
+        if self.die_profile == "coarse_die_v2":
+            # coarse Die exposes typed INT4 and FP32-equivalent rates. Keep
+            # them separate; neither is the legacy generic roofline scalar.
+            if self.peak_perf_tflops is not None:
+                self._validate_positive_rate(
+                    self.peak_perf_tflops, "peak_perf_tflops")
+            self._validate_positive_rate(
+                self.die_peak_int4_ops_s, "die_peak_int4_ops_s")
+            self._validate_positive_rate(
+                self.die_peak_vec_eqops_s, "die_peak_vec_eqops_s")
+        else:
+            if (self.die_peak_int4_ops_s is not None
+                    or self.die_peak_vec_eqops_s is not None):
+                raise ValueError(
+                    "typed coarse Die peaks require "
+                    "die_profile='coarse_die_v2'")
+            self._validate_positive_rate(
+                self.peak_perf_tflops, "peak_perf_tflops")
+
+    @staticmethod
+    def _is_finite(value) -> bool:
+        try:
+            return math.isfinite(value)
+        except OverflowError:
+            return False
+
+    @staticmethod
+    def _validate_positive_rate(value, name: str) -> None:
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not WscLlmHardware._is_finite(value) or value <= 0):
+            raise ValueError(f"{name} must be a finite positive rate")
+
+    def require_legacy_peak_perf_tflops(self) -> float:
+        """Return the legacy roofline scalar, refusing typed coarse rates."""
+        if self.die_profile == "coarse_die_v2":
+            raise ValueError(
+                "coarse_die_v2 has typed INT4/FP32-equivalent peak rates; "
+                "it has no generic peak_perf_tflops value")
+        if self.peak_perf_tflops is None:
+            raise ValueError("legacy peak_perf_tflops is unavailable")
+        return float(self.peak_perf_tflops)
 
     @property
     def npus_count(self) -> int:

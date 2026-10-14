@@ -6,6 +6,7 @@ LICENSE file in the root directory of this source tree.
 #include "astra-sim/workload/MetricCollector.hh"
 
 #include "astra-sim/system/Sys.hh"
+#include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
 #include "astra-sim/workload/Statistics.hh"
 #include "astra-sim/workload/Workload.hh"
@@ -13,13 +14,17 @@ LICENSE file in the root directory of this source tree.
 #include <json/json.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cerrno>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <fstream>
+#include <iomanip>
 #include <iostream>
 #include <limits>
+#include <sstream>
 #include <unordered_set>
 #include <unistd.h>
 
@@ -85,6 +90,234 @@ long double u128_to_long_double(unsigned __int128 value) {
     const long double lo =
         static_cast<long double>(static_cast<uint64_t>(value));
     return hi * 18446744073709551616.0L + lo;
+}
+
+using ExactHbmMatrix = std::array<std::array<long double, 2>, 2>;
+
+long double parse_runtime_exact_counter(const json& value,
+                                        const std::string& field) {
+    if (!value.is_string()) {
+        throw std::runtime_error("coarse_die Runtime counter " + field +
+                                 " is not an exact decimal string");
+    }
+    const std::string text = value.get<std::string>();
+    char* end = nullptr;
+    errno = 0;
+    const long double parsed = std::strtold(text.c_str(), &end);
+    if (errno == ERANGE || end != text.c_str() + text.size() ||
+        !std::isfinite(parsed) || parsed < 0.0L) {
+        throw std::runtime_error("coarse_die Runtime counter " + field +
+                                 " is not a finite non-negative decimal");
+    }
+    return parsed;
+}
+
+std::string exact_runtime_decimal(long double value) {
+    std::ostringstream stream;
+    stream << std::setprecision(std::numeric_limits<long double>::max_digits10)
+           << value;
+    return stream.str();
+}
+
+ExactHbmMatrix parse_runtime_hbm_matrix(const json& value,
+                                       const std::string& field) {
+    if (!value.is_array() || value.size() != 2) {
+        throw std::runtime_error("coarse_die Runtime counter " + field +
+                                 " must have two rows");
+    }
+    ExactHbmMatrix matrix{};
+    for (size_t row = 0; row < 2; ++row) {
+        if (!value.at(row).is_array() || value.at(row).size() != 2) {
+            throw std::runtime_error("coarse_die Runtime counter " + field +
+                                     " has a malformed row");
+        }
+        for (size_t direction = 0; direction < 2; ++direction) {
+            matrix[row][direction] = parse_runtime_exact_counter(
+                value.at(row).at(direction), field + "[" +
+                    std::to_string(row) + "][" +
+                    std::to_string(direction) + "]");
+        }
+    }
+    return matrix;
+}
+
+long double hbm_matrix_total(const ExactHbmMatrix& matrix) {
+    long double total = 0.0L;
+    for (const auto& row : matrix) {
+        for (const long double direction : row) {
+            total += direction;
+        }
+    }
+    return total;
+}
+
+long double hbm_category_total(const json& runtime_counters,
+                               const char* category) {
+    const json& served = runtime_counters.at("served_by_category").at(category);
+    return hbm_matrix_total(parse_runtime_hbm_matrix(
+        served.at("hbm_served_bytes_by_row_direction_exact"),
+        std::string("served_by_category.") + category +
+            ".hbm_served_bytes_by_row_direction_exact"));
+}
+
+json coarse_die_runtime_metric_record(const json& runtime_counters,
+                                      Tick window_ns) {
+    const bool accounting_complete =
+        runtime_counters.value("accounting_history_complete", false);
+    const bool typed_complete =
+        runtime_counters.value("typed_totals_history_complete", false);
+    const bool history_complete = accounting_complete && typed_complete;
+    const json& raw = runtime_counters.at("hardware_raw");
+    const bool raw_available = raw.value("available", false);
+    const long double window_seconds =
+        static_cast<long double>(window_ns) / 1e9L;
+
+    const json& categories = runtime_counters.at("served_by_category");
+    const json& comp = categories.at("comp");
+    const long double int4_ops = parse_runtime_exact_counter(
+        comp.at("int4_ops_exact_decimal"),
+        "served_by_category.comp.int4_ops_exact_decimal");
+    const long double vec_eqops = parse_runtime_exact_counter(
+        comp.at("vec_eqops_exact_decimal"),
+        "served_by_category.comp.vec_eqops_exact_decimal");
+    const ExactHbmMatrix total_hbm = parse_runtime_hbm_matrix(
+        runtime_counters.at("hbm_served_bytes_by_row_direction_exact"),
+        "hbm_served_bytes_by_row_direction_exact");
+    const long double total_hbm_bytes = hbm_matrix_total(total_hbm);
+    const auto& row_peaks = raw.at("hbm_row_peak_Bps");
+    long double int4_denominator = 0.0L;
+    long double vec_denominator = 0.0L;
+    std::array<long double, 2> hbm_row_denominators{};
+    bool int4_peak_valid = raw_available &&
+        raw.at("peak_int4_ops_per_s").is_number();
+    bool vec_peak_valid = raw_available &&
+        raw.at("peak_vec_fp32_eq_ops_per_s").is_number();
+    if (int4_peak_valid) {
+        const long double peak = raw.at("peak_int4_ops_per_s").get<double>();
+        int4_peak_valid = peak > 0.0L && std::isfinite(peak);
+        int4_denominator = peak * window_seconds;
+    }
+    if (vec_peak_valid) {
+        const long double peak =
+            raw.at("peak_vec_fp32_eq_ops_per_s").get<double>();
+        vec_peak_valid = peak > 0.0L && std::isfinite(peak);
+        vec_denominator = peak * window_seconds;
+    }
+    bool hbm_peaks_valid = raw_available && row_peaks.is_array() &&
+        row_peaks.size() == 2;
+    std::array<long double, 2> row_peak_values{};
+    if (hbm_peaks_valid) {
+        for (size_t row = 0; row < 2; ++row) {
+            if (!row_peaks.at(row).is_number()) {
+                hbm_peaks_valid = false;
+                break;
+            }
+            row_peak_values[row] = row_peaks.at(row).get<double>();
+            if (!(row_peak_values[row] > 0.0L) ||
+                !std::isfinite(row_peak_values[row])) {
+                hbm_peaks_valid = false;
+                break;
+            }
+            hbm_row_denominators[row] =
+                row_peak_values[row] * window_seconds;
+        }
+    }
+
+    const char* unavailable_reason = nullptr;
+    if (!history_complete) {
+        unavailable_reason = "incomplete_runtime_counter_history";
+    } else if (window_ns == 0) {
+        unavailable_reason = "zero_utilization_window";
+    } else if (!raw_available) {
+        unavailable_reason = "raw_hardware_denominators_unavailable";
+    }
+    const auto utilization = [history_complete, window_ns](long double numerator,
+                                                            long double denominator,
+                                                            bool valid_peak) {
+        if (!history_complete || window_ns == 0 || !valid_peak ||
+            !(denominator > 0.0L) || !std::isfinite(denominator)) {
+            return json(nullptr);
+        }
+        return json(static_cast<double>(numerator / denominator));
+    };
+
+    json int4 = {
+        {"numerator_ops_exact_decimal", exact_runtime_decimal(int4_ops)},
+        {"denominator_ops", int4_denominator},
+        {"denominator_definition", "raw_peak_int4_ops_per_s*window_seconds"},
+        {"utilization", utilization(int4_ops, int4_denominator,
+                                     int4_peak_valid)},
+        {"status", !history_complete ? "incomplete_runtime_counter_history"
+                   : window_ns == 0 ? "zero_utilization_window"
+                   : !int4_peak_valid ? "raw_peak_unavailable"
+                                      : "available"}};
+    json vec = {
+        {"numerator_eqops_exact_decimal", exact_runtime_decimal(vec_eqops)},
+        {"denominator_eqops", vec_denominator},
+        {"denominator_definition",
+         "raw_peak_vec_fp32_eq_ops_per_s*window_seconds"},
+        {"utilization", utilization(vec_eqops, vec_denominator,
+                                     vec_peak_valid)},
+        {"status", !history_complete ? "incomplete_runtime_counter_history"
+                   : window_ns == 0 ? "zero_utilization_window"
+                   : !vec_peak_valid ? "raw_peak_unavailable"
+                                     : "available"}};
+    json hbm_by_row = json::array();
+    for (size_t row = 0; row < 2; ++row) {
+        const long double row_bytes = total_hbm[row][0] + total_hbm[row][1];
+        hbm_by_row.push_back({
+            {"row", row},
+            {"numerator_bytes_exact_decimal", exact_runtime_decimal(row_bytes)},
+            {"denominator_bytes", hbm_row_denominators[row]},
+            {"denominator_definition", "raw_hbm_row_peak_Bps*window_seconds"},
+            {"utilization", utilization(row_bytes,
+                                         hbm_row_denominators[row],
+                                         hbm_peaks_valid)},
+            {"status", !history_complete ? "incomplete_runtime_counter_history"
+                       : window_ns == 0 ? "zero_utilization_window"
+                       : !hbm_peaks_valid ? "raw_peak_unavailable"
+                                          : "available"}});
+    }
+    const long double hbm_denominator =
+        hbm_row_denominators[0] + hbm_row_denominators[1];
+    const json hbm_total_util = utilization(total_hbm_bytes, hbm_denominator,
+                                            hbm_peaks_valid);
+    json hbm_total = {
+        {"numerator_bytes_exact_decimal",
+         exact_runtime_decimal(total_hbm_bytes)},
+        {"denominator_bytes", hbm_denominator},
+        {"denominator_definition",
+         "sum(raw_hbm_row_peak_Bps)*window_seconds"},
+        {"utilization", hbm_total_util},
+        {"status", !history_complete ? "incomplete_runtime_counter_history"
+                   : window_ns == 0 ? "zero_utilization_window"
+                   : !hbm_peaks_valid ? "raw_peak_unavailable"
+                                      : "available"}};
+
+    return {{"source", "coarse_die::Runtime::counters"},
+            {"counter_scope",
+             "rank_lifetime_served_work_including_active_cancelled_and_retired_executions"},
+            {"utilization_window_ns", window_ns},
+            {"utilization_window", "[0, sim_end_ns]"},
+            {"accounting_history_complete", accounting_complete},
+            {"typed_totals_history_complete", typed_complete},
+            {"totals_semantics", runtime_counters.value(
+                 "served_category_totals_semantics", "unknown")},
+            {"served_by_category", categories},
+            {"hbm_direction_order",
+             runtime_counters.value("hbm_direction_order", json::array())},
+            {"hbm_served_bytes_by_row_direction_exact",
+             runtime_counters.at("hbm_served_bytes_by_row_direction_exact")},
+            {"legacy_unclassified_hbm_bytes_by_row_direction_exact",
+             runtime_counters.at(
+                 "legacy_unclassified_hbm_bytes_by_row_direction_exact")},
+            {"raw_hardware_denominators", raw},
+            {"utilization_status", unavailable_reason == nullptr
+                 ? "available" : unavailable_reason},
+            {"utilization", {{"int4", std::move(int4)},
+                             {"vec_fp32_eq", std::move(vec)},
+                             {"hbm_total", std::move(hbm_total)},
+                             {"hbm_by_row", std::move(hbm_by_row)}}}};
 }
 
 // Nearest-rank percentile (doc sec.3.5): index = ceil(p * N) - 1.
@@ -1138,6 +1371,13 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
             this->rank_states_.count(sys->id) > 0
                 ? this->rank_states_[sys->id]
                 : RankMetricState{};
+        json coarse_counters;
+        json coarse_metrics;
+        if (sys->coarse_die_runtime != nullptr) {
+            coarse_counters = sys->coarse_die_runtime->counters_at(sim_end_tick);
+            coarse_metrics = coarse_die_runtime_metric_record(coarse_counters,
+                                                              sim_end_tick);
+        }
 
         json record;
         record["schema"] = 1;
@@ -1148,6 +1388,11 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         record["rank"] = sys->id;
         record["utilization_window_ns"] = sim_end_tick;
         record["utilization_window"] = "[0, sim_end_ns]";
+        record["die_cancelled_comp_count"] =
+            sys->workload->die_cancelled_comp_count();
+        if (!coarse_counters.is_null()) {
+            record["coarse_die_runtime"] = coarse_metrics;
+        }
         record["wall_time_ns"] = wall_time;
         record["gpu_busy_ns"] = gpu_busy_ns;
         const long double window_seconds =
@@ -1340,7 +1585,82 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         // roofline_local_bytes record above is still emitted unchanged.
         const LocalHbmBandwidthModel* hbm_model =
             sys->workload->local_hbm_bandwidth_model.get();
-        if (hbm_model != nullptr) {
+        if (!coarse_counters.is_null()) {
+            const auto category_direction = [&](const char* category,
+                                                  size_t direction) {
+                const ExactHbmMatrix matrix = parse_runtime_hbm_matrix(
+                    coarse_counters.at("served_by_category").at(category)
+                        .at("hbm_served_bytes_by_row_direction_exact"),
+                    category);
+                return matrix[0][direction] + matrix[1][direction];
+            };
+            const long double comp_read = category_direction("comp", 0) +
+                                          category_direction("die", 0);
+            const long double comp_write = category_direction("comp", 1) +
+                                           category_direction("die", 1);
+            const auto& hbm_total = coarse_metrics.at("utilization").at("hbm_total");
+            const auto& raw = coarse_counters.at("hardware_raw");
+            double raw_bandwidth = 0.0;
+            if (raw.value("available", false)) {
+                const auto& peaks = raw.at("hbm_row_peak_Bps");
+                raw_bandwidth = peaks[0].get<double>() + peaks[1].get<double>();
+            }
+            json hbm_record = {
+                {"schema", 1}, {"type", "local_hbm"},
+                {"source", "shared_coarse_die_runtime_model"},
+                {"model", "13-domain per-rank coarse Runtime"},
+                {"repo_variant", this->repo_variant_}, {"run_id", this->run_id_},
+                {"rank", sys->id}, {"utilization_window_ns", sim_end_tick},
+                {"utilization_window", "[0, sim_end_ns]"},
+                {"hbm_busy_ns", coarse_counters.at("hbm_busy_ns")},
+                {"hbm_busy_definition", "union of intervals with positive HBM service rate"},
+                {"hbm_shared_ns", coarse_counters.at("hbm_shared_ns")},
+                {"shared_definition", "at least two distinct owners with positive service on the same HBM row"},
+                // Preserve the LRU field name while documenting the coarse
+                // owner-based meaning; the scalar equal-split definition is
+                // not applicable to the coarse Runtime.
+                {"hbm_shared_definition", "at least two distinct owners with positive service on the same HBM row"},
+                // Retain the scalar-queue COMP category; typed DIE work is
+                // separate and contributes to the global total exactly once.
+                {"compute_bytes_served", hbm_model ? hbm_model->compute_bytes_served() : 0.0},
+                {"die_compute_read_bytes_served", static_cast<double>(comp_read)},
+                {"die_compute_write_bytes_served", static_cast<double>(comp_write)},
+                {"die_compute_read_bytes_served_exact_decimal", exact_runtime_decimal(comp_read)},
+                {"die_compute_write_bytes_served_exact_decimal", exact_runtime_decimal(comp_write)},
+                {"comm_read_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "comm_send"))},
+                {"comm_write_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "comm_recv"))},
+                {"restore_bytes_served", static_cast<double>(hbm_category_total(coarse_counters, "restore"))},
+                // This LRU field is the issued-byte counter from the metric
+                // hook, not coarse Runtime's restore bytes served.
+                {"local_hbm_restore_bytes_issued", rank_state.local_hbm_restore_bytes},
+                {"pool_read_bytes_served", static_cast<double>(category_direction("pool", 0))},
+                {"pool_write_bytes_served", static_cast<double>(category_direction("pool", 1))},
+                {"dram_bw_util", hbm_total.at("utilization")},
+                {"dram_bw_util_numerator_bytes", static_cast<double>(parse_runtime_exact_counter(hbm_total.at("numerator_bytes_exact_decimal"), "hbm_total_bytes"))},
+                {"dram_bw_util_numerator_bytes_exact_decimal", hbm_total.at("numerator_bytes_exact_decimal")},
+                {"dram_bw_util_denominator", "sum(raw_hbm_row_peak_Bps)*window_seconds"},
+                {"denominator_source", "coarse_die::Hardware.derived.hardware_summary.hbm_row_peak_Bps"},
+                {"local_hbm_bw_bytes_per_second", raw_bandwidth},
+                {"local_hbm_bw_source", "coarse_die raw hardware descriptor"},
+                {"served_by_category", coarse_counters.at("served_by_category")},
+                {"bytes_served_definition", "integrated physical payload; includes active, cancelled and retired executions"},
+                {"accounting_history_complete", coarse_counters.at("accounting_history_complete")},
+                {"arbiter_active_activities", coarse_counters.at("active_activities")},
+                {"allocation_updates", coarse_counters.at("allocation_updates")},
+                {"peak_concurrent_jobs", hbm_model ? hbm_model->peak_concurrent_jobs() : 0},
+                {"peak_concurrent_jobs_definition", "legacy scalar-queue peak; coarse logical-owner peak unavailable"},
+                {"redistribution_events", hbm_model ? hbm_model->redistribution_events() : 0},
+                {"redistribution_events_definition", "legacy scalar-queue membership changes; coarse allocation_updates reported separately"},
+                {"legacy_queue_counter_scope", "legacy scalar queue only; coarse logical-owner peaks are not instrumented"}
+            };
+            hbm_record["hbm_busy_util"] = sim_end_tick > 0
+                ? json(coarse_counters.at("hbm_busy_ns").get<double>() / sim_end_tick)
+                : json(nullptr);
+            hbm_record["hbm_shared_fraction_of_window"] = sim_end_tick > 0
+                ? json(coarse_counters.at("hbm_shared_ns").get<double>() / sim_end_tick)
+                : json(nullptr);
+            emit_record(hbm_record.dump());
+        } else if (hbm_model != nullptr) {
             const double hbm_busy_ns = hbm_model->hbm_busy_ns();
             const double hbm_shared_ns = hbm_model->hbm_shared_ns();
             const double compute_bytes_served =

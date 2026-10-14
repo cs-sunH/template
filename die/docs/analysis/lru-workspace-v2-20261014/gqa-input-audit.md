@@ -1,0 +1,66 @@
+# WSCLLM-LRU GQA 接线只读审计
+
+审计日期：2026-10-14。范围是头数输入到原始/在线 GraphBatch、Die task、KV/权重容量、LRU remote store/restore 与 readiness 的接线设计；没有改 tracking 源码或运行测试。仅新增此 work-only 报告。检查时 HEAD 为 `e2dd5af`、分支 `codex/die-lru-workspace-v2-20261014`；共享工作树含其他正在进行的 v2 修改，行号以本次查看的树为准。
+
+## 结论
+
+base 和 LRU 的 Python public model/config/trace 输入当前都只有 `num_heads`；两边的 `DieModelContext` 都把它展开为 `num_q_heads == num_kv_heads == num_heads` 并推导 `head_dim=hidden/num_heads`。因此，base 有的是 typed Die/C++ 的 Q/KV 字段和下游 GQA 消费能力，不是可以直接复制的端到端 Python GQA 配置路径。仅手改某个 `die_op_spec` 的 Q/KV 字段会让 GraphBatch 的 operation bytes、manager HBM/KV 账本、transfer/pool 体积及 workspace task 相互矛盾。
+
+最小安全接入要新增真实模型输入的 canonical `(num_q_heads, num_kv_heads, head_dim)`，在单一 TP head-layout helper 中按完整 GQA group 分配本地 Q/KV 头，然后让原图形状、Die task、权重和 KV helper、joiner transfer、metrics/SLO 工具都读取同一组 canonical/local dimensions。旧的 `num_heads` 配置必须归一化为 q=kv=heads，保证 MHA 分片和每个现存字节完全相同。LRU 的 whole-session LRU、remote_store/pool、whole-session `REMOTE_RESTORE`、reservation/容量 epoch、P→D 等策略保持原样；改变的是各rank承载的真实 shape 和与之相应的精确字节数，不需要新 timing formula。
+
+## 输入和现有下游形状
+
+- LRU 的 [WscLlmModel](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/wsc_llm_scheduler.py:123) 只有 `num_heads`，且要求 `hidden_size % num_heads == 0`。LRU [trace config schema/parser](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py:73) 将它列为唯一 attention-head 配置字段；[TraceConfig model/parser](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py:132) 和 [现有 CSV](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv:5) 同样只有 `num_heads=32`。base 的 [model](../../../../astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/wsc_llm_scheduler.py:122)、[config schema](../../../../astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py:61) 和 [CSV](../../../../astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/trace_config.csv:5) 也是相同的 `num_heads` 接口。
+- base 与 LRU 的 [LRU DieModelContext.from_service](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py:258) / [base bridge](../../../../astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py:256) 都显式合成 MHA：Q=KV=`config.num_heads`，head_dim=hidden/heads；[LRU tp_slice()](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py:329) 再分别对 Q 和 KV 使用 `shard_extent`。LRU 现有 adapter 测试也断言 Q=KV（[test_die_model_adapter.py](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_die_model_adapter.py:367)）。故“base 现成的 public GQA config/model/trace 输入”并不存在；只存在 global typed `num_q_heads`/`num_kv_heads`/`head_dim` 与 rank-local `q_heads_local`/`kv_heads_local` 的表示形式。
+- typed Die model fields 已分别存 global Q/KV/head_dim 与 TP-local Q/KV counts（[DieTypes.hh](../../../../astra-sim-wscllm-LRU/extern/die_model/include/DieTypes.hh:252)）。解析层要求 `hidden == num_q_heads*head_dim`、KV 不大于 Q，TP locals 不大于对应 global head counts（[Workload.cc](../../../../astra-sim-wscllm-LRU/extern/die_model/src/Workload.cc:288)）；GQA 字段也已经有 C++ workload 测试（[workload_test.cc](../../../../astra-sim-wscllm-LRU/extern/die_model/tests/workload_test.cc:160)）。coarse Mapping 对标准局部 GQA 还要求 `q_heads % kv_heads == 0`（[Mapping.cc](../../../../astra-sim-wscllm-LRU/extern/die_model/coarse/src/Mapping.cc:1099)）。这是形状消费者，不会替 Python 恢复缺失的模型配置和 group ownership。
+- 当前单独 `shard_extent(q,TP)` 与 `shard_extent(kv,TP)` 不保证每rank拿到完整且同尺寸的全局 Q→KV groups。例：Q/KV=32/8、TP=6 时，独立结果为 Q `[6,6,5,5,5,5]`、KV `[2,2,1,1,1,1]`；它们没有保留全局 group size 4。一个完整 group 的连续分配会是 KV `[2,2,1,1,1,1]`、Q `[8,8,4,4,4,4]`。设计文档规定标准 GQA `group=q_heads/kv_heads`、`kv_head=floor(q_head/group)`（[设计文档 §6.6](../../../../die内仿真器设计文档_最粗粒度参数响应版.md:399)）。应集中实现 group-aware TP assignment；不要把局部 `q%kv==0` 当成全局头映射已正确的充分条件。
+
+## LRU 中必须共用 canonical shape 的消费者
+
+| 路径 | 当前 MHA 假设及影响 | 最小接入要求 |
+|---|---|---|
+| 原始/聚合 GraphBatch shape | [transformer_pass](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py:501) 与 [transformer_pass_aggregated](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py:727) 以同一 local hidden width 代表 Q、K/V、O；QKV 权重和投影宽度是 `3*attention_hidden_per_rank`，K/V cache 用这同一宽度，score 用 Q head 数。对 GQA，Q/O 应用 local Q heads，K/V tensor/cache 用 local KV heads，QKV projection 输出宽度应为 `(q_local+2*kv_local)*head_dim`；沿用既有 shape->op 计数公式，不另造 latency/timing formula。在线 decode 从 [graph_batch_builder](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py:1409) 传入当前 `num_heads`，prefill 共用同一聚合发射器。|
+| Die task | [adapter](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py:258) 当前给真实发射的 global dims 与 TP locals 都是 MHA；`build_spec` 把它们带入 task（:420）。需从 canonical model 生成 global dims、group-aware rank locals，再由实际 GraphBatch emission 生成 task；不能只修改 typedSpec fixture。|
+| 总模型权重 / rank 权重 | [scheduler estimator](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/wsc_llm_scheduler.py:332) 的 attention term 是 `4*H*H`；[manager shard estimator](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py:270) 是 `4*H*q_local*head_dim`。GQA 每层实际 Q/O 权重为 `2*H*q*head_dim`，K/V 权重为 `2*H*kv*head_dim`；rank 权重按 local Q、local KV 分别计量。必须同步这两个 estimator，rank 之和仍等于同一个全模型总权重。|
+| KV 容量与每token bytes | [scheduler](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/wsc_llm_scheduler.py:362)、[manager total/shards](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py:305) 和 [SLO watermark twin](../../../../astra-sim-wscllm-LRU/sh_test_mesh/slo_tools/hbm_watermark.py:704) 都以 `2*layers*tokens*hidden_size*bpe` 估KV；shard helper 按 `num_heads` 分。新全局 KV 应为 `2*layers*tokens*num_kv_heads*head_dim*bpe`，每rank/层段按本地 KV heads；模型容量、reservation、resident 与 HBM accounting 均从这些 helper 得数。|
+| Whole-session remote pool/store/restore | manager 用 `kv_cache_shard_bytes_for_layer_range` 生成 remote_store 的每rank shards/total（[store](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py:1872)），历史远端恢复从同一 shard helper 建 desired/restored shards，并在 fit 成功后 debit remote account（[prepare_history restore](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py:2930)）。改 shared helper 后应保持 whole-session eviction、remote pool 和恢复协议；绝不能继续以 Q heads 计 remote bytes。|
+| P→D joiner transfer | [_paired_transfer](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py:544) 按 `config.num_heads` 把总 transfer bytes 再分到 source ranks；caller 以 [kv_cache_bytes_for_tokens](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py:1343) 算总量。这一段没有 manager shard vector，必须接入相同 canonical per-rank KV helper/布局；不能对 GQA 总字节按 Q heads 均分或 byte remainder 猜头归属。equal-TP pairing 拓扑约束不变。|
+| History restore readiness | [history emit path](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py:1038) 收集各 rank 的 restore arrivals，并把它们 arm 到 `history_tp_ready_barrier`（:1107）。保持屏障和所有 event ordering，只验证实际各rank restore bytes 完成后屏障才放行。|
+| Metrics 与 capacity tooling | [metrics model loader](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/metrics_postprocess.py:1038) 只读现有 `num_heads` 再创建模型并生成 `W_bytes/KV_bytes`；[hbm_watermark build_model_spec](../../../../astra-sim-wscllm-LRU/sh_test_mesh/slo_tools/hbm_watermark.py:784) 也只装配 `num_heads`，容量校准复用这些估计值。新增字段需进入 parser/model/cache key/loaders 与容量 helper，旧 trace config 继续产生原结果。hbm_watermark 另有 `coef=2*layers*hidden_size*bpe`（:2587），也要改成由 canonical KV bytes/token 得值，避免容量摘要和 manager 脱节。|
+
+## 不能直接复制 / 不能只改 typedSpec
+
+1. **base 并没有可直接移植的 public GQA 接线。** base 与 LRU 都有相同的 `num_heads` public dataclass/config；base Die bridge 同样把 Q=KV=heads。可以复用的只是下游 schema/shape 命名和现有 C++ work calculation，不是完整 Python 配置路径。
+2. **两个并行权重估计器有既存 gelu 末层 norm 差异。** scheduler 估计在 gelu 下计 final LayerNorm 的 `2*hidden`，manager 与 SLO watermark twin 计 0；生产 swiglu 三者对旧模型相符（scheduler: [wsc_llm_scheduler.py:332](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/wsc_llm_scheduler.py:332)，manager: [session_kv_manager.py:234](../../../../astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py:234)，SLO: [hbm_watermark.py:633](../../../../astra-sim-wscllm-LRU/sh_test_mesh/slo_tools/hbm_watermark.py:633)）。GQA 接入应只替换 attention matrix sizing，不顺手裁决 norm 历史差异；也不要把其中一份公式整文件照抄。
+3. **局部 Q 和 KV 头不能独立按 `shard_extent`。** 其余 FFN/vocab 等切片仍按既有规则；GQA 的 Q/KV 要以标准 group 所有权共同分片。若当前算子管线不能表达空 local head rank，必须 fail-closed 限制该 TP，而不要发空 shape/只在 manager 中允许零容量。
+4. **transfer bytes 不是均匀 Q-head bytes。** remote store/restore 的 manager shards、P→D joiner shard vector、GraphBatch route payload 和 SLO 统计必须守恒并完全一致；LRU 的 whole-session 路径与 base 的 history策略不同，不复制 base 的 history/restore policy。容量值变了不代表要改 LRU victim order、remote pool 生命周期或 readiness barriers。
+5. **不要引入另一套性能公式。** 原图的工作量保持从现有 operator shapes 推出；GQA改 Q/K/V/O/score/cache 的输入维度和正确的 head ownership。workspace 是真实 task 下编译出的 plan/workspace；只编辑 typedSpec 会掩盖 producer 与 manager 的不一致。
+
+## 建议的最小向后兼容实现边界
+
+1. 在 model/config 归一化层继续接受旧 `num_heads`；把它定义为历史 Q-head alias。在旧输入没有 GQA 字段时 canonical tuple 固定为 `(num_q_heads,num_kv_heads,head_dim)=(num_heads,num_heads,hidden_size/num_heads)`。追加 optional `num_q_heads`、`num_kv_heads` 与可选/可推导 `head_dim` 时，拒绝冲突 alias；校验正整数、`hidden_size=q*head_dim`、`1<=kv<=q`、标准映射 `q%kv==0`。不要要求旧 CSV 新增列。
+2. 增加单一 canonical head-layout/TP helper：先按 `group=q/kv` 把完整 Q→KV groups 分配到 rank，返回每rank local Q、local KV 和稳定头归属；验证全局总和、无丢失/重复、每rank group关系。MHA 的 group=1 必须字节等同当前 `shard_extent(num_heads, TP, rank)`。明确支持 TP>KV 的空rank语义或先拒绝。
+3. 先让真实 config 流经原始 trace / `transformer_pass_aggregated`，按本地 Q/KV 修正 QKV/O/score/KV tensor shapes 与兼容统计；Die adapter 使用同一个 layout 产出 global dims+locals。C++ 验证沿用现有 task path，并用实际 GraphBatch 生成内容，不手造一个能通过 schema 的 GQA task。
+4. 统一 `wsc_llm_scheduler`、manager、`metrics_postprocess`、`hbm_watermark` 的全模型/TP-shard weight 与 KV helper；将 manager admission、prefill/decode growth、whole-session eviction/store、remote pool、restore、history 和 P→D joiner shard payload 全部接到相同 bytes helper。容量 policy 和 LRU 序不变。
+5. 新建真实 GQA trace fixture 后再验证 workspace v2：同一个 config 到 GraphBatch、typed task、C++ compile/plan/workspace、manager capacity/transfer。Workspace/ring policy 与 head layout 独立，不因本任务修改。
+
+## 必要业务验证
+
+- **旧 MHA goldens：** 旧 `num_heads`-only CSV 与新 parser canonicalized 结果比较：全局/各rank Q=KV/head_dim，原 `transformer_pass` 和 aggregate 17 categories 的 `num_ops/tensor_size/remote_read/collective bytes`、scheduler/manager/SLO weight bytes、KV bytes/token、每rank容量、P→D/remote store/restore 字节都与旧结果逐字节一致。
+- **真实 GQA public pipeline：** 例如 `H=4096,Q=32,KV=8,hd=128`；从新增真实 config field 解析，构建 model，生成线上 prefill/decode GraphBatch，逐rank检查 task global dims/local heads、QKV/attention shapes，并用 C++ 当前 task/compiler 接受其 workload。不能在 Python test 中只覆盖 `DieModelContext(model_dims=...)` 手工伪造。
+- **TP assignment：** 至少测 TP=1、一个整除 group 数的 TP、一个不能整除 KV head count 的 TP（如 TP=6，验证 8/8/4/4/4/4 Q 和 2/2/1/1/1/1 KV），检查 group ownership、头总和、无交叉/重复。覆盖 q%kv 非整除和 unsupported empty-rank 配置的失败；若决定支持 TP>KV，证明 zero-local rank 的 graph/Die/manager 一致。
+- **权重/容量守恒：** global Q/KV 权重公式、rank shards 求和、manager 的 static model weight + resident KV + reserved capacity invariant；SLO watermark 与 `metrics_postprocess W_bytes/KV bytes` 同源。旧 MHA values 不变；不要混入 gelu norm formula 决议。
+- **LRU remote lifecycle：** 驱逐整会话时 remote store 每rank shards 和 remote pool debit 精确为 GQA KV；对该远端会话发起真实 `REMOTE_RESTORE`，验证 restore shards 与容量账、pool扣账精确相抵；restore transfer 完成前 history-ready barrier 不放行。覆盖容量不足时仍遵循原 LRU/阻塞与不 debit 规则。
+- **P→D 与在线 history：** joiner transfer 使用与 manager 相同的 rank shard layout/bytes；等 TP rank 配对/等 degree 规则保持，NOC route payload 总和与 global KV total 相同。现有 local hit/NOC migration/remote restore decision/history policy 不改。
+- **v2 workspace integration：** 在源码 checkpoint 完整后，走 GQA config→真实 GraphBatch→C++ 解析/compile→每rank plan `hbm_workspace_peak_bytes`→Python admission snapshot/hold；报告的 Q/KV dimensions 必须和 manager容量输入同一 model。这是 v2 的后续集成验证，不用变更 manager 或 RingTopology 策略。
+
+## 重点代码与既有测试
+
+实现接线时重点检查：
+
+- `sh_test_mesh/workload/llama2_7b_inference/{wsc_llm_scheduler.py,generate_wsc_llm_trace.py,generate_trace.py,session_kv_manager.py,metrics_postprocess.py}`
+- `sh_test_mesh/workload/llama2_7b_inference/online/{die_model_adapter.py,graph_batch_builder.py,wsc_llm_online_scheduler.py}`
+- `sh_test_mesh/slo_tools/hbm_watermark.py`
+- `extern/die_model/{include/DieTypes.hh,src/Workload.cc,coarse/src/Compiler.cc,coarse/src/Mapping.cc}`（优先复用形状契约，避免在仅 Python model 字段时误判 producer 已支持）
+
+可扩展的现有业务测试：`test_wsc_llm_scheduler.py`、`test_wscllm_kv_incremental_invariants.py`、`test_tiered_eviction_sequence.py`、`online/test_die_model_adapter.py`、`online/test_graph_batch_builder.py`、`online/test_kv_transfer_emission.py`、`online/test_store_restore_ordering.py`、`slo_tools/tests/test_hbm_watermark.py`，以及 C++ `extern/die_model/tests/workload_test.cc`/`spec_parse_test.cc`。现有 C++ GQA测试不代替 Python public-config→GraphBatch→manager 的端到端覆盖。

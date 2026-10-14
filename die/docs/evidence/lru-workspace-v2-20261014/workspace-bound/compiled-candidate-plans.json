@@ -1,0 +1,5939 @@
+{
+  "actual_shape_source": "captured die_op_spec objects from actual production Online response JSON",
+  "candidate_op_kind_source": "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py:OP_KINDS",
+  "compiler_api": "die_coarse_compile_batch_v2",
+  "fixtures": [
+    {
+      "actual_generated_node_spec_count": 80,
+      "actual_generated_op_kinds": [
+        "attention_region",
+        "ffn_region",
+        "logits",
+        "norm",
+        "o_proj",
+        "qkv_rope",
+        "residual"
+      ],
+      "actual_generated_shape_max_workspace_bytes": {
+        "decode/rank4": 0,
+        "decode/rank5": 0,
+        "decode/rank6": 0,
+        "decode/rank7": 0,
+        "prefill/rank0": 0,
+        "prefill/rank1": 0,
+        "prefill/rank2": 0,
+        "prefill/rank3": 0
+      },
+      "actual_normalized_shape_variant_counts": {
+        "decode/rank4": 1,
+        "decode/rank5": 1,
+        "decode/rank6": 1,
+        "decode/rank7": 1,
+        "prefill/rank0": 1,
+        "prefill/rank1": 1,
+        "prefill/rank2": 1,
+        "prefill/rank3": 1
+      },
+      "actual_phase_rank_seed_count": 8,
+      "actual_response_paths": [
+        "/workspace/template/work/lru-online-workspace-20261014/e2e/run/wire_audit/response_0.json",
+        "/workspace/template/work/lru-online-workspace-20261014/e2e/run/wire_audit/response_1.json",
+        "/workspace/template/work/lru-online-workspace-20261014/e2e/run/wire_audit/response_2.json"
+      ],
+      "actual_response_sha256": {
+        "/workspace/template/work/lru-online-workspace-20261014/e2e/run/wire_audit/response_0.json": "7fed013a089f3fe7cffebb8343bb0c9ceef23f9dc05d96bbcd1c345a6956a31a",
+        "/workspace/template/work/lru-online-workspace-20261014/e2e/run/wire_audit/response_1.json": "031a95c4dc6f33978527226b7de21771394649fe7f1103e6bb49167c44c7e3ba",
+        "/workspace/template/work/lru-online-workspace-20261014/e2e/run/wire_audit/response_2.json": "4c2e18ddcae75b27e564b76377bca5dda78ef9fa90fd99fbe38ccfb9c33bfbc5"
+      },
+      "adapter_candidate_op_kinds": [
+        "attention_region",
+        "av",
+        "ffn_region",
+        "local_region",
+        "logits",
+        "mlp_activation",
+        "mlp_down",
+        "mlp_up",
+        "norm",
+        "o_proj",
+        "qk",
+        "qkv_rope",
+        "residual",
+        "scale_mask",
+        "softmax"
+      ],
+      "all_opkind_selected_plan_by_kind_workspace_bytes": {
+        "decode/rank4": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 0,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 260,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "decode/rank5": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 0,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 260,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "decode/rank6": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 0,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 260,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "decode/rank7": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 0,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 260,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "prefill/rank0": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 0,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 16384,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "prefill/rank1": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 0,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 16384,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "prefill/rank2": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 0,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 16384,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "prefill/rank3": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 0,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 16384,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        }
+      },
+      "all_opkind_selected_plan_shape_max_workspace_bytes": {
+        "decode/rank4": 260,
+        "decode/rank5": 260,
+        "decode/rank6": 260,
+        "decode/rank7": 260,
+        "prefill/rank0": 16384,
+        "prefill/rank1": 16384,
+        "prefill/rank2": 16384,
+        "prefill/rank3": 16384
+      },
+      "candidate_compile_count": 120,
+      "candidate_error_count": 8,
+      "candidate_errors": [
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 4,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 5,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 6,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 7,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 0,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 1,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 2,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 3,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        }
+      ],
+      "candidate_spec_sha256": "b3c66569a9d744c66253b290ab770d27834728c620bd8494b5e61ec73efda9f3",
+      "candidate_success_count": 112,
+      "coarse_die_cabi_path": "/workspace/template/work/lru-cpp-workspace-20261014/build/aggregate/lib/libcoarse_die_cabi.so",
+      "coarse_die_cabi_sha256": "d2f06c80e6112f1215f6b124f4cb333041d2c592b84c90a81127e0faeb5ee17b",
+      "compiled_candidates": [
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "decode",
+          "plan_hash": "70c16fe63daa574c8debaec4134a2430808fe2176dd991be436907ae26e48cf6",
+          "rank": 4,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "decode",
+          "plan_hash": "bd5c2f0d5b7d5582292e4e54a864679404486ecf6e2838fdbdae68ba479bbe09",
+          "rank": 4,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "decode",
+          "plan_hash": "e2e4581c2b11948777b23f3a20f272de5e407cef46471162cf941ec1a3a1dcfe",
+          "rank": 4,
+          "selected_template": "fused_output_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 4,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "decode",
+          "plan_hash": "454aaf72d422ef65b36f85659ef769c6487dbed4e8027d01c9658d83504b8465",
+          "rank": 4,
+          "selected_template": "logits_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "decode",
+          "plan_hash": "3ecb4bc6a782e4eacba1e1ccc730745b018fdff22d0ab20478a0fb8eaee2ec7b",
+          "rank": 4,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "decode",
+          "plan_hash": "8f5fb56c42c9fcbe963db155104426df0c16fb82f2ca3ec64070813946e6574c",
+          "rank": 4,
+          "selected_template": "mlp_down_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "decode",
+          "plan_hash": "235de2ef0f7f4bc1ad93dec14c36da0bc349f8cd0fa76ec6e9a48ff2c0346264",
+          "rank": 4,
+          "selected_template": "mlp_up_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "decode",
+          "plan_hash": "19dc791f1b69383f575b2cf295a2d5f1ba330310359a4401b56c0964cbe43733",
+          "rank": 4,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "decode",
+          "plan_hash": "0896a4220ee419666598cc33956db4ff738fe6629465996913f472fb7efced89",
+          "rank": 4,
+          "selected_template": "o_proj_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "decode",
+          "plan_hash": "bf47d524ef52176fd230c447b439755e2e80352734b28143823929b7fb57090b",
+          "rank": 4,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 260
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "decode",
+          "plan_hash": "60cd742209039611115418adc5fe3930fa4b782704b682d875dca179bc272b24",
+          "rank": 4,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "decode",
+          "plan_hash": "4376c24222725e8aef86f9fbfd68003a8b7238de7292f61122dce730af68b2f4",
+          "rank": 4,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "decode",
+          "plan_hash": "257623d24909543145866af79443cd06a7df30f6454df233fdf8d64c61cd13c6",
+          "rank": 4,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "decode",
+          "plan_hash": "530f1326d2a5721fea627a62cd05967fa729d359ed210440ac1affe4005ae24c",
+          "rank": 4,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "decode",
+          "plan_hash": "c05cc98f64efd0768982d215d7eb0805f79f2147c869eb5d4868b5e1e1c12126",
+          "rank": 5,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "decode",
+          "plan_hash": "c3e6715a3d2273ff62a7c50ddcba0d0cf609e0b5d18159f3b5faa3a7dbb3c8bd",
+          "rank": 5,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "decode",
+          "plan_hash": "22654eed69b69d4d190f1efcd5298222266a88f38bded684773d13f0d8d414f6",
+          "rank": 5,
+          "selected_template": "fused_output_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 5,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "decode",
+          "plan_hash": "5870a975d70316fc698159c861f088413d34a3f8bbde4ab57507ed70930e20cf",
+          "rank": 5,
+          "selected_template": "logits_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "decode",
+          "plan_hash": "9ec653ecdd498bd3385f4c71315a56e47b6771cc3ca3d7abb09f07fae1fc7a84",
+          "rank": 5,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "decode",
+          "plan_hash": "7a427ff5bda3de9554b1f04ef253f21ebc82ac305cae1c72454e3e110fec0638",
+          "rank": 5,
+          "selected_template": "mlp_down_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "decode",
+          "plan_hash": "e334832aa10925d91edcc9672e92f6420e6932a353d0ae949888286de1e9fe2b",
+          "rank": 5,
+          "selected_template": "mlp_up_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "decode",
+          "plan_hash": "8b347dd8abb4423f93943ba06fa2421e7f32aec27908bdb97468adceb12155c1",
+          "rank": 5,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "decode",
+          "plan_hash": "a4f9877243fd06ad3995b093ad11e93a6a61652ae377cbf1c9529cb57a6f8bf2",
+          "rank": 5,
+          "selected_template": "o_proj_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "decode",
+          "plan_hash": "69e6d6b9048f66d304b5853e28d372581d086813efad9ae98665b93c8fb9bd96",
+          "rank": 5,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 260
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "decode",
+          "plan_hash": "d26f02cfa4fb6751487a7e4e5241bf6875870d1c293f2897b5d197760bfd57a4",
+          "rank": 5,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "decode",
+          "plan_hash": "32c8340fa02b976b4366f94415c2166adfadceee74a50eb417c136cd219c067f",
+          "rank": 5,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "decode",
+          "plan_hash": "0a54ff0d1641cf628ddf20943dfc299e8e052c42e1cf5dd9bbb1b201385929da",
+          "rank": 5,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "decode",
+          "plan_hash": "5721058abb876739d44d8e46d271214ddd9ac558b602983cbfecd95f64e5164a",
+          "rank": 5,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "decode",
+          "plan_hash": "b24f81c62693e7410a8e7ffe53a1836659436692cdb445a7b013a2a321b32bc9",
+          "rank": 6,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "decode",
+          "plan_hash": "735edc6f5d7cffc9a960803cbb4bc8e915253cd36a422c91f1c4529d37cf8bcf",
+          "rank": 6,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "decode",
+          "plan_hash": "0b750ce12b3955e876c8805e8115e3b28d33179a0af1ad55382154ed7dc1f6e1",
+          "rank": 6,
+          "selected_template": "fused_output_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 6,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "decode",
+          "plan_hash": "acf866c3cee30076a26ad54213f6c97259767b25a5fdb1b42e9bd36371c763e1",
+          "rank": 6,
+          "selected_template": "logits_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "decode",
+          "plan_hash": "c44309c6b4aca7afdd3a8173c23a834338f9d83b0907e9e32214fb1069d1be59",
+          "rank": 6,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "decode",
+          "plan_hash": "46059151e93563185569a076f4989fbe31af71dae347728d79b36605606d40a4",
+          "rank": 6,
+          "selected_template": "mlp_down_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "decode",
+          "plan_hash": "105a727e584459afed1084d9805eb9e66b20c1aeadb19ce96a2388e4ec3c244c",
+          "rank": 6,
+          "selected_template": "mlp_up_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "decode",
+          "plan_hash": "babecab074abe18a2bcfe25a80b487be0fe0e0fd9a07f83f4d7ba4ede11a9db7",
+          "rank": 6,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "decode",
+          "plan_hash": "11c5d0500e471af18ad92341ab975d9b700bbe07fd29887baf2b2ec2f1e029ac",
+          "rank": 6,
+          "selected_template": "o_proj_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "decode",
+          "plan_hash": "f1edf4921e810f787a0ab2cc2984734ba6a90687bf0d134fb58685a5122d9c25",
+          "rank": 6,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 260
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "decode",
+          "plan_hash": "e952ab526a1cbee14e5210704f3e08a83d64f634158ce498089021149449daf7",
+          "rank": 6,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "decode",
+          "plan_hash": "1fb1d5a179ea1c6abd3c7f1bbb48b13b8bf5010131f44cf3a14a062c7df9f411",
+          "rank": 6,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "decode",
+          "plan_hash": "1eb53540e507590fb70ff4bb91d1c8698a8f14ff238f845004bd04a6d7e1bb29",
+          "rank": 6,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "decode",
+          "plan_hash": "56a7f78d568fde09ca35b38810c977b8412a1cd61a20ddff58cf06735ecbb659",
+          "rank": 6,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "decode",
+          "plan_hash": "2f4bc1a785e82185c5281ce1db80adad68f08459bb33c4f20e6dd2eeb04bad30",
+          "rank": 7,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "decode",
+          "plan_hash": "7d6b5e66d24a6edf34270077e8ac152dc03b45b404c5f60a31db671250abcf6b",
+          "rank": 7,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "decode",
+          "plan_hash": "3dd4c85697b16c893df65cbce1596bfbc01c5df38e7dc0406974612b8c2a7540",
+          "rank": 7,
+          "selected_template": "fused_output_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 7,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "decode",
+          "plan_hash": "a3ff686b873daac9a7eb3c9855018d2a22fa7f6045be3ecf0e7677b342006b52",
+          "rank": 7,
+          "selected_template": "logits_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "decode",
+          "plan_hash": "72686e4e77a08c7498717a0163288f30693b658426626ca063efcb7a9ef8e563",
+          "rank": 7,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "decode",
+          "plan_hash": "55facc3bf0b502a6cb430c7b434391e3c0dfca7b8ccb4e34d9fe6243c952c5c7",
+          "rank": 7,
+          "selected_template": "mlp_down_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "decode",
+          "plan_hash": "5fee9ea4130ca03b18c3be2d99ad770afe8219fc76e202734ab91c332c7c547f",
+          "rank": 7,
+          "selected_template": "mlp_up_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "decode",
+          "plan_hash": "c707f3663407ec389d34f09469e715d067c940c01d58b411d220ccb0ffc9a440",
+          "rank": 7,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "decode",
+          "plan_hash": "f81fe4e934f174b39dfdaad18bdf54033c0ab6972231df919540b079b72ae0e0",
+          "rank": 7,
+          "selected_template": "o_proj_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "decode",
+          "plan_hash": "8294e1ee908b5be4706d9570d5edbe5fad015f68cf231eb3d38c288f4429e847",
+          "rank": 7,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 260
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "decode",
+          "plan_hash": "866f0a2ce139742dbeff915d71b00812c81f3eb6089a2db099b287c909817e98",
+          "rank": 7,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "decode",
+          "plan_hash": "468bd3abae0b51943260750b46c5c735a6b09f6010db48a198f89929ad1335c1",
+          "rank": 7,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "decode",
+          "plan_hash": "0fb94828f98a54c1fb8582602e839cfbb662436dbd8da6663993376fce6c0d6a",
+          "rank": 7,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "decode",
+          "plan_hash": "e032c7088623074b65b9a99908400d6686d6582a638f367d1019707509eea924",
+          "rank": 7,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "prefill",
+          "plan_hash": "652270f12faa40009930523e03f77bef6e373e942847c53ede54f29f6697807e",
+          "rank": 0,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "prefill",
+          "plan_hash": "8a8fdc593dd9b4ed3e16b910f8c493476ef4873f4f88d4dc2be908a359d095a0",
+          "rank": 0,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "prefill",
+          "plan_hash": "59ab4d238fe59e4017af4c75be0e5e6ca2ff91a1c9330bf9433dfbe699ab18c9",
+          "rank": 0,
+          "selected_template": "fused_output_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 0,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "prefill",
+          "plan_hash": "e62a59b63489c0da2abcf93c01717e5c9984e6bbe15211c4a42d7ab123e88d24",
+          "rank": 0,
+          "selected_template": "logits_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "prefill",
+          "plan_hash": "3d72dc50b839967f0f035f03cfbc85c5beb863526928402d97c70da18f9ab679",
+          "rank": 0,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "prefill",
+          "plan_hash": "7f1e5d7d66ef1cd34cdfe23966dba06f242c7b20626d7e09cad96afd1556d86b",
+          "rank": 0,
+          "selected_template": "mlp_down_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "prefill",
+          "plan_hash": "288bbfe273473735bac8b2c661864f8f7fa71de5a083e6569f79681ed3513026",
+          "rank": 0,
+          "selected_template": "mlp_up_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "prefill",
+          "plan_hash": "0aa0d9476418ee405a2304d45f82cd364f491c8d128d166890ba46ac2dc32c71",
+          "rank": 0,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "prefill",
+          "plan_hash": "9a257a8b531b839c9117ed13f086a3cf07743f38d3c6710aeaeca590b0c775b9",
+          "rank": 0,
+          "selected_template": "o_proj_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "prefill",
+          "plan_hash": "ab3605ba75cfe0ec60de78f47223faa45219b88558c22afd92fa2c81f538b35b",
+          "rank": 0,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 16384
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "prefill",
+          "plan_hash": "ea769e850f0974bb78c224c5a55b5e066c72789b5c12ca10c73890c6d79a4587",
+          "rank": 0,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "prefill",
+          "plan_hash": "ad56eb86c97335851db478a5caf4ba7dc9941e37a9c3d2a730755c07949b1d9e",
+          "rank": 0,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "prefill",
+          "plan_hash": "9485cd20c69ef829e472a86d4409cff454059ebaea902965af443d7b59348468",
+          "rank": 0,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "prefill",
+          "plan_hash": "cfe43de67d87987e85cd6dc809d30256363f3ab99838a6bfa531c0c323baa988",
+          "rank": 0,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "prefill",
+          "plan_hash": "4d162435661b5367e4451482870493534c6197a7686cd3f8394534bc5b965f18",
+          "rank": 1,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "prefill",
+          "plan_hash": "f435c9e77e4faddda4ad8a9e9bbb27c100c1f911b7f2764d673e9ffe81b7a770",
+          "rank": 1,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "prefill",
+          "plan_hash": "41d6b7620b4b3e964ece2c2e8fefa1a7b40dec7d601c941f2d1fb4c375782ea0",
+          "rank": 1,
+          "selected_template": "fused_output_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 1,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "prefill",
+          "plan_hash": "8bc118ebea9f320d9a6d8fee0ab3f2e0aca57e313b7aca054e319ff4c8d2dfcc",
+          "rank": 1,
+          "selected_template": "logits_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "prefill",
+          "plan_hash": "6ad48dd4b0bbbf60c1b56a35c1800e3f16c810dc558516e5355b07afee3d2c7a",
+          "rank": 1,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "prefill",
+          "plan_hash": "1fdb62337c7624d12c8241b2f9c7df2e628ac064ee2c9f7ea60224a8a9fcaa13",
+          "rank": 1,
+          "selected_template": "mlp_down_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "prefill",
+          "plan_hash": "dc3a29e0a6d64b6b6ea74fc1793852e488b51eaaed2e658350eabea073038af4",
+          "rank": 1,
+          "selected_template": "mlp_up_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "prefill",
+          "plan_hash": "dbfb2ce3d664db5cd4056404cd06241d72cb33f4c9d5141057eec542f966f35a",
+          "rank": 1,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "prefill",
+          "plan_hash": "49fa5a73f204f385d0b5898d8cef0152c36ee989a11fe6a868cfdb73f8bf54b5",
+          "rank": 1,
+          "selected_template": "o_proj_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "prefill",
+          "plan_hash": "f590b9f60822cde96f886e24513af5dfc2347e00cea2123fc1bfad668a51ef7e",
+          "rank": 1,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 16384
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "prefill",
+          "plan_hash": "79a760609d03f13f12dcdd748906abfb9c3c1856d4694806709fd7f3c6213aff",
+          "rank": 1,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "prefill",
+          "plan_hash": "3711791ee1ec61bfe6c3760589edb30eb873db78426b6a281766314a838266c9",
+          "rank": 1,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "prefill",
+          "plan_hash": "322aa3c9bef25303abef10db7402ba560ede5ed774d38bb5cd67ec082a35b986",
+          "rank": 1,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "prefill",
+          "plan_hash": "26c18fe10168c0920c5fd77e4d13d9b15c4ff86034ce328aa7c105623315fd31",
+          "rank": 1,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "prefill",
+          "plan_hash": "9c2f42b16d21803dfa02f52b9b3a16167dc547dd0d69687c71819388d51f1152",
+          "rank": 2,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "prefill",
+          "plan_hash": "b9a0045d8e2be064036316227f997e297febf627b73eae4c0aa2d66b7c0aab31",
+          "rank": 2,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "prefill",
+          "plan_hash": "78773e776e14ef129ef8ec263aaf2ea3bb25713217390ae85459e9bbe3f3d19d",
+          "rank": 2,
+          "selected_template": "fused_output_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 2,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "prefill",
+          "plan_hash": "e517fcd64d7970f014c87372db9367d4dfddc44423c24718429a44d1c2f0409b",
+          "rank": 2,
+          "selected_template": "logits_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "prefill",
+          "plan_hash": "e60a73ab37e42410e8e71d05a77f3ae8a407191bb6de737bbc0dec2c086fb2ba",
+          "rank": 2,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "prefill",
+          "plan_hash": "e4429ba3110c5b82e0ca0d661e9a24a93133dd050599ec8c5d88b95bc09c74c0",
+          "rank": 2,
+          "selected_template": "mlp_down_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "prefill",
+          "plan_hash": "16981e7b2afef387f2ab76f084750d951b71fc6bef89e01bf9ec0e05f466292a",
+          "rank": 2,
+          "selected_template": "mlp_up_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "prefill",
+          "plan_hash": "0f0defe74ef4329280d6d68ba202cf585191560d83596bfce8dab4036d8f4f23",
+          "rank": 2,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "prefill",
+          "plan_hash": "7c4a8ca4f817afd71c0f308adf1b4de04606a4b89613fa831c7b5aa3cde5aeaf",
+          "rank": 2,
+          "selected_template": "o_proj_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "prefill",
+          "plan_hash": "cc99bad34328645c5c196d7a4cc450ec97b6c91c12090e30006141c2a20c0127",
+          "rank": 2,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 16384
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "prefill",
+          "plan_hash": "d1d0e73aa8a7c4c2a99342d31177261c035590dded934015d927f163e1cf11ac",
+          "rank": 2,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "prefill",
+          "plan_hash": "66510fc3ae2a8f315739036e512d4fcbeb363085b51867fe8fefb5fea749b6fd",
+          "rank": 2,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "prefill",
+          "plan_hash": "19bba7e64d65a0350aaad74204e1f82b3ce9089218971affdd2308db91cdf6eb",
+          "rank": 2,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "prefill",
+          "plan_hash": "52c2345ec5e8ec7ca00d6824ebcd0bd1d47f1f92bded4ee9c1f7150b1b7ff478",
+          "rank": 2,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "prefill",
+          "plan_hash": "ace8d11d367247428329df76bb780017a6177f3573df21ce1f3d39f26b6d4830",
+          "rank": 3,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "prefill",
+          "plan_hash": "eb7a19c5f213ff487878be3cf5b0ac24ddefd1920aadec6ca57fb3a3ff87a251",
+          "rank": 3,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "prefill",
+          "plan_hash": "b2684fe9de54bc54655383a5271d04f053ee1fbd1073b6156eaadd1855bc47e4",
+          "rank": 3,
+          "selected_template": "fused_output_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 3,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "prefill",
+          "plan_hash": "08d370093a9424531b45dd4dc9566b0bbfae8b9b1c9ec784f487e27719268a4e",
+          "rank": 3,
+          "selected_template": "logits_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "prefill",
+          "plan_hash": "8286a844cf791740dedf74972b9b0166331bf374e51873c24e57357465ff471d",
+          "rank": 3,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "prefill",
+          "plan_hash": "03efcbbb560f97293f0f885044478486dccf22d7052032e4d60b994d0fab5cc7",
+          "rank": 3,
+          "selected_template": "mlp_down_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "prefill",
+          "plan_hash": "c5fd55f1b37a6d61574b7dded698309b55c7a2d91fff132da599fc04bd316876",
+          "rank": 3,
+          "selected_template": "mlp_up_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "prefill",
+          "plan_hash": "53349e485acccfe65497f4d1448bed435d25320883becd986ac1ba2857e1a407",
+          "rank": 3,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "prefill",
+          "plan_hash": "4a07db6c45a72f96fddf25cfdc21fc83b0825c3c97d8c5c3497ebc4d6beafdcb",
+          "rank": 3,
+          "selected_template": "o_proj_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "prefill",
+          "plan_hash": "8f4bcc96449691f72b47dc141963ed27119e3f22fbb88fe26344e5666d005c7a",
+          "rank": 3,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 16384
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "prefill",
+          "plan_hash": "8c29296b48f860973989a655d74d3e0fe07fa87368ef00140df74f3fc5c4ab8a",
+          "rank": 3,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "prefill",
+          "plan_hash": "edc389fe2e2379181f5801c7986dffbcb4682f9d8010c65307108bcfb267b14f",
+          "rank": 3,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "prefill",
+          "plan_hash": "b1640d2af619972bc04977d15c622df98541b411e94d95cb891bcb2b19827e3a",
+          "rank": 3,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "prefill",
+          "plan_hash": "6ea08e19d5b2351744c5728690e4945270d1775eb3724aefbfa49c30bf0800af",
+          "rank": 3,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        }
+      ],
+      "fixture": "official-tiny-e2e",
+      "hardware_config_path": "/workspace/template/work/lru-online-workspace-20261014/e2e/generated/generated/runtime_config/workspace_e2e_coarse_8rank__workspace-e2e-coarse__edge_remote_memory_pool/resolved_die_model.json",
+      "hardware_config_sha256": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+      "manifest_path": "/workspace/template/work/lru-online-workspace-20261014/e2e/generated/llama2_7b_wsc_llm_inference_54npus_plan_75386cf8/manifest.json",
+      "manifest_sha256": "762c85a6c301d7d37f15bfbabb09590c835dbb1c9a95cc875152812afc9788af",
+      "max_same_session_span": 1,
+      "phase_rank_shapes": [
+        {
+          "hardware_rank": 4,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 256,
+            "head_dim": 32,
+            "hidden": 128,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "decode",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1,
+              "request_id": "batch_train_i1_1#s0"
+            }
+          ],
+          "tensor_parallel_rank": 0,
+          "tp_slice": {
+            "ffn_local": 64,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 0,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 5,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 256,
+            "head_dim": 32,
+            "hidden": 128,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "decode",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1,
+              "request_id": "batch_train_i1_1#s0"
+            }
+          ],
+          "tensor_parallel_rank": 1,
+          "tp_slice": {
+            "ffn_local": 64,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 1,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 6,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 256,
+            "head_dim": 32,
+            "hidden": 128,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "decode",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1,
+              "request_id": "batch_train_i1_1#s0"
+            }
+          ],
+          "tensor_parallel_rank": 2,
+          "tp_slice": {
+            "ffn_local": 64,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 2,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 7,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 256,
+            "head_dim": 32,
+            "hidden": 128,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "decode",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1,
+              "request_id": "batch_train_i1_1#s0"
+            }
+          ],
+          "tensor_parallel_rank": 3,
+          "tp_slice": {
+            "ffn_local": 64,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 3,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 0,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 256,
+            "head_dim": 32,
+            "hidden": 128,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "prefill",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64,
+              "request_id": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill#s0"
+            }
+          ],
+          "tensor_parallel_rank": 0,
+          "tp_slice": {
+            "ffn_local": 64,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 0,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 1,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 256,
+            "head_dim": 32,
+            "hidden": 128,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "prefill",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64,
+              "request_id": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill#s0"
+            }
+          ],
+          "tensor_parallel_rank": 1,
+          "tp_slice": {
+            "ffn_local": 64,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 1,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 2,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 256,
+            "head_dim": 32,
+            "hidden": 128,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "prefill",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64,
+              "request_id": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill#s0"
+            }
+          ],
+          "tensor_parallel_rank": 2,
+          "tp_slice": {
+            "ffn_local": 64,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 2,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 3,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 256,
+            "head_dim": 32,
+            "hidden": 128,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "prefill",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64,
+              "request_id": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill#s0"
+            }
+          ],
+          "tensor_parallel_rank": 3,
+          "tp_slice": {
+            "ffn_local": 64,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 3,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        }
+      ],
+      "request": {
+        "decode_length": 1,
+        "final_context_tokens": 65,
+        "history_tokens_before": 0,
+        "prefill_context_tokens": 64,
+        "prefill_length": 64,
+        "prefix_len": 0,
+        "queue_index": 0,
+        "request_id": "session_workspace_e2e_s0_request_0",
+        "request_type": "human",
+        "session_id": "session_workspace_e2e_s0",
+        "turn_index": 0
+      },
+      "selected_request_count": 1
+    },
+    {
+      "actual_generated_node_spec_count": 80,
+      "actual_generated_op_kinds": [
+        "attention_region",
+        "ffn_region",
+        "logits",
+        "norm",
+        "o_proj",
+        "qkv_rope",
+        "residual"
+      ],
+      "actual_generated_shape_max_workspace_bytes": {
+        "decode/rank4": 1024,
+        "decode/rank5": 1024,
+        "decode/rank6": 1024,
+        "decode/rank7": 1024,
+        "prefill/rank0": 65536,
+        "prefill/rank1": 65536,
+        "prefill/rank2": 65536,
+        "prefill/rank3": 65536
+      },
+      "actual_normalized_shape_variant_counts": {
+        "decode/rank4": 1,
+        "decode/rank5": 1,
+        "decode/rank6": 1,
+        "decode/rank7": 1,
+        "prefill/rank0": 1,
+        "prefill/rank1": 1,
+        "prefill/rank2": 1,
+        "prefill/rank3": 1
+      },
+      "actual_phase_rank_seed_count": 8,
+      "actual_response_paths": [
+        "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/run/wire_audit/response_0.json",
+        "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/run/wire_audit/response_1.json",
+        "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/run/wire_audit/response_2.json"
+      ],
+      "actual_response_sha256": {
+        "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/run/wire_audit/response_0.json": "c1aecf8feddccb090c53a45b5b1b2e0cf3fb35150802399983b5b0c8336ffe37",
+        "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/run/wire_audit/response_1.json": "e0a8bc072f75f994ab3fef66c78291e976f74d4ed3ddb3b48a89e96416d0ccec",
+        "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/run/wire_audit/response_2.json": "d7d19194978b72b872ee568252fa643f61adc2044a6f24e6e4fce5a4dee031c4"
+      },
+      "adapter_candidate_op_kinds": [
+        "attention_region",
+        "av",
+        "ffn_region",
+        "local_region",
+        "logits",
+        "mlp_activation",
+        "mlp_down",
+        "mlp_up",
+        "norm",
+        "o_proj",
+        "qk",
+        "qkv_rope",
+        "residual",
+        "scale_mask",
+        "softmax"
+      ],
+      "all_opkind_selected_plan_by_kind_workspace_bytes": {
+        "decode/rank4": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 1024,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 260,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "decode/rank5": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 1024,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 260,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "decode/rank6": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 1024,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 260,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "decode/rank7": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 1024,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 260,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "prefill/rank0": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 65536,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 16384,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "prefill/rank1": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 65536,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 16384,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "prefill/rank2": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 65536,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 16384,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        },
+        "prefill/rank3": {
+          "attention_region": 0,
+          "av": 0,
+          "ffn_region": 65536,
+          "logits": 0,
+          "mlp_activation": 0,
+          "mlp_down": 0,
+          "mlp_up": 0,
+          "norm": 0,
+          "o_proj": 0,
+          "qk": 16384,
+          "qkv_rope": 0,
+          "residual": 0,
+          "scale_mask": 0,
+          "softmax": 0
+        }
+      },
+      "all_opkind_selected_plan_shape_max_workspace_bytes": {
+        "decode/rank4": 1024,
+        "decode/rank5": 1024,
+        "decode/rank6": 1024,
+        "decode/rank7": 1024,
+        "prefill/rank0": 65536,
+        "prefill/rank1": 65536,
+        "prefill/rank2": 65536,
+        "prefill/rank3": 65536
+      },
+      "candidate_compile_count": 120,
+      "candidate_error_count": 8,
+      "candidate_errors": [
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 4,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 5,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 6,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 7,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 0,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 1,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 2,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 3,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        }
+      ],
+      "candidate_spec_sha256": "07e843e3dbfe14ac03bffb4cc4f7cee83b51d307a1146a1aeb4af3cd4fa2613e",
+      "candidate_success_count": 112,
+      "coarse_die_cabi_path": "/workspace/template/work/lru-cpp-workspace-20261014/build/aggregate/lib/libcoarse_die_cabi.so",
+      "coarse_die_cabi_sha256": "d2f06c80e6112f1215f6b124f4cb333041d2c592b84c90a81127e0faeb5ee17b",
+      "compiled_candidates": [
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "decode",
+          "plan_hash": "a4e43f37dac64d64d5376f2a37b648bd03b7bd6e08ac36c6b5ed36f5bb21f6f7",
+          "rank": 4,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "decode",
+          "plan_hash": "d9eaf9869cd101fc173d042fb6688e0270754d9ec3e2aac258648bcce37e5c62",
+          "rank": 4,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "decode",
+          "plan_hash": "ce84ab6dc115fb1000fa963e31e36806f85cd7acc0c6294aa512fb23c386479d",
+          "rank": 4,
+          "selected_template": "materialized_swiglu_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 1024
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 4,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "decode",
+          "plan_hash": "9bb0df2600eba7c475b241cc75b483e22035e8864ef7e6d9f0c1d01805904a52",
+          "rank": 4,
+          "selected_template": "logits_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "decode",
+          "plan_hash": "f4e49d38ce929ca8b6d0cbe121c48d38a86ec7801c24bbb7272ef79f328c9d80",
+          "rank": 4,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "decode",
+          "plan_hash": "ab1b884780e5374b89b8550050886ce85c00dc6159407386cd63218532f929d7",
+          "rank": 4,
+          "selected_template": "mlp_down_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "decode",
+          "plan_hash": "7b3954607e01680c9d523a70706d7c04d72bc18bbe1208e8da865b2d0d494dfe",
+          "rank": 4,
+          "selected_template": "mlp_up_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "decode",
+          "plan_hash": "ed01e430ed41ffc4db99088bffe432c6a9e150b588900b3356fa5d1d80759eb4",
+          "rank": 4,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "decode",
+          "plan_hash": "92d54b76033d46006a974ed9476692e99f587dbc08934c412dfa140647d3650d",
+          "rank": 4,
+          "selected_template": "o_proj_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "decode",
+          "plan_hash": "c1565976839d01aae04ba97470708fa3bbb70a02e1d80da2a1776aa104cfa0c2",
+          "rank": 4,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 260
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "decode",
+          "plan_hash": "75289204cfc34c41bf75ade7baea755162f7a47302c552ebb4efafa6aefd5af3",
+          "rank": 4,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "decode",
+          "plan_hash": "beabfba05bb3bd1c85b7130313811b50c264b8cff76bb65af7fd679150bcccfb",
+          "rank": 4,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "decode",
+          "plan_hash": "a41ddd6ec26b053aa90c705ed09c5945f25486b27e7cbd11c0b5a828924d856a",
+          "rank": 4,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "decode",
+          "plan_hash": "88e2e0bd058a3619126e484bf2b9dc258b477208b5a48697ccfeb2d9a33311b4",
+          "rank": 4,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "decode",
+          "plan_hash": "0fa21b9cc8099a5b27556611a8f6db15b24a7aa6d1d102c5d8ef93669d7b6f66",
+          "rank": 5,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "decode",
+          "plan_hash": "bef948e50a3bb5309be87fea7391d7b943a96cef9508bb3e022569ab941be5b3",
+          "rank": 5,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "decode",
+          "plan_hash": "0294fbec99d497423ab539b0c5585ab8d31d0cf57c1b096efc4bc98d87f61d82",
+          "rank": 5,
+          "selected_template": "materialized_swiglu_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 1024
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 5,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "decode",
+          "plan_hash": "337db5c22c526e3b85017f5fb8f46348a4fa76f21a87c8652492eb0dd82fc980",
+          "rank": 5,
+          "selected_template": "logits_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "decode",
+          "plan_hash": "be1abb15fcb8df775998928e386abd5a9e47e7c862ec183dfdb93255ad2eff6d",
+          "rank": 5,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "decode",
+          "plan_hash": "147826f412391ff62a9d793b2e731aa1d707410ad3d9bf4f6c947bbdb59c8b55",
+          "rank": 5,
+          "selected_template": "mlp_down_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "decode",
+          "plan_hash": "e4cfee2163c4e889792c7175b722e3bc3480242191a2066f8a5d45c1dd7100c8",
+          "rank": 5,
+          "selected_template": "mlp_up_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "decode",
+          "plan_hash": "caf7bb0f264ec0847bb59a6c04fc32d745dc8ac96c179819da633680fa9263b4",
+          "rank": 5,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "decode",
+          "plan_hash": "d17b7951c387974f51d347f27a590e18863cb5d9b70445ec65970438a35fb976",
+          "rank": 5,
+          "selected_template": "o_proj_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "decode",
+          "plan_hash": "a86b276912f6a3c9155b3b50082acead0f82c57225b240bf00374085273ccbe7",
+          "rank": 5,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 260
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "decode",
+          "plan_hash": "14a298b2339a96bc96a985a977f2cbbbe608819bb7451f590d0917ccadfd2dfe",
+          "rank": 5,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "decode",
+          "plan_hash": "c6628a328ecbff37032c9daf567b30f2cd08f01f761450a4742cdfcb5a2c0bc4",
+          "rank": 5,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "decode",
+          "plan_hash": "c0368e9175fd2f9499ea92f57328488f994c6e918abc4448f007196eb23e8625",
+          "rank": 5,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "decode",
+          "plan_hash": "4cd4de4281d9b08b88952e9fe688b8531b2d364ab5f13c47a8d02820fe2bb8ff",
+          "rank": 5,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "decode",
+          "plan_hash": "0e2534305e010befbf83d0eaaa266fe15bbcae1f1b2bbf9b48fef78a764f4a1d",
+          "rank": 6,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "decode",
+          "plan_hash": "ed83bb6113a626f0c941ac0d5be0c3f72d1632a37c44ab1bd776597a19277124",
+          "rank": 6,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "decode",
+          "plan_hash": "6868188661c49ad89b5acaff14a2fd81573bcad28a4eb261fe09956966b091c6",
+          "rank": 6,
+          "selected_template": "materialized_swiglu_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 1024
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 6,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "decode",
+          "plan_hash": "4e7bce1934600a198809b100e5355808fe031c6f5796e8cdaade311523526cc9",
+          "rank": 6,
+          "selected_template": "logits_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "decode",
+          "plan_hash": "9e1e10929421d95cff17b75f33247e38eb14609e0ee5e3125c92ae87d011a716",
+          "rank": 6,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "decode",
+          "plan_hash": "701afc5ff886efd6f39ee7f84679167ce7f72af4abfa23947db4beb1c53074b1",
+          "rank": 6,
+          "selected_template": "mlp_down_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "decode",
+          "plan_hash": "9fe29b11dabbd0d5c278d7c16e93798c2de6d7974f59237a18a0df045f50e6b4",
+          "rank": 6,
+          "selected_template": "mlp_up_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "decode",
+          "plan_hash": "9283d8f3aba346e7c5d0a8f93425c717a73f03c0c3e215cecc325a662cfa996e",
+          "rank": 6,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "decode",
+          "plan_hash": "91688e1fbe3299e0140231f8294809ba0c943f304ccf9f97355441083aef99dc",
+          "rank": 6,
+          "selected_template": "o_proj_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "decode",
+          "plan_hash": "58df21a09e8ccf2ed6b3f03dd83c0875db3b72c3605c26d6dcdf82ee54d74c8d",
+          "rank": 6,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 260
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "decode",
+          "plan_hash": "0190f228d6c567299ffe587a8e592e027391a96a4ee2fd0ef64052093a92e8db",
+          "rank": 6,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "decode",
+          "plan_hash": "7d4636bd9da66b4acd8f8574e9e00a473d3e3bcefaeb71d11a153ed7367cf80d",
+          "rank": 6,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "decode",
+          "plan_hash": "b700d9ce8c2739394fc3fa0d9c402b99bd2de725f00240d18a0009747ea8a8f4",
+          "rank": 6,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "decode",
+          "plan_hash": "9fea11a473eb487d8e8d52153427a39201f872d60b422de84ba75999ea4f3524",
+          "rank": 6,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "decode",
+          "plan_hash": "39d33b903e173f869e3dab315d3d29c2d605c4a64fc31815946ace0b4b51c216",
+          "rank": 7,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "decode",
+          "plan_hash": "bbd30964197ce0a901f19f3712bbf7e6a4db10028419b5d341ce2fcf7ade9ca9",
+          "rank": 7,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "decode",
+          "plan_hash": "164b5e3bdae5a785fe133f6ce5c05798d7591755d3dbc4cbd6a1390e307a9496",
+          "rank": 7,
+          "selected_template": "materialized_swiglu_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 1024
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "decode",
+          "rank": 7,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "decode",
+          "plan_hash": "a7eb6b4c4518375358bc770a293ad075458ff4b9c68ea2bfe50a427cc89679f3",
+          "rank": 7,
+          "selected_template": "logits_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "decode",
+          "plan_hash": "1d7ae198218960683c6b7232ae8b5ea739a3c01287a22ff7cc37b15558bc419e",
+          "rank": 7,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "decode",
+          "plan_hash": "839f0124671aef92ca9b0d57fcee01ffa58ed9e75189c9d738d4a8884aa03774",
+          "rank": 7,
+          "selected_template": "mlp_down_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "decode",
+          "plan_hash": "dda743fa2b403b3f4a5eecd55a8080bb209bbda709bb47535993338948b7ab2a",
+          "rank": 7,
+          "selected_template": "mlp_up_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "decode",
+          "plan_hash": "48276e1521afab1850191de64326c7a43036c8966b7d1213a2350e7e1d3f3325",
+          "rank": 7,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "decode",
+          "plan_hash": "1f920e009912c36f4577e7558a2826de2a8b44d46270291a1c52aa8222c56d55",
+          "rank": 7,
+          "selected_template": "o_proj_weight_resident_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "decode",
+          "plan_hash": "dcf2c2b12b0195188d15abf2d2122b001ddafa9b5f6c8eacd790fc91554fa299",
+          "rank": 7,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 260
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "decode",
+          "plan_hash": "f070a6680fb0aba144388fb2b1b0fad138da5a8ec9a04d31c27238716404a29c",
+          "rank": 7,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "decode",
+          "plan_hash": "f68a606ffdaf765f59a482157cab8278d4180909f51910b7a480e7cfcf6a2602",
+          "rank": 7,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "decode",
+          "plan_hash": "f32b63ed3d6221362976fd971a6ed712482fd47fbe9f1bbbfe4d78e3c67c966e",
+          "rank": 7,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "decode",
+          "plan_hash": "f68e826980f2c98fe8d1066e96907f3617ebd669301da254942235ad3a8e913d",
+          "rank": 7,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "prefill",
+          "plan_hash": "90833782f01c34c5b24154af8f2b0739841bf870b95866a40f1acae031122b59",
+          "rank": 0,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "prefill",
+          "plan_hash": "9f3a97431fe7db4a89474dfd03ae0617591cf38f739fbcbf6f70dcf7b0ff15ad",
+          "rank": 0,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "prefill",
+          "plan_hash": "0084fff81aab561972baeba483ed85c62771f727bae51e31483b47601a6cc4d7",
+          "rank": 0,
+          "selected_template": "materialized_swiglu_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 65536
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 0,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "prefill",
+          "plan_hash": "86bf382c202a6e2b5d38a95db0e9c85a77f68c99b4f6d603cec81d0218963a85",
+          "rank": 0,
+          "selected_template": "logits_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "prefill",
+          "plan_hash": "9f2812b4fd8c835c6e4f6ea5dee2c8d1033c911a98a2e10da9d49103dc8e8c27",
+          "rank": 0,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "prefill",
+          "plan_hash": "00dfe84296d05c7487b6a9d05c931277ca302e9edb842becc33a4b786a44be51",
+          "rank": 0,
+          "selected_template": "mlp_down_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "prefill",
+          "plan_hash": "7dd41e9e6473d4f58067062e6a3e12c6274001ebd5528d4589a4df77dae389ef",
+          "rank": 0,
+          "selected_template": "mlp_up_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "prefill",
+          "plan_hash": "b5ebc161db83b277c5cf618ac8083bc38122cdd12fbbe12da18fa331405b9a17",
+          "rank": 0,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "prefill",
+          "plan_hash": "c5f856069789bf020daa6c626d9b6afb4101e331214c99182692d3dece4ddad6",
+          "rank": 0,
+          "selected_template": "o_proj_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "prefill",
+          "plan_hash": "2e5ac5b3e921178935e41f9a1784726eacb1848c38f24fbb1b65a6ea125aa606",
+          "rank": 0,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 16384
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "prefill",
+          "plan_hash": "95e3e3fe7c0b32067b54035ffaf510ede56819e59a9bc1deba1d53f9d5aca8fd",
+          "rank": 0,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "prefill",
+          "plan_hash": "f1da5baf284b87c9ae5eca3f98669e6b7d718b6318d965978400b7dba6c64a1d",
+          "rank": 0,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "prefill",
+          "plan_hash": "395efb8fb669bb369e7593c41d5c7399f0585625ab9570f5a0fc0f2959f369e7",
+          "rank": 0,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "prefill",
+          "plan_hash": "97e90a62c215ddcc6428655c037b0a43777b78c44f348a7776deeb58e2bc7829",
+          "rank": 0,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "prefill",
+          "plan_hash": "bd8e19038112a5956d836619d2e3fe1df82a9eacad8417bcb09f6e40026ed7a3",
+          "rank": 1,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "prefill",
+          "plan_hash": "e77c44eca476a9c7803146cbaf5aa3aceeac0070a97ad6aad852f1c2a3830484",
+          "rank": 1,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "prefill",
+          "plan_hash": "8f8531fd4f76efb34c90db2328d548f09ebdb914f872936b0574fb1e18d5c1d8",
+          "rank": 1,
+          "selected_template": "materialized_swiglu_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 65536
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 1,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "prefill",
+          "plan_hash": "fc65b23b36e3aefadb2c1af43156b679604ebc55d585f6a860cac22642c415d7",
+          "rank": 1,
+          "selected_template": "logits_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "prefill",
+          "plan_hash": "4fdc0270efa26a6dcd1bd6ff4ae98ab12084bd94c524bb27b1afc3a65c6ada83",
+          "rank": 1,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "prefill",
+          "plan_hash": "e3074bebc395c2b3365d2ec7f3de60c72075db2d5df7e7b0e4667ac76f733516",
+          "rank": 1,
+          "selected_template": "mlp_down_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "prefill",
+          "plan_hash": "8375effaca5cf1d4f4f4801bc8c387f8e9f33bcae589fb7905f4d3c0ccdd65ad",
+          "rank": 1,
+          "selected_template": "mlp_up_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "prefill",
+          "plan_hash": "62b7ff61760dcdf1d4afe544f01414d6f4ad21586b71771cc98b7edb57fe3479",
+          "rank": 1,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "prefill",
+          "plan_hash": "c670922608ee690b380ecd88e2fe92802f239dc3159357cd2e680206a5d2c10d",
+          "rank": 1,
+          "selected_template": "o_proj_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "prefill",
+          "plan_hash": "b2375bdbbe8d62e1f3fd8a6346a453ea42ca0dcaead063ad9e28a08c24c45abc",
+          "rank": 1,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 16384
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "prefill",
+          "plan_hash": "34c4df0342b6bc87e6ceea743f7b1c54a1239dbcc9e89da36ade91f11f295ce1",
+          "rank": 1,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "prefill",
+          "plan_hash": "5ec07ac54025f25ee4e7373af80f038ba396b6dd2b5c6cab3854f41f5f3649d4",
+          "rank": 1,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "prefill",
+          "plan_hash": "980e9dddbfd1fe64939357f2ace3f448a46b2b4478f67c426828e919d3d651a0",
+          "rank": 1,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "prefill",
+          "plan_hash": "36fc43cdd8dd2cf236df28a5f0a730ff5dd1ad09e5fdb0f8b378259020431042",
+          "rank": 1,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "prefill",
+          "plan_hash": "e7a4a8986032dcc072311f880443916ed0a925d8773d0ed1ef4c81644fad0f74",
+          "rank": 2,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "prefill",
+          "plan_hash": "c20bd97f181593497e4f5178e71961843a5f8c319ea58abcf06069cbcca79b9c",
+          "rank": 2,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "prefill",
+          "plan_hash": "409632b438222a9eef676cf67d6e40a171a62c19af2c0db8acc80527465a163d",
+          "rank": 2,
+          "selected_template": "materialized_swiglu_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 65536
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 2,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "prefill",
+          "plan_hash": "4418927f9a080913dce213f52a108448982a056abb628d069285eebab2b38b8b",
+          "rank": 2,
+          "selected_template": "logits_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "prefill",
+          "plan_hash": "fa13968056792203396328d4f46bb3abee0b7ba6431c31d78e7a779411b72fa3",
+          "rank": 2,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "prefill",
+          "plan_hash": "8f480149c80d2ba8b2c2d2c5afd0e0ac80b62414e76860656c47be28990200eb",
+          "rank": 2,
+          "selected_template": "mlp_down_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "prefill",
+          "plan_hash": "c9bd899421e516f0842c56f80d05898f4bcd11fe361771c44d72a0fd1f915590",
+          "rank": 2,
+          "selected_template": "mlp_up_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "prefill",
+          "plan_hash": "dda051843961165cdb989460989b3a9432b886ef78a5361f61103b896d3c7eed",
+          "rank": 2,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "prefill",
+          "plan_hash": "b0fd536d67c663de19d3a50c4c0d26a567d7d7fec052cc5b992f1b4d9e82fc48",
+          "rank": 2,
+          "selected_template": "o_proj_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "prefill",
+          "plan_hash": "235e1d48551b85948e71ba4de04a5d4191ff4836a0a7badf1b9722714fe00ce3",
+          "rank": 2,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 16384
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "prefill",
+          "plan_hash": "5ae20a4c569d8c67ef13e7e2f7017e518cda847e843eb2ec1ca4f7e674fa6dd9",
+          "rank": 2,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "prefill",
+          "plan_hash": "9a19299cb02d244e06e47dd7ee2045d589307d01fa4c7dd4fd68b3430dabe22a",
+          "rank": 2,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "prefill",
+          "plan_hash": "b7ecd24ac8a3b1ecd023772edb9c417529c49500f3be9e4ff3e6a962f816c98c",
+          "rank": 2,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "prefill",
+          "plan_hash": "96ca3a00709f5e18cf70ccf352396041f48df851075fb219d6ffb085d30b62a1",
+          "rank": 2,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "attention_region",
+          "phase": "prefill",
+          "plan_hash": "d3b14cd06829c6f4516699d6eb695319313e78d169d4051353d0e1d3af8277e4",
+          "rank": 3,
+          "selected_template": "fused_q_head_shard_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "av",
+          "phase": "prefill",
+          "plan_hash": "376e7b286afebdac1952c5059679eb4178c1c6f2ad95f8bcd7a88753ac598d40",
+          "rank": 3,
+          "selected_template": "av_attention_av_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "ffn_region",
+          "phase": "prefill",
+          "plan_hash": "cec42da33de1e09d076d37a296c7d694703d179dcc5f4b0c1c39eb5bb55246b1",
+          "rank": 3,
+          "selected_template": "materialized_swiglu_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 65536
+        },
+        {
+          "compile_error": {
+            "field_path": "die_op_spec.op_kind",
+            "reason": "die_op_spec.op_kind: unsupported local_region: DieOpSpec v1 carries no typed mathematical graph",
+            "status_code": 13
+          },
+          "layer_count": 1,
+          "op_kind": "local_region",
+          "phase": "prefill",
+          "rank": 3,
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "logits",
+          "phase": "prefill",
+          "plan_hash": "bb336b1fd746f909af6bc6c416c9151333b29886c5b9f44ecbdd0ac755214afe",
+          "rank": 3,
+          "selected_template": "logits_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_activation",
+          "phase": "prefill",
+          "plan_hash": "d88b60e360b104087d29970824ec4d916a3f39414a8cd8eba33dd0ff22812339",
+          "rank": 3,
+          "selected_template": "mlp_activation_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_down",
+          "phase": "prefill",
+          "plan_hash": "87873543f55f87f7a4523294bc813e8cc34d872c7402103a4a87b0d445acf63b",
+          "rank": 3,
+          "selected_template": "mlp_down_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "mlp_up",
+          "phase": "prefill",
+          "plan_hash": "fd5b2cdc7d99d37d08c1362b77c15fd6274995682a68dda13f055b06c0457448",
+          "rank": 3,
+          "selected_template": "mlp_up_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "norm",
+          "phase": "prefill",
+          "plan_hash": "20ba498a77c08beec5a0722ce62d6521baee294c5fa44bbecf6f2a9b0e966b65",
+          "rank": 3,
+          "selected_template": "norm_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "o_proj",
+          "phase": "prefill",
+          "plan_hash": "adb25dc87f60cf5cc8c6b3fcffa8325ac1a04cac9a65fbb5b5a711aebab3da80",
+          "rank": 3,
+          "selected_template": "o_proj_output_stationary_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qk",
+          "phase": "prefill",
+          "plan_hash": "3445c415dbe77b327e14353e40bd9205abc1119462cd36a6a6053c551206a486",
+          "rank": 3,
+          "selected_template": "qk_attention_qk_materialized_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 16384
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "qkv_rope",
+          "phase": "prefill",
+          "plan_hash": "4735b368d3ed6834794ea65c251045f72367a13c5eab82444eb935611ea6a28c",
+          "rank": 3,
+          "selected_template": "qkv_projection_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "residual",
+          "phase": "prefill",
+          "plan_hash": "6993a7e8b6f37efb0918398665ade34348ba6a2e8163feb54365ff72ee6e8d24",
+          "rank": 3,
+          "selected_template": "residual_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "scale_mask",
+          "phase": "prefill",
+          "plan_hash": "59a36c15ab374462526f4dc806088cea04e71c0823022b0b06cea3dad9034811",
+          "rank": 3,
+          "selected_template": "scale_mask_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        },
+        {
+          "layer_count": 1,
+          "loop_kind": null,
+          "op_kind": "softmax",
+          "phase": "prefill",
+          "plan_hash": "4e49e9723ef1052396ac2a7f0acb284e490bcda3fe462212291d1d52e5a10a0a",
+          "rank": 3,
+          "selected_template": "softmax_vec_v2",
+          "span_shape": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64
+            }
+          ],
+          "weight_passes": 1,
+          "workspace_bytes": 0
+        }
+      ],
+      "fixture": "larger-workspace-probe",
+      "hardware_config_path": "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/generated/generated/runtime_config/workspace_e2e_coarse_8rank__workspace-e2e-coarse__edge_remote_memory_pool/resolved_die_model.json",
+      "hardware_config_sha256": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+      "manifest_path": "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/generated/llama2_7b_wsc_llm_inference_54npus_plan_3dbcb61d/manifest.json",
+      "manifest_sha256": "1e5bf41485ef947b397d2c2a325472f33aee7ebfcf2cf71639930dafb9070549",
+      "max_same_session_span": 1,
+      "phase_rank_shapes": [
+        {
+          "hardware_rank": 4,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 1024,
+            "head_dim": 128,
+            "hidden": 512,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "decode",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1,
+              "request_id": "batch_train_i1_1#s0"
+            }
+          ],
+          "tensor_parallel_rank": 0,
+          "tp_slice": {
+            "ffn_local": 256,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 0,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 5,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 1024,
+            "head_dim": 128,
+            "hidden": 512,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "decode",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1,
+              "request_id": "batch_train_i1_1#s0"
+            }
+          ],
+          "tensor_parallel_rank": 1,
+          "tp_slice": {
+            "ffn_local": 256,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 1,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 6,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 1024,
+            "head_dim": 128,
+            "hidden": 512,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "decode",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1,
+              "request_id": "batch_train_i1_1#s0"
+            }
+          ],
+          "tensor_parallel_rank": 2,
+          "tp_slice": {
+            "ffn_local": 256,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 2,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 7,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 1024,
+            "head_dim": 128,
+            "hidden": 512,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "decode",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 65,
+              "q_start_pos": 64,
+              "q_tokens": 1,
+              "request_id": "batch_train_i1_1#s0"
+            }
+          ],
+          "tensor_parallel_rank": 3,
+          "tp_slice": {
+            "ffn_local": 256,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 3,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 0,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 1024,
+            "head_dim": 128,
+            "hidden": 512,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "prefill",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64,
+              "request_id": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill#s0"
+            }
+          ],
+          "tensor_parallel_rank": 0,
+          "tp_slice": {
+            "ffn_local": 256,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 0,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 1,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 1024,
+            "head_dim": 128,
+            "hidden": 512,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "prefill",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64,
+              "request_id": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill#s0"
+            }
+          ],
+          "tensor_parallel_rank": 1,
+          "tp_slice": {
+            "ffn_local": 256,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 1,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 2,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 1024,
+            "head_dim": 128,
+            "hidden": 512,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "prefill",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64,
+              "request_id": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill#s0"
+            }
+          ],
+          "tensor_parallel_rank": 2,
+          "tp_slice": {
+            "ffn_local": 256,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 2,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        },
+        {
+          "hardware_rank": 3,
+          "layer_count": 1,
+          "model_dims": {
+            "ffn": 1024,
+            "head_dim": 128,
+            "hidden": 512,
+            "mlp_variant": "swiglu",
+            "norm_type": "rmsnorm",
+            "num_kv_heads": 4,
+            "num_q_heads": 4,
+            "position_encoding": "none",
+            "vocab": 512
+          },
+          "phase": "prefill",
+          "span_records": [
+            {
+              "kv_start_pos": 0,
+              "kv_tokens": 64,
+              "q_start_pos": 0,
+              "q_tokens": 64,
+              "request_id": "q0000_session_workspace_e2e_s0_turn0_session_workspace_e2e_s0_request_0_current_prefill#s0"
+            }
+          ],
+          "tensor_parallel_rank": 3,
+          "tp_slice": {
+            "ffn_local": 256,
+            "kv_heads_local": 1,
+            "q_heads_local": 1,
+            "tensor_parallel": 4,
+            "tensor_parallel_rank": 3,
+            "vocab_local": 128
+          },
+          "weight_passes": 1
+        }
+      ],
+      "request": {
+        "decode_length": 1,
+        "final_context_tokens": 65,
+        "history_tokens_before": 0,
+        "prefill_context_tokens": 64,
+        "prefill_length": 64,
+        "prefix_len": 0,
+        "queue_index": 0,
+        "request_id": "session_workspace_e2e_s0_request_0",
+        "request_type": "human",
+        "session_id": "session_workspace_e2e_s0",
+        "turn_index": 0
+      },
+      "selected_request_count": 1
+    }
+  ],
+  "proof_source_sha256": {
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Plan.hh": "539b15ae288327f8998ce2981c1fdea8989a7634eb4199cc74a23480701d7526",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/src/Capi.cc": "2b3cb646594ac3091749122dd4aa909b62abe8eb96be84c53670432ffd90e5ec",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/src/Mapping.cc": "b78bcf1874d8c16f8be6cdc6d502f63912592b307403728b855f457c1054d070",
+    "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py": "316ae91fefa927fc8336677aeaa9dc39b656fbae56102fa34f628f5aed6f0cf9",
+    "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py": "de65b0d0abcae44b42f14670f95f7a8ca87d667d72c1a09919295a12bad64a56",
+    "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py": "1b301106833303138c8d94100e747309f8a3153cdeca808c96d7aaed6bdfaca4",
+    "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py": "6d8e689e618c74dd64ddcc539dd55aad50d3feee2f4892a8702ed9629a2e0398",
+    "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/wsc_llm_online_scheduler.py": "919148d6bd91f012611759d8dcf14835c95c8d8aa959d78c2d91ee5b96a81ff2"
+  },
+  "purpose": "finite manifest-bound exact C++ compiler inventory; no sampled or Python-estimated workspace formula"
+}

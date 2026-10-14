@@ -1,0 +1,12 @@
+[  2%] Built target coarse_die
+[ 27%] Built target yaml-cpp
+[ 27%] Built target fmt
+[ 33%] Built target spdlog
+[ 38%] Built target die_model
+[ 50%] Built target Analytical_Congestion_Aware
+[ 94%] Built target AstraSim
+[100%] Built target AstraSim_Analytical_Congestion_Aware_Online
+[ 50%] Built target coarse_die
+[100%] Built target coarse_die_cabi
+[100%] Built target die_model
+[100%] Built target die_model_cabi

@@ -1,0 +1,81 @@
+{
+  "checks": {
+    "manager_state_match": true,
+    "physical_equals_weight": true,
+    "remote_account_zero": true,
+    "residual_reserved_zero": true,
+    "residual_resident_zero": true
+  },
+  "journal": "kv_delta_journal.jsonl",
+  "line_count": 40,
+  "max_transaction_id": 8,
+  "ranks": {
+    "0": {
+      "capacity_bytes": 144000000000,
+      "physical": 147648,
+      "remote": 0,
+      "reserved": 0,
+      "resident": 0,
+      "weight": 147648
+    },
+    "1": {
+      "capacity_bytes": 144000000000,
+      "physical": 147648,
+      "remote": 0,
+      "reserved": 0,
+      "resident": 0,
+      "weight": 147648
+    },
+    "2": {
+      "capacity_bytes": 144000000000,
+      "physical": 147648,
+      "remote": 0,
+      "reserved": 0,
+      "resident": 0,
+      "weight": 147648
+    },
+    "3": {
+      "capacity_bytes": 144000000000,
+      "physical": 147648,
+      "remote": 0,
+      "reserved": 0,
+      "resident": 0,
+      "weight": 147648
+    },
+    "4": {
+      "capacity_bytes": 144000000000,
+      "physical": 147648,
+      "remote": 0,
+      "reserved": 0,
+      "resident": 0,
+      "weight": 147648
+    },
+    "5": {
+      "capacity_bytes": 144000000000,
+      "physical": 147648,
+      "remote": 0,
+      "reserved": 0,
+      "resident": 0,
+      "weight": 147648
+    },
+    "6": {
+      "capacity_bytes": 144000000000,
+      "physical": 147648,
+      "remote": 0,
+      "reserved": 0,
+      "resident": 0,
+      "weight": 147648
+    },
+    "7": {
+      "capacity_bytes": 144000000000,
+      "physical": 147648,
+      "remote": 0,
+      "reserved": 0,
+      "resident": 0,
+      "weight": 147648
+    }
+  },
+  "schema_version": 2,
+  "sha256": "9b2bce92e0f36330094e4d34ce7368b4fee9f527a7eabe12202a2d6ff3066744",
+  "transaction_count": 6
+}

@@ -21,7 +21,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 硬件 `die/src/Hardware.cc`；计划/任务/映射 `Plan.cc`、`Compiler.cc`、`Mapping.cc`；执行 `Execution.cc`；ABI `Capi.cc`。
 - 接口在 `die/include/coarse_die/`；配置、工具、测试分别在 `configs/`、`tools/`、`tests/`。
 - 依赖 C++17、CMake、Python3 和 vendored `astra-sim-wscllm/extern/helper/json/json.hpp`；TX8 工具仅 Python 标准库。
-- 下一环境应核实真实工具安装。本环境 CMake 在 `work/tooling/cmake/cmake/data/bin/`，Protobuf 3.21.12 安装在 `work/deps/protobuf/`；这些忽略目录不是跨账号依赖交付。
+- 下一环境应核实真实工具安装。本轮 Cloud 使用 `/workspace/cloud-setup/activate.sh`、CMake3.31.10、protoc3.21.12/Python protobuf6.33.5，`PROTOBUF_FROM_SOURCE` unset；前轮work/tooling与work/deps为历史忽略目录，不是跨账号依赖交付。
 - `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release` 是公共库入口；benchmark 宏缺失已修复。实际最新构建/CTest 状态以 HANDOFF 为准。
 - 独立 Runtime/hardware_search 和 TX8 审计的真实命令、日志与结果在 HANDOFF 与 `docs/evidence/`。
 
@@ -41,10 +41,12 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-当前持续开发分支 `codex/die-os-lifecycle-20261014`；共享分支 `main`。已fetch/ancestry确认 [PR #7](https://github.com/cs-sunH/template/pull/7) merged 的 main `fba3b8e544b65728be384b43ecfeb355fddd028f`，从干净基线接续。最新指令是持续自主开发，上轮 stop 仅限上轮 Session。当前OS facts/LRU manager检查点及实际测试身份见 HANDOFF 和 `docs/evidence/os-foundation-20261014/`，protocol/timing/performance整体验收仍未完成。
+当前持续开发分支 `codex/die-lru-workspace-v2-20261014`；共享分支 `main`。已fetch/ancestry确认 [PR #8](https://github.com/cs-sunH/template/pull/8) merged 的 main `e2dd5af7b61895a85b122c200606017bb741a004`。最新指令是持续自主开发，上轮 stop 仅限上轮 Session。当前LRU协议/lease/typedmetrics/官方8rank正常路径与OS solo13域外部边界研究见 HANDOFF 和对应evidence/analysis；生产timing、压力/history业务、其它三仓v2、性能及完整GQA输入仍未验收。
 
 ## 重要决定及变更记录
 
+- 2026-10-14 LRU v2检查点：strict fullrank容量桥接与exact Plan lease落地，保持whole-session/remote/pool/history；typed硬件单位隔离；coarse指标/cancel与旧LRU字段兼容。最终CPP9/9、Python143pass1skip+44/44、实际8rankMHA官方Online0/0/0、124terminals、八个正workspace FFN Plan；bridge只采阶段末active0。LRU Ring2×2约束不放宽，GQA publicproducer尚缺。base/LRU prospectivePlan压力失活与store物理释放排序成为下一明确实现依赖。
+- 同检查点：actual13域facts exact solo powering/226外部stop前缀与resume/capacity对拍，standardC++256slot/768scratch primitive2247差分与sanitizer self-test通过，研究尚未进生产。naive256scratch与三个public-ns偏差诚实保留，原3%/5%门限不变；TX8无新fit/heldout/host证书。
 - 2026-10-13：建立 AGENTS/PROJECT/HANDOFF/RELAY_PROMPT 与文档 workflow；保留原流程初始化事实。
 - 2026-10-13：本 Session 保存 coarse v2 公共源、五仓原型、两项 TX8 条件参数；默认构建阻塞、校准边界和下一最小任务已记录，未宣称工程完成。
 - 2026-10-13 持续开发：恢复默认构建、signed credit 和端点快照，扩充 GEMM/FFN/Attention 独立计数测试，优化候选 Runtime 驱动；边界逻辑量、物理流量、保守槽位容量与粒度证据仍分别报告。手工 grouped-wave Runtime 的 oracle 结果不能给实际编译模板颁发证书。

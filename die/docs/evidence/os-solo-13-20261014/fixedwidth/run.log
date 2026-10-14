@@ -1,0 +1,446 @@
+{
+  "output": "/workspace/template/work/os-fixedwidth-13-20261014/bitwidth_audit.json",
+  "runs": [
+    {
+      "fixture": "strict_small",
+      "mode": "powered",
+      "status": "passed",
+      "events": 28,
+      "descriptors": 0,
+      "max_normalized_numerator_bits": 209,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 263,
+      "max_conservative_scratch_denominator_bits": 196,
+      "max_integer_bits": 14
+    },
+    {
+      "fixture": "int4_native_small",
+      "mode": "powered",
+      "status": "passed",
+      "events": 26,
+      "descriptors": 0,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 153,
+      "max_conservative_scratch_numerator_bits": 267,
+      "max_conservative_scratch_denominator_bits": 200,
+      "max_integer_bits": 11
+    },
+    {
+      "fixture": "int4_converted_fractional",
+      "mode": "powered",
+      "status": "passed",
+      "events": 28,
+      "descriptors": 0,
+      "max_normalized_numerator_bits": 212,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 204,
+      "max_integer_bits": 14
+    },
+    {
+      "fixture": "int4_converted_storage",
+      "mode": "powered",
+      "status": "passed",
+      "events": 28,
+      "descriptors": 0,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 153,
+      "max_conservative_scratch_numerator_bits": 266,
+      "max_conservative_scratch_denominator_bits": 200,
+      "max_integer_bits": 12
+    },
+    {
+      "fixture": "dense",
+      "mode": "powered",
+      "status": "passed",
+      "events": 72,
+      "descriptors": 7,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 204,
+      "max_integer_bits": 14
+    },
+    {
+      "fixture": "dense",
+      "mode": "expanded",
+      "status": "passed",
+      "events": 1310,
+      "descriptors": 0,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 199,
+      "max_integer_bits": 14
+    },
+    {
+      "fixture": "large_k",
+      "mode": "powered",
+      "status": "passed",
+      "events": 72,
+      "descriptors": 7,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 204,
+      "max_integer_bits": 26
+    },
+    {
+      "fixture": "large_outputs",
+      "mode": "powered",
+      "status": "passed",
+      "events": 72,
+      "descriptors": 7,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 204,
+      "max_integer_bits": 27
+    },
+    {
+      "fixture": "output_pressure_requested",
+      "mode": "powered",
+      "status": "passed",
+      "events": 40,
+      "descriptors": 0,
+      "max_normalized_numerator_bits": 210,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 261,
+      "max_conservative_scratch_denominator_bits": 197,
+      "max_integer_bits": 14
+    },
+    {
+      "fixture": "output_pressure_k1_tiles128",
+      "mode": "powered",
+      "status": "passed",
+      "events": 20,
+      "descriptors": 0,
+      "max_normalized_numerator_bits": 210,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 263,
+      "max_conservative_scratch_denominator_bits": 192,
+      "max_integer_bits": 16
+    },
+    {
+      "fixture": "output_pressure_k2_tiles128",
+      "mode": "powered",
+      "status": "passed",
+      "events": 40,
+      "descriptors": 0,
+      "max_normalized_numerator_bits": 211,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 263,
+      "max_conservative_scratch_denominator_bits": 195,
+      "max_integer_bits": 16
+    }
+  ],
+  "stop_runs": [
+    {
+      "fixture": "strict_small",
+      "stop_kind": "17 integer nanoseconds; exact finish/3 and finish/2; then 7/8 HBM capacity change",
+      "status_sequence": [
+        "paused",
+        "paused",
+        "paused",
+        "failed_closed",
+        "passed"
+      ],
+      "final_events": 31,
+      "max_normalized_numerator_bits": 209,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 263,
+      "max_conservative_scratch_denominator_bits": 202,
+      "max_integer_bits": 30
+    },
+    {
+      "fixture": "int4_native_small",
+      "stop_kind": "17 integer nanoseconds; exact finish/3 and finish/2; then 7/8 HBM capacity change",
+      "status_sequence": [
+        "paused",
+        "paused",
+        "paused",
+        "failed_closed",
+        "passed"
+      ],
+      "final_events": 29,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 153,
+      "max_conservative_scratch_numerator_bits": 267,
+      "max_conservative_scratch_denominator_bits": 206,
+      "max_integer_bits": 30
+    },
+    {
+      "fixture": "int4_converted_fractional",
+      "stop_kind": "17 integer nanoseconds; exact finish/3 and finish/2; then 7/8 HBM capacity change",
+      "status_sequence": [
+        "paused",
+        "paused",
+        "paused",
+        "failed_closed",
+        "passed"
+      ],
+      "final_events": 31,
+      "max_normalized_numerator_bits": 212,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 210,
+      "max_integer_bits": 30
+    },
+    {
+      "fixture": "int4_converted_storage",
+      "stop_kind": "17 integer nanoseconds; exact finish/3 and finish/2; then 7/8 HBM capacity change",
+      "status_sequence": [
+        "paused",
+        "paused",
+        "paused",
+        "failed_closed",
+        "passed"
+      ],
+      "final_events": 31,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 153,
+      "max_conservative_scratch_numerator_bits": 266,
+      "max_conservative_scratch_denominator_bits": 207,
+      "max_integer_bits": 30
+    },
+    {
+      "fixture": "dense",
+      "stop_kind": "17 integer nanoseconds; exact finish/3 and finish/2; then 7/8 HBM capacity change",
+      "status_sequence": [
+        "paused",
+        "paused",
+        "paused",
+        "failed_closed",
+        "passed"
+      ],
+      "final_events": 105,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 210,
+      "max_integer_bits": 30
+    },
+    {
+      "fixture": "output_pressure_k1_tiles128",
+      "stop_kind": "17 integer nanoseconds; exact finish/3 and finish/2; then 7/8 HBM capacity change",
+      "status_sequence": [
+        "paused",
+        "paused",
+        "paused",
+        "failed_closed",
+        "passed"
+      ],
+      "final_events": 23,
+      "max_normalized_numerator_bits": 210,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 263,
+      "max_conservative_scratch_denominator_bits": 199,
+      "max_integer_bits": 30
+    },
+    {
+      "fixture": "large_k",
+      "stop_kind": "exact fractions at finish/3 and 2*finish/3",
+      "status_sequence": [
+        "paused",
+        "paused",
+        "passed"
+      ],
+      "final_events": 102,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 204,
+      "max_integer_bits": 26
+    },
+    {
+      "fixture": "large_outputs",
+      "stop_kind": "exact fractions at finish/3 and 2*finish/3",
+      "status_sequence": [
+        "paused",
+        "paused",
+        "passed"
+      ],
+      "final_events": 100,
+      "max_normalized_numerator_bits": 213,
+      "max_normalized_denominator_bits": 151,
+      "max_conservative_scratch_numerator_bits": 271,
+      "max_conservative_scratch_denominator_bits": 218,
+      "max_integer_bits": 27
+    }
+  ],
+  "fixed_width_budget_audit": {
+    "observed_operation_result_count": 1079307,
+    "state_component_limit_bits": 256,
+    "max_observed_normalized_numerator_bits": 213,
+    "max_observed_normalized_denominator_bits": 153,
+    "normalized_256_bit_state_fits_all_captured_runs": true,
+    "normalized_state_overflow_runs": [],
+    "max_observed_conservative_scratch_numerator_bits": 271,
+    "max_observed_conservative_scratch_denominator_bits": 218,
+    "phase_maxima": {
+      "allocation": {
+        "records": 576156,
+        "max_numerator_bits": 213,
+        "max_denominator_bits": 106,
+        "max_scratch_numerator_bits": 271,
+        "max_scratch_denominator_bits": 138
+      },
+      "class_fact_aggregation": {
+        "records": 30270,
+        "max_numerator_bits": 93,
+        "max_denominator_bits": 80,
+        "max_scratch_numerator_bits": 165,
+        "max_scratch_denominator_bits": 159
+      },
+      "event": {
+        "records": 318155,
+        "max_numerator_bits": 181,
+        "max_denominator_bits": 141,
+        "max_scratch_numerator_bits": 259,
+        "max_scratch_denominator_bits": 218
+      },
+      "event_state": {
+        "records": 102865,
+        "max_numerator_bits": 181,
+        "max_denominator_bits": 141,
+        "max_scratch_numerator_bits": 0,
+        "max_scratch_denominator_bits": 0
+      },
+      "external_stop_inputs": {
+        "records": 22,
+        "max_numerator_bits": 112,
+        "max_denominator_bits": 98,
+        "max_scratch_numerator_bits": 0,
+        "max_scratch_denominator_bits": 0
+      },
+      "fact_inputs": {
+        "records": 10689,
+        "max_numerator_bits": 100,
+        "max_denominator_bits": 153,
+        "max_scratch_numerator_bits": 0,
+        "max_scratch_denominator_bits": 0
+      },
+      "facts_load": {
+        "records": 25134,
+        "max_numerator_bits": 114,
+        "max_denominator_bits": 153,
+        "max_scratch_numerator_bits": 114,
+        "max_scratch_denominator_bits": 99
+      },
+      "lifecycle": {
+        "records": 1045,
+        "max_numerator_bits": 115,
+        "max_denominator_bits": 103,
+        "max_scratch_numerator_bits": 209,
+        "max_scratch_denominator_bits": 103
+      },
+      "resume": {
+        "records": 98,
+        "max_numerator_bits": 112,
+        "max_denominator_bits": 98,
+        "max_scratch_numerator_bits": 209,
+        "max_scratch_denominator_bits": 98
+      },
+      "skip": {
+        "records": 10689,
+        "max_numerator_bits": 118,
+        "max_denominator_bits": 105,
+        "max_scratch_numerator_bits": 221,
+        "max_scratch_denominator_bits": 210
+      },
+      "skip_state": {
+        "records": 3123,
+        "max_numerator_bits": 118,
+        "max_denominator_bits": 105,
+        "max_scratch_numerator_bits": 0,
+        "max_scratch_denominator_bits": 0
+      },
+      "solver_init": {
+        "records": 1061,
+        "max_numerator_bits": 112,
+        "max_denominator_bits": 97,
+        "max_scratch_numerator_bits": 113,
+        "max_scratch_denominator_bits": 97
+      }
+    },
+    "integer_phase_maxima": {
+      "event_state": {
+        "records": 9681,
+        "max_bits": 27,
+        "witness": {
+          "field": "skip_wave_shift",
+          "value": "130000260"
+        }
+      },
+      "external_stop_inputs": {
+        "records": 12,
+        "max_bits": 30,
+        "witness": {
+          "field": "ns_denominator",
+          "value": "1000000000"
+        }
+      },
+      "fact_inputs": {
+        "records": 2652,
+        "max_bits": 16,
+        "witness": {
+          "field": "hbm_payload_bytes",
+          "value": "32768"
+        }
+      },
+      "geometry_integer_inputs": {
+        "records": 1656,
+        "max_bits": 27,
+        "witness": {
+          "field": "consumption_wave_count",
+          "value": "130000650"
+        }
+      },
+      "skip_state": {
+        "records": 462,
+        "max_bits": 27,
+        "witness": {
+          "field": "skip_wave_shift",
+          "value": "130000260"
+        }
+      }
+    },
+    "scratch_candidates": {
+      "256": {
+        "fits_all_captured_runs": false,
+        "first_failure": {
+          "run": "strict_small/powered",
+          "operation": "allocation/compare_lt",
+          "numerator_bits": 263,
+          "denominator_bits": 104,
+          "witness": {
+            "value": "258325827649544745250591224688673325932307527737282184246984704/3862391442429428593889225843297",
+            "numerator_bits": 263,
+            "denominator_bits": 102,
+            "operands": [
+              "258325827649544745250591224688673325932307527737282184246984704/3862391442429428593889225843297",
+              "205785123630023230758058752/32474179181386043"
+            ]
+          }
+        },
+        "failure_count_by_operation_sample": 20
+      },
+      "544": {
+        "fits_all_captured_runs": true,
+        "first_failure": null,
+        "failure_count_by_operation_sample": 0
+      },
+      "768": {
+        "fits_all_captured_runs": true,
+        "first_failure": null,
+        "failure_count_by_operation_sample": 0
+      }
+    },
+    "interpretation": [
+      "The 256-bit normalized-state check passes these captured traces, including exact stop/resume and clamped skip multiplication.",
+      "A 256-bit scratch candidate fails on actual traced operations; the recorded comparison products reach 271 bits and one large-output stop/resume addition reaches 259 bits.",
+      "544-bit scratch contains every observed conservative operation bound. 768 bits is the proposed simple production scratch width to allow checked 256-bit rational operands and up-to-128-bit skip multipliers with carry headroom.",
+      "Observed fit is not a universal bound for future facts, geometries, or all supported Runtime inputs. Production must check every operand/result and fail closed on any width overflow; no tile fallback or cap reset."
+    ]
+  }
+}

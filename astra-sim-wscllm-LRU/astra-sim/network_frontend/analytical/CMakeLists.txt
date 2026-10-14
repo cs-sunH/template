@@ -83,6 +83,24 @@ add_test(NAME AstraSim_Analytical_CmdLineParserTest
 set_tests_properties(AstraSim_Analytical_CmdLineParserTest
         PROPERTIES TIMEOUT 300)
 
+# Rank-local coarse workspace lease ledger fixture. This header-only test
+# exercises checked admission, revision binding and RAII release without
+# building the simulator/network stack.
+add_executable(AstraSim_Analytical_WorkspaceAdmissionTest
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../workload/execution_driven/tests/workspace_admission_test.cc)
+target_include_directories(AstraSim_Analytical_WorkspaceAdmissionTest PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../../)
+set_target_properties(AstraSim_Analytical_WorkspaceAdmissionTest
+        PROPERTIES COMPILE_WARNING_AS_ERROR OFF)
+set_target_properties(AstraSim_Analytical_WorkspaceAdmissionTest
+        PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../bin/
+        LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+        ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/../lib/
+)
+add_test(NAME AstraSim_Analytical_WorkspaceAdmissionTest
+        COMMAND AstraSim_Analytical_WorkspaceAdmissionTest)
+
 # Compile Congestion Aware Backend
 if (BUILDTARGET STREQUAL "all" OR BUILDTARGET STREQUAL "congestion_aware")
     # Path-1 removal (2026-08-18): the static aware target and

@@ -1,0 +1,19 @@
+{
+  "all_files_count": 834,
+  "all_files_manifest_sha256": "daa8978913898f9460e1117c24ffdf8bd6a1c3ea73c5ac75d646b366b88f1b91",
+  "branch": "codex/die-lru-workspace-v2-20261014",
+  "head_commit": "e2dd5af7b61895a85b122c200606017bb741a004",
+  "identity_kind": "measured_dirty_source_tree_at_online_build",
+  "is_commit_of_dirty_source": false,
+  "online_python_file_count": 56,
+  "python_tracked_diff_bytes": 32558,
+  "python_tracked_diff_sha256": "1ff97ede1a8f1df863adbe39b205f3b5171b7aa1e316003470572dfa92de7375",
+  "tracked_diff_bytes": 199526,
+  "tracked_diff_sha256": "a15fdb974b6a7722dfd5fd5c2e5d327751a5ffd4b3777c18e089f9108ee25813",
+  "untracked_source_paths": [
+    "astra-sim/workload/WorkspaceAdmission.hh",
+    "astra-sim/workload/execution_driven/tests/workspace_admission_test.cc",
+    "sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_admission_v2.py",
+    "sh_test_mesh/workload/llama2_7b_inference/test_wsc_llm_typed_hardware.py"
+  ]
+}
