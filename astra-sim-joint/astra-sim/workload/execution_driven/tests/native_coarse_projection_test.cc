@@ -1,11 +1,18 @@
 #include "astra-sim/workload/execution_driven/NativeProjection.hh"
+#include "astra-sim/workload/execution_driven/NativeCoarseDieDomain.hh"
 #include "coarse_die/Execution.hh"
 
 #include <algorithm>
+#include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <limits>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
+#include <utility>
+#include <vector>
 
 using json = nlohmann::json;
 using namespace AstraSim::ExecutionDriven;
@@ -35,6 +42,14 @@ json endpoint() {
         {"physical_bytes", 1048577}, {"eta_hbm", 1.0},
         {"path_class", "edge_to_hbm"},
         {"route", {{"internal_route", false}}}};
+}
+
+json capacity_event(std::uint64_t time_ns, std::size_t resource_index,
+                    double absolute_physical_rate,
+                    const std::string& resource_key = "hbm:0") {
+    return {{"time_ns", time_ns}, {"resource_key", resource_key},
+        {"resource_index", resource_index},
+        {"absolute_physical_rate", absolute_physical_rate}};
 }
 
 json leg(const std::string& id, const std::string& kind = "compute") {
@@ -216,6 +231,102 @@ Reference direct(const json& wire, bool with_endpoint) {
     return result;
 }
 
+struct DomainReference {
+    std::uint64_t comp = 0;
+    std::uint64_t restore = 0;
+    std::uint64_t first_plan_finish = 0;
+    json counters;
+    json snapshot;
+};
+
+DomainReference direct_domain(const json& wire, bool with_endpoint,
+                              std::optional<std::uint64_t> final_advance_ns =
+                                  std::nullopt) {
+    const auto& input = wire["projection_input"];
+    const auto& hardware_wire = input["coarse_die_domains"][0]["hardware_config"];
+    auto hardware = coarse_die::resolve_hardware(hardware_wire);
+    NativeCoarseDieDomain domain("hbm:0", hardware);
+    const auto& comp_leg = input["background_works"][0]["legs"][0];
+    std::vector<std::shared_ptr<const coarse_die::Plan>> plans;
+    for (const auto& spec : comp_leg["die_plan"]["specs"])
+        plans.push_back(coarse_die::compile(hardware, spec));
+    domain.begin_plan_chain("comp#0", std::move(plans), {0, 1, 1, 1},
+        input["now_ns"].get<std::uint64_t>());
+
+    struct OrderedCapacity { std::uint64_t time; std::size_t order; json wire; };
+    std::vector<OrderedCapacity> capacities;
+    if (input.contains("coarse_capacity_events")) {
+        for (std::size_t i = 0; i < input["coarse_capacity_events"].size(); ++i) {
+            const auto& event = input["coarse_capacity_events"][i];
+            capacities.push_back({event["time_ns"].get<std::uint64_t>(), i, event});
+        }
+        std::stable_sort(capacities.begin(), capacities.end(),
+            [](const OrderedCapacity& a, const OrderedCapacity& b) {
+                return a.time < b.time;
+            });
+    }
+
+    std::uint64_t endpoint_time = 0;
+    bool endpoint_started = !with_endpoint;
+    if (with_endpoint) {
+        endpoint_time = input["background_works"][1]["ready_at_ns"]
+            .get<std::uint64_t>();
+    }
+    std::size_t capacity_index = 0;
+    DomainReference result;
+    auto collect = [&]() {
+        for (const auto& completion : domain.take_completions()) {
+            if (completion.leg_id == "comp#0") result.comp = completion.finish_ns;
+            else if (completion.leg_id == "restore#0")
+                result.restore = completion.finish_ns;
+        }
+        const auto progress = domain.progress("comp#0");
+        if (result.first_plan_finish == 0 &&
+            !progress["completed_plan_progress"].empty()) {
+            result.first_plan_finish = progress["completed_plan_progress"][0]
+                ["finish_ns"].get<std::uint64_t>();
+        }
+    };
+
+    while (true) {
+        std::optional<std::uint64_t> next = domain.next_event();
+        if (!endpoint_started && (!next || endpoint_time < *next))
+            next = endpoint_time;
+        if (capacity_index < capacities.size() &&
+            (!next || capacities[capacity_index].time < *next))
+            next = capacities[capacity_index].time;
+        if (!next) break;
+
+        domain.advance_to(*next);
+        collect();
+        if (!endpoint_started && endpoint_time == *next) {
+            const auto& endpoint_leg = input["background_works"][1]["legs"][0];
+            domain.begin_endpoint("restore#0", endpoint_leg["coarse_endpoint"],
+                {0, 2, 1, 1}, *next);
+            endpoint_started = true;
+            collect();
+        }
+        while (capacity_index < capacities.size() &&
+               capacities[capacity_index].time == *next) {
+            const auto& event = capacities[capacity_index].wire;
+            domain.update_capacity(event["resource_index"].get<std::size_t>(),
+                event["absolute_physical_rate"].get<double>(), *next);
+            ++capacity_index;
+            collect();
+        }
+    }
+    if (final_advance_ns) {
+        domain.advance_to(*final_advance_ns);
+        collect();
+    }
+    collect();
+    require(result.comp != 0 && (!with_endpoint || result.restore != 0),
+        "direct NativeCoarseDieDomain finishes the frozen typed work");
+    result.counters = domain.counters();
+    result.snapshot = domain.export_snapshot();
+    return result;
+}
+
 void parity(bool with_endpoint, bool chain) {
     const auto wire = envelope(with_endpoint, chain);
     const auto reference = direct(wire, with_endpoint);
@@ -282,6 +393,324 @@ void candidate_world_parity() {
     require(before["predicted_settle_done_ns"] == after["predicted_settle_done_ns"] &&
         before["coarse_runtime_counters_by_domain"] == after["coarse_runtime_counters_by_domain"],
         "candidate does not mutate the frozen baseline or its memoized reference run");
+}
+
+std::pair<std::uint64_t, std::uint64_t> direct_candidate_with_capacity(
+        const json& wire, const json& candidate) {
+    const auto& input = wire["projection_input"];
+    const auto hardware = coarse_die::resolve_hardware(
+        input["coarse_die_domains"][0]["hardware_config"]);
+    const auto& background = input["background_works"][0]["legs"][0];
+    const auto& candidate_leg = candidate["legs"][0];
+    const auto background_plan = coarse_die::compile(hardware,
+        background["die_plan"]["specs"][0]);
+    const auto candidate_plan = coarse_die::compile(hardware,
+        candidate_leg["die_plan"]["specs"][0]);
+    coarse_die::Runtime runtime(hardware);
+    const auto background_handle = runtime.submit(background_plan,
+        {0, 1, 1, 1}, input["now_ns"].get<std::uint64_t>());
+    const auto candidate_time = candidate["ready_at_ns"].get<std::uint64_t>();
+    bool candidate_submitted = false;
+    std::optional<std::uint64_t> candidate_handle;
+
+    struct OrderedCapacity { std::uint64_t time; std::size_t order; json wire; };
+    std::vector<OrderedCapacity> capacities;
+    for (std::size_t i = 0; i < input["coarse_capacity_events"].size(); ++i) {
+        const auto& event = input["coarse_capacity_events"][i];
+        capacities.push_back({event["time_ns"].get<std::uint64_t>(), i, event});
+    }
+    std::stable_sort(capacities.begin(), capacities.end(),
+        [](const OrderedCapacity& a, const OrderedCapacity& b) {
+            return a.time < b.time;
+        });
+    std::size_t capacity_index = 0;
+    while (!candidate_submitted || capacity_index < capacities.size()) {
+        std::optional<std::uint64_t> next;
+        if (!candidate_submitted) next = candidate_time;
+        if (capacity_index < capacities.size() &&
+            (!next || capacities[capacity_index].time < *next))
+            next = capacities[capacity_index].time;
+        if (!next) break;
+        runtime.advance_to(*next);
+        if (!candidate_submitted && candidate_time == *next) {
+            candidate_handle = runtime.submit(candidate_plan, {0, 2, 1, 1}, *next);
+            candidate_submitted = true;
+        }
+        while (capacity_index < capacities.size() &&
+               capacities[capacity_index].time == *next) {
+            const auto& event = capacities[capacity_index].wire;
+            runtime.update_capacity(event["resource_index"].get<std::size_t>(),
+                event["absolute_physical_rate"].get<double>(), *next);
+            ++capacity_index;
+        }
+    }
+    while (const auto next = runtime.next_event()) runtime.advance_to(*next);
+    require(candidate_handle.has_value(), "direct candidate is admitted at its frozen ready tick");
+    return {*runtime.terminal_finish_ns(background_handle),
+            *runtime.terminal_finish_ns(*candidate_handle)};
+}
+
+template<class Mutation> void rejected(Mutation mutate, const char* message);
+template<class Mutation> void rejected_snapshot_mutation(
+        const std::shared_ptr<const NativeProjectionContext>& context,
+        const json& snapshot, Mutation mutate, const char* message);
+
+void native_known_capacity_events() {
+    auto wire = envelope(true, true);
+    const auto baseline = direct_domain(wire, true);
+    require(baseline.first_plan_finish > 50 &&
+        baseline.comp > baseline.first_plan_finish + 8,
+        "fixture exposes an intermediate Plan-chain capacity boundary");
+    const auto span = baseline.comp - baseline.first_plan_finish;
+    const auto pause_delta = span / 4;
+    const auto restore_delta = (span * 3) / 4;
+    require(pause_delta > 0 && restore_delta > pause_delta && restore_delta < span,
+        "Plan-chain fixture has room for a pause and a later capacity restore");
+
+    const auto hardware = coarse_die::resolve_hardware(hardware_config());
+    const auto hbm0 = hardware.rates[coarse_die::HBM0];
+    const auto hbm1 = hardware.rates[coarse_die::HBM1];
+    auto& input = wire["projection_input"];
+    // Deliberately put later timestamps first. Same-tick HBM1 changes retain
+    // their input order and occur after the ready endpoint has entered the
+    // shared Domain.
+    input["coarse_capacity_events"] = json::array({
+        capacity_event(50, coarse_die::HBM1, hbm1 * 0.5),
+        capacity_event(50, coarse_die::HBM1, hbm1),
+        capacity_event(baseline.first_plan_finish + restore_delta,
+            coarse_die::HBM0, hbm0),
+        capacity_event(baseline.first_plan_finish,
+            coarse_die::HBM0, hbm0 * 0.5),
+        capacity_event(baseline.first_plan_finish + pause_delta,
+            coarse_die::HBM0, 0.0)});
+    const auto reference = direct_domain(wire, true);
+    require(reference.comp > baseline.comp && reference.restore != 0,
+        "capacity pause and restore retime the real shared Plan/endpoint Domain");
+
+    const auto context = NativeProjectionContext::parse(wire);
+    NativeProjectionWorldSession world(context);
+    const auto finished = world.operation({{"operation", "run"},
+        {"drain_background", true}});
+    require(finished["status"] == "ok" &&
+        finished["work_done_at"]["comp"] == reference.comp &&
+        finished["work_done_at"]["restore"] == reference.restore,
+        "world reaches the direct Domain finish ticks through the frozen event queue");
+    require(finished["coarse_die_domains"]["hbm:0"]["counters"] ==
+            reference.counters,
+        "served/busy counters match the independent direct Domain oracle");
+    require(finished["coarse_die_domains"]["hbm:0"]["counters"]["hbm_shared_ns"]
+                .get<double>() > 0,
+        "capacity fixture records actual endpoint/COMP shared HBM service");
+    const auto snapshot = world.operation({{"operation", "export_snapshot"}});
+    require(snapshot["coarse_die_domains"]["hbm:0"] == reference.snapshot,
+        "complete canonical Domain snapshot matches the independent event replay");
+
+    const auto projected = NativeProjection::project(*context,
+        {{"candidates", json::array()}}, NativeProjectionOptions{});
+    require(projected["predicted_settle_done_ns"] == reference.comp &&
+        projected["coarse_runtime_counters_by_domain"]["hbm:0"]["counters"] ==
+            reference.counters,
+        "query projection inherits the same immutable known-world capacity events");
+
+    auto terminal_wire = envelope(false, true);
+    const auto terminal_baseline = direct_domain(terminal_wire, false);
+    terminal_wire["projection_input"]["coarse_capacity_events"] = json::array({
+        capacity_event(terminal_baseline.comp, coarse_die::HBM0, hbm0 * 0.5)});
+    auto dependent = leg("dependent#0", "fixed");
+    dependent["route"] = json::array();
+    dependent["duration_ns"] = 7;
+    dependent["deps"] = json::array({"comp#0"});
+    terminal_wire["projection_input"]["background_works"].push_back(
+        work("dependent", dependent));
+    terminal_wire["projection_input"]["focus_work_id"] = "dependent";
+    const auto terminal_reference = direct_domain(terminal_wire, false,
+        terminal_baseline.comp + 7);
+    NativeProjectionWorldSession terminal_world(
+        NativeProjectionContext::parse(terminal_wire));
+    const auto terminal_result = terminal_world.operation({{"operation", "run"}});
+    require(terminal_result["status"] == "ok" &&
+        terminal_result["work_done_at"]["comp"] == terminal_reference.comp &&
+        terminal_result["work_done_at"]["dependent"] ==
+            terminal_reference.comp + 7 &&
+        terminal_world.operation({{"operation", "export_snapshot"}})
+            ["coarse_die_domains"]["hbm:0"] == terminal_reference.snapshot,
+        "same-tick terminal and capacity update settle the outer dependent exactly once");
+
+    auto candidate_wire = envelope(false, false);
+    auto& candidate_input = candidate_wire["projection_input"];
+    candidate_input["coarse_capacity_events"] = json::array({
+        capacity_event(1000, coarse_die::HBM0, hbm0),
+        capacity_event(50, coarse_die::HBM0, hbm0 * 0.5)});
+    const auto candidate_context = NativeProjectionContext::parse(candidate_wire);
+    auto candidate = candidate_input["background_works"][0];
+    candidate["work_id"] = "candidate";
+    candidate["is_candidate"] = true;
+    candidate["ready_at_ns"] = 50;
+    candidate["legs"][0]["leg_id"] = "candidate#0";
+    const auto direct_times = direct_candidate_with_capacity(candidate_wire, candidate);
+    const auto candidate_result = NativeProjection::project(*candidate_context,
+        {{"candidates", json::array({candidate})}}, NativeProjectionOptions{});
+    require(candidate_result["status"] == "ok" &&
+        candidate_result["predicted_settle_done_ns"] == direct_times.second &&
+        candidate_result["background_comparisons"][0]["done_with_candidate_ns"] ==
+            direct_times.first,
+        "candidate overlay competes under the identical frozen capacity schedule");
+}
+
+void capacity_input_validation() {
+    const auto hardware = coarse_die::resolve_hardware(hardware_config());
+    const auto valid = capacity_event(0, coarse_die::HBM0,
+        hardware.rates[coarse_die::HBM0]);
+    rejected([&](json& input) {
+        input["coarse_capacity_events"] = json::array({capacity_event(0,
+            coarse_die::HBM0, hardware.rates[coarse_die::HBM0], "hbm:missing")});
+    }, "unknown capacity-event domain is rejected before world construction");
+    rejected([&](json& input) {
+        auto event = valid; event["resource_index"] = coarse_die::resource_count;
+        input["coarse_capacity_events"] = json::array({event});
+    }, "capacity resource index outside canonical hardware is rejected");
+    rejected([&](json& input) {
+        auto event = valid; event["absolute_physical_rate"] = -1.0;
+        input["coarse_capacity_events"] = json::array({event});
+    }, "negative physical rate is rejected before execution");
+    rejected([&](json& input) {
+        auto event = valid;
+        event["absolute_physical_rate"] = std::numeric_limits<double>::quiet_NaN();
+        input["coarse_capacity_events"] = json::array({event});
+    }, "NaN physical rate is rejected before execution");
+    rejected([&](json& input) {
+        auto event = valid;
+        event["absolute_physical_rate"] = std::numeric_limits<double>::infinity();
+        input["coarse_capacity_events"] = json::array({event});
+    }, "infinite physical rate is rejected before execution");
+    rejected([&](json& input) {
+        auto event = valid;
+        event["absolute_physical_rate"] = hardware.rates[coarse_die::HBM0] + 1.0;
+        input["coarse_capacity_events"] = json::array({event});
+    }, "physical rate above the resolved hardware peak is rejected");
+    rejected([&](json& input) {
+        auto event = valid; event["time_ns"] = 0.5;
+        input["coarse_capacity_events"] = json::array({event});
+    }, "fractional capacity event time is rejected");
+    rejected([&](json& input) {
+        auto event = valid; event["time_ns"] = std::uint64_t{1} << 53;
+        input["coarse_capacity_events"] = json::array({event});
+    }, "capacity event beyond exact JSON nanoseconds is rejected");
+    rejected([&](json& input) {
+        input["now_ns"] = 10;
+        auto event = valid; event["time_ns"] = 9;
+        input["coarse_capacity_events"] = json::array({event});
+    }, "capacity event before frozen initial clock is rejected");
+    rejected([](json& input) {
+        input["coarse_capacity_events"] = json::array({
+            {{"time_ns", 0}, {"resource_key", "hbm:0"},
+             {"resource_index", coarse_die::HBM0}}});
+    }, "incomplete capacity-event object is rejected");
+    rejected([](json& input) {
+        auto event = capacity_event(0, coarse_die::HBM0, 1.0);
+        event["unexpected"] = true;
+        input["coarse_capacity_events"] = json::array({event});
+    }, "unknown capacity-event keys are rejected");
+    require(hardware.rates[coarse_die::INJECT0] == 0.0,
+        "canonical fixture exposes a disabled resource for capacity preflight");
+    rejected([](json& input) {
+        input["coarse_capacity_events"] = json::array({
+            capacity_event(0, coarse_die::INJECT0, 1.0)});
+    }, "disabled physical resource can only remain at zero rate");
+}
+
+void capacity_budget_snapshot_prefix() {
+    auto wire = envelope(true, true);
+    const auto hardware = coarse_die::resolve_hardware(hardware_config());
+    wire["projection_input"]["coarse_capacity_events"] = json::array({
+        capacity_event(0, coarse_die::HBM0, 0.0),
+        capacity_event(0, coarse_die::HBM0,
+            hardware.rates[coarse_die::HBM0])});
+    const auto context = NativeProjectionContext::parse(wire);
+    NativeProjectionWorldSession source(context);
+    const auto interrupted = source.operation({{"operation", "run"},
+        {"event_budget", 1}});
+    require(interrupted["status"] == "degraded" &&
+        interrupted["now_ns"] == 0 && interrupted["events_processed"] == 1,
+        "event budget stops after a consumed same-tick capacity prefix");
+    const auto checkpoint = source.operation({{"operation", "export_snapshot"}});
+    require(checkpoint["state"]["capacity_events_processed"] == 1,
+        "snapshot records the exact consumed capacity prefix");
+    std::uint64_t same_tick_suffix = 0;
+    for (const auto& event : checkpoint["state"]["events"])
+        if (event["kind"] == 4 && event["time_ns"] == 0) ++same_tick_suffix;
+    require(same_tick_suffix == 1,
+        "unprocessed capacity suffix remains queued at its consumed tick");
+
+    rejected_snapshot_mutation(context, checkpoint,
+        [](json& invalid) {
+            invalid["state"].erase("capacity_events_processed");
+        }, "nonempty frozen capacity schedule requires its consumed-prefix state");
+    rejected_snapshot_mutation(context, checkpoint,
+        [](json& invalid) {
+            invalid["state"]["capacity_events_processed"] = 0;
+        }, "capacity prefix cannot omit an already consumed same-tick event");
+    rejected_snapshot_mutation(context, checkpoint,
+        [](json& invalid) {
+            invalid["state"]["capacity_events_processed"] = 2;
+        }, "capacity prefix cannot consume an event still in the queue suffix");
+    rejected_snapshot_mutation(context, checkpoint,
+        [](json& invalid) {
+            auto& events = invalid["state"]["events"];
+            events.erase(std::remove_if(events.begin(), events.end(),
+                [](const json& event) { return event["kind"] == 4; }),
+                events.end());
+        }, "snapshot cannot omit the pending same-tick capacity suffix");
+    rejected_snapshot_mutation(context, checkpoint,
+        [](json& invalid) {
+            json pending = nullptr;
+            for (const auto& event : invalid["state"]["events"])
+                if (event["kind"] == 4) { pending = event; break; }
+            require(!pending.is_null(), "capacity suffix fixture has a pending event");
+            invalid["state"]["events"].push_back(pending);
+        }, "snapshot cannot duplicate a pending frozen capacity event");
+
+    NativeProjectionWorldSession restored(context);
+    const auto restored_inspect = restored.operation({{"operation", "import_snapshot"},
+        {"snapshot", checkpoint}});
+    require(restored_inspect == source.operation({{"operation", "inspect"}}),
+        "same-tick capacity checkpoint imports without advancing its source");
+    const auto source_done = source.operation({{"operation", "run"},
+        {"drain_background", true}});
+    const auto restored_done = restored.operation({{"operation", "run"},
+        {"drain_background", true}});
+    require(source_done == restored_done &&
+        source.operation({{"operation", "inspect"}}) ==
+            restored.operation({{"operation", "inspect"}}) &&
+        source.operation({{"operation", "export_snapshot"}}) ==
+            restored.operation({{"operation", "export_snapshot"}}),
+        "resumed and uninterrupted worlds drain to identical full state");
+    const auto reference = direct_domain(wire, true);
+    require(source_done["work_done_at"]["comp"] == reference.comp &&
+        source_done["work_done_at"]["restore"] == reference.restore &&
+        source_done["coarse_die_domains"]["hbm:0"]["counters"] ==
+            reference.counters,
+        "resumed same-tick pause uses the later restore and matches direct Domain execution");
+
+    auto combined_wire = envelope(false, false);
+    combined_wire["projection_input"]["forecast_arrival_placeholders_ns"] =
+        json::array({0});
+    combined_wire["projection_input"]["coarse_capacity_events"] = json::array({
+        capacity_event(0, coarse_die::HBM0,
+            hardware.rates[coarse_die::HBM0] * 0.5)});
+    const auto combined_context = NativeProjectionContext::parse(combined_wire);
+    NativeProjectionWorldSession combined(combined_context);
+    const auto two_events = combined.operation({{"operation", "run"},
+        {"event_budget", 2}});
+    const auto combined_snapshot = combined.operation({{"operation", "export_snapshot"}});
+    require(two_events["events_processed"] == 2 &&
+        combined_snapshot["state"]["forecast_events_processed"] == 1 &&
+        combined_snapshot["state"]["capacity_events_processed"] == 1,
+        "forecast and capacity queues consume one event each at the same tick");
+    rejected_snapshot_mutation(combined_context, combined_snapshot,
+        [](json& invalid) {
+            invalid["state"]["events_processed"] = 1;
+        }, "combined frozen prefixes cannot exceed the total event counter");
 }
 
 void native_gate_and_dependency_join() {
@@ -829,6 +1258,9 @@ int main() {
         parity(true, false);
         parity(true, true);
         candidate_world_parity();
+        native_known_capacity_events();
+        capacity_input_validation();
+        capacity_budget_snapshot_prefix();
         native_gate_and_dependency_join();
         snapshot_world_states();
         snapshot_partial_integration_and_budget();

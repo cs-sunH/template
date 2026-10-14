@@ -122,6 +122,14 @@ struct NativeProjectionBlockPipeline final {
     uint64_t startup_ns = 0;
 };
 
+struct NativeCoarseCapacityEvent final {
+    uint64_t time_ns = 0;
+    std::string resource_key;
+    size_t resource_index = 0;
+    double absolute_physical_rate = 0.0;
+    size_t input_order = 0;
+};
+
 struct NativeProjectionInput final {
     // Exact immutable contract for session snapshot compatibility. Mutable
     // state is restored separately; a snapshot cannot replace this graph.
@@ -140,6 +148,9 @@ struct NativeProjectionInput final {
     std::map<std::string, double> eta;
     std::map<std::string, double> gamma;
     std::vector<uint64_t> forecast_arrival_placeholders_ns;
+    // Immutable known physical rate changes, shared by baseline and candidate
+    // projections. Events are canonically ordered by (time, input order).
+    std::vector<NativeCoarseCapacityEvent> coarse_capacity_events;
     // Shared-snapshot form: number of leading background_works entries that
     // precede the forecast works.  A per-call private overlay splices its
     // extra background works at this index so the merged work order matches
@@ -168,6 +179,9 @@ struct NativeProjectionOverlay final {
 namespace {
 
 using Json = nlohmann::json;
+
+constexpr uint64_t kMaxProjectionJsonNs = (uint64_t{1} << 53) - 1;
+constexpr size_t kCoarseDieResourceCount = coarse_die::resource_count;
 
 [[noreturn]] void fail(const std::string& path, const std::string& message) {
     throw std::invalid_argument("native projection " + path + ": " + message);
@@ -223,7 +237,8 @@ void validate_projection_input_shape(const Json& input) {
            {"now_ns", "resources", "background_works", "focus_work_id",
             "gates", "barriers", "efficiency", "pipelines",
             "forecast_arrival_placeholders_ns"},
-           {"forecast_start_index", "defer_focus_validation", "coarse_die_domains"});
+           {"forecast_start_index", "defer_focus_validation", "coarse_die_domains",
+            "coarse_capacity_events"});
     if (number_value(input.at("now_ns"), "projection_input.now_ns") < 0.0) {
         fail("projection_input.now_ns", "must be nonnegative");
     }
@@ -232,6 +247,10 @@ void validate_projection_input_shape(const Json& input) {
                             "barriers", "pipelines",
                             "forecast_arrival_placeholders_ns"}) {
         array(input.at(key), std::string("projection_input.") + key);
+    }
+    if (input.contains("coarse_capacity_events")) {
+        array(input.at("coarse_capacity_events"),
+              "projection_input.coarse_capacity_events");
     }
     const auto& efficiency = input.at("efficiency");
     object(efficiency, "projection_input.efficiency", {"eta", "gamma"});
@@ -677,6 +696,68 @@ std::shared_ptr<const NativeProjectionInput> parse_projection_input(
                 fail("coarse_die_domains", "duplicate physical domain " + key);
         }
     }
+    if (wire.contains("coarse_capacity_events")) {
+        const auto& events = wire.at("coarse_capacity_events");
+        result->coarse_capacity_events.reserve(events.size());
+        for (size_t i = 0; i < events.size(); ++i) {
+            const auto& item = events[i];
+            const auto path = "projection_input.coarse_capacity_events[" +
+                std::to_string(i) + "]";
+            object(item, path, {"time_ns", "resource_key", "resource_index",
+                "absolute_physical_rate"});
+            const uint64_t time_ns = uint_value(item.at("time_ns"), path + ".time_ns");
+            if (time_ns > kMaxProjectionJsonNs ||
+                static_cast<double>(time_ns) < result->now_ns) {
+                fail(path + ".time_ns",
+                     "must be exact JSON nanoseconds at or after initial now_ns");
+            }
+            const auto resource_key =
+                string_value(item.at("resource_key"), path + ".resource_key");
+            const uint64_t resource_index =
+                uint_value(item.at("resource_index"), path + ".resource_index");
+            if (resource_index >= kCoarseDieResourceCount) {
+                fail(path + ".resource_index", "must be less than 13");
+            }
+            const double absolute_physical_rate = number_value(
+                item.at("absolute_physical_rate"), path + ".absolute_physical_rate");
+            if (absolute_physical_rate < 0.0) {
+                fail(path + ".absolute_physical_rate", "must be nonnegative");
+            }
+            if (!result->coarse_domains.count(resource_key)) {
+                fail(path + ".resource_key", "unknown frozen physical domain " + resource_key);
+            }
+            result->coarse_capacity_events.push_back({time_ns, resource_key,
+                static_cast<size_t>(resource_index), absolute_physical_rate, i});
+        }
+        std::stable_sort(result->coarse_capacity_events.begin(),
+            result->coarse_capacity_events.end(),
+            [](const NativeCoarseCapacityEvent& a,
+               const NativeCoarseCapacityEvent& b) {
+                return std::tie(a.time_ns, a.input_order) <
+                       std::tie(b.time_ns, b.input_order);
+            });
+
+        // Validate the complete frozen schedule against the same canonical
+        // Domain/Runtime path before any projection world is constructed.
+        std::map<std::string, std::unique_ptr<NativeCoarseDieDomain>> validators;
+        for (const auto& event : result->coarse_capacity_events) {
+            auto validator = validators.find(event.resource_key);
+            if (validator == validators.end()) {
+                validator = validators.emplace(event.resource_key,
+                    std::make_unique<NativeCoarseDieDomain>(event.resource_key,
+                        *result->coarse_domains.at(event.resource_key))).first;
+            }
+            const auto path = "projection_input.coarse_capacity_events[" +
+                std::to_string(event.input_order) + "]";
+            try {
+                validator->second->update_capacity(event.resource_index,
+                    event.absolute_physical_rate, event.time_ns);
+            } catch (const std::exception& error) {
+                fail(path, std::string("canonical capacity preflight failed: ") +
+                    error.what());
+            }
+        }
+    }
     result->background_works.reserve(wire.at("background_works").size());
     for (size_t i = 0; i < wire.at("background_works").size(); ++i) {
         result->background_works.push_back(parse_work_spec(
@@ -848,6 +929,7 @@ NativeProjectionInput apply_projection_overlay(
     merged.gamma = base.gamma;
     merged.forecast_arrival_placeholders_ns =
         base.forecast_arrival_placeholders_ns;
+    merged.coarse_capacity_events = base.coarse_capacity_events;
     merged.forecast_start_index = base.forecast_start_index;
     merged.coarse_domains = base.coarse_domains;
 
@@ -1446,6 +1528,11 @@ class NativeProjectionWorld final {
                               RuntimeBarrier{&barrier, {}, false, 0});
         }
         build();
+        for (size_t i = 0; i < input_.coarse_capacity_events.size(); ++i) {
+            const auto& event = input_.coarse_capacity_events[i];
+            push(static_cast<double>(event.time_ns), 4, "capacity", 4,
+                 std::to_string(i));
+        }
     }
 
     std::string run(bool has_horizon, double horizon_ns,
@@ -1809,7 +1896,7 @@ class NativeProjectionWorld final {
                 {"kind", e.kind}, {"task_id", e.task_id}});
             queue.pop();
         }
-        return {{"schema", "native_coarse_projection_world_snapshot_v1"},
+        Json snapshot{{"schema", "native_coarse_projection_world_snapshot_v1"},
             {"snapshot_version", 1}, {"frozen_input", input_.frozen_input_wire},
             {"coarse_die_domains", std::move(domains)},
             {"state", {{"now_ns", now_ns_}, {"status", last_status_},
@@ -1821,6 +1908,10 @@ class NativeProjectionWorld final {
                 {"analytic_enabled", analytic_enabled_}, {"legs", std::move(legs)},
                 {"gates", std::move(gates)}, {"barriers", std::move(barriers)},
                 {"active_leg_ids", std::move(active)}, {"events", std::move(events)}}}};
+        if (!input_.coarse_capacity_events.empty())
+            snapshot["state"]["capacity_events_processed"] =
+                capacity_events_processed_;
+        return snapshot;
     }
 
     // Called only on a disposable world. Session publication follows complete
@@ -1839,7 +1930,16 @@ class NativeProjectionWorld final {
         object(s, path + ".state", {"now_ns", "status", "events_processed",
             "integration_steps", "forecast_events_processed", "sequence", "event_budget_limit", "conservation_check",
             "last_step_budget_truncated", "analytic_enabled", "legs", "gates",
-            "barriers", "active_leg_ids", "events"});
+            "barriers", "active_leg_ids", "events"},
+            {"capacity_events_processed"});
+        if (input_.coarse_capacity_events.empty() &&
+            s.contains("capacity_events_processed")) {
+            fail(path, "capacity prefix is present without frozen capacity events");
+        }
+        if (!input_.coarse_capacity_events.empty() &&
+            !s.contains("capacity_events_processed")) {
+            fail(path, "snapshot is missing its frozen capacity-event prefix");
+        }
         const auto flag = [&](const Json& value) {
             if (!value.is_boolean()) fail(path, "expected boolean");
             return value.get<bool>();
@@ -1858,24 +1958,60 @@ class NativeProjectionWorld final {
         events_processed_ = uint_value(s.at("events_processed"), path);
         integration_steps_ = uint_value(s.at("integration_steps"), path);
         forecast_events_processed_ = uint_value(s.at("forecast_events_processed"), path);
+        capacity_events_processed_ = s.contains("capacity_events_processed")
+            ? uint_value(s.at("capacity_events_processed"), path) : 0;
         std::map<uint64_t, ProjectionEvent> expected_forecasts;
+        std::map<uint64_t, ProjectionEvent> expected_capacity_events;
         auto initial_events = events_;
         uint64_t forecast_index = 0;
+        uint64_t capacity_index = 0;
         while (!initial_events.empty()) {
             const auto event = initial_events.top();
             initial_events.pop();
-            if (event.kind != 3) continue;
-            if (forecast_index++ < forecast_events_processed_) {
-                if (event.time_ns > now_ns_) fail(path, "future forecast cannot already be consumed");
-            } else {
-                if (event.time_ns < now_ns_) fail(path, "past forecast must already be consumed");
-                expected_forecasts.emplace(event.sequence, event);
+            if (event.kind == 3) {
+                if (forecast_index++ < forecast_events_processed_) {
+                    if (event.time_ns > now_ns_) fail(path, "future forecast cannot already be consumed");
+                } else {
+                    if (event.time_ns < now_ns_) fail(path, "past forecast must already be consumed");
+                    expected_forecasts.emplace(event.sequence, event);
+                }
+            } else if (event.kind == 4) {
+                if (capacity_index >= input_.coarse_capacity_events.size())
+                    fail(path, "extra frozen capacity event in initial queue");
+                const auto& expected =
+                    input_.coarse_capacity_events[capacity_index];
+                if (event.producer != "capacity" || event.priority != 4 ||
+                    event.task_id != std::to_string(capacity_index) ||
+                    event.time_ns != static_cast<double>(expected.time_ns)) {
+                    fail(path, "frozen capacity event queue differs from input order");
+                }
+                if (capacity_index++ < capacity_events_processed_) {
+                    if (event.time_ns > now_ns_)
+                        fail(path, "future capacity event cannot already be consumed");
+                } else {
+                    if (event.time_ns < now_ns_)
+                        fail(path, "past capacity event must already be consumed");
+                    expected_capacity_events.emplace(event.sequence, event);
+                }
             }
         }
         if (forecast_events_processed_ > forecast_index ||
             forecast_events_processed_ > events_processed_)
             fail(path, "invalid processed forecast prefix");
-        sequence_ = uint_value(s.at("sequence"), path);
+        if (capacity_index != input_.coarse_capacity_events.size() ||
+            capacity_events_processed_ > capacity_index ||
+            capacity_events_processed_ > events_processed_ ||
+            capacity_events_processed_ >
+                events_processed_ - forecast_events_processed_) {
+            fail(path, "invalid processed capacity-event prefix");
+        }
+        const uint64_t minimum_sequence = sequence_;
+        const uint64_t snapshot_sequence = uint_value(s.at("sequence"), path);
+        if (!input_.coarse_capacity_events.empty() &&
+            snapshot_sequence < minimum_sequence) {
+            fail(path, "sequence counter precedes frozen capacity events");
+        }
+        sequence_ = snapshot_sequence;
         event_budget_limit_ = uint_value(s.at("event_budget_limit"), path);
         conservation_check_ = flag(s.at("conservation_check"));
         last_step_budget_truncated_ = flag(s.at("last_step_budget_truncated"));
@@ -1896,6 +2032,34 @@ class NativeProjectionWorld final {
             if (!wire.at("completion_queue").empty())
                 fail(path, "native world must consume domain completion records");
             domain.second = std::move(imported);
+        }
+        if (!input_.coarse_capacity_events.empty()) {
+            std::map<std::string, std::vector<double>> expected_rates;
+            for (const auto& hardware : input_.coarse_domains) {
+                expected_rates.emplace(hardware.first,
+                    std::vector<double>(hardware.second->rates.begin(),
+                        hardware.second->rates.end()));
+            }
+            for (size_t i = 0; i < capacity_events_processed_; ++i) {
+                const auto& event = input_.coarse_capacity_events[i];
+                expected_rates.at(event.resource_key).at(event.resource_index) =
+                    event.absolute_physical_rate;
+            }
+            for (const auto& domain : coarse_domains_) {
+                const auto capacities = domain.second
+                    ->export_runtime_snapshot().at("capacities");
+                if (!capacities.is_array() ||
+                    capacities.size() != kCoarseDieResourceCount) {
+                    fail(path, "domain capacity state has the wrong resource count");
+                }
+                const auto& expected = expected_rates.at(domain.first);
+                for (size_t resource = 0; resource < expected.size(); ++resource) {
+                    if (number_value(capacities[resource], path + ".capacity") !=
+                        expected[resource]) {
+                        fail(path, "domain capacity state differs from consumed frozen prefix");
+                    }
+                }
+            }
         }
         keys_match(s.at("legs"), legs_);
         active_legs_.clear();
@@ -2060,7 +2224,7 @@ class NativeProjectionWorld final {
             event.time_ns = static_cast<double>(tick(wire.at("time_ns")));
             const auto kind = uint_value(wire.at("kind"), path);
             const auto priority = uint_value(wire.at("priority"), path);
-            if (kind < 1 || kind > 3 || priority != kind) fail(path, "invalid event kind/priority");
+            if (kind < 1 || kind > 4 || priority != kind) fail(path, "invalid event kind/priority");
             event.kind = static_cast<int>(kind);
             event.priority = static_cast<int>(priority);
             event.producer = string_value(wire.at("producer"), path);
@@ -2076,6 +2240,19 @@ class NativeProjectionWorld final {
                     expected->second.time_ns != event.time_ns)
                     fail(path, "unknown forecast placeholder");
                 expected_forecasts.erase(expected);
+            } else if (kind == 4) {
+                const auto expected =
+                    expected_capacity_events.find(event.sequence);
+                if (event.producer != "capacity" ||
+                    expected == expected_capacity_events.end() ||
+                    expected->second.time_ns != event.time_ns ||
+                    expected->second.priority != event.priority ||
+                    expected->second.producer != event.producer ||
+                    expected->second.kind != event.kind ||
+                    expected->second.task_id != event.task_id) {
+                    fail(path, "unknown or duplicated pending capacity event");
+                }
+                expected_capacity_events.erase(expected);
             } else {
                 if (!legs_.count(event.task_id) || event.producer != event.task_id)
                     fail(path, "unknown event task/producer");
@@ -2140,6 +2317,8 @@ class NativeProjectionWorld final {
         }
         if (!expected_forecasts.empty())
             fail(path, "snapshot omitted an unconsumed known arrival placeholder");
+        if (!expected_capacity_events.empty())
+            fail(path, "snapshot omitted an unconsumed frozen capacity event");
     }
 
     void set_clock(double time_ns) {
@@ -2247,6 +2426,9 @@ class NativeProjectionWorld final {
     // One prefix count distinguishes consumed same-tick forecast placeholders
     // from arrivals still pending after controlled integration/budget limits.
     uint64_t forecast_events_processed_ = 0;
+    // Capacity events are immutable frozen-input events with the same
+    // processed-prefix requirement at controlled/same-tick checkpoints.
+    uint64_t capacity_events_processed_ = 0;
     double bytes_served_total_ = 0.0;
     std::string last_status_ = kStatusWait;
     bool conservation_check_ = true;
@@ -2689,6 +2871,23 @@ class NativeProjectionWorld final {
                       std::move(task_id)});
     }
 
+    size_t capacity_event_index(const std::string& value) const {
+        if (value.empty()) fail("capacity_event", "missing frozen event index");
+        uint64_t index = 0;
+        for (const char digit : value) {
+            if (digit < '0' || digit > '9')
+                fail("capacity_event", "invalid frozen event index");
+            const uint64_t part = static_cast<uint64_t>(digit - '0');
+            if (index > (std::numeric_limits<uint64_t>::max() - part) / 10)
+                fail("capacity_event", "frozen event index overflows");
+            index = index * 10 + part;
+        }
+        if (std::to_string(index) != value ||
+            index >= input_.coarse_capacity_events.size())
+            fail("capacity_event", "unknown frozen event index");
+        return static_cast<size_t>(index);
+    }
+
     uint64_t work_ready(const std::string& id) const {
         const auto found = work_specs_.find(id);
         return found == work_specs_.end()
@@ -2986,6 +3185,20 @@ class NativeProjectionWorld final {
                 auto* leg = found->second.get();
                 if (leg->state != kTimer) continue;
                 try_activate(leg);
+            } else if (event.kind == 4) {
+                const size_t index = capacity_event_index(event.task_id);
+                const auto& capacity = input_.coarse_capacity_events[index];
+                if (event.producer != "capacity" || event.priority != 4 ||
+                    event.time_ns != static_cast<double>(capacity.time_ns)) {
+                    fail("capacity_event", "queued event differs from its frozen input");
+                }
+                coarse_domains_.at(capacity.resource_key)->update_capacity(
+                    capacity.resource_index, capacity.absolute_physical_rate,
+                    capacity.time_ns);
+                ++capacity_events_processed_;
+                // Domain updates can expose same-tick chain terminals. Let the
+                // outer graph settle them at this tick before later time moves.
+                collect_coarse_completions();
             }
             // Forecast arrival is a disclosure-only placeholder.
         }
