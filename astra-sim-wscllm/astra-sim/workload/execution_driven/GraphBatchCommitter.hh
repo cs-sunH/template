@@ -123,6 +123,17 @@ class GraphBatchCommitter {
         WatchRegistry* watch_registry = nullptr;
         RequestIngress* ingress = nullptr;
         std::function<void(int rank)> issue_rank;
+        // Workspace bridge v2 is required for coarse_die_v2. Validation is
+        // pure and runs in mandatory preflight; installation runs after the
+        // graph/KV response commit and before any issue_rank callback.
+        bool workspace_admission_required = false;
+        std::function<std::optional<std::string>(
+            const std::vector<WorkspaceRankState>&,
+            const std::vector<WorkspaceCapacityRank>&)>
+            validate_workspace_capacity_snapshot;
+        std::function<void(const std::vector<WorkspaceCapacityRank>&,
+                           std::vector<int>& changed_ranks)>
+            install_workspace_capacity_snapshot;
         // Phase-7 §10.3: optional side-band metrics anchor registration. When
         // set, commit() invokes it right after Phase B-1 (nodes), BEFORE the
         // issue pass, with the batch and this committer's O(1) affine
@@ -193,6 +204,8 @@ class GraphBatchCommitter {
         json_id_seen_stamp_by_rank_.assign(rank_count, 0);
         json_id_discovered_touched_ranks_.reserve(rank_count);
         commit_touched_ranks_.reserve(rank_count);
+        commit_workspace_changed_ranks_.reserve(rank_count);
+        commit_issue_ranks_.reserve(rank_count);
         // M2 (2026-08-23): propagate the node-GC switch to every per-rank
         // store once, here (fixtures leave node_gc off and keep the pre-M2
         // no-collection behavior byte-for-byte).
@@ -332,6 +345,8 @@ class GraphBatchCommitter {
     mutable uint64_t json_id_stream_stamp_ = 0;
     mutable std::vector<int> json_id_discovered_touched_ranks_;
     std::vector<int> commit_touched_ranks_;
+    std::vector<int> commit_workspace_changed_ranks_;
+    std::vector<int> commit_issue_ranks_;
     // validate_and_commit() and commit() own commit_touched_ranks_ across
     // their whole validation/commit sequences.  Context callbacks attempting
     // a nested mutating commit fail closed instead of corrupting that

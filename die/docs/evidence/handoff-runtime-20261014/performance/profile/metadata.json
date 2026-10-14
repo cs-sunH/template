@@ -1,0 +1,23 @@
+{
+  "source_commit": "c47ae85f479edd0953bbb432bc05139ef1c63541",
+  "source_directory": "work/coldcompile-profile-source/die",
+  "compile_flags": "-O3 -DNDEBUG -pg -g",
+  "iterations": 30,
+  "sample_period_seconds": 0.01,
+  "total_sampled_seconds": 0.12,
+  "raw_file_sha256": {
+    "flat.txt": "965f78d6c8168dd59e3f79ebec3ce652748c31b1a683ac051032fea0f7fe0773",
+    "callgraph.txt": "27a3d79b956f9c137d3069a4f26e28b0da8c102564af1dbd3fe1df2096fffee1",
+    "report.json": "5c914be761e4cf1b0ae0ddd7b07a5bb23b484f50523c9cb91039ffa0c0a9d83a"
+  },
+  "measurement_scope": "baseline profiled cold/hot/estimate combined; diagnostic only, instrumented times are not final performance samples",
+  "key_cumulative_percent": {
+    "enumerate_gemm": 52.4,
+    "plan_to_json": 41.2,
+    "estimate_latency_ns": 25.4
+  },
+  "key_self_percent": {
+    "json_value_destroy": 33.33
+  },
+  "previous_n1": "No accumulated samples; excluded from diagnosis."
+}

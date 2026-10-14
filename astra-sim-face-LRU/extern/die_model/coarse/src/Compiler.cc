@@ -14,7 +14,7 @@
 
 namespace coarse_die {
 namespace detail {
-std::vector<std::shared_ptr<Plan>> enumerate_mappings(
+std::vector<std::shared_ptr<Plan>> enumerate_mappings_for_compile(
     const Hardware& hardware, const nlohmann::json& normalized_task);
 }
 namespace {
@@ -512,12 +512,14 @@ std::shared_ptr<const Plan> compile(const Hardware& hardware,
                                    const nlohmann::json& task) {
   const nlohmann::json normalized = normalize_task(hardware, task);
   std::vector<std::shared_ptr<Plan>> candidates =
-      detail::enumerate_mappings(hardware, normalized);
+      detail::enumerate_mappings_for_compile(hardware, normalized);
   if (candidates.empty()) {
     fail("compile", "unsupported_workspace: no feasible fixed mapping candidate");
   }
   if (candidates.size() > 256) fail("compile", "candidate set exceeds fixed upper bound 256");
   const auto immutable_hardware = std::make_shared<const Hardware>(hardware);
+  const bool gemm_candidates_are_unsealed =
+      normalized.at("op_kind").get<std::string>() == "gemm";
 
   struct Ranked {
     std::shared_ptr<Plan> plan;
@@ -531,15 +533,20 @@ std::shared_ptr<const Plan> compile(const Hardware& hardware,
   std::vector<Ranked> ranked;
   ranked.reserve(candidates.size());
   for (auto& candidate : candidates) {
-    // Mapping builders already seal the complete normalized Plan. Reuse that
-    // identity for the actual Runtime trial; silently rewriting builder
-    // inputs here would mask a broken compiler boundary.
+    // The compile-only GEMM enumerator defers candidate fingerprints because
+    // losing candidates never leave this ranking pass. The dedicated Runtime
+    // estimate path still performs all plan, hardware, work, and credit checks
+    // while allowing only that internal trial to omit a not-yet-needed hash.
+    // Public enumerate_mappings() continues to return fully sealed Plans.
     const std::string expected_hardware = hardware.fingerprint.empty()
         ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
     if(candidate->task != normalized || candidate->hardware_fingerprint != expected_hardware ||
-       candidate->fingerprint.empty())
+       (gemm_candidates_are_unsealed ? !candidate->fingerprint.empty()
+                                     : candidate->fingerprint.empty()))
       fail("compile", "invalid_plan: mapping candidate identity is incomplete");
-    const u64 latency = detail::estimate_latency_ns(immutable_hardware, candidate);
+    const u64 latency = gemm_candidates_are_unsealed
+        ? detail::estimate_candidate_latency_ns(immutable_hardware, candidate)
+        : detail::estimate_latency_ns(immutable_hardware, candidate);
     candidate->summary["estimated_latency_ns"] = latency;
     candidate->summary["alone_estimate_status"] = "ok_assumed";
     // These are still private mutable builders. Seal only the winner after

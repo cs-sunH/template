@@ -1,0 +1,1587 @@
+{
+  "schema_version": 1,
+  "tool": "die/tools/benchmark.py",
+  "status": "passed",
+  "benchmark_binary": "/workspace/template/work/coldcompile-merge-build/coarse_die_benchmark",
+  "config_path": "/workspace/template/die/tests/fixtures/coarse_die_v2.json",
+  "config_sha256": "9f3f4e24e690181af1875c60ed561124701759bea97da827abe3b3b06c8d9f3b",
+  "task_path": "/workspace/template/work/coldcompile-before/fixtures/gemm_128x128x128.json",
+  "task_sha256": "09a1b3ea7990a18007d08a829f3d036f73bb0de4ba6bcf24593b2d3e5874cfda",
+  "iterations": 30,
+  "contending_owners": 1,
+  "benchmark_result": {
+    "benchmark_version": 1,
+    "cold_create_parse_resolve_compile": {
+      "count": 30,
+      "max_ns": 4291515.0,
+      "min_ns": 1819196.0,
+      "p50_ns": 2225458.0,
+      "p95_ns": 4055090.0,
+      "samples_ns": [
+        2593130.0,
+        2431117.0,
+        1894680.0,
+        2233690.0,
+        1987039.0,
+        1819196.0,
+        2337566.0,
+        2042542.0,
+        2509725.0,
+        2076874.0,
+        2379539.0,
+        2290445.0,
+        2105637.0,
+        2092888.0,
+        2388733.0,
+        2202804.0,
+        2236164.0,
+        1947349.0,
+        2151436.0,
+        2225458.0,
+        3672514.0,
+        4055090.0,
+        2482484.0,
+        2537687.0,
+        2797408.0,
+        2216665.0,
+        2130505.0,
+        4291515.0,
+        1991566.0,
+        2008451.0
+      ]
+    },
+    "compiler": "14.2.0",
+    "config_hash": "778e2517d858241f1c91957ce1b2b2cdea2c4c04e9994772651c92153fb27934",
+    "config_path": "/workspace/template/die/tests/fixtures/coarse_die_v2.json",
+    "contending_owners": 1,
+    "cplusplus": 201703,
+    "estimate_alone": {
+      "count": 30,
+      "max_ns": 523808.0,
+      "min_ns": 226481.0,
+      "p50_ns": 241523.0,
+      "p95_ns": 439331.0,
+      "samples_ns": [
+        439331.0,
+        281113.0,
+        252389.0,
+        239440.0,
+        236645.0,
+        346661.0,
+        241523.0,
+        233902.0,
+        350407.0,
+        243356.0,
+        231768.0,
+        255685.0,
+        254843.0,
+        234022.0,
+        228925.0,
+        227242.0,
+        226961.0,
+        247963.0,
+        226481.0,
+        227131.0,
+        228294.0,
+        265119.0,
+        230086.0,
+        228704.0,
+        297297.0,
+        275985.0,
+        523808.0,
+        310187.0,
+        249085.0,
+        240331.0
+      ]
+    },
+    "hardware_fingerprint": "sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787",
+    "hot_compile_same_hardware_same_task": {
+      "count": 30,
+      "max_ns": 2619100.0,
+      "min_ns": 1506276.0,
+      "p50_ns": 1729552.0,
+      "p95_ns": 2260951.0,
+      "samples_ns": [
+        2040609.0,
+        1550332.0,
+        1687619.0,
+        1616211.0,
+        2260951.0,
+        1720327.0,
+        1658815.0,
+        1506276.0,
+        1611303.0,
+        2046479.0,
+        1774779.0,
+        1659666.0,
+        1729552.0,
+        1631064.0,
+        1975661.0,
+        2077374.0,
+        1559176.0,
+        2054380.0,
+        1540006.0,
+        2027069.0,
+        1784023.0,
+        1987770.0,
+        1610843.0,
+        2619100.0,
+        1626016.0,
+        2024535.0,
+        1730473.0,
+        2023424.0,
+        1865916.0,
+        1709462.0
+      ]
+    },
+    "iterations": 30,
+    "max_rss_kib": 13056,
+    "measurement": "actual coarse_die C++ library calls",
+    "notes": [
+      "cold includes JSON file reads, parse, hardware resolution, and compile",
+      "hot reuses parsed task and resolved hardware; compile still runs each sample",
+      "runtime event count is actual next_event/advance_to loop count",
+      "latency is modeled device time; benchmark durations are host time"
+    ],
+    "plan_hash": "1bf9ea72a8fcad7149ed2ad50c6dba5e0a1abade8b4cf10366c3cbcddbfcd096",
+    "runtime_advance_event_count": 3,
+    "runtime_counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 4,
+      "capacity": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "compute_busy_ns": 2195.0000000000005,
+      "compute_busy_ns_exact": "2195.000000000000624834",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 1097.142857142857,
+      "hbm_busy_ns_exact": "1097.142857142857049091",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          163840.0,
+          16384.0
+        ],
+        [
+          163840.0,
+          16384.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "163840",
+          "16384"
+        ],
+        [
+          "163840",
+          "16384"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 6,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 3293,
+      "row_busy_ns": [
+        1097.142857142857,
+        1097.142857142857
+      ],
+      "row_busy_ns_exact": [
+        "1097.142857142857049091",
+        "1097.142857142857049091"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 4,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              163840.0,
+              16384.0
+            ],
+            [
+              163840.0,
+              16384.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "163840",
+              "16384"
+            ],
+            [
+              "163840",
+              "16384"
+            ]
+          ],
+          "int4_ops": 4194304.0,
+          "int4_ops_exact_decimal": "4194304",
+          "vec_eqops": 704512.0,
+          "vec_eqops_exact_decimal": "704512"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "runtime_finish_ns": 3293,
+    "shared_runtime_arbitration": {
+      "count": 30,
+      "max_ns": 17045.0,
+      "min_ns": 6831.0,
+      "p50_ns": 8292.0,
+      "p95_ns": 16815.0,
+      "samples_ns": [
+        16815.0,
+        6831.0,
+        9985.0,
+        10947.0,
+        8883.0,
+        8923.0,
+        8052.0,
+        7962.0,
+        7841.0,
+        10015.0,
+        8242.0,
+        7892.0,
+        7892.0,
+        14352.0,
+        10726.0,
+        8192.0,
+        9644.0,
+        8032.0,
+        9574.0,
+        8012.0,
+        9504.0,
+        7952.0,
+        9494.0,
+        9534.0,
+        17045.0,
+        10036.0,
+        8292.0,
+        8032.0,
+        7761.0,
+        8042.0
+      ]
+    },
+    "shared_runtime_arbitration_cpu": {
+      "count": 30,
+      "max_ns": 18000.0,
+      "min_ns": 7000.0,
+      "p50_ns": 9000.0,
+      "p95_ns": 17000.0,
+      "samples_ns": [
+        18000.0,
+        7000.0,
+        11000.0,
+        11000.0,
+        9000.0,
+        9000.0,
+        8000.0,
+        8000.0,
+        8000.0,
+        11000.0,
+        9000.0,
+        8000.0,
+        8000.0,
+        15000.0,
+        11000.0,
+        8000.0,
+        10000.0,
+        8000.0,
+        10000.0,
+        9000.0,
+        9000.0,
+        8000.0,
+        9000.0,
+        10000.0,
+        17000.0,
+        11000.0,
+        9000.0,
+        8000.0,
+        8000.0,
+        8000.0
+      ]
+    },
+    "standalone_result": {
+      "active_cores": 16,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "activity_work_semantics": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1",
+      "alone_estimate_status": "ok_assumed",
+      "calibration_claimed_status": "assumed",
+      "calibration_revision": null,
+      "calibration_source_flags": {
+        "calibration_revision_present": false,
+        "certificate_manifest_present": false,
+        "performance_profile_present": true,
+        "verified": false
+      },
+      "calibration_status": "assumed",
+      "candidate_count": 28,
+      "candidate_estimate_source": "estimate_alone(shared_runtime_engine)",
+      "consumption_wave_count": 1,
+      "conversion_elements": 196608,
+      "dataflow_id": "output_stationary_v2",
+      "derived_hardware": {
+        "core": {
+          "L0_mm": 2.5635515881709545,
+          "N_core": 88,
+          "N_pe": 4371,
+          "N_vec": 221,
+          "P_int4_per_core_ops_per_s": 8742000000000.0,
+          "P_vec_per_core_ops_per_s": 874143400000.0,
+          "core_type": "large",
+          "noc_width_bits": 256,
+          "sram_bytes_per_core": 262144,
+          "sram_mib_per_core": 0.25
+        },
+        "core_resource_table": {
+          "id": "core64_v2",
+          "rows_sha256": "8e7d393ff9a96dd556088fa7c98a6fd80ed0b277e03cde7c3909a0f118e45f36"
+        },
+        "die": {
+          "A_req_mm2": 200.0,
+          "area_mm2": 583.1988615963413,
+          "aspect_ratio": 1.3731803547640409,
+          "bump_budget_Bps": 24099126512245.508,
+          "bump_budget_GBps": 24099.126512245508,
+          "core_columns_nx": 8,
+          "core_count": 88,
+          "core_pitch_x_mm": 0.0,
+          "core_pitch_y_mm": 0.0,
+          "core_rows_ny": 11,
+          "d2d_bidirectional_Bps": 19388726512245.508,
+          "d2d_oneway_Bps": 9694363256122.754,
+          "die_extra_height_mm": 0.1,
+          "die_extra_width_mm": 0.1,
+          "geometry_candidate": "minimum_grid",
+          "height_mm": 28.2990674698805,
+          "minimum_height_mm": 28.2990674698805,
+          "minimum_width_mm": 20.608412705367638,
+          "width_mm": 20.608412705367638
+        },
+        "hardware_summary": {
+          "die_core_count": 88,
+          "hbm_capacity_bytes": 144000000000.0,
+          "hbm_row_peak_Bps": [
+            2355200000000.0,
+            2355200000000.0
+          ],
+          "peak_int4_ops_per_s": 769296000000000.0,
+          "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+        },
+        "hbm": {
+          "capacity_bytes": 144000000000.0,
+          "ingress_evidence": {
+            "physical_topology_validation": "unverified",
+            "profile": "distributed_ideal_v2",
+            "row_to_ingress": [
+              null,
+              null
+            ],
+            "unlimited": true
+          },
+          "module_height_mm": 50.8590674698805,
+          "module_width_mm": 22.41,
+          "peak_Bps": 4710400000000.0,
+          "placement_mode": "two_sides_one_row_each",
+          "row_overhang": true,
+          "row_peak_Bps": 2355200000000.0,
+          "row_to_ingress": [
+            null,
+            null
+          ],
+          "row_width_mm": 22.11,
+          "sku": "Micron MT65B18G16120A00QH-92:A",
+          "stacks_per_row": 2,
+          "total_stacks": 4
+        },
+        "performance_identity": {
+          "physical_topology_validation": "unverified",
+          "routing_profile": "mapped_uniform_sources_v2",
+          "timing_topology_profile": "distributed_ideal_v2"
+        },
+        "resources": [
+          {
+            "enabled": true,
+            "id": "COMPUTE_GATE",
+            "rate": 1.0,
+            "resource_id": 0,
+            "unit": "second_of_service/s"
+          },
+          {
+            "enabled": true,
+            "id": "SRAM_READ",
+            "rate": 11264000000000.0,
+            "resource_id": 1,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "SRAM_WRITE",
+            "rate": 11264000000000.0,
+            "resource_id": 2,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "LOCAL",
+            "rate": 1971199999999.9998,
+            "resource_id": 3,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "HBM0",
+            "rate": 2355200000000.0,
+            "resource_id": 4,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "HBM1",
+            "rate": 2355200000000.0,
+            "resource_id": 5,
+            "unit": "B/s"
+          },
+          {
+            "enabled": false,
+            "id": "INJECT0",
+            "rate": 0.0,
+            "resource_id": 6,
+            "unit": "B/s"
+          },
+          {
+            "enabled": false,
+            "id": "INJECT1",
+            "rate": 0.0,
+            "resource_id": 7,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "XPOS",
+            "rate": 246400000000.0,
+            "resource_id": 8,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "XNEG",
+            "rate": 246400000000.0,
+            "resource_id": 9,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "YPOS",
+            "rate": 179200000000.0,
+            "resource_id": 10,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "YNEG",
+            "rate": 179200000000.0,
+            "resource_id": 11,
+            "unit": "B/s"
+          },
+          {
+            "enabled": true,
+            "id": "HOP",
+            "rate": 7033600000000.0,
+            "resource_id": 12,
+            "unit": "hop_B/s"
+          }
+        ],
+        "source_revision": "9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8",
+        "system": {
+          "core_count": 3168,
+          "effective_module_height_mm": 53.61016429233315,
+          "effective_module_width_mm": 23.622214121457795,
+          "eta_core_die": 0.991631074168826,
+          "eta_core_region": 0.4503937715270393,
+          "eta_module_region": 0.9862643175770878,
+          "hbm_capacity_bytes": 5184000000000.0,
+          "module_columns": 9,
+          "module_count": 36,
+          "module_rows": 4,
+          "peak_int4_ops_per_s": 2.7694656e+16,
+          "peak_vec_fp32_eq_ops_per_s": 2769286291200000.0,
+          "region_height_mm": 215.0,
+          "region_width_mm": 215.0
+        }
+      },
+      "domain_capacities": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "domain_work": [
+        8.928703199426872e-08,
+        573568.0,
+        573568.0,
+        786688.0,
+        257462.85714285716,
+        257462.85714285716,
+        0.0,
+        0.0,
+        90112.0,
+        90112.0,
+        17873.454545454544,
+        178734.54545454544,
+        2600960.0
+      ],
+      "estimated_latency_ns": 3293,
+      "evidence_flags": [
+        "engineering_assumption",
+        "hardware_source_derived"
+      ],
+      "executed_int4_ops": 4194304,
+      "executed_matrix_ops": 4194304,
+      "executed_score_slots": 0,
+      "execution": {
+        "activities": [
+          {
+            "activity_id": 1,
+            "alpha": 0.0,
+            "canonical_q": 327680.0,
+            "credit_delta": [
+              1.0,
+              0.0
+            ],
+            "done": true,
+            "epoch_index": 0,
+            "hbm_payload_bytes": [
+              [
+                163840,
+                0
+              ],
+              [
+                163840,
+                0
+              ]
+            ],
+            "hbm_served_bytes": [
+              [
+                163840.0,
+                0.0
+              ],
+              [
+                163840.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_exact": [
+              [
+                "163840",
+                "0"
+              ],
+              [
+                "163840",
+                "0"
+              ]
+            ],
+            "int4_ops": "0",
+            "int4_served_ops": 0.0,
+            "int4_served_ops_exact": "0",
+            "planned_work": [
+              0.0,
+              0.0,
+              327680.0,
+              0.0,
+              234057.14285714287,
+              234057.14285714287,
+              0.0,
+              0.0,
+              81920.0,
+              81920.0,
+              0.0,
+              178734.54545454544,
+              2364509.090909091
+            ],
+            "progress": 1.0,
+            "rate": 0.0,
+            "rate_unit": "progress_per_second",
+            "remaining_work": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "role": "load",
+            "served_work": [
+              0.0,
+              0.0,
+              327680.0,
+              0.0,
+              234057.14285714287,
+              234057.14285714287,
+              0.0,
+              0.0,
+              81920.0,
+              81920.0,
+              0.0,
+              178734.54545454544,
+              2364509.090909091
+            ],
+            "status": "done",
+            "vec_eqops": "0",
+            "vec_served_eqops": 0.0,
+            "vec_served_eqops_exact": "0"
+          },
+          {
+            "activity_id": 5,
+            "alpha": 0.0,
+            "canonical_q": 786688.0,
+            "credit_delta": [
+              -1.0,
+              1.0
+            ],
+            "done": true,
+            "epoch_index": 1,
+            "hbm_payload_bytes": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "hbm_served_bytes": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": "4194304",
+            "int4_served_ops": 4194304.0,
+            "int4_served_ops_exact": "4194304",
+            "planned_work": [
+              8.928703199426872e-08,
+              540800.0,
+              245888.0,
+              786688.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "progress": 1.0,
+            "rate": 0.0,
+            "rate_unit": "progress_per_second",
+            "remaining_work": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "role": "compute",
+            "served_work": [
+              8.928703199426872e-08,
+              540800.0,
+              245888.0,
+              786688.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "status": "done",
+            "vec_eqops": "704512",
+            "vec_served_eqops": 704512.0,
+            "vec_served_eqops_exact": "704512"
+          },
+          {
+            "activity_id": 9,
+            "alpha": 0.0,
+            "canonical_q": 32768.0,
+            "credit_delta": [
+              0.0,
+              -1.0
+            ],
+            "done": true,
+            "epoch_index": 2,
+            "hbm_payload_bytes": [
+              [
+                0,
+                16384
+              ],
+              [
+                0,
+                16384
+              ]
+            ],
+            "hbm_served_bytes": [
+              [
+                0.0,
+                16384.0
+              ],
+              [
+                0.0,
+                16384.0
+              ]
+            ],
+            "hbm_served_bytes_exact": [
+              [
+                "0",
+                "16384"
+              ],
+              [
+                "0",
+                "16384"
+              ]
+            ],
+            "int4_ops": "0",
+            "int4_served_ops": 0.0,
+            "int4_served_ops_exact": "0",
+            "planned_work": [
+              0.0,
+              32768.0,
+              0.0,
+              0.0,
+              23405.714285714286,
+              23405.714285714286,
+              0.0,
+              0.0,
+              8192.0,
+              8192.0,
+              17873.454545454544,
+              0.0,
+              236450.9090909091
+            ],
+            "progress": 1.0,
+            "rate": 0.0,
+            "rate_unit": "progress_per_second",
+            "remaining_work": [
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ],
+            "role": "store",
+            "served_work": [
+              0.0,
+              32768.0,
+              0.0,
+              0.0,
+              23405.714285714286,
+              23405.714285714286,
+              0.0,
+              0.0,
+              8192.0,
+              8192.0,
+              17873.454545454544,
+              0.0,
+              236450.9090909091
+            ],
+            "status": "done",
+            "vec_eqops": "0",
+            "vec_served_eqops": 0.0,
+            "vec_served_eqops_exact": "0"
+          }
+        ],
+        "cancelled": false,
+        "compute_gate_served_work": 8.928703199426872e-08,
+        "compute_gate_served_work_exact": "8.928703199426871799931e-08",
+        "credit": [
+          {
+            "capacity": 2.0,
+            "index": 0,
+            "value": 0.0
+          },
+          {
+            "capacity": 2.0,
+            "index": 1,
+            "value": 0.0
+          }
+        ],
+        "elapsed_ns": 3293,
+        "elapsed_ns_exact": "3293",
+        "epoch_index": 3,
+        "finish_ns": 3293,
+        "generation": 4,
+        "handle": 1,
+        "hardware_fingerprint": "sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787",
+        "hbm_direction_order": [
+          "read",
+          "write"
+        ],
+        "hbm_served_bytes": [
+          [
+            163840.0,
+            16384.0
+          ],
+          [
+            163840.0,
+            16384.0
+          ]
+        ],
+        "hbm_served_bytes_exact": [
+          [
+            "163840",
+            "16384"
+          ],
+          [
+            "163840",
+            "16384"
+          ]
+        ],
+        "issue_ns": 0,
+        "owner": {
+          "execution_id": 1,
+          "generation": 1,
+          "key": "1:1:1",
+          "node_id": 1,
+          "request_id": 1
+        },
+        "plan_fingerprint": "1bf9ea72a8fcad7149ed2ad50c6dba5e0a1abade8b4cf10366c3cbcddbfcd096",
+        "ready_ns": 0,
+        "served": {
+          "compute_gate_work": 8.928703199426872e-08,
+          "compute_gate_work_exact": "8.928703199426871799931e-08",
+          "hbm_bytes_by_row_direction": [
+            [
+              163840.0,
+              16384.0
+            ],
+            [
+              163840.0,
+              16384.0
+            ]
+          ],
+          "hbm_bytes_by_row_direction_exact": [
+            [
+              "163840",
+              "16384"
+            ],
+            [
+              "163840",
+              "16384"
+            ]
+          ],
+          "int4_ops": 4194304.0,
+          "int4_ops_exact_decimal": "4194304",
+          "vec_eqops": 704512.0,
+          "vec_eqops_exact_decimal": "704512"
+        },
+        "state": "finished",
+        "terminal": true
+      },
+      "granularity_identity": {
+        "activity_limit_per_epoch": 3,
+        "claimed_validation": "not_run",
+        "epoch_count": 3,
+        "heldout_status": "not_available",
+        "ranking_status": "not_tested",
+        "repeat_count_semantics": "audit_metadata_only",
+        "schema": "coarse_die_plan_v2",
+        "validation_status": "not_run"
+      },
+      "granularity_validation": "not_run",
+      "hardware_fingerprint": "sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787",
+      "hardware_source_revision": "9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8",
+      "hbm_read_bytes_total": 327680,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 32768,
+      "heldout_status": "not_available",
+      "int4_input_bytes": 81920,
+      "kind": "gemm",
+      "local_bus_bytes": 786688,
+      "logical_tensor_bytes": 98304,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates",
+        "exact_per_tile_INT4_tail_packing"
+      ],
+      "output_round_count": 1,
+      "physical_transfer_bytes": 360448,
+      "pipeline_identity": {
+        "profile": "pipeline_fluid_v2",
+        "status": "assumed"
+      },
+      "plan_fingerprint": "1bf9ea72a8fcad7149ed2ad50c6dba5e0a1abade8b4cf10366c3cbcddbfcd096",
+      "probability_bytes": 0,
+      "ranking_status": "not_tested",
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "resource_domains": [
+        {
+          "capacity_per_s": 1.0,
+          "enabled": true,
+          "id": "COMPUTE_GATE",
+          "planned_work": 8.928703199426872e-08,
+          "resource_id": 0,
+          "unit": "second_of_service/s"
+        },
+        {
+          "capacity_per_s": 11264000000000.0,
+          "enabled": true,
+          "id": "SRAM_READ",
+          "planned_work": 573568.0,
+          "resource_id": 1,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 11264000000000.0,
+          "enabled": true,
+          "id": "SRAM_WRITE",
+          "planned_work": 573568.0,
+          "resource_id": 2,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 1971199999999.9998,
+          "enabled": true,
+          "id": "LOCAL",
+          "planned_work": 786688.0,
+          "resource_id": 3,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 2355200000000.0,
+          "enabled": true,
+          "id": "HBM0",
+          "planned_work": 257462.85714285716,
+          "resource_id": 4,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 2355200000000.0,
+          "enabled": true,
+          "id": "HBM1",
+          "planned_work": 257462.85714285716,
+          "resource_id": 5,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 0.0,
+          "enabled": false,
+          "id": "INJECT0",
+          "planned_work": 0.0,
+          "resource_id": 6,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 0.0,
+          "enabled": false,
+          "id": "INJECT1",
+          "planned_work": 0.0,
+          "resource_id": 7,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 246400000000.0,
+          "enabled": true,
+          "id": "XPOS",
+          "planned_work": 90112.0,
+          "resource_id": 8,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 246400000000.0,
+          "enabled": true,
+          "id": "XNEG",
+          "planned_work": 90112.0,
+          "resource_id": 9,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 179200000000.0,
+          "enabled": true,
+          "id": "YPOS",
+          "planned_work": 17873.454545454544,
+          "resource_id": 10,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 179200000000.0,
+          "enabled": true,
+          "id": "YNEG",
+          "planned_work": 178734.54545454544,
+          "resource_id": 11,
+          "unit": "B/s"
+        },
+        {
+          "capacity_per_s": 7033600000000.0,
+          "enabled": true,
+          "id": "HOP",
+          "planned_work": 2600960.0,
+          "resource_id": 12,
+          "unit": "hop_B/s"
+        }
+      ],
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "routing_identity": {
+        "profile": "mapped_uniform_sources_v2",
+        "status": "assumed"
+      },
+      "runtime_counters": {
+        "accounting_history_complete": true,
+        "active_activities": 0,
+        "active_hbm_owners": 0,
+        "active_owners": 0,
+        "allocation_updates": 4,
+        "capacity": [
+          1.0,
+          11264000000000.0,
+          11264000000000.0,
+          1971199999999.9998,
+          2355200000000.0,
+          2355200000000.0,
+          0.0,
+          0.0,
+          246400000000.0,
+          246400000000.0,
+          179200000000.0,
+          179200000000.0,
+          7033600000000.0
+        ],
+        "compute_busy_ns": 2195.0000000000005,
+        "compute_busy_ns_exact": "2195.000000000000624834",
+        "endpoint_registry_size": 0,
+        "hardware_raw": {
+          "available": true,
+          "hardware_fingerprint": "sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787",
+          "hbm_row_peak_Bps": [
+            2355200000000.0,
+            2355200000000.0
+          ],
+          "peak_int4_ops_per_s": 769296000000000.0,
+          "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+        },
+        "hbm_busy_ns": 1097.142857142857,
+        "hbm_busy_ns_exact": "1097.142857142857049091",
+        "hbm_direction_order": [
+          "read",
+          "write"
+        ],
+        "hbm_served_bytes_by_row_direction": [
+          [
+            163840.0,
+            16384.0
+          ],
+          [
+            163840.0,
+            16384.0
+          ]
+        ],
+        "hbm_served_bytes_by_row_direction_exact": [
+          [
+            "163840",
+            "16384"
+          ],
+          [
+            "163840",
+            "16384"
+          ]
+        ],
+        "hbm_shared_ns": 0.0,
+        "hbm_shared_ns_exact": "0",
+        "internal_events": 6,
+        "legacy_unclassified_hbm_bytes_by_row_direction": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "legacy_unclassified_typed_totals_unknown": false,
+        "now_ns": 3293,
+        "row_busy_ns": [
+          1097.142857142857,
+          1097.142857142857
+        ],
+        "row_busy_ns_exact": [
+          "1097.142857142857049091",
+          "1097.142857142857049091"
+        ],
+        "row_shared_ns": [
+          0.0,
+          0.0
+        ],
+        "row_shared_ns_exact": [
+          "0",
+          "0"
+        ],
+        "row_shared_owners": [
+          0,
+          0
+        ],
+        "runtime_generation": 4,
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                163840.0,
+                16384.0
+              ],
+              [
+                163840.0,
+                16384.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "163840",
+                "16384"
+              ],
+              [
+                "163840",
+                "16384"
+              ]
+            ],
+            "int4_ops": 4194304.0,
+            "int4_ops_exact_decimal": "4194304",
+            "vec_eqops": 704512.0,
+            "vec_eqops_exact_decimal": "704512"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        },
+        "served_category_totals_semantics": "complete_lifetime_totals",
+        "transaction_registry_size": 0,
+        "typed_totals_history_complete": true
+      },
+      "score_bytes": 0,
+      "selected_template": "gemm_output_stationary_v2",
+      "selection_rule": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th",
+      "source_matrix_ops": 4194304,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 63504,
+      "sram_read_bytes": 573568,
+      "sram_write_bytes": 573568,
+      "status": "ok_assumed",
+      "template_id": "gemm_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 128,
+      "tm": 16,
+      "tn": 64,
+      "topology_identity": {
+        "physical_validation": "unverified",
+        "profile": "distributed_ideal_v2",
+        "status": "assumed"
+      },
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 704512,
+      "wave_count": 1
+    },
+    "status": "ok",
+    "task_hash": "448f36eef3694a624f56947a0540d89399734fe90e9e4d9eaba5076b21e90a06",
+    "task_path": "/workspace/template/work/coldcompile-before/fixtures/gemm_128x128x128.json"
+  },
+  "command": [
+    "/workspace/template/work/coldcompile-merge-build/coarse_die_benchmark",
+    "--config",
+    "/workspace/template/die/tests/fixtures/coarse_die_v2.json",
+    "--task",
+    "/workspace/template/work/coldcompile-before/fixtures/gemm_128x128x128.json",
+    "--iterations",
+    "30",
+    "--owners",
+    "1"
+  ],
+  "binary_sha256": "f716b91f234206e0ae2dceec92aa8f8410c419d89665cf18874b2529cd2abafc",
+  "driver_host_elapsed_ns": 141919072,
+  "driver_return_code": 0,
+  "stdout": "{\n  \"benchmark_version\": 1,\n  \"cold_create_parse_resolve_compile\": {\n    \"count\": 30,\n    \"max_ns\": 4291515.0,\n    \"min_ns\": 1819196.0,\n    \"p50_ns\": 2225458.0,\n    \"p95_ns\": 4055090.0,\n    \"samples_ns\": [\n      2593130.0,\n      2431117.0,\n      1894680.0,\n      2233690.0,\n      1987039.0,\n      1819196.0,\n      2337566.0,\n      2042542.0,\n      2509725.0,\n      2076874.0,\n      2379539.0,\n      2290445.0,\n      2105637.0,\n      2092888.0,\n      2388733.0,\n      2202804.0,\n      2236164.0,\n      1947349.0,\n      2151436.0,\n      2225458.0,\n      3672514.0,\n      4055090.0,\n      2482484.0,\n      2537687.0,\n      2797408.0,\n      2216665.0,\n      2130505.0,\n      4291515.0,\n      1991566.0,\n      2008451.0\n    ]\n  },\n  \"compiler\": \"14.2.0\",\n  \"config_hash\": \"778e2517d858241f1c91957ce1b2b2cdea2c4c04e9994772651c92153fb27934\",\n  \"config_path\": \"/workspace/template/die/tests/fixtures/coarse_die_v2.json\",\n  \"contending_owners\": 1,\n  \"cplusplus\": 201703,\n  \"estimate_alone\": {\n    \"count\": 30,\n    \"max_ns\": 523808.0,\n    \"min_ns\": 226481.0,\n    \"p50_ns\": 241523.0,\n    \"p95_ns\": 439331.0,\n    \"samples_ns\": [\n      439331.0,\n      281113.0,\n      252389.0,\n      239440.0,\n      236645.0,\n      346661.0,\n      241523.0,\n      233902.0,\n      350407.0,\n      243356.0,\n      231768.0,\n      255685.0,\n      254843.0,\n      234022.0,\n      228925.0,\n      227242.0,\n      226961.0,\n      247963.0,\n      226481.0,\n      227131.0,\n      228294.0,\n      265119.0,\n      230086.0,\n      228704.0,\n      297297.0,\n      275985.0,\n      523808.0,\n      310187.0,\n      249085.0,\n      240331.0\n    ]\n  },\n  \"hardware_fingerprint\": \"sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787\",\n  \"hot_compile_same_hardware_same_task\": {\n    \"count\": 30,\n    \"max_ns\": 2619100.0,\n    \"min_ns\": 1506276.0,\n    \"p50_ns\": 1729552.0,\n    \"p95_ns\": 2260951.0,\n    \"samples_ns\": [\n      2040609.0,\n      1550332.0,\n      1687619.0,\n      1616211.0,\n      2260951.0,\n      1720327.0,\n      1658815.0,\n      1506276.0,\n      1611303.0,\n      2046479.0,\n      1774779.0,\n      1659666.0,\n      1729552.0,\n      1631064.0,\n      1975661.0,\n      2077374.0,\n      1559176.0,\n      2054380.0,\n      1540006.0,\n      2027069.0,\n      1784023.0,\n      1987770.0,\n      1610843.0,\n      2619100.0,\n      1626016.0,\n      2024535.0,\n      1730473.0,\n      2023424.0,\n      1865916.0,\n      1709462.0\n    ]\n  },\n  \"iterations\": 30,\n  \"max_rss_kib\": 13056,\n  \"measurement\": \"actual coarse_die C++ library calls\",\n  \"notes\": [\n    \"cold includes JSON file reads, parse, hardware resolution, and compile\",\n    \"hot reuses parsed task and resolved hardware; compile still runs each sample\",\n    \"runtime event count is actual next_event/advance_to loop count\",\n    \"latency is modeled device time; benchmark durations are host time\"\n  ],\n  \"plan_hash\": \"1bf9ea72a8fcad7149ed2ad50c6dba5e0a1abade8b4cf10366c3cbcddbfcd096\",\n  \"runtime_advance_event_count\": 3,\n  \"runtime_counters\": {\n    \"accounting_history_complete\": true,\n    \"active_activities\": 0,\n    \"active_hbm_owners\": 0,\n    \"active_owners\": 0,\n    \"allocation_updates\": 4,\n    \"capacity\": [\n      1.0,\n      11264000000000.0,\n      11264000000000.0,\n      1971199999999.9998,\n      2355200000000.0,\n      2355200000000.0,\n      0.0,\n      0.0,\n      246400000000.0,\n      246400000000.0,\n      179200000000.0,\n      179200000000.0,\n      7033600000000.0\n    ],\n    \"compute_busy_ns\": 2195.0000000000005,\n    \"compute_busy_ns_exact\": \"2195.000000000000624834\",\n    \"endpoint_registry_size\": 0,\n    \"hardware_raw\": {\n      \"available\": true,\n      \"hardware_fingerprint\": \"sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787\",\n      \"hbm_row_peak_Bps\": [\n        2355200000000.0,\n        2355200000000.0\n      ],\n      \"peak_int4_ops_per_s\": 769296000000000.0,\n      \"peak_vec_fp32_eq_ops_per_s\": 76924619200000.0\n    },\n    \"hbm_busy_ns\": 1097.142857142857,\n    \"hbm_busy_ns_exact\": \"1097.142857142857049091\",\n    \"hbm_direction_order\": [\n      \"read\",\n      \"write\"\n    ],\n    \"hbm_served_bytes_by_row_direction\": [\n      [\n        163840.0,\n        16384.0\n      ],\n      [\n        163840.0,\n        16384.0\n      ]\n    ],\n    \"hbm_served_bytes_by_row_direction_exact\": [\n      [\n        \"163840\",\n        \"16384\"\n      ],\n      [\n        \"163840\",\n        \"16384\"\n      ]\n    ],\n    \"hbm_shared_ns\": 0.0,\n    \"hbm_shared_ns_exact\": \"0\",\n    \"internal_events\": 6,\n    \"legacy_unclassified_hbm_bytes_by_row_direction\": [\n      [\n        0.0,\n        0.0\n      ],\n      [\n        0.0,\n        0.0\n      ]\n    ],\n    \"legacy_unclassified_hbm_bytes_by_row_direction_exact\": [\n      [\n        \"0\",\n        \"0\"\n      ],\n      [\n        \"0\",\n        \"0\"\n      ]\n    ],\n    \"legacy_unclassified_typed_totals_unknown\": false,\n    \"now_ns\": 3293,\n    \"row_busy_ns\": [\n      1097.142857142857,\n      1097.142857142857\n    ],\n    \"row_busy_ns_exact\": [\n      \"1097.142857142857049091\",\n      \"1097.142857142857049091\"\n    ],\n    \"row_shared_ns\": [\n      0.0,\n      0.0\n    ],\n    \"row_shared_ns_exact\": [\n      \"0\",\n      \"0\"\n    ],\n    \"row_shared_owners\": [\n      0,\n      0\n    ],\n    \"runtime_generation\": 4,\n    \"served_by_category\": {\n      \"comm_recv\": {\n        \"hbm_served_bytes_by_row_direction\": [\n          [\n            0.0,\n            0.0\n          ],\n          [\n            0.0,\n            0.0\n          ]\n        ],\n        \"hbm_served_bytes_by_row_direction_exact\": [\n          [\n            \"0\",\n            \"0\"\n          ],\n          [\n            \"0\",\n            \"0\"\n          ]\n        ],\n        \"int4_ops\": 0.0,\n        \"int4_ops_exact_decimal\": \"0\",\n        \"vec_eqops\": 0.0,\n        \"vec_eqops_exact_decimal\": \"0\"\n      },\n      \"comm_send\": {\n        \"hbm_served_bytes_by_row_direction\": [\n          [\n            0.0,\n            0.0\n          ],\n          [\n            0.0,\n            0.0\n          ]\n        ],\n        \"hbm_served_bytes_by_row_direction_exact\": [\n          [\n            \"0\",\n            \"0\"\n          ],\n          [\n            \"0\",\n            \"0\"\n          ]\n        ],\n        \"int4_ops\": 0.0,\n        \"int4_ops_exact_decimal\": \"0\",\n        \"vec_eqops\": 0.0,\n        \"vec_eqops_exact_decimal\": \"0\"\n      },\n      \"comp\": {\n        \"hbm_served_bytes_by_row_direction\": [\n          [\n            163840.0,\n            16384.0\n          ],\n          [\n            163840.0,\n            16384.0\n          ]\n        ],\n        \"hbm_served_bytes_by_row_direction_exact\": [\n          [\n            \"163840\",\n            \"16384\"\n          ],\n          [\n            \"163840\",\n            \"16384\"\n          ]\n        ],\n        \"int4_ops\": 4194304.0,\n        \"int4_ops_exact_decimal\": \"4194304\",\n        \"vec_eqops\": 704512.0,\n        \"vec_eqops_exact_decimal\": \"704512\"\n      },\n      \"die\": {\n        \"hbm_served_bytes_by_row_direction\": [\n          [\n            0.0,\n            0.0\n          ],\n          [\n            0.0,\n            0.0\n          ]\n        ],\n        \"hbm_served_bytes_by_row_direction_exact\": [\n          [\n            \"0\",\n            \"0\"\n          ],\n          [\n            \"0\",\n            \"0\"\n          ]\n        ],\n        \"int4_ops\": 0.0,\n        \"int4_ops_exact_decimal\": \"0\",\n        \"vec_eqops\": 0.0,\n        \"vec_eqops_exact_decimal\": \"0\"\n      },\n      \"pool\": {\n        \"hbm_served_bytes_by_row_direction\": [\n          [\n            0.0,\n            0.0\n          ],\n          [\n            0.0,\n            0.0\n          ]\n        ],\n        \"hbm_served_bytes_by_row_direction_exact\": [\n          [\n            \"0\",\n            \"0\"\n          ],\n          [\n            \"0\",\n            \"0\"\n          ]\n        ],\n        \"int4_ops\": 0.0,\n        \"int4_ops_exact_decimal\": \"0\",\n        \"vec_eqops\": 0.0,\n        \"vec_eqops_exact_decimal\": \"0\"\n      },\n      \"restore\": {\n        \"hbm_served_bytes_by_row_direction\": [\n          [\n            0.0,\n            0.0\n          ],\n          [\n            0.0,\n            0.0\n          ]\n        ],\n        \"hbm_served_bytes_by_row_direction_exact\": [\n          [\n            \"0\",\n            \"0\"\n          ],\n          [\n            \"0\",\n            \"0\"\n          ]\n        ],\n        \"int4_ops\": 0.0,\n        \"int4_ops_exact_decimal\": \"0\",\n        \"vec_eqops\": 0.0,\n        \"vec_eqops_exact_decimal\": \"0\"\n      }\n    },\n    \"served_category_totals_semantics\": \"complete_lifetime_totals\",\n    \"transaction_registry_size\": 0,\n    \"typed_totals_history_complete\": true\n  },\n  \"runtime_finish_ns\": 3293,\n  \"shared_runtime_arbitration\": {\n    \"count\": 30,\n    \"max_ns\": 17045.0,\n    \"min_ns\": 6831.0,\n    \"p50_ns\": 8292.0,\n    \"p95_ns\": 16815.0,\n    \"samples_ns\": [\n      16815.0,\n      6831.0,\n      9985.0,\n      10947.0,\n      8883.0,\n      8923.0,\n      8052.0,\n      7962.0,\n      7841.0,\n      10015.0,\n      8242.0,\n      7892.0,\n      7892.0,\n      14352.0,\n      10726.0,\n      8192.0,\n      9644.0,\n      8032.0,\n      9574.0,\n      8012.0,\n      9504.0,\n      7952.0,\n      9494.0,\n      9534.0,\n      17045.0,\n      10036.0,\n      8292.0,\n      8032.0,\n      7761.0,\n      8042.0\n    ]\n  },\n  \"shared_runtime_arbitration_cpu\": {\n    \"count\": 30,\n    \"max_ns\": 18000.0,\n    \"min_ns\": 7000.0,\n    \"p50_ns\": 9000.0,\n    \"p95_ns\": 17000.0,\n    \"samples_ns\": [\n      18000.0,\n      7000.0,\n      11000.0,\n      11000.0,\n      9000.0,\n      9000.0,\n      8000.0,\n      8000.0,\n      8000.0,\n      11000.0,\n      9000.0,\n      8000.0,\n      8000.0,\n      15000.0,\n      11000.0,\n      8000.0,\n      10000.0,\n      8000.0,\n      10000.0,\n      9000.0,\n      9000.0,\n      8000.0,\n      9000.0,\n      10000.0,\n      17000.0,\n      11000.0,\n      9000.0,\n      8000.0,\n      8000.0,\n      8000.0\n    ]\n  },\n  \"standalone_result\": {\n    \"active_cores\": 16,\n    \"activity_units\": \"work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]\",\n    \"activity_work_semantics\": \"activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1\",\n    \"alone_estimate_status\": \"ok_assumed\",\n    \"calibration_claimed_status\": \"assumed\",\n    \"calibration_revision\": null,\n    \"calibration_source_flags\": {\n      \"calibration_revision_present\": false,\n      \"certificate_manifest_present\": false,\n      \"performance_profile_present\": true,\n      \"verified\": false\n    },\n    \"calibration_status\": \"assumed\",\n    \"candidate_count\": 28,\n    \"candidate_estimate_source\": \"estimate_alone(shared_runtime_engine)\",\n    \"consumption_wave_count\": 1,\n    \"conversion_elements\": 196608,\n    \"dataflow_id\": \"output_stationary_v2\",\n    \"derived_hardware\": {\n      \"core\": {\n        \"L0_mm\": 2.5635515881709545,\n        \"N_core\": 88,\n        \"N_pe\": 4371,\n        \"N_vec\": 221,\n        \"P_int4_per_core_ops_per_s\": 8742000000000.0,\n        \"P_vec_per_core_ops_per_s\": 874143400000.0,\n        \"core_type\": \"large\",\n        \"noc_width_bits\": 256,\n        \"sram_bytes_per_core\": 262144,\n        \"sram_mib_per_core\": 0.25\n      },\n      \"core_resource_table\": {\n        \"id\": \"core64_v2\",\n        \"rows_sha256\": \"8e7d393ff9a96dd556088fa7c98a6fd80ed0b277e03cde7c3909a0f118e45f36\"\n      },\n      \"die\": {\n        \"A_req_mm2\": 200.0,\n        \"area_mm2\": 583.1988615963413,\n        \"aspect_ratio\": 1.3731803547640409,\n        \"bump_budget_Bps\": 24099126512245.508,\n        \"bump_budget_GBps\": 24099.126512245508,\n        \"core_columns_nx\": 8,\n        \"core_count\": 88,\n        \"core_pitch_x_mm\": 0.0,\n        \"core_pitch_y_mm\": 0.0,\n        \"core_rows_ny\": 11,\n        \"d2d_bidirectional_Bps\": 19388726512245.508,\n        \"d2d_oneway_Bps\": 9694363256122.754,\n        \"die_extra_height_mm\": 0.1,\n        \"die_extra_width_mm\": 0.1,\n        \"geometry_candidate\": \"minimum_grid\",\n        \"height_mm\": 28.2990674698805,\n        \"minimum_height_mm\": 28.2990674698805,\n        \"minimum_width_mm\": 20.608412705367638,\n        \"width_mm\": 20.608412705367638\n      },\n      \"hardware_summary\": {\n        \"die_core_count\": 88,\n        \"hbm_capacity_bytes\": 144000000000.0,\n        \"hbm_row_peak_Bps\": [\n          2355200000000.0,\n          2355200000000.0\n        ],\n        \"peak_int4_ops_per_s\": 769296000000000.0,\n        \"peak_vec_fp32_eq_ops_per_s\": 76924619200000.0\n      },\n      \"hbm\": {\n        \"capacity_bytes\": 144000000000.0,\n        \"ingress_evidence\": {\n          \"physical_topology_validation\": \"unverified\",\n          \"profile\": \"distributed_ideal_v2\",\n          \"row_to_ingress\": [\n            null,\n            null\n          ],\n          \"unlimited\": true\n        },\n        \"module_height_mm\": 50.8590674698805,\n        \"module_width_mm\": 22.41,\n        \"peak_Bps\": 4710400000000.0,\n        \"placement_mode\": \"two_sides_one_row_each\",\n        \"row_overhang\": true,\n        \"row_peak_Bps\": 2355200000000.0,\n        \"row_to_ingress\": [\n          null,\n          null\n        ],\n        \"row_width_mm\": 22.11,\n        \"sku\": \"Micron MT65B18G16120A00QH-92:A\",\n        \"stacks_per_row\": 2,\n        \"total_stacks\": 4\n      },\n      \"performance_identity\": {\n        \"physical_topology_validation\": \"unverified\",\n        \"routing_profile\": \"mapped_uniform_sources_v2\",\n        \"timing_topology_profile\": \"distributed_ideal_v2\"\n      },\n      \"resources\": [\n        {\n          \"enabled\": true,\n          \"id\": \"COMPUTE_GATE\",\n          \"rate\": 1.0,\n          \"resource_id\": 0,\n          \"unit\": \"second_of_service/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"SRAM_READ\",\n          \"rate\": 11264000000000.0,\n          \"resource_id\": 1,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"SRAM_WRITE\",\n          \"rate\": 11264000000000.0,\n          \"resource_id\": 2,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"LOCAL\",\n          \"rate\": 1971199999999.9998,\n          \"resource_id\": 3,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"HBM0\",\n          \"rate\": 2355200000000.0,\n          \"resource_id\": 4,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"HBM1\",\n          \"rate\": 2355200000000.0,\n          \"resource_id\": 5,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": false,\n          \"id\": \"INJECT0\",\n          \"rate\": 0.0,\n          \"resource_id\": 6,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": false,\n          \"id\": \"INJECT1\",\n          \"rate\": 0.0,\n          \"resource_id\": 7,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"XPOS\",\n          \"rate\": 246400000000.0,\n          \"resource_id\": 8,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"XNEG\",\n          \"rate\": 246400000000.0,\n          \"resource_id\": 9,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"YPOS\",\n          \"rate\": 179200000000.0,\n          \"resource_id\": 10,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"YNEG\",\n          \"rate\": 179200000000.0,\n          \"resource_id\": 11,\n          \"unit\": \"B/s\"\n        },\n        {\n          \"enabled\": true,\n          \"id\": \"HOP\",\n          \"rate\": 7033600000000.0,\n          \"resource_id\": 12,\n          \"unit\": \"hop_B/s\"\n        }\n      ],\n      \"source_revision\": \"9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8\",\n      \"system\": {\n        \"core_count\": 3168,\n        \"effective_module_height_mm\": 53.61016429233315,\n        \"effective_module_width_mm\": 23.622214121457795,\n        \"eta_core_die\": 0.991631074168826,\n        \"eta_core_region\": 0.4503937715270393,\n        \"eta_module_region\": 0.9862643175770878,\n        \"hbm_capacity_bytes\": 5184000000000.0,\n        \"module_columns\": 9,\n        \"module_count\": 36,\n        \"module_rows\": 4,\n        \"peak_int4_ops_per_s\": 2.7694656e+16,\n        \"peak_vec_fp32_eq_ops_per_s\": 2.7692862912e+15,\n        \"region_height_mm\": 215.0,\n        \"region_width_mm\": 215.0\n      }\n    },\n    \"domain_capacities\": [\n      1.0,\n      11264000000000.0,\n      11264000000000.0,\n      1971199999999.9998,\n      2355200000000.0,\n      2355200000000.0,\n      0.0,\n      0.0,\n      246400000000.0,\n      246400000000.0,\n      179200000000.0,\n      179200000000.0,\n      7033600000000.0\n    ],\n    \"domain_work\": [\n      8.928703199426872e-08,\n      573568.0,\n      573568.0,\n      786688.0,\n      257462.85714285716,\n      257462.85714285716,\n      0.0,\n      0.0,\n      90112.0,\n      90112.0,\n      17873.454545454544,\n      178734.54545454544,\n      2600960.0\n    ],\n    \"estimated_latency_ns\": 3293,\n    \"evidence_flags\": [\n      \"engineering_assumption\",\n      \"hardware_source_derived\"\n    ],\n    \"executed_int4_ops\": 4194304,\n    \"executed_matrix_ops\": 4194304,\n    \"executed_score_slots\": 0,\n    \"execution\": {\n      \"activities\": [\n        {\n          \"activity_id\": 1,\n          \"alpha\": 0.0,\n          \"canonical_q\": 327680.0,\n          \"credit_delta\": [\n            1.0,\n            0.0\n          ],\n          \"done\": true,\n          \"epoch_index\": 0,\n          \"hbm_payload_bytes\": [\n            [\n              163840,\n              0\n            ],\n            [\n              163840,\n              0\n            ]\n          ],\n          \"hbm_served_bytes\": [\n            [\n              163840.0,\n              0.0\n            ],\n            [\n              163840.0,\n              0.0\n            ]\n          ],\n          \"hbm_served_bytes_exact\": [\n            [\n              \"163840\",\n              \"0\"\n            ],\n            [\n              \"163840\",\n              \"0\"\n            ]\n          ],\n          \"int4_ops\": \"0\",\n          \"int4_served_ops\": 0.0,\n          \"int4_served_ops_exact\": \"0\",\n          \"planned_work\": [\n            0.0,\n            0.0,\n            327680.0,\n            0.0,\n            234057.14285714287,\n            234057.14285714287,\n            0.0,\n            0.0,\n            81920.0,\n            81920.0,\n            0.0,\n            178734.54545454544,\n            2364509.090909091\n          ],\n          \"progress\": 1.0,\n          \"rate\": 0.0,\n          \"rate_unit\": \"progress_per_second\",\n          \"remaining_work\": [\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0\n          ],\n          \"role\": \"load\",\n          \"served_work\": [\n            0.0,\n            0.0,\n            327680.0,\n            0.0,\n            234057.14285714287,\n            234057.14285714287,\n            0.0,\n            0.0,\n            81920.0,\n            81920.0,\n            0.0,\n            178734.54545454544,\n            2364509.090909091\n          ],\n          \"status\": \"done\",\n          \"vec_eqops\": \"0\",\n          \"vec_served_eqops\": 0.0,\n          \"vec_served_eqops_exact\": \"0\"\n        },\n        {\n          \"activity_id\": 5,\n          \"alpha\": 0.0,\n          \"canonical_q\": 786688.0,\n          \"credit_delta\": [\n            -1.0,\n            1.0\n          ],\n          \"done\": true,\n          \"epoch_index\": 1,\n          \"hbm_payload_bytes\": [\n            [\n              0,\n              0\n            ],\n            [\n              0,\n              0\n            ]\n          ],\n          \"hbm_served_bytes\": [\n            [\n              0.0,\n              0.0\n            ],\n            [\n              0.0,\n              0.0\n            ]\n          ],\n          \"hbm_served_bytes_exact\": [\n            [\n              \"0\",\n              \"0\"\n            ],\n            [\n              \"0\",\n              \"0\"\n            ]\n          ],\n          \"int4_ops\": \"4194304\",\n          \"int4_served_ops\": 4194304.0,\n          \"int4_served_ops_exact\": \"4194304\",\n          \"planned_work\": [\n            8.928703199426872e-08,\n            540800.0,\n            245888.0,\n            786688.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0\n          ],\n          \"progress\": 1.0,\n          \"rate\": 0.0,\n          \"rate_unit\": \"progress_per_second\",\n          \"remaining_work\": [\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0\n          ],\n          \"role\": \"compute\",\n          \"served_work\": [\n            8.928703199426872e-08,\n            540800.0,\n            245888.0,\n            786688.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0\n          ],\n          \"status\": \"done\",\n          \"vec_eqops\": \"704512\",\n          \"vec_served_eqops\": 704512.0,\n          \"vec_served_eqops_exact\": \"704512\"\n        },\n        {\n          \"activity_id\": 9,\n          \"alpha\": 0.0,\n          \"canonical_q\": 32768.0,\n          \"credit_delta\": [\n            0.0,\n            -1.0\n          ],\n          \"done\": true,\n          \"epoch_index\": 2,\n          \"hbm_payload_bytes\": [\n            [\n              0,\n              16384\n            ],\n            [\n              0,\n              16384\n            ]\n          ],\n          \"hbm_served_bytes\": [\n            [\n              0.0,\n              16384.0\n            ],\n            [\n              0.0,\n              16384.0\n            ]\n          ],\n          \"hbm_served_bytes_exact\": [\n            [\n              \"0\",\n              \"16384\"\n            ],\n            [\n              \"0\",\n              \"16384\"\n            ]\n          ],\n          \"int4_ops\": \"0\",\n          \"int4_served_ops\": 0.0,\n          \"int4_served_ops_exact\": \"0\",\n          \"planned_work\": [\n            0.0,\n            32768.0,\n            0.0,\n            0.0,\n            23405.714285714286,\n            23405.714285714286,\n            0.0,\n            0.0,\n            8192.0,\n            8192.0,\n            17873.454545454544,\n            0.0,\n            236450.9090909091\n          ],\n          \"progress\": 1.0,\n          \"rate\": 0.0,\n          \"rate_unit\": \"progress_per_second\",\n          \"remaining_work\": [\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0,\n            0.0\n          ],\n          \"role\": \"store\",\n          \"served_work\": [\n            0.0,\n            32768.0,\n            0.0,\n            0.0,\n            23405.714285714286,\n            23405.714285714286,\n            0.0,\n            0.0,\n            8192.0,\n            8192.0,\n            17873.454545454544,\n            0.0,\n            236450.9090909091\n          ],\n          \"status\": \"done\",\n          \"vec_eqops\": \"0\",\n          \"vec_served_eqops\": 0.0,\n          \"vec_served_eqops_exact\": \"0\"\n        }\n      ],\n      \"cancelled\": false,\n      \"compute_gate_served_work\": 8.928703199426872e-08,\n      \"compute_gate_served_work_exact\": \"8.928703199426871799931e-08\",\n      \"credit\": [\n        {\n          \"capacity\": 2.0,\n          \"index\": 0,\n          \"value\": 0.0\n        },\n        {\n          \"capacity\": 2.0,\n          \"index\": 1,\n          \"value\": 0.0\n        }\n      ],\n      \"elapsed_ns\": 3293,\n      \"elapsed_ns_exact\": \"3293\",\n      \"epoch_index\": 3,\n      \"finish_ns\": 3293,\n      \"generation\": 4,\n      \"handle\": 1,\n      \"hardware_fingerprint\": \"sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787\",\n      \"hbm_direction_order\": [\n        \"read\",\n        \"write\"\n      ],\n      \"hbm_served_bytes\": [\n        [\n          163840.0,\n          16384.0\n        ],\n        [\n          163840.0,\n          16384.0\n        ]\n      ],\n      \"hbm_served_bytes_exact\": [\n        [\n          \"163840\",\n          \"16384\"\n        ],\n        [\n          \"163840\",\n          \"16384\"\n        ]\n      ],\n      \"issue_ns\": 0,\n      \"owner\": {\n        \"execution_id\": 1,\n        \"generation\": 1,\n        \"key\": \"1:1:1\",\n        \"node_id\": 1,\n        \"request_id\": 1\n      },\n      \"plan_fingerprint\": \"1bf9ea72a8fcad7149ed2ad50c6dba5e0a1abade8b4cf10366c3cbcddbfcd096\",\n      \"ready_ns\": 0,\n      \"served\": {\n        \"compute_gate_work\": 8.928703199426872e-08,\n        \"compute_gate_work_exact\": \"8.928703199426871799931e-08\",\n        \"hbm_bytes_by_row_direction\": [\n          [\n            163840.0,\n            16384.0\n          ],\n          [\n            163840.0,\n            16384.0\n          ]\n        ],\n        \"hbm_bytes_by_row_direction_exact\": [\n          [\n            \"163840\",\n            \"16384\"\n          ],\n          [\n            \"163840\",\n            \"16384\"\n          ]\n        ],\n        \"int4_ops\": 4194304.0,\n        \"int4_ops_exact_decimal\": \"4194304\",\n        \"vec_eqops\": 704512.0,\n        \"vec_eqops_exact_decimal\": \"704512\"\n      },\n      \"state\": \"finished\",\n      \"terminal\": true\n    },\n    \"granularity_identity\": {\n      \"activity_limit_per_epoch\": 3,\n      \"claimed_validation\": \"not_run\",\n      \"epoch_count\": 3,\n      \"heldout_status\": \"not_available\",\n      \"ranking_status\": \"not_tested\",\n      \"repeat_count_semantics\": \"audit_metadata_only\",\n      \"schema\": \"coarse_die_plan_v2\",\n      \"validation_status\": \"not_run\"\n    },\n    \"granularity_validation\": \"not_run\",\n    \"hardware_fingerprint\": \"sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787\",\n    \"hardware_source_revision\": \"9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8\",\n    \"hbm_read_bytes_total\": 327680,\n    \"hbm_workspace_peak_bytes\": 0,\n    \"hbm_write_bytes_total\": 32768,\n    \"heldout_status\": \"not_available\",\n    \"int4_input_bytes\": 81920,\n    \"kind\": \"gemm\",\n    \"local_bus_bytes\": 786688,\n    \"logical_tensor_bytes\": 98304,\n    \"mapping_assumptions\": [\n      \"engineering_assumption\",\n      \"bounded_tile_candidates\",\n      \"exact_per_tile_INT4_tail_packing\"\n    ],\n    \"output_round_count\": 1,\n    \"physical_transfer_bytes\": 360448,\n    \"pipeline_identity\": {\n      \"profile\": \"pipeline_fluid_v2\",\n      \"status\": \"assumed\"\n    },\n    \"plan_fingerprint\": \"1bf9ea72a8fcad7149ed2ad50c6dba5e0a1abade8b4cf10366c3cbcddbfcd096\",\n    \"probability_bytes\": 0,\n    \"ranking_status\": \"not_tested\",\n    \"recompute_matrix_ops\": 0,\n    \"recomputed_matrix_ops\": 0,\n    \"resource_domains\": [\n      {\n        \"capacity_per_s\": 1.0,\n        \"enabled\": true,\n        \"id\": \"COMPUTE_GATE\",\n        \"planned_work\": 8.928703199426872e-08,\n        \"resource_id\": 0,\n        \"unit\": \"second_of_service/s\"\n      },\n      {\n        \"capacity_per_s\": 11264000000000.0,\n        \"enabled\": true,\n        \"id\": \"SRAM_READ\",\n        \"planned_work\": 573568.0,\n        \"resource_id\": 1,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 11264000000000.0,\n        \"enabled\": true,\n        \"id\": \"SRAM_WRITE\",\n        \"planned_work\": 573568.0,\n        \"resource_id\": 2,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 1971199999999.9998,\n        \"enabled\": true,\n        \"id\": \"LOCAL\",\n        \"planned_work\": 786688.0,\n        \"resource_id\": 3,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 2355200000000.0,\n        \"enabled\": true,\n        \"id\": \"HBM0\",\n        \"planned_work\": 257462.85714285716,\n        \"resource_id\": 4,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 2355200000000.0,\n        \"enabled\": true,\n        \"id\": \"HBM1\",\n        \"planned_work\": 257462.85714285716,\n        \"resource_id\": 5,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 0.0,\n        \"enabled\": false,\n        \"id\": \"INJECT0\",\n        \"planned_work\": 0.0,\n        \"resource_id\": 6,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 0.0,\n        \"enabled\": false,\n        \"id\": \"INJECT1\",\n        \"planned_work\": 0.0,\n        \"resource_id\": 7,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 246400000000.0,\n        \"enabled\": true,\n        \"id\": \"XPOS\",\n        \"planned_work\": 90112.0,\n        \"resource_id\": 8,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 246400000000.0,\n        \"enabled\": true,\n        \"id\": \"XNEG\",\n        \"planned_work\": 90112.0,\n        \"resource_id\": 9,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 179200000000.0,\n        \"enabled\": true,\n        \"id\": \"YPOS\",\n        \"planned_work\": 17873.454545454544,\n        \"resource_id\": 10,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 179200000000.0,\n        \"enabled\": true,\n        \"id\": \"YNEG\",\n        \"planned_work\": 178734.54545454544,\n        \"resource_id\": 11,\n        \"unit\": \"B/s\"\n      },\n      {\n        \"capacity_per_s\": 7033600000000.0,\n        \"enabled\": true,\n        \"id\": \"HOP\",\n        \"planned_work\": 2600960.0,\n        \"resource_id\": 12,\n        \"unit\": \"hop_B/s\"\n      }\n    ],\n    \"routing_evidence\": {\n      \"profile\": \"distributed_ideal_v2\",\n      \"status\": \"engineering_assumption\"\n    },\n    \"routing_identity\": {\n      \"profile\": \"mapped_uniform_sources_v2\",\n      \"status\": \"assumed\"\n    },\n    \"runtime_counters\": {\n      \"accounting_history_complete\": true,\n      \"active_activities\": 0,\n      \"active_hbm_owners\": 0,\n      \"active_owners\": 0,\n      \"allocation_updates\": 4,\n      \"capacity\": [\n        1.0,\n        11264000000000.0,\n        11264000000000.0,\n        1971199999999.9998,\n        2355200000000.0,\n        2355200000000.0,\n        0.0,\n        0.0,\n        246400000000.0,\n        246400000000.0,\n        179200000000.0,\n        179200000000.0,\n        7033600000000.0\n      ],\n      \"compute_busy_ns\": 2195.0000000000005,\n      \"compute_busy_ns_exact\": \"2195.000000000000624834\",\n      \"endpoint_registry_size\": 0,\n      \"hardware_raw\": {\n        \"available\": true,\n        \"hardware_fingerprint\": \"sha256:987e770486a0bb7e196980e5ee0d8b96630955c45b97a0958937b62db2c7e787\",\n        \"hbm_row_peak_Bps\": [\n          2355200000000.0,\n          2355200000000.0\n        ],\n        \"peak_int4_ops_per_s\": 769296000000000.0,\n        \"peak_vec_fp32_eq_ops_per_s\": 76924619200000.0\n      },\n      \"hbm_busy_ns\": 1097.142857142857,\n      \"hbm_busy_ns_exact\": \"1097.142857142857049091\",\n      \"hbm_direction_order\": [\n        \"read\",\n        \"write\"\n      ],\n      \"hbm_served_bytes_by_row_direction\": [\n        [\n          163840.0,\n          16384.0\n        ],\n        [\n          163840.0,\n          16384.0\n        ]\n      ],\n      \"hbm_served_bytes_by_row_direction_exact\": [\n        [\n          \"163840\",\n          \"16384\"\n        ],\n        [\n          \"163840\",\n          \"16384\"\n        ]\n      ],\n      \"hbm_shared_ns\": 0.0,\n      \"hbm_shared_ns_exact\": \"0\",\n      \"internal_events\": 6,\n      \"legacy_unclassified_hbm_bytes_by_row_direction\": [\n        [\n          0.0,\n          0.0\n        ],\n        [\n          0.0,\n          0.0\n        ]\n      ],\n      \"legacy_unclassified_hbm_bytes_by_row_direction_exact\": [\n        [\n          \"0\",\n          \"0\"\n        ],\n        [\n          \"0\",\n          \"0\"\n        ]\n      ],\n      \"legacy_unclassified_typed_totals_unknown\": false,\n      \"now_ns\": 3293,\n      \"row_busy_ns\": [\n        1097.142857142857,\n        1097.142857142857\n      ],\n      \"row_busy_ns_exact\": [\n        \"1097.142857142857049091\",\n        \"1097.142857142857049091\"\n      ],\n      \"row_shared_ns\": [\n        0.0,\n        0.0\n      ],\n      \"row_shared_ns_exact\": [\n        \"0\",\n        \"0\"\n      ],\n      \"row_shared_owners\": [\n        0,\n        0\n      ],\n      \"runtime_generation\": 4,\n      \"served_by_category\": {\n        \"comm_recv\": {\n          \"hbm_served_bytes_by_row_direction\": [\n            [\n              0.0,\n              0.0\n            ],\n            [\n              0.0,\n              0.0\n            ]\n          ],\n          \"hbm_served_bytes_by_row_direction_exact\": [\n            [\n              \"0\",\n              \"0\"\n            ],\n            [\n              \"0\",\n              \"0\"\n            ]\n          ],\n          \"int4_ops\": 0.0,\n          \"int4_ops_exact_decimal\": \"0\",\n          \"vec_eqops\": 0.0,\n          \"vec_eqops_exact_decimal\": \"0\"\n        },\n        \"comm_send\": {\n          \"hbm_served_bytes_by_row_direction\": [\n            [\n              0.0,\n              0.0\n            ],\n            [\n              0.0,\n              0.0\n            ]\n          ],\n          \"hbm_served_bytes_by_row_direction_exact\": [\n            [\n              \"0\",\n              \"0\"\n            ],\n            [\n              \"0\",\n              \"0\"\n            ]\n          ],\n          \"int4_ops\": 0.0,\n          \"int4_ops_exact_decimal\": \"0\",\n          \"vec_eqops\": 0.0,\n          \"vec_eqops_exact_decimal\": \"0\"\n        },\n        \"comp\": {\n          \"hbm_served_bytes_by_row_direction\": [\n            [\n              163840.0,\n              16384.0\n            ],\n            [\n              163840.0,\n              16384.0\n            ]\n          ],\n          \"hbm_served_bytes_by_row_direction_exact\": [\n            [\n              \"163840\",\n              \"16384\"\n            ],\n            [\n              \"163840\",\n              \"16384\"\n            ]\n          ],\n          \"int4_ops\": 4194304.0,\n          \"int4_ops_exact_decimal\": \"4194304\",\n          \"vec_eqops\": 704512.0,\n          \"vec_eqops_exact_decimal\": \"704512\"\n        },\n        \"die\": {\n          \"hbm_served_bytes_by_row_direction\": [\n            [\n              0.0,\n              0.0\n            ],\n            [\n              0.0,\n              0.0\n            ]\n          ],\n          \"hbm_served_bytes_by_row_direction_exact\": [\n            [\n              \"0\",\n              \"0\"\n            ],\n            [\n              \"0\",\n              \"0\"\n            ]\n          ],\n          \"int4_ops\": 0.0,\n          \"int4_ops_exact_decimal\": \"0\",\n          \"vec_eqops\": 0.0,\n          \"vec_eqops_exact_decimal\": \"0\"\n        },\n        \"pool\": {\n          \"hbm_served_bytes_by_row_direction\": [\n            [\n              0.0,\n              0.0\n            ],\n            [\n              0.0,\n              0.0\n            ]\n          ],\n          \"hbm_served_bytes_by_row_direction_exact\": [\n            [\n              \"0\",\n              \"0\"\n            ],\n            [\n              \"0\",\n              \"0\"\n            ]\n          ],\n          \"int4_ops\": 0.0,\n          \"int4_ops_exact_decimal\": \"0\",\n          \"vec_eqops\": 0.0,\n          \"vec_eqops_exact_decimal\": \"0\"\n        },\n        \"restore\": {\n          \"hbm_served_bytes_by_row_direction\": [\n            [\n              0.0,\n              0.0\n            ],\n            [\n              0.0,\n              0.0\n            ]\n          ],\n          \"hbm_served_bytes_by_row_direction_exact\": [\n            [\n              \"0\",\n              \"0\"\n            ],\n            [\n              \"0\",\n              \"0\"\n            ]\n          ],\n          \"int4_ops\": 0.0,\n          \"int4_ops_exact_decimal\": \"0\",\n          \"vec_eqops\": 0.0,\n          \"vec_eqops_exact_decimal\": \"0\"\n        }\n      },\n      \"served_category_totals_semantics\": \"complete_lifetime_totals\",\n      \"transaction_registry_size\": 0,\n      \"typed_totals_history_complete\": true\n    },\n    \"score_bytes\": 0,\n    \"selected_template\": \"gemm_output_stationary_v2\",\n    \"selection_rule\": \"ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th\",\n    \"source_matrix_ops\": 4194304,\n    \"source_vec_ops\": 0,\n    \"sram_capacity_bytes_per_core\": 262144,\n    \"sram_peak_bytes_per_core\": 63504,\n    \"sram_read_bytes\": 573568,\n    \"sram_write_bytes\": 573568,\n    \"status\": \"ok_assumed\",\n    \"template_id\": \"gemm_output_stationary_v2\",\n    \"tf\": 0,\n    \"th\": 0,\n    \"tk\": 128,\n    \"tm\": 16,\n    \"tn\": 64,\n    \"topology_identity\": {\n      \"physical_validation\": \"unverified\",\n      \"profile\": \"distributed_ideal_v2\",\n      \"status\": \"assumed\"\n    },\n    \"valid_score_pairs\": 0,\n    \"vec_equivalent_ops\": 704512,\n    \"wave_count\": 1\n  },\n  \"status\": \"ok\",\n  \"task_hash\": \"448f36eef3694a624f56947a0540d89399734fe90e9e4d9eaba5076b21e90a06\",\n  \"task_path\": \"/workspace/template/work/coldcompile-before/fixtures/gemm_128x128x128.json\"\n}\n",
+  "stderr": ""
+}

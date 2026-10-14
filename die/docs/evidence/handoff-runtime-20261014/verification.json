@@ -1,0 +1,226 @@
+{
+  "date": "2026-10-14",
+  "timezone": "Asia/Shanghai",
+  "baseline_main": "c47ae85f479edd0953bbb432bc05139ef1c63541",
+  "source_digest": "6c2340b9d409f863d7a373d2f3c7ffe3d8d38db3361ab287adb779c15dc12468",
+  "release_file_count": 20,
+  "source_sha256": {
+    "astra-sim-face-LRU/extern/die_model/coarse/CMakeLists.txt": "94d764766964c38fbab9ac34d331a60285a31038224b53cb2446d5fa8d1cc5ca",
+    "astra-sim-face-LRU/extern/die_model/coarse/RELEASE.json": "fa84c44ad238f231d9cb8def8339e3c96e938a12e5edf51ab6c74082f00e34f3",
+    "astra-sim-face-LRU/extern/die_model/coarse/include/coarse_die/Execution.hh": "3916d001b1c42e87b71177da362d91c8d9d056668e6f7524d9b4c551e2e7f5e1",
+    "astra-sim-face-LRU/extern/die_model/coarse/include/coarse_die/Plan.hh": "539b15ae288327f8998ce2981c1fdea8989a7634eb4199cc74a23480701d7526",
+    "astra-sim-face-LRU/extern/die_model/coarse/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+    "astra-sim-face-LRU/extern/die_model/coarse/src/Execution.cc": "b232baaf5300060984dfa9c60482dfc7c0076e4c340b059e91ca04f2436533af",
+    "astra-sim-face-LRU/extern/die_model/coarse/src/Mapping.cc": "4988b407ef8ad61005d75ffbff17a3b4be32dc6fcd0cf2ae2e3668ad90b2beb4",
+    "astra-sim-face-LRU/extern/die_model/coarse/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+    "astra-sim-face/extern/die_model/coarse/CMakeLists.txt": "94d764766964c38fbab9ac34d331a60285a31038224b53cb2446d5fa8d1cc5ca",
+    "astra-sim-face/extern/die_model/coarse/RELEASE.json": "fa84c44ad238f231d9cb8def8339e3c96e938a12e5edf51ab6c74082f00e34f3",
+    "astra-sim-face/extern/die_model/coarse/include/coarse_die/Execution.hh": "3916d001b1c42e87b71177da362d91c8d9d056668e6f7524d9b4c551e2e7f5e1",
+    "astra-sim-face/extern/die_model/coarse/include/coarse_die/Plan.hh": "539b15ae288327f8998ce2981c1fdea8989a7634eb4199cc74a23480701d7526",
+    "astra-sim-face/extern/die_model/coarse/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+    "astra-sim-face/extern/die_model/coarse/src/Execution.cc": "b232baaf5300060984dfa9c60482dfc7c0076e4c340b059e91ca04f2436533af",
+    "astra-sim-face/extern/die_model/coarse/src/Mapping.cc": "4988b407ef8ad61005d75ffbff17a3b4be32dc6fcd0cf2ae2e3668ad90b2beb4",
+    "astra-sim-face/extern/die_model/coarse/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+    "astra-sim-joint/extern/die_model/coarse/CMakeLists.txt": "94d764766964c38fbab9ac34d331a60285a31038224b53cb2446d5fa8d1cc5ca",
+    "astra-sim-joint/extern/die_model/coarse/RELEASE.json": "fa84c44ad238f231d9cb8def8339e3c96e938a12e5edf51ab6c74082f00e34f3",
+    "astra-sim-joint/extern/die_model/coarse/include/coarse_die/Execution.hh": "3916d001b1c42e87b71177da362d91c8d9d056668e6f7524d9b4c551e2e7f5e1",
+    "astra-sim-joint/extern/die_model/coarse/include/coarse_die/Plan.hh": "539b15ae288327f8998ce2981c1fdea8989a7634eb4199cc74a23480701d7526",
+    "astra-sim-joint/extern/die_model/coarse/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+    "astra-sim-joint/extern/die_model/coarse/src/Execution.cc": "b232baaf5300060984dfa9c60482dfc7c0076e4c340b059e91ca04f2436533af",
+    "astra-sim-joint/extern/die_model/coarse/src/Mapping.cc": "4988b407ef8ad61005d75ffbff17a3b4be32dc6fcd0cf2ae2e3668ad90b2beb4",
+    "astra-sim-joint/extern/die_model/coarse/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/CMakeLists.txt": "94d764766964c38fbab9ac34d331a60285a31038224b53cb2446d5fa8d1cc5ca",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/RELEASE.json": "fa84c44ad238f231d9cb8def8339e3c96e938a12e5edf51ab6c74082f00e34f3",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Execution.hh": "3916d001b1c42e87b71177da362d91c8d9d056668e6f7524d9b4c551e2e7f5e1",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/include/coarse_die/Plan.hh": "539b15ae288327f8998ce2981c1fdea8989a7634eb4199cc74a23480701d7526",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/src/Execution.cc": "b232baaf5300060984dfa9c60482dfc7c0076e4c340b059e91ca04f2436533af",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/src/Mapping.cc": "4988b407ef8ad61005d75ffbff17a3b4be32dc6fcd0cf2ae2e3668ad90b2beb4",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+    "astra-sim-wscllm/astra-sim/network_frontend/analytical/CMakeLists.txt": "5e319d47f8bb34f05ba9fc155329e4b6bb3f92496f5b0345b7bfd816a26144be",
+    "astra-sim-wscllm/astra-sim/network_frontend/analytical/congestion_aware/main_online.cc": "abf7f8ae8441572ad63e73b949e21ce1c2cc374ff5fe37e643ddbf1d548f4d48",
+    "astra-sim-wscllm/astra-sim/system/Sys.cc": "fda8f1c0d0cb2f4ccd07aaf0b9a070478ca3afe16cebc6d1fc3a381ccbd9b3bc",
+    "astra-sim-wscllm/astra-sim/system/Sys.hh": "4f48b530e5e3a70183ea6e454938880e48798d2b51306629b9b94b31e72db25e",
+    "astra-sim-wscllm/astra-sim/workload/CoarseDieRuntime.cc": "bf8b5a88d38e55c2c15025632ad06d63f3270dbda92f7942121ef24b2f9f38b6",
+    "astra-sim-wscllm/astra-sim/workload/DieModelAdapter.cc": "786683acfbb3704305a682fd0d831cc4ec2471c9d773c8a02777fd099969a426",
+    "astra-sim-wscllm/astra-sim/workload/DieModelAdapter.hh": "ed11ce57feff03bd335714657b8589fa2da8baa8977496fe233a026f3c081152",
+    "astra-sim-wscllm/astra-sim/workload/MetricCollector.cc": "84d912a99fc62ef1b6addf62fe545a36adbc92e598d11a607540544cb2294727",
+    "astra-sim-wscllm/astra-sim/workload/Workload.cc": "b52b5fbce22b6b403bb65eea09f68c8c034adc16eee3bc330807aa0ce28dd465",
+    "astra-sim-wscllm/astra-sim/workload/Workload.hh": "2c38e9091fcaf4353c4e0ae54502d5f945aeed348ecf2a9e6f2912af88633790",
+    "astra-sim-wscllm/astra-sim/workload/WorkspaceAdmission.hh": "900ae33a0100166c56b2163baba8051962c2e52747946f45b3b29fe6bfac58aa",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/DecisionBridge.cc": "8b0c51bcf23f38c8cdc3ef6c49558169deac4079c4bb251f972287a8e786cc44",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/DecisionBridge.hh": "f27060f04ef6a57a8cd7dcbada44700ecead51f52be19797a75afb94c4c47c6d",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/DecisionMailbox.cc": "ce706fa0dfb8e7c54c84d73c5f4a6524e26b6bd81017028dc3be001bea94b446",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/DecisionMailbox.hh": "9c5ac1365dbbbf94b01b02578023461ba8226f70a9ca8c8f501ee3d28ec0343a",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/GraphBatchCommitter.cc": "640453110374517137407a41f36c0412e13affa986fa7c10a4fb62d9ec3b4dbd",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/GraphBatchCommitter.hh": "1a96cf9573aa6d6601103473c982005bcb4cc5a9a809dddf340311f74bae45d5",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/ParsedGraphBatch.cc": "9e32713d3aef18a8c431d171874ade4d94623259746da67bb83e2cd2fcc05e2a",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/ParsedGraphBatch.hh": "9d9215e8e76dd0b0b37ce7180ae5a471a5c64564b635784825ff29088138fc3b",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/tests/decision_mailbox_test.cc": "dd10c620952bfb975afe1ab004722b9fb823e9642b7ff92b2d328a737e21bb76",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc": "8bb84146dc6d31f5921ffad853e28f04aabc79ee762d6ac25b31d7caef7844e9",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/tests/graph_batch_committer_test.cc": "213097d744b1f9aedf20ddac656febfdb8657d6502a8cc4d257d7e9f2a00deaa",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/tests/parsed_graph_batch_test.cc": "e11afc755a77a6457620317437c5277acd4186a16573c2f62322336f62befa29",
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/tests/workspace_admission_test.cc": "068e59e22038fd3f611c67ab163db2ff6958f6fb858f0a9140d182930acda216",
+    "astra-sim-wscllm/extern/die_model/coarse/CMakeLists.txt": "94d764766964c38fbab9ac34d331a60285a31038224b53cb2446d5fa8d1cc5ca",
+    "astra-sim-wscllm/extern/die_model/coarse/RELEASE.json": "fa84c44ad238f231d9cb8def8339e3c96e938a12e5edf51ab6c74082f00e34f3",
+    "astra-sim-wscllm/extern/die_model/coarse/include/coarse_die/Execution.hh": "3916d001b1c42e87b71177da362d91c8d9d056668e6f7524d9b4c551e2e7f5e1",
+    "astra-sim-wscllm/extern/die_model/coarse/include/coarse_die/Plan.hh": "539b15ae288327f8998ce2981c1fdea8989a7634eb4199cc74a23480701d7526",
+    "astra-sim-wscllm/extern/die_model/coarse/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+    "astra-sim-wscllm/extern/die_model/coarse/src/Execution.cc": "b232baaf5300060984dfa9c60482dfc7c0076e4c340b059e91ca04f2436533af",
+    "astra-sim-wscllm/extern/die_model/coarse/src/Mapping.cc": "4988b407ef8ad61005d75ffbff17a3b4be32dc6fcd0cf2ae2e3668ad90b2beb4",
+    "astra-sim-wscllm/extern/die_model/coarse/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py": "2a4b01ca57eef8f61ee4f0094b81b465b99eb6b33a1a3b6bcbecc949789a8fdf",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py": "3b4c09f50fca86861a83954f79bb30e897d08d3b6c4168eaf9c4869c2dba0386",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/online/online_scheduler_base.py": "9ccbcb55be55a1864f5724c5880ebb71abb8f40c14ecabb2facaf66d46b61caa",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py": "f30044f62b2c424ad8d1aab91f9c20f6c125821b9c0378fc88ce97d14b5418e6",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/online/test_train_machinery.py": "5bf7718178111876a01ed0c08c3644445308457095512d3ff70d7c46f9c57480",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_admission.py": "f0dfec154afeff67b87fab62ef052ff5e29868a30c6c3ac1b42645ad19931f4a",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/online/wsc_llm_online_scheduler.py": "52ea23e5b44e17fc30236a1571a875280cfe643c03821f6616a613ab74f218a2",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py": "d80d726409f471c8bcf209b184b630b168062e8bbb708369530ae98346715b34",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/test_wsc_llm_scheduler.py": "bc001ef3debe4e87831c83e0487081daf5ed6d3b16f68c19e3e1ef9e60df5b72",
+    "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference/wsc_llm_scheduler.py": "6e5d22c9430de303f474f9dc7147f11d116786fa2af69f58d7f3251546a8da67",
+    "die/CMakeLists.txt": "94d764766964c38fbab9ac34d331a60285a31038224b53cb2446d5fa8d1cc5ca",
+    "die/include/coarse_die/Execution.hh": "3916d001b1c42e87b71177da362d91c8d9d056668e6f7524d9b4c551e2e7f5e1",
+    "die/include/coarse_die/Plan.hh": "539b15ae288327f8998ce2981c1fdea8989a7634eb4199cc74a23480701d7526",
+    "die/src/Compiler.cc": "1a21e839b6df07b0395ed498a30faf3dbd5fc768574699abb2a5857a716ca169",
+    "die/src/Execution.cc": "b232baaf5300060984dfa9c60482dfc7c0076e4c340b059e91ca04f2436533af",
+    "die/src/Mapping.cc": "4988b407ef8ad61005d75ffbff17a3b4be32dc6fcd0cf2ae2e3668ad90b2beb4",
+    "die/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+    "die/tests/estimate_driver_test.cc": "21ad0656f30e3d9cc47b12bbc573cb341c6800d9cbbabc64067dba3d7c7aea92",
+    "die/tests/runtime_owner_symmetry_test.cc": "9dbd48ed4bcd94ed7711ebd40a3f53c7a4b1f64e673e6f18a19fb2edbce71880",
+    "die/tests/runtime_submit_transaction_test.cc": "5e571810ac0bfdfa4910eea6d7421efedead078dd1b82a344cbb48899ebacf6e",
+    "die/tests/workspace_metadata_test.cc": "db9cd242ba35ee3c57257c99a3952619948360225415f66080e69fc042416d10"
+  },
+  "final_public": {
+    "build_exit_code": 0,
+    "ctest_passed": 25,
+    "ctest_failed": 0,
+    "skipped": 0,
+    "commands": [
+      "cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release",
+      "cmake --build work/build-die --parallel 2",
+      "ctest --test-dir work/build-die --output-on-failure"
+    ],
+    "logs": [
+      "build-die-cohort-flat.log",
+      "ctest-die-cohort-flat.log"
+    ]
+  },
+  "final_wscllm_cpp": {
+    "build_exit_code": 0,
+    "Online_built": true,
+    "ctest_passed": 7,
+    "ctest_failed": 0,
+    "skipped": 0,
+    "focused_targets": [
+      "WorkspaceAdmission",
+      "DecisionMailbox",
+      "ParsedBatch",
+      "GraphBatchCommitter",
+      "DieModelAdapter",
+      "DieExecutionLifecycle",
+      "LocalHbmDieMemory"
+    ],
+    "ctest_regex": "WorkspaceAdmission|DecisionMailbox|ParsedBatch|GraphBatchCommitter|DieModelAdapter|DieExecutionLifecycle|LocalHbmDieMemory",
+    "build_log": "integration/wscllm-handoff-final-build.log",
+    "ctest_log": "integration/wscllm-handoff-final-ctest.log",
+    "Online_e2e": "not_run"
+  },
+  "final_python": {
+    "cwd": "astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference",
+    "environment": {
+      "DIE_MODEL_CABI_PATH": "<repo>/work/integration-build/build/astra-sim-wscllm/lib/libdie_model_cabi.so",
+      "DIE_COARSE_CABI_PATH": "<repo>/work/integration-build/build/astra-sim-wscllm/lib/libcoarse_die_cabi.so",
+      "PYTHONPATH": "<repo>/work/deps/python-protobuf"
+    },
+    "online": {
+      "passed": 106,
+      "skipped": 0,
+      "command": "python3 -m unittest discover -s online -p test_*.py",
+      "log": "python-online-final-handoff.log"
+    },
+    "typed_hardware_train": {
+      "passed": 35,
+      "skipped": 0,
+      "command": "python3 -m unittest test_wsc_llm_scheduler online.test_train_machinery -v",
+      "log": "python-typed-hardware-final.log"
+    }
+  },
+  "five_repository_abi": {
+    "build_exit_code_each": {
+      "astra-sim-wscllm": 0,
+      "astra-sim-wscllm-LRU": 0,
+      "astra-sim-face": 0,
+      "astra-sim-face-LRU": 0,
+      "astra-sim-joint": 0
+    },
+    "built_targets": [
+      "die_model_cabi",
+      "coarse_die_cabi"
+    ],
+    "binary_sha256": {
+      "astra-sim-wscllm": {
+        "libcoarse_die_cabi.so": "3ef5e4f98c55895056e03a2aa5d9caaa4d64ada190630783e8c77143e930898f",
+        "libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+      },
+      "astra-sim-wscllm-LRU": {
+        "libcoarse_die_cabi.so": "3ef5e4f98c55895056e03a2aa5d9caaa4d64ada190630783e8c77143e930898f",
+        "libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+      },
+      "astra-sim-face": {
+        "libcoarse_die_cabi.so": "3ef5e4f98c55895056e03a2aa5d9caaa4d64ada190630783e8c77143e930898f",
+        "libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+      },
+      "astra-sim-face-LRU": {
+        "libcoarse_die_cabi.so": "3ef5e4f98c55895056e03a2aa5d9caaa4d64ada190630783e8c77143e930898f",
+        "libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+      },
+      "astra-sim-joint": {
+        "libcoarse_die_cabi.so": "3ef5e4f98c55895056e03a2aa5d9caaa4d64ada190630783e8c77143e930898f",
+        "libdie_model_cabi.so": "4f294213d775637abedb0cd9ea2bc579a6450c48d35a5712e05fab4a5c26e477"
+      }
+    },
+    "explicit_abi_config_tests_passed_by_repo": {
+      "astra-sim-wscllm": 20,
+      "astra-sim-wscllm-LRU": 15,
+      "astra-sim-face": 18,
+      "astra-sim-face-LRU": 17,
+      "astra-sim-joint": 13
+    },
+    "total_config_tests_passed": 83,
+    "skipped": 0,
+    "command": "DIE_MODEL_CABI_PATH=<build>/<repo>/lib/libdie_model_cabi.so DIE_COARSE_CABI_PATH=<build>/<repo>/lib/libcoarse_die_cabi.so python3 -m unittest discover -s <repo>/sh_test_mesh/tests -p test_config_resolver*.py -v",
+    "workspace_protocol_ported": [
+      "astra-sim-wscllm"
+    ],
+    "other_four_Online_business_validation": "not_run_this_session"
+  },
+  "expected_failed_or_unavailable": {
+    "compiled_E5": "failed; all work-ledger checks passed, latency/busy tolerance failed; run before flat allocation-container refinement, not a final-flat identity certificate",
+    "production_E8_E16": "unavailable/not_run",
+    "cold_N30": "C++ P95 over 2ms; measured-before-flat identity.json only, not final-flat cold samples",
+    "final_flat_J32_full_credit": "P95 55694ns >50000ns, symmetric synthetic fixture only",
+    "target_heldout": "not_available",
+    "full_Online_E2E": "not_run"
+  },
+  "affine_research": {
+    "root_checker": "passed; saved affine/root-verification.log",
+    "scope": "fixed offset=1/20, full MN single Core OS strict FP32; 1/10/100/995 exact comparison, numeric-only powers to 10^12; not production"
+  },
+  "not_run": [
+    "production sanitizers",
+    "malloc/bad_alloc fault injection",
+    "full seven-default-fixture new hash sweep",
+    "unexecuted-review scripts",
+    "final-flat cold N30",
+    "full five-repo business workload"
+  ],
+  "dependencies": {
+    "cmake": "4.4.4",
+    "gcc": "14.2.0",
+    "protobuf_cpp": "3.21.12",
+    "protobuf_all_tar_sha256": "2c6a36c7b5a55accae063667ef3c55f2642e67476d96d355ff0acb13dbb47f09",
+    "python": "3.12.14",
+    "protobuf_python": "4.25.8"
+  }
+}

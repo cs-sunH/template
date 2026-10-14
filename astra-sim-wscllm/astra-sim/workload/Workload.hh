@@ -55,6 +55,12 @@ class Workload : public Callable {
     // 者).
     void issue_dep_free_nodes();
     void issue(const ExecutionDriven::NodeView& node);
+    /// Coarse v2 only: issue an already prepared Plan after its rank-local
+    /// workspace lease has been acquired before take_node/occupy.
+    void issue_prepared_coarse(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan prepared,
+        WorkspaceAdmission::Lease lease);
     void issue_metadata(const ExecutionDriven::NodeView& node);
     void issue_replay(const ExecutionDriven::NodeView& node);
     void issue_comp(const ExecutionDriven::NodeView& node);
@@ -122,6 +128,14 @@ class Workload : public Callable {
     /// the HBM-delivered completions already ran it from
     /// on_local_hbm_job_complete).
     void finish_generic_node(uint64_t node_id);
+    /// Terminal path for an explicitly cancelled live coarse COMP. It
+    /// releases the occupied slot and dependencies once with Skipped status.
+    void finish_cancelled_coarse_node(uint64_t node_id);
+    /// Count live coarse COMP cancellations for rank/service metric sideband.
+    /// Shutdown cancellation is intentionally excluded.
+    uint64_t die_cancelled_comp_count() const {
+        return die_cancelled_comp_count_;
+    }
 
     /// Die backend (contract §7.6): fill the utilization fields of the
     /// node's statistics state ahead of finish_generic_node -- compact
@@ -168,7 +182,14 @@ class Workload : public Callable {
     // -> control_marker legacy micro-job -> die_spec via DieModelAdapter ->
     // fail-closed throw. Reached only under
     // sys->compute_cost_model == ComputeCostModel::Die.
-    void issue_die_comp(const ExecutionDriven::NodeView& node);
+    void issue_die_comp(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared = nullptr,
+        WorkspaceAdmission::Lease* lease = nullptr);
+    void issue_impl(
+        const ExecutionDriven::NodeView& node,
+        DieModelAdapter::PreparedCoarsePlan* prepared,
+        WorkspaceAdmission::Lease* lease);
 
     // Two-event join for p2p comm nodes with an HBM endpoint job: the node
     // completes exactly once, when both the network-side callback and the
@@ -179,6 +200,7 @@ class Workload : public Callable {
         bool hbm_done = false;
     };
     std::unordered_map<uint64_t, HbmCommJoin> hbm_comm_join_;
+    uint64_t die_cancelled_comp_count_ = 0;
     void maybe_complete_hbm_joined_comm(uint64_t node_id);
 };
 

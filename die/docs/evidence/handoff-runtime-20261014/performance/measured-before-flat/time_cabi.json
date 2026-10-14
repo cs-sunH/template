@@ -1,0 +1,20 @@
+{
+  "command": [
+    "work/coldcompile-merge-build/cabi_cache_probe",
+    "--config",
+    "die/tests/fixtures/coarse_die_v2.json",
+    "--task",
+    "work/coldcompile-before/fixtures/gemm_128x128x128.json",
+    "--samples",
+    "30",
+    "--output",
+    "work/coldcompile-final/raw/cabi_gemm_128x128x128.json"
+  ],
+  "exit_code": 0,
+  "outer_elapsed_ns": 63861158,
+  "direct_child_user_cpu_seconds_delta": 0.059676,
+  "direct_child_system_cpu_seconds_delta": 0.004007,
+  "cumulative_children_max_rss_kib": 9344,
+  "rss_units": "KiB on Linux",
+  "scope_note": "outer process resource metadata; probe-internal caller timing is unchanged and is in raw JSON"
+}

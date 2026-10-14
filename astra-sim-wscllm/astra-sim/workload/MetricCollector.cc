@@ -1595,6 +1595,8 @@ void MetricCollector::finalize(const std::vector<Sys*>& systems,
         record["rank"] = sys->id;
         record["utilization_window_ns"] = sim_end_tick;
         record["utilization_window"] = "[0, sim_end_ns]";
+        record["die_cancelled_comp_count"] =
+            sys->workload->die_cancelled_comp_count();
         if (!coarse_counters.is_null()) {
             record["coarse_die_runtime"] = coarse_metrics;
         }

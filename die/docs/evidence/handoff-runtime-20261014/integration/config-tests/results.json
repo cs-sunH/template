@@ -1,0 +1,117 @@
+[
+  {
+    "repo": "astra-sim-wscllm",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-wscllm/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "log": "work/handoff/config-tests/astra-sim-wscllm.log",
+    "tail": [
+      "",
+      "----------------------------------------------------------------------",
+      "Ran 20 tests in 0.050s",
+      "",
+      "OK"
+    ]
+  },
+  {
+    "repo": "astra-sim-wscllm-LRU",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-wscllm-LRU/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "log": "work/handoff/config-tests/astra-sim-wscllm-LRU.log",
+    "tail": [
+      "",
+      "----------------------------------------------------------------------",
+      "Ran 15 tests in 0.010s",
+      "",
+      "OK"
+    ]
+  },
+  {
+    "repo": "astra-sim-face",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-face/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "log": "work/handoff/config-tests/astra-sim-face.log",
+    "tail": [
+      "",
+      "----------------------------------------------------------------------",
+      "Ran 18 tests in 0.009s",
+      "",
+      "OK"
+    ]
+  },
+  {
+    "repo": "astra-sim-face-LRU",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-face-LRU/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "log": "work/handoff/config-tests/astra-sim-face-LRU.log",
+    "tail": [
+      "",
+      "----------------------------------------------------------------------",
+      "Ran 17 tests in 0.014s",
+      "",
+      "OK"
+    ]
+  },
+  {
+    "repo": "astra-sim-joint",
+    "command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-joint/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "exit_code": 0,
+    "log": "work/handoff/config-tests/astra-sim-joint.log",
+    "tail": [
+      "",
+      "----------------------------------------------------------------------",
+      "Ran 13 tests in 0.091s",
+      "",
+      "OK"
+    ]
+  }
+]

@@ -1017,7 +1017,8 @@ void add_vector(Plan& plan, Metrics& m, const Hardware& hw,
 std::vector<std::shared_ptr<Plan>> enumerate_gemm(const Hardware& hw,
                                                    const nlohmann::json& task,
                                                    const Topology& topo,
-                                                   u64 M,u64 N,u64 K) {
+                                                   u64 M,u64 N,u64 K,
+                                                   bool seal_fingerprints = true) {
   const auto ts=options(M,{1,16,64,256}); const auto ns=options(N,{64,256,1024,4096});
   const auto ks=options(K,{64,256,1024,4096});
   const u64 layers=getu(task,"layer_instances",1), passes=getu(task,"weight_passes",1);
@@ -1037,7 +1038,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_gemm(const Hardware& hw,
     p->summary["executed_matrix_ops"] = as_u64(m.executed_mops,"executed matrix ops");
     p->summary["recomputed_matrix_ops"] = 0; p->summary["recompute_matrix_ops"] = 0;
     p->summary["tm"]=tm; p->summary["tn"]=tn; p->summary["tk"]=tk;
-    p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
+    if (seal_fingerprints)
+      p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
     result.push_back(std::move(p));
   }
   return result;
@@ -1587,13 +1589,16 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
 
 }  // namespace
 
-std::vector<std::shared_ptr<Plan>> enumerate_mappings(
-    const Hardware& hardware, const nlohmann::json& task) {
+static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
+    const Hardware& hardware, const nlohmann::json& task,
+    bool defer_top_level_gemm_fingerprints) {
   if (!task.is_object() || !task.contains("op_kind")) fail("task: normalized op_kind is required");
   const std::string op=gets(task,"op_kind");
   const u64 nx=du(hardware,"die","core_columns_nx"), ny=du(hardware,"die","core_rows_ny");
   const Topology topo=topology(hardware,nx,ny);
-  if (op=="gemm") return enumerate_gemm(hardware,task,topo,shape_u(task,"m"),shape_u(task,"n"),shape_u(task,"k"));
+  if (op=="gemm") return enumerate_gemm(
+      hardware,task,topo,shape_u(task,"m"),shape_u(task,"n"),shape_u(task,"k"),
+      !defer_top_level_gemm_fingerprints);
   if (op=="attention" || op=="attention_region") {
     const std::string fusion=gets(task,"fusion_policy","auto");
     std::vector<std::shared_ptr<Plan>> result;
@@ -2219,6 +2224,16 @@ std::vector<std::shared_ptr<Plan>> enumerate_mappings(
     fail("unsupported_op_kind: " + op);
   }
   finalize_summary(*p,m,hardware);p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();return {p};
+}
+
+std::vector<std::shared_ptr<Plan>> enumerate_mappings(
+    const Hardware& hardware, const nlohmann::json& task) {
+  return enumerate_mappings_impl(hardware,task,false);
+}
+
+std::vector<std::shared_ptr<Plan>> enumerate_mappings_for_compile(
+    const Hardware& hardware, const nlohmann::json& task) {
+  return enumerate_mappings_impl(hardware,task,true);
 }
 
 }  // namespace coarse_die::detail

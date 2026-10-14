@@ -243,7 +243,11 @@ struct Fixture {
     RequestIngress ingress;
     WatchRegistry registry;
     std::vector<std::shared_ptr<NodeStoreGraphSource>> sources;
+    std::vector<std::unique_ptr<AstraSim::WorkspaceAdmission>>
+        workspace_ledgers;
     std::vector<int> issue_calls;
+    size_t workspace_install_calls = 0;
+    std::vector<int> workspace_changed_ranks;
     // Watch fires recorded by the notifier (fires are observed synchronously
     // at fire time; consume/clear between parts where the old polling queue
     // used to drain).
@@ -256,15 +260,70 @@ struct Fixture {
     size_t hook_issue_calls_at_entry = 0;
     GraphBatchCommitter committer;
 
-    static GraphBatchCommitter::Context make_context(Fixture* fixture) {
+    static GraphBatchCommitter::Context make_context(
+        Fixture* fixture, const bool workspace_required = false) {
         GraphBatchCommitter::Context ctx;
         ctx.num_ranks = 3;
         ctx.graph_sources = &fixture->sources;
         ctx.watch_registry = &fixture->registry;
         ctx.ingress = &fixture->ingress;
         ctx.issue_rank = [fixture](int rank) {
+            if (fixture->workspace_admission_required &&
+                (rank < 0 ||
+                 rank >= static_cast<int>(fixture->workspace_ledgers.size()) ||
+                 !fixture->workspace_ledgers[rank]->has_capacity_snapshot())) {
+                expect(false,
+                       "workspace snapshot is installed before any issue rank");
+            }
             fixture->issue_calls.push_back(rank);
         };
+        ctx.workspace_admission_required = workspace_required;
+        if (workspace_required) {
+            ctx.validate_workspace_capacity_snapshot =
+                [fixture](const std::vector<AstraSim::WorkspaceRankState>&
+                              request_state,
+                          const std::vector<AstraSim::WorkspaceCapacityRank>&
+                              snapshot)
+                -> std::optional<std::string> {
+                if (request_state.size() != fixture->workspace_ledgers.size() ||
+                    snapshot.size() != fixture->workspace_ledgers.size()) {
+                    return "workspace fixture rank count mismatch";
+                }
+                for (size_t rank = 0;
+                     rank < fixture->workspace_ledgers.size(); ++rank) {
+                    try {
+                        fixture->workspace_ledgers[rank]
+                            ->validate_request_state(request_state[rank]);
+                        fixture->workspace_ledgers[rank]
+                            ->validate_capacity_snapshot(snapshot[rank]);
+                    } catch (const std::exception& exc) {
+                        return "rank " + std::to_string(rank) + ": " +
+                               exc.what();
+                    }
+                }
+                return std::nullopt;
+            };
+            ctx.install_workspace_capacity_snapshot =
+                [fixture](const std::vector<AstraSim::WorkspaceCapacityRank>&
+                              snapshot,
+                          std::vector<int>& changed_ranks) {
+                changed_ranks.clear();
+                for (size_t rank = 0;
+                     rank < fixture->workspace_ledgers.size(); ++rank) {
+                    if (fixture->workspace_ledgers[rank]
+                            ->capacity_snapshot_changes(snapshot[rank])) {
+                        changed_ranks.push_back(static_cast<int>(rank));
+                    }
+                }
+                for (size_t rank = 0;
+                     rank < fixture->workspace_ledgers.size(); ++rank) {
+                    fixture->workspace_ledgers[rank]
+                        ->install_capacity_snapshot_unchecked(snapshot[rank]);
+                }
+                fixture->workspace_changed_ranks = changed_ranks;
+                ++fixture->workspace_install_calls;
+            };
+        }
         // P2-31 (2026-09-28): the fixture historically never installed the
         // Context::metrics_anchor_hook, so the "main_online kv anchor"
         // chain (P1-1) was the only link with no fixture-driven coverage.
@@ -385,8 +444,9 @@ struct Fixture {
         return ctx;
     }
 
-    Fixture()
-        : ingress(4096), committer(make_context(this)) {
+    explicit Fixture(const bool workspace_required = false)
+        : ingress(4096),
+          committer(make_context(this, workspace_required)) {
         ingress.bind(&eq, &mailbox, &svc);
         registry.set_fire_notifier([this](const WatchFire& fire) {
             fires.push_back(fire);
@@ -396,8 +456,16 @@ struct Fixture {
         sources.reserve(3);
         for (int rank = 0; rank < 3; ++rank) {
             sources.push_back(std::make_shared<NodeStoreGraphSource>());
+            if (workspace_required) {
+                workspace_ledgers.push_back(
+                    std::make_unique<AstraSim::WorkspaceAdmission>(rank));
+            }
         }
+        workspace_changed_ranks.reserve(3);
+        workspace_admission_required = workspace_required;
     }
+
+    bool workspace_admission_required = false;
 };
 
 // Observable state snapshot: everything the commit can write, flattened
@@ -549,6 +617,46 @@ std::optional<std::string> phase_a_preflight(
 
 GraphBatch parse_batch(const nlohmann::json& resp, int num_ranks = 3) {
     return parse_graph_batch(resp, num_ranks);
+}
+
+std::vector<AstraSim::WorkspaceRankState> workspace_state_of(
+    const Fixture& fixture) {
+    std::vector<AstraSim::WorkspaceRankState> state;
+    state.reserve(fixture.workspace_ledgers.size());
+    for (const auto& ledger : fixture.workspace_ledgers) {
+        state.push_back(ledger->state());
+    }
+    return state;
+}
+
+nlohmann::json workspace_response(
+    const uint64_t sequence,
+    const std::vector<AstraSim::WorkspaceRankState>& state,
+    const std::vector<uint64_t>& capacities) {
+    nlohmann::json ranks = nlohmann::json::array();
+    for (size_t rank = 0; rank < state.size(); ++rank) {
+        ranks.push_back({
+            {"rank", state[rank].rank},
+            {"workspace_revision", state[rank].workspace_revision},
+            {"capacity_bytes", capacities[rank]},
+            {"model_weight_bytes", 200},
+            {"resident_kv_bytes", 100},
+            {"reserved_request_bytes", 0},
+        });
+    }
+    return {
+        {"schema_version", 2},
+        {"batch_id", sequence},
+        {"source_delivery_sequence", sequence},
+        {"workspace_capacity_snapshot",
+         {{"protocol_version", 1}, {"ranks", std::move(ranks)}}},
+    };
+}
+
+GraphBatch parse_workspace_batch(
+    const nlohmann::json& response,
+    const std::vector<AstraSim::WorkspaceRankState>& state) {
+    return parse_graph_batch(response, 3, 2, state);
 }
 
 // A typed prefill/decode watch over explicit (rank, json id) members.
@@ -911,6 +1019,62 @@ void test_validate_and_commit_atomic() {
                "C0: failed validate_and_commit enters no Phase-B state");
         (void)result.validation_ns;
     }
+}
+
+void test_workspace_snapshot_preflight_install_and_wake() {
+    Fixture f(/*workspace_required=*/true);
+    const std::vector<uint64_t> initial_capacities{1000, 1000, 1000};
+    auto state0 = workspace_state_of(f);
+    StateDelta delta0 = build_state_delta_v2(
+        {}, /*tick=*/10, /*delivery_sequence=*/0, /*deferred_from_tick=*/0,
+        {}, {}, state0);
+    GraphBatch batch0 = parse_workspace_batch(
+        workspace_response(0, state0, initial_capacities), state0);
+    f.committer.commit(delta0, batch0);
+    expect(f.workspace_install_calls == 1 &&
+               f.workspace_changed_ranks == std::vector<int>({0, 1, 2}),
+           "workspace preflight installs the initial full-rank snapshot");
+    expect(f.issue_calls == std::vector<int>({0, 1, 2}),
+           "initial capacity snapshot wakes every rank once");
+
+    // No nodes are touched in this delivery. Changing only rank 1's Python
+    // capacity view still issues that rank, after the new view is installed.
+    f.issue_calls.clear();
+    const auto state1 = workspace_state_of(f);
+    StateDelta delta1 = build_state_delta_v2(
+        {}, /*tick=*/11, /*delivery_sequence=*/1, /*deferred_from_tick=*/0,
+        {}, {}, state1);
+    GraphBatch batch1 = parse_workspace_batch(
+        workspace_response(1, state1, {1000, 1200, 1000}), state1);
+    f.committer.commit(delta1, batch1);
+    expect(f.workspace_install_calls == 2 &&
+               f.workspace_changed_ranks == std::vector<int>({1}) &&
+               f.issue_calls == std::vector<int>({1}),
+           "capacity-only change wakes exactly its changed rank");
+
+    // A revision mismatch is rejected in pure preflight. Neither the graph
+    // committer, capacity owner, nor issue pass may observe the bad snapshot.
+    const auto before_issue = f.issue_calls;
+    const auto before_install_count = f.workspace_install_calls;
+    auto malformed = workspace_response(2, state1, {1000, 1200, 1000});
+    GraphBatch bad_batch = parse_workspace_batch(malformed, state1);
+    bad_batch.workspace_capacity_snapshot[2].workspace_revision = 99;
+    StateDelta delta2 = build_state_delta_v2(
+        {}, /*tick=*/12, /*delivery_sequence=*/2, /*deferred_from_tick=*/0,
+        {}, {}, state1);
+    bool rejected = false;
+    try {
+        f.committer.commit(delta2, bad_batch);
+    } catch (const std::runtime_error&) {
+        rejected = true;
+    }
+    expect(rejected && f.workspace_install_calls == before_install_count &&
+               f.issue_calls == before_issue &&
+               !f.workspace_ledgers[1]->capacity_snapshot_changes(
+                   AstraSim::WorkspaceCapacityRank{1, 0, 1200, 200, 100, 0}) &&
+               f.workspace_ledgers[1]->capacity_snapshot_changes(
+                   AstraSim::WorkspaceCapacityRank{1, 0, 1000, 200, 100, 0}),
+           "workspace snapshot preflight failure is atomic");
 }
 
 // The per-rank stamp avoids O(ranks) clearing on the hot path.  Force the
@@ -2365,6 +2529,7 @@ int main() {
     Fixture f;
     test_negative_cases(f);
     test_validate_and_commit_atomic();
+    test_workspace_snapshot_preflight_install_and_wake();
     test_json_id_stamp_wrap_and_recovery();
     test_positive_commit(f);
     test_post_commit_negatives(f);

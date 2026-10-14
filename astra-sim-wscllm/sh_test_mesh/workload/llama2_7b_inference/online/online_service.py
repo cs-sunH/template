@@ -67,6 +67,38 @@ KV_DELTA_JOURNAL_NAME = "kv_delta_journal.jsonl"
 ONLINE_STATS_PARTIAL_NAME = "online_stats.jsonl.partial"
 
 
+def _workspace_admission_mode(config) -> str:
+    """Resolve auto/required/off against the selected Die profile.
+
+    coarse_die_v2 carries temporary workspace and must use the v2 capacity
+    handshake. Legacy and non-Die runs keep the frozen v1 bridge by default.
+    """
+    requested = os.environ.get("SH_WORKSPACE_ADMISSION", "auto")
+    if requested not in {"auto", "required", "off"}:
+        raise ValueError(
+            "SH_WORKSPACE_ADMISSION must be auto|required|off, got {!r}"
+            .format(requested))
+    profile = None
+    system_config = getattr(config, "system_config", None)
+    if system_config is not None:
+        with open(system_config, "r", encoding="utf-8") as source:
+            system = json.load(source)
+        profile = system.get("die-model-profile")
+    coarse_workspace = profile == "coarse_die_v2"
+    if requested == "auto":
+        return "required" if coarse_workspace else "off"
+    if coarse_workspace and requested == "off":
+        raise ValueError(
+            "coarse_die_v2 requires workspace admission; "
+            "SH_WORKSPACE_ADMISSION=off is unsupported")
+    if requested == "required" and profile in {
+            "mesh_die_v1", "tx8_reference_v1"}:
+        raise ValueError(
+            "workspace admission is unsupported for legacy Die profile {!r}"
+            .format(profile))
+    return requested
+
+
 def _kv_delta_journal_enabled() -> bool:
     """P1 journal 开关:缺省 on;KV_DELTA_JOURNAL=off 完全旁路(不装
     recorder,不写 journal/checksum,行为与改前逐字节一致)。这是 journal
@@ -182,6 +214,8 @@ def main(argv=None) -> int:
     else:
         config = load_wsc_llm_trace_config()
 
+    workspace_admission = _workspace_admission_mode(config)
+
     # 根因 #5(主控裁决 2026-08-15 第三项):strategy 模式保持物理链。
     graph = GraphBatchBuilder(config)
     # C2/D2(2026-08-28):digest 默认关(SH_GRAPH_DIGESTS=1 恢复恒写)。
@@ -253,6 +287,7 @@ def main(argv=None) -> int:
             sensing_query_sink=sensing_query_sink,
             online_stats_sink=online_stats_sink,
             ledger_sink=ledger_sink,
+            workspace_admission=workspace_admission,
         )
     else:
         raise ValueError(
@@ -265,7 +300,8 @@ def main(argv=None) -> int:
     # Official peer is FileDecisionBridge: request files are exactly
     # nlohmann::json::dump() bytes (compact, no trailing newline).
     server = BridgeServer(
-        args.bridge_dir, canonical_request_producer=True)
+        args.bridge_dir, canonical_request_producer=True,
+        workspace_admission=workspace_admission)
     result = server.serve_forever(
         scheduler.on_decision_batch,
         on_commit_ack=scheduler.on_commit_ack,

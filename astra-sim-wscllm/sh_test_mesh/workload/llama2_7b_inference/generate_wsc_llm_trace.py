@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import csv
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -222,6 +223,32 @@ def _parse_config_value(key: str, value: str) -> object:
 
 
 def _to_wsc_llm_hardware(hardware: ResolvedHardware) -> WscLlmHardware:
+    die_peak_int4_ops_s = None
+    die_peak_vec_eqops_s = None
+    if hardware.die_profile == "coarse_die_v2":
+        derived = hardware.die_derived
+        summary = derived.get("hardware_summary") if isinstance(derived, dict) else None
+        if not isinstance(summary, dict):
+            raise ValueError(
+                "coarse_die_v2 hardware is missing typed hardware_summary")
+
+        def typed_positive_rate(key: str) -> float:
+            value = summary.get(key)
+            try:
+                finite = math.isfinite(value)
+            except (OverflowError, TypeError):
+                finite = False
+            if (isinstance(value, bool)
+                    or not isinstance(value, (int, float))
+                    or not finite or value <= 0):
+                raise ValueError(
+                    "coarse_die_v2 hardware_summary.{} must be a finite "
+                    "positive rate in its declared units".format(key))
+            return value
+
+        die_peak_int4_ops_s = typed_positive_rate("peak_int4_ops_per_s")
+        die_peak_vec_eqops_s = typed_positive_rate(
+            "peak_vec_fp32_eq_ops_per_s")
     return WscLlmHardware(
         mesh_rows=hardware.mesh_rows,
         mesh_cols=hardware.mesh_cols,
@@ -232,6 +259,9 @@ def _to_wsc_llm_hardware(hardware: ResolvedHardware) -> WscLlmHardware:
         d2d_latency_ns=hardware.d2d_latency_ns,
         local_hbm_latency_ns=hardware.local_hbm_latency_ns,
         label=hardware.label,
+        die_profile=hardware.die_profile,
+        die_peak_int4_ops_s=die_peak_int4_ops_s,
+        die_peak_vec_eqops_s=die_peak_vec_eqops_s,
     )
 
 

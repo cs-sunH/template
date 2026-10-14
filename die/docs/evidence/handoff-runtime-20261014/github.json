@@ -1,0 +1,14 @@
+{
+  "repository": "cs-sunH/template",
+  "integration_branch": "main",
+  "working_branch": "codex/die-workspace-runtime-20261014",
+  "verified_starting_main": "c47ae85f479edd0953bbb432bc05139ef1c63541",
+  "previous_pr": {
+    "number": 5,
+    "merged": true,
+    "head_sha": "fc6460f2713448a75404b87280ef78512ad9bf07",
+    "merge_sha": "c47ae85f479edd0953bbb432bc05139ef1c63541"
+  },
+  "delivery": "Pending commit and PR; NOT READY FOR HANDOFF until merged and remote main ancestry verified.",
+  "engineering_acceptance": "NOT ACCEPTED; see HANDOFF and verification.json"
+}
