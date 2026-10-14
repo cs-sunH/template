@@ -47,6 +47,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 重要决定及变更记录
 
+- 2026-10-14 用户停止/交接：本轮源码和完整HANDOFF `60d18dc` 已经 PR #11 合入 main，merge `721ab833` 已fetch/ancestry实核，源码CI38590775233 success。仅补最终GitHub元数据后停止；下一账号基于最新main继续，不把工程 NOT ACCEPTED 当作交接失败，也不把PR merge当作模型验收。
+
 - 2026-10-14 容量/源释放检查点：新增独立 `die_coarse_workspace_capacity_bound_v2`，以共享 checked-u128 生命周期公式覆盖 SRAM 筛选前模板，不证明 task 可执行，不改变旧 envelope/Plan identity。LRU finite request-aggregated manifest 为各 rank 安装不可变 E，fit 使用 max(A,E)，真实 Plan 超界在 acquire 前拒绝。源 store/migrate ACK 在复用容量的 COMP/目的 KV 写前形成依赖。公共30/30、62 identity全等、旧240 envelope查询全等；LRU Python182pass/2skip、实际 Online 默认/迭代cap2均0/0，480/560 typed Plans全部受界。完整 source/binary 与局限见新 evidence。生产 E5 精度、全业务压力、完整 GQA 与 host预算仍未验收。
 
 - 2026-10-14 用户新增复杂度原则已写入 AGENTS、本项目说明和根设计 §1.4；本 Session 已从已合并 main `ad865f11` 恢复持续开发，上轮停止指令属于历史交接。后续研究与实现按上述公式优先原则收紧，保存已有有效成果。

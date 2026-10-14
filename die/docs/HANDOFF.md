@@ -10,15 +10,15 @@
 
 生产 E5 finish/busy 原 3%/5% 门槛仍失败，E8/E16 不可用；TX8 reference/target priors 冻结，目标 held-out 数据不可用，host 开销预算没有新通过证书。两组 Online 不是容量极限压力或芯片测量。
 
-**GitHub 状态：源码与本交接文档正在提交；PR 合并且 fetch/ancestry 确认 main 包含交付版前为 NOT READY FOR HANDOFF。真实提交、PR、CI、merge/fetch 事实保存在本检查点 GitHub evidence；不预编未来 SHA。**
+**GitHub 源码交接已完成，可基于最新 main 安全接棒。** 源码与初版完整交接文档提交 `60d18dc26173f265f050e7f71fa3ad12196cbc5e` 经 [PR #11](https://github.com/cs-sunH/template/pull/11) 合并，merge `721ab833c3e17f856e7bf18b7175b7d5f3980901` 已 fetch/ff；source/principle ancestor 检查均 exit0。[源码 CI 38590775233](https://github.com/cs-sunH/template/actions/runs/38590775233) 的公共构建/CTest和文档检查均success。本文件最终元数据与 [GitHub事实](evidence/capacity-joint-handoff-20261014/github/) 在该 merge 后补入 main；工程整体仍 NOT ACCEPTED。
 
 ## Integration Branch
 
-共享分支 `main`；本轮分支 `codex/die-capacity-joint-20261014`。用户原则文档提交 `912b748` 已推送该分支。后续交付源码及本文件一起提交/推送；不 force-push，不覆盖外部 main，不丢弃有效修改。下一账号必须读取实际 PR merged 状态，fetch main 并检查交付源码 ancestry 后创建工作分支。
+共享分支 `main`；本轮交付分支 `codex/die-capacity-joint-20261014`。用户原则文档提交 `912b748`、源码/交接文档 `60d18dc` 均已通过 PR #11 合入 main。随后仅补合并/CI/远端核实元数据，不再开发或新测试；不 force-push，不覆盖外部 main，不丢弃有效修改。下一账号 fetch 最新 main，核实包含源码60d18dc、merge721ab833和本HANDOFF，再创建工作分支。
 
 ## Last Verified Base
 
-- main 基线 `ad865f11b6466dcc1d07a75be442740b8db20d01`，上轮 PR #10 已 merged。
+- 起始 main 基线 `ad865f11b6466dcc1d07a75be442740b8db20d01`，上轮 PR #10 已 merged；交接源码 merge 后实核 main `721ab833c3e17f856e7bf18b7175b7d5f3980901`，最终元数据提交不预编自身SHA。
 - 实际 LRU Online 的 checked-out context 为 `912b748` dirty tree；每文件 source SHA、diff、实际二进制 SHA 和 manifest provenance 单列，不能把 context SHA 冒充运行源码身份。
 - 公共 coarse C ABI SHA `c678d268a7f9e624d5389d5a11a830258f5b2a6bdbc4d6157c2a647cf231b0f1`，public static SHA `089ee1a432fb77491e57d5b613310b6aee59b131af121d9622969d9dbe7f8c81`。
 - canonical23 发布 digest `9d025e25699e44b708997da5e4bc9c45e60c75b02166be931282f20921c0c4f4`，活动五仓同步；`_old` 未同步/未改。
@@ -117,4 +117,4 @@ schema3 legacy请求字节保持原样，coarse可加workspace_state；typed res
 
 本 Session 用户停止指令生效，所有代理扩展任务已冻结。已完成和部分完成的有效源码、测试、解析研究、校准状态与失败证据一起保存；没有丢弃工作区、改 `_old` 或覆盖外部提交。停止时 JOINT 只完成 additive seams，下一账号按 Next Step 对其业务路径继续，不误判已完成。
 
-GitHub代码交接与工程验收分开：只有PR合并且fetch/ancestry核main含交付代码和本HANDOFF后，才可安全基于main接棒。交付commit/CI/merge事实在本检查点GitHub evidence与最终报告，不预编未来SHA。完成该核实后本Session立即停止，不执行Next Step。
+GitHub代码交接与工程验收分开：PR #11 merged、源码CI success、fetch/ff和ancestor均已实际确认，API结果已入本检查点GitHub evidence。本文件不预编自身commit；最终main HEAD在推送后核实。下一账号可从含本文件的最新main接棒，继续明确未验收项。本Session完成最后元数据同步及远端核实后立即停止，不执行Next Step。
