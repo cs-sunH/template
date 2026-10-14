@@ -1,0 +1,20 @@
+Official Chakra Python schema generation for the LRU checkout
+
+Environment:
+  source /workspace/cloud-setup/activate.sh
+  protoc --version
+  libprotoc 3.21.12
+
+LRU CMakeLists.txt uses CHAKRA_PROTO_DIR as the proto_path. Equivalent Python
+generation command used the LRU checkout's own et_def.proto:
+  REPO=/workspace/template/astra-sim-wscllm-LRU
+  PROTO_DIR=$REPO/extern/graph_frontend/chakra/schema/protobuf
+  PY_ROOT=$REPO/work/chakra-python-root
+  PY_OUT=$PY_ROOT/extern/graph_frontend/chakra/schema/protobuf
+  mkdir -p "$PY_OUT"
+  protoc --proto_path="$PROTO_DIR" --python_out="$PY_OUT" "$PROTO_DIR/et_def.proto"
+
+The runner also has the protoc-generated binding at the LRU source-relative
+ignored path so generate_trace.find_project_root can discover the checkout.
+run_manager_regressions.py preloads the work-tree generated binding before
+route imports; it does not patch the generator, find_project_root, or routing.

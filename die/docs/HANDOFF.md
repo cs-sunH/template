@@ -1,8 +1,23 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-14（UTC）。用户最新指令为停止启动新任务，在当前最小任务完成后保存、合入 main 并停止。本 Session 已完成在途 marker teardown 收尾，未继续启动功能开发。下一账号收到新的开发指令后按 Next Step 接续；停工指令不是永久项目限制。
+记录日期：2026-10-14。已收到新的持续自主开发指令，撤销上轮 Session 的停工状态；当前工作仍在推进，并未收到本轮交接或停止指令。以下新增检查点与历史交接分别记录。
 
 ## Current Status
+
+
+### 当前接续检查点：OS facts / LRU manager
+
+PR #7 已 merged，fetch/ancestry 核实 main 为 `fba3b8e544b65728be384b43ecfeb355fddd028f`，从干净工作区创建 `codex/die-os-lifecycle-20261014`。本轮公共默认构建29/29 CTest；生产 OS 访问总账接入 bounded geometry/per-K counter，62个选中任务hash/summary与基线完全相同，五段生产timing未改变。新增actual single-Core L/C/S资源facts复用原13域/PRIVATE/Q/path builder；geometry存储<=32类（实际<=12），支持解析wave/cohort/full-tail与q/core映射。
+
+离线C++ readiness夹具驱动真正Runtime，独立Fraction checker六场景通过：同owner、各一个L/C/S流、双输入/输出槽、finalC reserve/Store retire、terminal byte/typed work守恒。整数ns醒来使start/finish差异最大2ns；global lifetime long-double counter小量舍入单列。fixture的cap是stage submission预算，不是生产256-pivot/discovery证书，没有cycle skipping。实际compiled E5仍failed、E8/E16不可用，不能以新fixture取代生产验收。
+
+WSCLLM-LRU Python manager workspace基础45项回归通过：全rank absolute revision/u64原子view、独立fit hold/容量snapshot、不随KV事务回滚，保持整会话LRU、remote_store/pool。检查含workspace余量到真正fit；只有workspace导致可回收margin不够时暂时block而不徒劳evict/deep_gap/remote debit，释放后retry。**scheduler/bridge/C++ v2 wiring仍在本轮继续实施，manager基础不代表LRU端到端验收。**
+
+canonical23文件digest `9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47` 已5仓sync/check与两ABI构建、配置83/83无skip；最终focused结果按新证据追加，未完成不预报pass。另补跑committed fba3b8e最后teardown后的base production tiny Online：4项focused与真实E2E exit0/0、20COMP/3acks/31terminal/REQUEST_COMPLETE。它早于新OS facts/LRU port，身份独立保存。
+
+证据入口 `evidence/os-foundation-20261014/README.md`，重建入口 `analysis/os-foundation-20261014/README.md`。TX8/reference/targetpriors冻结，无新host预算或目标heldout证书。代码检查点同步后继续开发；本轮尚无最终交接状态。
+
+### 历史：PR #7 交接检查点
 
 **公共/五仓定向回归通过，代码交接待远端合并核实；工程整体仍 NOT ACCEPTED。** 本轮从已合并 PR #6 的 main `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f` 开始，复用既有 compact batch、fractional κ、Plan v2/v3、C ABI v2、缓存、事务回滚、owner LP 对称商及 wscllm workspace v2，不重复这些成果。
 
@@ -16,7 +31,7 @@
 
 ## Integration Branch
 
-- 共享集成分支：`main`；本轮工作分支：`codex/die-lifecycle-online-20261014`。
+- 当前共享集成分支：`main`；当前工作分支：`codex/die-os-lifecycle-20261014`；已同步基线为 PR #7 merge `fba3b8e544b65728be384b43ecfeb355fddd028f`。以下 PR #6/#7 元数据为历史，不再是当前未合并阻塞。
 - 上轮 [PR #6](https://github.com/cs-sunH/template/pull/6) 已 merged，merge/main SHA 为 `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f`。上轮工作与失败证据原样保留。
 - 本轮源码、测试、研究、Online 证据与本 HANDOFF 一起提交为 `77af39781485af527339051b580f5250c93f004f`，目标 main 的 [PR #7](https://github.com/cs-sunH/template/pull/7)。源码 CI run 38525345962 两 jobs 均 success；真实 API 结果见本轮 `github.json`、`source-ci.json`。后续仅补交接元数据，不 force-push。最终 merge SHA/本元数据文件自身 commit 不提前猜测，从 PR/fetch 获取。
 - 下一账号 fetch 最新 main，核源码 ancestry、21 文件 source digest 和证据索引，再建独立工作分支。忽略目录 work/、工具/依赖/二进制不跨账号共享，保存的源码和命令可重建。
@@ -92,6 +107,8 @@ Norm复用锚点；其余派生/工程组weight0；19math节点不是19独立测
 target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta_sram=1，eta_local/mesh/inject=.70，rho_sram=.90，launch1000ns/setup0，κquant4/κacc2。真实region Plan.launch仍0，consumer未兑现；endpoint delay为独立兼容语义，不算目标启动校准完成。target calibration/heldout not_available，不能迁移BF16/DDR参数到INT4/HBM。
 
 ## Next Step
+
+本轮先复用已接入的GemmOSGeometry/OS总账与single-Core resource facts，继续真实Runtime的bounded readiness/guard/外层return powering；同时完成LRU Python/C++ workspace v2 wiring及正式Online压力/恢复回归。离线逐消费夹具只供证据，不进入生产hot path。下面原优先级继续有效，已验证的foundation不重做。
 
 按依赖推进，以下不是人为数量/阶段限额。先核最新main/source digest和证据；复用27套、marker与base workspace/E2E，不重做cache/fractional/compact/LP对称商或无数据重新拟合。
 

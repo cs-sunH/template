@@ -41,7 +41,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-最新交接工作分支 `codex/die-lifecycle-online-20261014`；共享集成分支仍为 `main`。已合并 PR #6 的 main `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f` 是本轮基线。本轮源码提交 `77af39781485af527339051b580f5250c93f004f`，目标 main 的 [PR #7](https://github.com/cs-sunH/template/pull/7)；源码 CI run 38525345962 两 jobs 均成功。真实 PR/已完成 CI 入口见 `docs/evidence/handoff-lifecycle-online-20261014/github.json`；只有合入 main 并 fetch 核实后才能安全接棒。用户最新指令为当前最小任务完成后交接并停止，本 Session 不再启动新开发任务。
+当前持续开发分支 `codex/die-os-lifecycle-20261014`；共享分支 `main`。已fetch/ancestry确认 [PR #7](https://github.com/cs-sunH/template/pull/7) merged 的 main `fba3b8e544b65728be384b43ecfeb355fddd028f`，从干净基线接续。最新指令是持续自主开发，上轮 stop 仅限上轮 Session。当前OS facts/LRU manager检查点及实际测试身份见 HANDOFF 和 `docs/evidence/os-foundation-20261014/`，protocol/timing/performance整体验收仍未完成。
 
 ## 重要决定及变更记录
 
@@ -62,3 +62,5 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 2026-10-14 最终交接：实现公共候选延迟seal/原结构校验、提交失败回滚、完全同构owner块LP压缩、精确workspace accessor；无LRU wscllm bridge v2/发射前lease/权威KV容量epoch/取消typed统计闭环及typed硬件loader。公共25/25、wscllm最终源7/7、Python在线106/106、硬件/train35/35通过；五仓20文件同digest，ABI/config真实范围以HANDOFF证据为准。生产K-wave oracle仍failed、E8/E16不可用，真实Online E2E未启动，四仓workspace待推广，cold/J32全域预算未通过。新nested affine/固定精度研究只限已证明fixture，未进生产；TX8冻结。本轮用户明确要求交接后立即停止。
 
 - 2026-10-14 接续及交接：公共 endpoint 可选 ready delay 保持旧省略字段摘要；独立 Fraction LP 实际 Runtime 对照与精确 OS 每 K access counter（未接入生产）加入正式测试。五仓 ControlMarker 专用 1B DIE endpoint/本地延迟、read-only live prefix、无通知 teardown，保留 legacy/carrier/pool/join，JOINT virtual pipeline sink 恰好一次。最终公共27/27、五仓定向16/16、21文件同digest、双ABI/config83/83通过；base生产 tiny Online E2E 成功但早于最后teardown源，四仓workspace仍待推广。新 geometry-generated symbolic return/标准C++ outward lowering和solo sharedHBM研究保存，完整双owner256发现及生产E5精度仍failed、E8/E16不可用，counter尚未落地timing；TX8冻结，无新host预算证书。详细依赖与验收边界在当前HANDOFF，用户要求合并交接后立即停止。
+
+- 2026-10-14 接续开发：核PR #7 merge与main ancestry；生产OS总账采用<=32 bounded geometry/per-K counter（实际<=12类），新增wave/cohort/full-tail/q-core facts与single-Core13域活动事实。公共29/29、62任务hash/summary不变，canonical23文件五仓两ABI/config83/83通过；离线实际Runtime+Fraction六场景不替代仍failed的生产E5。LRU manager45项含whole-session/remote/pool/transaction回归通过，协议/adapter继续推进。补跑最终teardown main基线tiny Online成功，按旧binary/source身份单列；TX8保持冻结，无新host预算证书。

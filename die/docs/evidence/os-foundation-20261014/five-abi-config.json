@@ -1,0 +1,192 @@
+[
+  {
+    "binary_sha256": {
+      "libcoarse_die_cabi.so": "d2f06c80e6112f1215f6b124f4cb333041d2c592b84c90a81127e0faeb5ee17b",
+      "libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+    },
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm",
+      "--parallel",
+      "2",
+      "--target",
+      "coarse_die_cabi",
+      "die_model_cabi"
+    ],
+    "build_dir": "/workspace/template/work/online-baseline-20261014/integration-build/build/astra-sim-wscllm",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-wscllm-abi-build.log",
+    "config_command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-wscllm/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "config_exit": 0,
+    "config_log": "work/five-os-20261014/logs/astra-sim-wscllm-config-tests.log",
+    "config_test_status": "passed",
+    "config_tests": 20,
+    "config_tests_expected": 20,
+    "repo": "astra-sim-wscllm",
+    "skipped": 0,
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47"
+  },
+  {
+    "binary_sha256": {
+      "libcoarse_die_cabi.so": "d2f06c80e6112f1215f6b124f4cb333041d2c592b84c90a81127e0faeb5ee17b",
+      "libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+    },
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-wscllm-LRU",
+      "--parallel",
+      "2",
+      "--target",
+      "coarse_die_cabi",
+      "die_model_cabi"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-wscllm-LRU",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-wscllm-LRU-abi-build.log",
+    "config_command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-wscllm-LRU/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "config_exit": 0,
+    "config_log": "work/five-os-20261014/logs/astra-sim-wscllm-LRU-config-tests.log",
+    "config_test_status": "passed",
+    "config_tests": 15,
+    "config_tests_expected": 15,
+    "repo": "astra-sim-wscllm-LRU",
+    "skipped": 0,
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47"
+  },
+  {
+    "binary_sha256": {
+      "libcoarse_die_cabi.so": "d2f06c80e6112f1215f6b124f4cb333041d2c592b84c90a81127e0faeb5ee17b",
+      "libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+    },
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face",
+      "--parallel",
+      "2",
+      "--target",
+      "coarse_die_cabi",
+      "die_model_cabi"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-face",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-face-abi-build.log",
+    "config_command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-face/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "config_exit": 0,
+    "config_log": "work/five-os-20261014/logs/astra-sim-face-config-tests.log",
+    "config_test_status": "passed",
+    "config_tests": 18,
+    "config_tests_expected": 18,
+    "repo": "astra-sim-face",
+    "skipped": 0,
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47"
+  },
+  {
+    "binary_sha256": {
+      "libcoarse_die_cabi.so": "d2f06c80e6112f1215f6b124f4cb333041d2c592b84c90a81127e0faeb5ee17b",
+      "libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+    },
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-face-LRU",
+      "--parallel",
+      "2",
+      "--target",
+      "coarse_die_cabi",
+      "die_model_cabi"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-face-LRU",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-face-LRU-abi-build.log",
+    "config_command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-face-LRU/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "config_exit": 0,
+    "config_log": "work/five-os-20261014/logs/astra-sim-face-LRU-config-tests.log",
+    "config_test_status": "passed",
+    "config_tests": 17,
+    "config_tests_expected": 17,
+    "repo": "astra-sim-face-LRU",
+    "skipped": 0,
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47"
+  },
+  {
+    "binary_sha256": {
+      "libcoarse_die_cabi.so": "d2f06c80e6112f1215f6b124f4cb333041d2c592b84c90a81127e0faeb5ee17b",
+      "libdie_model_cabi.so": "4f294213d775637abedb0cd9ea2bc579a6450c48d35a5712e05fab4a5c26e477"
+    },
+    "build_command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/five-os-20261014/build/astra-sim-joint",
+      "--parallel",
+      "2",
+      "--target",
+      "coarse_die_cabi",
+      "die_model_cabi"
+    ],
+    "build_dir": "/workspace/template/work/five-os-20261014/build/astra-sim-joint",
+    "build_exit": 0,
+    "build_log": "work/five-os-20261014/logs/astra-sim-joint-abi-build.log",
+    "config_command": [
+      "python3",
+      "-m",
+      "unittest",
+      "discover",
+      "-s",
+      "/workspace/template/astra-sim-joint/sh_test_mesh/tests",
+      "-p",
+      "test_config_resolver*.py",
+      "-v"
+    ],
+    "config_exit": 0,
+    "config_log": "work/five-os-20261014/logs/astra-sim-joint-config-tests.log",
+    "config_test_status": "passed",
+    "config_tests": 13,
+    "config_tests_expected": 13,
+    "repo": "astra-sim-joint",
+    "skipped": 0,
+    "source_digest": "9fb747016e69200da9ef461bc4e0a9d00343b746a4d70081e3c489401e613a47"
+  }
+]

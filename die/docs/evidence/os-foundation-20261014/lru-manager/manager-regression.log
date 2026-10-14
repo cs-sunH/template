@@ -1,0 +1,74 @@
+test_absolute_revisions_and_capacity_snapshot (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_absolute_revisions_and_capacity_snapshot) ... ok
+test_capacity_snapshot_validates_uint64_fields_and_combined_headroom (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_capacity_snapshot_validates_uint64_fields_and_combined_headroom) ... ok
+test_invalid_full_rank_update_is_atomic (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_invalid_full_rank_update_is_atomic) ... ok
+test_legacy_no_view_and_empty_instance_overflow_contract (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_legacy_no_view_and_empty_instance_overflow_contract) ... ok
+test_workspace_blocked_remote_restore_keeps_pool_until_release (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_workspace_blocked_remote_restore_keeps_pool_until_release) ... ok
+test_workspace_fit_continues_lru_after_physical_shortfall_clears (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_workspace_fit_continues_lru_after_physical_shortfall_clears) ... ok
+test_workspace_hold_reclaims_when_physical_headroom_alone_fits (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_workspace_hold_reclaims_when_physical_headroom_alone_fits) ... ok
+test_workspace_only_margin_block_preserves_cold_candidate_for_retry (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_workspace_only_margin_block_preserves_cold_candidate_for_retry) ... ok
+test_workspace_view_survives_kv_journal_rollback (test_workspace_admission_manager.WorkspaceAdmissionManagerTests.test_workspace_view_survives_kv_journal_rollback) ... ok
+test_incremental_and_full_checks_reject_corrupt_accounting (test_wscllm_kv_incremental_invariants.IncrementalInvariantTests.test_incremental_and_full_checks_reject_corrupt_accounting) ... ok
+test_incremental_and_strict_mutations_stay_equivalent (test_wscllm_kv_incremental_invariants.IncrementalInvariantTests.test_incremental_and_strict_mutations_stay_equivalent) ... ok
+test_partial_runtime_state_is_unreachable (test_wscllm_kv_incremental_invariants.IncrementalInvariantTests.test_partial_runtime_state_is_unreachable)
+PARTIAL 不可达的运行时证明:手工构造 0<prefix<L 的会话状态 ... ok
+test_two_state_mutations_stay_equivalent_and_audit (test_wscllm_kv_incremental_invariants.IncrementalInvariantTests.test_two_state_mutations_stay_equivalent_and_audit)
+二态:整体逐出 → REMOTE 跨实例全量回迁 → REMOTE 同实例全量 ... ok
+test_completion_timestamp_contract (test_wscllm_kv_incremental_invariants.MutationInputValidationTests.test_completion_timestamp_contract)
+MEM-04:完成时刻是 LRU 的唯一时间戳写入点——非负 int + 会话内 ... ok
+test_incremental_check_rejects_short_remote_shard_vector (test_wscllm_kv_incremental_invariants.MutationInputValidationTests.test_incremental_check_rejects_short_remote_shard_vector)
+M1-07:remote shard 向量长度不齐时守恒断言必须显式失败 ... ok
+test_release_capacity_failure_keeps_reservation_retryable (test_wscllm_kv_incremental_invariants.MutationInputValidationTests.test_release_capacity_failure_keeps_reservation_retryable)
+MEM-02:release 先全量校验后减账注销——underflow 失败时预约 ... ok
+test_shard_vectors_reject_precision_losing_types (test_wscllm_kv_incremental_invariants.MutationInputValidationTests.test_shard_vectors_reject_precision_losing_types)
+MEM-03:1.9/True 在 int() 静默截断(1.9→1、True→1,低估预约) ... ok
+test_active_residency_counts_into_fit_feasibility (test_tiered_eviction_sequence.TieredEvictionSequenceTests.test_active_residency_counts_into_fit_feasibility)
+M1-10 补遗(S2-4):active 会话驻留同样计入 fit 可行性门控—— ... ok
+test_protected_residency_counts_into_fit_feasibility (test_tiered_eviction_sequence.TieredEvictionSequenceTests.test_protected_residency_counts_into_fit_feasibility)
+M1-10:净额需求 + protected 会话自身驻留超过空实例余量时,任何 ... ok
+test_reserved_request_bytes_count_into_fit_feasibility (test_tiered_eviction_sequence.TieredEvictionSequenceTests.test_reserved_request_bytes_count_into_fit_feasibility)
+M1-10 补遗二(F-1/2026-09-28 确认批):未落位的预约字节 ... ok
+test_whole_session_sequence_strict_lru_and_over_release (test_tiered_eviction_sequence.TieredEvictionSequenceTests.test_whole_session_sequence_strict_lru_and_over_release)
+完整 session 级 LRU 逐出:严格 LRU 序、逐笔重查、允许过量释放 ... ok
+test_all_new_mutations_journal_consistent (test_tiered_eviction_sequence.TieredJournalConsistencyTests.test_all_new_mutations_journal_consistent)
+新 mutation 全走 _journal_transaction:run 末 checksum 通过 ... ok
+test_checksum_gate_detects_tampered_delta (test_kv_delta_journal.KvDeltaJournalTests.test_checksum_gate_detects_tampered_delta) ... ok
+test_checksum_gate_detects_torn_tail_line (test_kv_delta_journal.KvDeltaJournalTests.test_checksum_gate_detects_torn_tail_line) ... ok
+test_checksum_gate_passes_and_writes_summary (test_kv_delta_journal.KvDeltaJournalTests.test_checksum_gate_passes_and_writes_summary) ... ok
+test_conservation_matrix_full_lifecycle (test_kv_delta_journal.KvDeltaJournalTests.test_conservation_matrix_full_lifecycle) ... ok
+test_evict_restore_and_terminal_retire_transactions (test_kv_delta_journal.KvDeltaJournalTests.test_evict_restore_and_terminal_retire_transactions) ... ok
+test_failed_transaction_rolls_back_manager_state (test_kv_delta_journal.KvDeltaJournalTests.test_failed_transaction_rolls_back_manager_state)
+MEM-01:journal 行写入失败(① 时序护栏)时,装饰器把 manager ... ok
+test_grow_anchor_follows_central_phase_mapping (test_kv_delta_journal.KvDeltaJournalTests.test_grow_anchor_follows_central_phase_mapping)
+M1-02:grow 的 journal anchor 与逐出/预约同走中心映射—— ... ok
+test_journal_disabled_recorder_keeps_legacy_behavior (test_kv_delta_journal.KvDeltaJournalTests.test_journal_disabled_recorder_keeps_legacy_behavior) ... ok
+test_journal_mode_streams_without_retaining_deltas (test_kv_delta_journal.KvDeltaJournalTests.test_journal_mode_streams_without_retaining_deltas) ... ok
+test_non_monotonic_mutation_timestamp_fails_closed (test_kv_delta_journal.KvDeltaJournalTests.test_non_monotonic_mutation_timestamp_fails_closed) ... ok
+test_reconcile_failure_rolls_back_reservation (test_kv_delta_journal.KvDeltaJournalTests.test_reconcile_failure_rolls_back_reservation)
+MEM-01(commit 对账分支):④ 对账失败时 manager 同样回滚—— ... ok
+test_sequence_contiguous_with_zero_shard_rank (test_kv_delta_journal.KvDeltaJournalTests.test_sequence_contiguous_with_zero_shard_rank) ... ok
+test_terminal_retire_reservation_rows_attribute_terminal_request (test_kv_delta_journal.KvDeltaJournalTests.test_terminal_retire_reservation_rows_attribute_terminal_request)
+M1-06:终态退休事务内的预约释放行 request_id 与本地/远端核销行 ... ok
+test_transaction_reconciliation_detects_manager_drift (test_kv_delta_journal.KvDeltaJournalTests.test_transaction_reconciliation_detects_manager_drift) ... ok
+test_full_reserve_deep_gaps_net_reserve_fits_and_backfills (online.test_admission_net_credit.NetCreditRealManagerTests.test_full_reserve_deep_gaps_net_reserve_fits_and_backfills)
+旧 KV RESIDENT 于 decode、终态使"旧+新"≈预算 150%: ... ok
+test_scheduler_net_credit_flow_on_real_manager (online.test_admission_net_credit.NetCreditRealManagerTests.test_scheduler_net_credit_flow_on_real_manager)
+端到端:真 manager 上跑 `_try_admit_prefill` —— 全量失败自动 ... ok
+test_credit_with_mismatched_migration_source_fails_closed (online.test_admission_net_credit.NetCreditStubTests.test_credit_with_mismatched_migration_source_fails_closed)
+credit>0 蕴涵迁移源==decode;失步(如 LOCAL_HIT 源=prefill) ... ok
+test_full_fail_net_retry_success_backfills (online.test_admission_net_credit.NetCreditStubTests.test_full_fail_net_retry_success_backfills)
+全量失败 + 旧 KV RESIDENT 于 decode → 净额重试成功 → ... ok
+test_net_retry_clamps_per_rank_credit (online.test_admission_net_credit.NetCreditStubTests.test_net_retry_clamps_per_rank_credit)
+净额按 rank 钳位:credit 某分量 > 终态时该 rank 净额为 0 ... ok
+test_net_retry_failure_notes_both_attempts (online.test_admission_net_credit.NetCreditStubTests.test_net_retry_failure_notes_both_attempts)
+净额也失败 → return False,且 `_note_capacity_change` 合并覆盖 ... ok
+test_net_success_then_history_blocked_releases_and_clears (online.test_admission_net_credit.NetCreditStubTests.test_net_success_then_history_blocked_releases_and_clears)
+净额成功但 prepare_history blocked → release(pop 语义按登记 ... ok
+test_snapshot_off_decode_target_keeps_single_full_reserve (online.test_admission_net_credit.NetCreditStubTests.test_snapshot_off_decode_target_keeps_single_full_reserve)
+旧 KV 不在 decode 目标(别的实例)/ EVICTED / ABSENT → ... ok
+test_blocked_attempt_evictions_survive_retry (online.test_admission_eviction_accumulation.AdmissionEvictionAccumulationTest.test_blocked_attempt_evictions_survive_retry)
+第一次 attempt 的 history 逐出(E1)不得被放行的第二次 attempt ... ok
+
+----------------------------------------------------------------------
+Ran 45 tests in 0.080s
+
+OK
