@@ -1,0 +1,166 @@
+Start testing: Oct 14 06:46 UTC
+----------------------------------------------------------
+24/28 Testing: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+24/28 Test: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+Command: "/workspace/template/work/integration-build/build/astra-sim-joint/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest"
+Directory: /workspace/template/work/integration-build/build/astra-sim-joint/frontend
+"AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest" start time: Oct 14 06:46 UTC
+Output:
+----------------------------------------------------------
+A: die + roofline-enabled=1 exits fail-closed                          -> PASS
+A: die + replay-only=1 exits fail-closed                               -> PASS
+D: real COMP without die_op_spec fails closed at the Workload layer (no silent roofline/replay fallback) -> PASS
+A: compute-cost-model=die resolves to the Die backend                  -> PASS
+A: die runtime (hardware + plan cache) installed                       -> PASS
+A: roofline stays off under the die backend                            -> PASS
+A: HBM fluid model stays on (contention default)                       -> PASS
+A: peak_perf filled from the library (PE_peak_die)                     -> PASS
+A: local-mem-bw filled from the library                                -> PASS
+A: die-model-config defaults next to the system.json                   -> PASS
+B: GPU comp slot occupied while the die node runs                      -> PASS
+B: die node finishes through finish_general_node exactly once (Success) -> PASS
+B: completion tick includes the one-shot local_mem_latency (>= 100 latency + 1) -> PASS
+B: GPU comp slot released after completion                             -> PASS
+B: tics_gpu_ops equals the issue->completion span                      -> PASS
+B: adapter drains after the node completes                             -> PASS
+B: first DIE dispatch records cache miss, compile, setup, start        -> PASS
+B: compute utilization weighted sum == plan FLOP / PE_peak (die caliber) -> PASS
+B: memory utilization weighted sum == actual bytes / B_mem (die caliber) -> PASS
+B: vector utilization weighted sum == eqops / V_peak (die-only field aggregates) -> PASS
+B: repeated same-spec DIE dispatch records warm cache hit              -> PASS
+C: control_marker completes at issue + 100 + 1 (legacy micro-job, no die plan) -> PASS
+D: DieModelAdapter refuses a spec-less node (throw names die_op_spec)  -> PASS
+D: parser rejects die_op_spec with runtime_ns != 0                     -> PASS
+E: JOINT Sys loads the vendored coarse_die_v2 hardware                 -> PASS
+E: coarse_die_v2 fails closed instead of discarding a frozen JOINT PipelineKernelContract -> PASS
+E: contract rejection happens before Runtime submission                -> PASS
+E: counter sampling integrates partial typed work between alarms       -> PASS
+E: sampling leaves live progress, counters and callbacks unchanged     -> PASS
+E: terminal private sampling does not dispatch graph callbacks         -> PASS
+E: dispatch rethrows the first callback exception after drain          -> PASS
+E: same-tick detached callbacks run once in handle order               -> PASS
+E: each callback receives its terminal progress snapshot               -> PASS
+E: all same-tick completion entries are removed                        -> PASS
+E: all detached terminal handles are retired despite throw             -> PASS
+E: dispatching state resets and accepts a later completion             -> PASS
+[die_model_adapter_test] ALL PASS
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest" end time: Oct 14 06:46 UTC
+"AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+25/28 Testing: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+25/28 Test: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+Command: "/workspace/template/work/integration-build/build/astra-sim-joint/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+Directory: /workspace/template/work/integration-build/build/astra-sim-joint/frontend
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" start time: Oct 14 06:46 UTC
+Output:
+----------------------------------------------------------
+A: GPU comp slot occupied at issue                                       -> PASS
+A: node terminal fires exactly once                                      -> PASS
+A: span >= isolated estimate + one-shot latency                          -> PASS
+A: span == oracle machine elapsed + exactly one 100 ns local_mem_latency charge -> PASS
+A: tics_gpu_ops equals the wall span                                     -> PASS
+A: GPU comp slot released after Done                                     -> PASS
+A: adapter drains after Done                                             -> PASS
+F: online DIE terminal fires once with frozen K=8                        -> PASS
+F: K=8 does not change the exact mixed-plan runtime                      -> PASS
+F: adapter reports the Workload-frozen K=8 contract                      -> PASS
+F: completed online DIE execution is accounted                           -> PASS
+F: ineligible mixed plan honestly stays exact at K=8                     -> PASS
+B: node terminal fires exactly once                                      -> PASS
+B: span == oracle machine elapsed exactly (latency 0 -> no latency charge) -> PASS
+C: adapter reports an active execution mid-flight                        -> PASS
+C: GPU comp slot still occupied mid-flight                               -> PASS
+C: node terminal fires exactly once under contention                     -> PASS
+C: span >= isolated estimate + latency (equal share can only delay)      -> PASS
+C: adapter drains after Done under contention                            -> PASS
+C: die side-band records service AND actual bytes (separate columns)     -> PASS
+D: marker without the HBM model completes on the 1 ns event (legacy micro-job) -> PASS
+E: big node still in flight after partial pumping                        -> PASS
+E: resetting Sys with a live DieExecution
+E: draining stale outer alarms
+E: stale alarms drained
+E: teardown fires no completion for the in-flight node (exactly-zero terminals) -> PASS
+F: ordinary scalar COMPUTE remains rejected in coarse mode               -> PASS
+F: one-byte DIE endpoint waits its 100 ns startup delay                  -> PASS
+F: one marker byte is DIE-owned; COMP/COMM/RESTORE/POOL ledgers stay isolated -> PASS
+F: completed coarse marker teardown has no duplicate terminal            -> PASS
+G: live prefix getter is exact/read-only; stale and reverse samples fail closed -> PASS
+G: cancellation retains the exact partial DIE/compatibility prefix without graph completion -> PASS
+G: cancelled endpoint handle is stale after retirement                   -> PASS
+G: cancelled marker teardown does not publish a terminal                 -> PASS
+H: virtual marker sink remains pending during endpoint delay             -> PASS
+H: pipeline marker uses the same delayed one-byte DIE endpoint           -> PASS
+H: Workload forwards the completion cookie to TileTransportAdapter exactly once -> PASS
+H: stale alarms do not duplicate the pipeline sink handoff               -> PASS
+I: partially served marker is live before HBM facade teardown            -> PASS
+I: teardown retires the marker without losing its prefix or calling the graph -> PASS
+I: stale teardown alarms do not complete the marker                      -> PASS
+J: teardown runs between full service and queued marker/sibling callbacks -> PASS
+J: marker teardown retains both prefixes without dispatching its terminal sibling -> PASS
+J: sibling retires independently without publishing either callback      -> PASS
+J: stale teardown alarms do not publish completed markers                -> PASS
+[die_execution_lifecycle_test] ALL PASS
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" end time: Oct 14 06:46 UTC
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+26/28 Testing: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+26/28 Test: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+Command: "/workspace/template/work/integration-build/build/astra-sim-joint/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+Directory: /workspace/template/work/integration-build/build/astra-sim-joint/frontend
+"AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest" start time: Oct 14 06:46 UTC
+Output:
+----------------------------------------------------------
+HBM resource version starts at zero for an unchanged rank                  -> PASS
+DIE A completes at 10 (2 die users @ 3 B/ns, 30 units; the comm job is still in its latency phase) -> PASS
+DIE B completes at 15 (alone @ 6 B/ns, 30 units left)                      -> PASS
+exactly two sink fires total (one per die job)                             -> PASS
+HBM membership versions publish before DIE completion sinks                -> PASS
+internal die/comm HBM jobs never complete the outer node alone (send node has no terminal) -> PASS
+die_service_units_served == 90 (drained quantity)                          -> PASS
+die_actual_bytes_served == 51 (21 + 30, service * eta)                     -> PASS
+comm_read_bytes_served == 120 (untouched by die units)                     -> PASS
+no COMP roofline bytes mixed into the die accounting                       -> PASS
+hbm_busy_ns == 35 (15 ns die drain + 20 ns comm drain)                     -> PASS
+peak concurrency 3 (2 die jobs + 1 comm read)                              -> PASS
+redistribution events 4 (2 joins + 2 survivor splits)                      -> PASS
+each issue/share transition publishes before its paired after-version      -> PASS
+eta >= 1 request (service <= actual) refused                               -> PASS
+zero-service request refused                                               -> PASS
+fractional fixture first callback is the 10ns latency boundary             -> PASS
+latency-ending callback completes neither DIE nor COMM_READ job            -> PASS
+pre-latency interval serves only the two captured DIE users                -> PASS
+latency expiry publishes its membership version before later drain boundaries -> PASS
+both fractional DIE boundaries are integrated by the next integer tick     -> PASS
+different-service DIE jobs complete in insertion order at tick +11         -> PASS
+DIE sinks observe both membership and completion versions already published -> PASS
+latency transfer remains active after the DIE completion batch             -> PASS
+legacy transfer receives exactly 3B after its 10ns latency                 -> PASS
+fractional boundaries preserve exact DIE service, actual bytes, and legacy bytes -> PASS
+fractional boundary integration preserves busy/shared durations            -> PASS
+fixture publishes three issue, two membership, and one completion transition -> PASS
+cancel_die_jobs_of drops the pending job                                   -> PASS
+cancelled job never fires its sink                                         -> PASS
+cancelled job served nothing                                               -> PASS
+transfer HBM snapshot preserves rank, mapped ID, kind, and remainder       -> PASS
+two transfer closures complete exactly once after shared 100ns latency and 60B/N drain -> PASS
+transfer jobs use the legacy COMM_READ/COMM_WRITE accounting               -> PASS
+[local_hbm_die_memory_test] ALL PASS
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest" end time: Oct 14 06:46 UTC
+"AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 14 06:46 UTC

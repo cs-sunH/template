@@ -1,0 +1,2 @@
+{"delivery_sequence": 0, "node_count": 14, "reasons": ["ARRIVAL"], "scheduler_self_ns": 2389905, "tick": 1}
+{"delivery_sequence": 1, "node_count": 17, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 1493156, "tick": 25295}

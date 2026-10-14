@@ -625,13 +625,19 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
     }
     if (node.compute.op_role == ExecutionDriven::OpRole::ControlMarker) {
         // Legacy micro-job semantics, byte-for-byte (contract §7.3): with
-        // the HBM fluid model the marker drains a (1 op, 1 byte) COMP job
-        // (the model's own latency phase included); without it a 1 ns
-        // event. No die macro-group launch, no plan, no PE/VEC stages.
+        // the legacy HBM model the marker drains its original (1 op, 1 byte)
+        // COMP job; coarse_die_v2 bridges the one physical byte through its
+        // canonical DIE endpoint with the same configured local-memory
+        // delay. Without an HBM facade it remains a 1 ns event. No typed
+        // COMP Plan, PE/VEC stages, or extra graph launch is created.
         WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
         wlhd->node_id = node.global_id;
         if (local_hbm_bandwidth_model != nullptr) {
-            local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+            if (sys->coarse_die_runtime != nullptr) {
+                local_hbm_bandwidth_model->issue_control_marker(wlhd);
+            } else {
+                local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+            }
         } else {
             hw_resource->tics_gpu_ops += 1;
             sys->register_event(this, EventType::General, wlhd, 1);

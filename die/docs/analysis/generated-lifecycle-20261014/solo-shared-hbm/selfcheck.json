@@ -1,0 +1,1452 @@
+{
+  "bottleneck_checks": [
+    {
+      "compute_busy": "21801/3164320",
+      "events_expanded": 70,
+      "events_powered": 42,
+      "finish_s": "9954950721/79108000",
+      "hbm_busy": "3146/25",
+      "name": "load_store_limited"
+    },
+    {
+      "compute_busy": "21801/3164320",
+      "events_expanded": 61,
+      "events_powered": 37,
+      "finish_s": "68128125000000000000000101278017/9888500000000000000000000000000000",
+      "hbm_busy": "1573/12500000000000000000000000000",
+      "name": "compute_limited"
+    }
+  ],
+  "compiled_cpp_driver": "/workspace/template/work/build-die/coarse_compiled_gemm_oracle_driver",
+  "compiled_wave_oracle": {
+    "equal_progress_busy_s": {
+      "compute": "28509/15821600",
+      "hbm": "22261/25000000"
+    },
+    "equal_progress_finish_s": "1187360379/494425000000",
+    "independent_busy_s": {
+      "compute": 0.0018019037265510438,
+      "hbm": 0.0008904399999999998,
+      "row": [
+        0.0008904399999999998,
+        0.0008904399999999998
+      ]
+    },
+    "independent_finish_s": 0.0024014974546190016,
+    "outputs": 4,
+    "shape": [
+      17,
+      65,
+      129
+    ],
+    "waves": 12
+  },
+  "full_k_and_output_expansion": {
+    "descriptors": [
+      {
+        "category_word": "same output tile; interior full-K waves only; k-first and K-final are explicit",
+        "deadline_template": [
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "78125/16",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "963568/1545078125",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "16/78125",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "19777/80000",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "963568/1545078125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          }
+        ],
+        "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+        "kind": "Kmiddle_identity",
+        "ledger_per_step": {
+          "compute_busy": "2048/2472125",
+          "compute_service": "2048/2472125",
+          "elapsed": "2048/2472125",
+          "hbm0": "10240",
+          "hbm0_busy": "16/78125",
+          "hbm1": "10240",
+          "hbm1_busy": "16/78125",
+          "hbm_busy": "16/78125",
+          "hbm_shared": "0",
+          "local_bytes": "28672",
+          "vec_ops": "131072"
+        },
+        "repeat_count": 59,
+        "return_map": "exact identity on every live progress coordinate",
+        "skip_outputs": 0,
+        "skip_waves": 59,
+        "step_outputs": 0,
+        "step_waves": 1,
+        "template_events": 2
+      },
+      {
+        "category_word": "same output tile; interior full-K waves only; k-first and K-final are explicit",
+        "deadline_template": [
+          {
+            "active": [
+              {
+                "progress": "100000/336209",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "236209/7725390625",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/32",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "236209/7725390625",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "32/2472125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          }
+        ],
+        "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+        "kind": "Kmiddle_identity",
+        "ledger_per_step": {
+          "compute_busy": "32/2472125",
+          "compute_service": "32/2472125",
+          "elapsed": "17/390625",
+          "hbm0": "2176",
+          "hbm0_busy": "17/390625",
+          "hbm1": "2176",
+          "hbm1_busy": "17/390625",
+          "hbm_busy": "17/390625",
+          "hbm_shared": "0",
+          "local_bytes": "4480",
+          "vec_ops": "2048"
+        },
+        "repeat_count": 60,
+        "return_map": "exact identity on every live progress coordinate",
+        "skip_outputs": 0,
+        "skip_waves": 60,
+        "step_outputs": 0,
+        "step_waves": 1,
+        "template_events": 2
+      },
+      {
+        "category_word": "row-major word, 1 output rows per period; N-full=1, N-tail=1; M-class=16",
+        "deadline_template": [
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "78125/16",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "963568/1545078125",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "16/78125",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "19777/80000",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "963568/1545078125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "78125/16",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "963568/1545078125",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "16/78125",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "19777/80000",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "963568/1545078125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "78125/16",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "963568/1545078125",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "16/78125",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "19777/80000",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "963568/1545078125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "312500",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "5100223/6180312500",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "1/312500",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "19777/5120000",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "5100223/6180312500",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/32",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "236209/7725390625",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "32/2472125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "100000/336209",
+                "rate": "390625/33",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "390625/33",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "1056/42026125",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "7794897/131331640625",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "390625/33",
+                "stage": 0,
+                "wave_offset": 2
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/32",
+                "stage": 1,
+                "wave_offset": 1
+              },
+              {
+                "progress": "236209/336209",
+                "rate": "390625/33",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "552641/7725390625",
+                "stage": 0,
+                "wave_offset": 2
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 1
+              },
+              {
+                "margin": "512/42026125",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "32/2472125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "100000/652641",
+                "rate": "390625/33",
+                "stage": 0,
+                "wave_offset": 2
+              },
+              {
+                "progress": "9494897/11094897",
+                "rate": "390625/33",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "7794897/131331640625",
+                "stage": 0,
+                "wave_offset": 2
+              },
+              {
+                "margin": "0",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "512/42026125",
+            "selected": [
+              {
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "100000/336209",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "236209/7725390625",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/32",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "236209/7725390625",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "32/2472125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "100000/336209",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "236209/7725390625",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/32",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "236209/7725390625",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "32/2472125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "100000/336209",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "236209/7725390625",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "25000000/17",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/32",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "6063791/494425000000",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "17/25000000",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "336209/6400000",
+                "rate": "2472125/32",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "6063791/494425000000",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "78125/16",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "4944250",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "632239/3090156250",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "1/4944250",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "625/632864",
+                "rate": "1562500/321",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "1562500/321",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "321/1582160000",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "202948719/988850000000",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "1562500/321",
+                "stage": 0,
+                "wave_offset": 2
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 1
+              },
+              {
+                "progress": "632239/632864",
+                "rate": "1562500/321",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "202948719/988850000000",
+                "stage": 0,
+                "wave_offset": 2
+              },
+              {
+                "margin": "1310399/1582160000",
+                "stage": 1,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "321/1582160000",
+            "selected": [
+              {
+                "stage": 2,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "625/632864",
+                "rate": "78125/16",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "321/1310720",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "123336579/197770000000",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "632239/3090156250",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "40503421/163840000",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "123336579/197770000000",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          }
+        ],
+        "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+        "kind": "output_classword_identity",
+        "ledger_per_step": {
+          "compute_busy": "53261/988850",
+          "compute_service": "53261/988850",
+          "elapsed": "55439476143/988850000000",
+          "hbm0": "796898",
+          "hbm0_busy": "398449/25000000",
+          "hbm1": "796898",
+          "hbm1_busy": "398449/25000000",
+          "hbm_busy": "398449/25000000",
+          "hbm_shared": "0",
+          "local_bytes": "2126276",
+          "vec_ops": "8521760"
+        },
+        "repeat_count": 2,
+        "return_map": "exact identity on every live progress coordinate",
+        "skip_outputs": 4,
+        "skip_waves": 260,
+        "step_outputs": 2,
+        "step_waves": 130,
+        "template_events": 24
+      },
+      {
+        "category_word": "same output tile; interior full-K waves only; k-first and K-final are explicit",
+        "deadline_template": [
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "78125/16",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "963568/1545078125",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "16/78125",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 1
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "19777/80000",
+                "rate": "2472125/2048",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "963568/1545078125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          }
+        ],
+        "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+        "kind": "Kmiddle_identity",
+        "ledger_per_step": {
+          "compute_busy": "2048/2472125",
+          "compute_service": "2048/2472125",
+          "elapsed": "2048/2472125",
+          "hbm0": "10240",
+          "hbm0_busy": "16/78125",
+          "hbm1": "10240",
+          "hbm1_busy": "16/78125",
+          "hbm_busy": "16/78125",
+          "hbm_shared": "0",
+          "local_bytes": "28672",
+          "vec_ops": "131072"
+        },
+        "repeat_count": 59,
+        "return_map": "exact identity on every live progress coordinate",
+        "skip_outputs": 0,
+        "skip_waves": 59,
+        "step_outputs": 0,
+        "step_waves": 1,
+        "template_events": 2
+      },
+      {
+        "category_word": "same output tile; interior full-K waves only; k-first and K-final are explicit",
+        "deadline_template": [
+          {
+            "active": [
+              {
+                "progress": "100000/336209",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "236209/7725390625",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "390625/17",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/32",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "236209/7725390625",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "32/2472125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          }
+        ],
+        "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+        "kind": "Kmiddle_identity",
+        "ledger_per_step": {
+          "compute_busy": "32/2472125",
+          "compute_service": "32/2472125",
+          "elapsed": "17/390625",
+          "hbm0": "2176",
+          "hbm0_busy": "17/390625",
+          "hbm1": "2176",
+          "hbm1_busy": "17/390625",
+          "hbm_busy": "17/390625",
+          "hbm_shared": "0",
+          "local_bytes": "4480",
+          "vec_ops": "2048"
+        },
+        "repeat_count": 60,
+        "return_map": "exact identity on every live progress coordinate",
+        "skip_outputs": 0,
+        "skip_waves": 60,
+        "step_outputs": 0,
+        "step_waves": 1,
+        "template_events": 2
+      },
+      {
+        "category_word": "same output tile; interior full-K waves only; k-first and K-final are explicit",
+        "deadline_template": [
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "78125/13",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/128",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "177101/1545078125",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "128/2472125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "80000/257101",
+                "rate": "78125/13",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "177101/1545078125",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ]
+          }
+        ],
+        "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+        "kind": "Kmiddle_identity",
+        "ledger_per_step": {
+          "compute_busy": "128/2472125",
+          "compute_service": "128/2472125",
+          "elapsed": "13/78125",
+          "hbm0": "8320",
+          "hbm0_busy": "13/78125",
+          "hbm1": "8320",
+          "hbm1_busy": "13/78125",
+          "hbm_busy": "13/78125",
+          "hbm_shared": "0",
+          "local_bytes": "17152",
+          "vec_ops": "8192"
+        },
+        "repeat_count": 59,
+        "return_map": "exact identity on every live progress coordinate",
+        "skip_outputs": 0,
+        "skip_waves": 59,
+        "step_outputs": 0,
+        "step_waves": 1,
+        "template_events": 2
+      },
+      {
+        "category_word": "same output tile; interior full-K waves only; k-first and K-final are explicit",
+        "deadline_template": [
+          {
+            "active": [
+              {
+                "progress": "3125/19777",
+                "rate": "390625/2",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "0",
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "33304/7725390625",
+            "selected": [
+              {
+                "stage": 0,
+                "wave_offset": 0
+              }
+            ]
+          },
+          {
+            "active": [
+              {
+                "progress": "0",
+                "rate": "390625/2",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "progress": "0",
+                "rate": "2472125/2",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "deadline_margin": [
+              {
+                "margin": "33304/7725390625",
+                "stage": 0,
+                "wave_offset": 1
+              },
+              {
+                "margin": "0",
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ],
+            "delta": "2/2472125",
+            "selected": [
+              {
+                "stage": 1,
+                "wave_offset": 0
+              }
+            ]
+          }
+        ],
+        "guard": "same active/queue topology, exact translated wave roles and work classes, two-input/two-output occupancy; solo fixed capacities and no external stop",
+        "kind": "Kmiddle_identity",
+        "ledger_per_step": {
+          "compute_busy": "2/2472125",
+          "compute_service": "2/2472125",
+          "elapsed": "2/390625",
+          "hbm0": "256",
+          "hbm0_busy": "2/390625",
+          "hbm1": "256",
+          "hbm1_busy": "2/390625",
+          "hbm_busy": "2/390625",
+          "hbm_shared": "0",
+          "local_bytes": "520",
+          "vec_ops": "128"
+        },
+        "repeat_count": 60,
+        "return_map": "exact identity on every live progress coordinate",
+        "skip_outputs": 0,
+        "skip_waves": 60,
+        "step_outputs": 0,
+        "step_waves": 1,
+        "template_events": 2
+      }
+    ],
+    "events_expanded": 1310,
+    "events_powered": 72,
+    "geometry": {
+      "K": 4097,
+      "M": 65,
+      "N": 65,
+      "tk": 64,
+      "tm": 16,
+      "tn": 64
+    },
+    "ledger": {
+      "compute_busy": "692393/3164320",
+      "compute_service": "692393/3164320",
+      "elapsed": "46533474407/197770000000",
+      "hbm0": "3736720",
+      "hbm0_busy": "46709/625000",
+      "hbm1": "3736720",
+      "hbm1_busy": "46709/625000",
+      "hbm_busy": "46709/625000",
+      "hbm_shared": "0",
+      "local_bytes": "9636640",
+      "vec_ops": "34619650"
+    }
+  },
+  "full_tail_edge_sweep": {
+    "exact_geometry_count": 240,
+    "status": "all accelerated ledgers and finish times equal expanded paths"
+  },
+  "grouped_q_exact_expansion": {
+    "accelerated_events": 28,
+    "descriptors": [],
+    "events": 28,
+    "ledger": {
+      "compute_busy": "28509/15821600",
+      "compute_service": "28509/15821600",
+      "elapsed": "1187360379/494425000000",
+      "hbm0": "44522",
+      "hbm0_busy": "22261/25000000",
+      "hbm1": "44522",
+      "hbm1_busy": "22261/25000000",
+      "hbm_busy": "22261/25000000",
+      "hbm_shared": "0",
+      "local_bytes": "106724",
+      "vec_ops": "285090"
+    }
+  },
+  "large_k": {
+    "cap": 256,
+    "descriptor_count": 7,
+    "events": 72,
+    "geometry": {
+      "K": 64000001,
+      "M": 65,
+      "N": 65,
+      "tk": 64,
+      "tm": 16,
+      "tn": 64
+    },
+    "skipped_outputs": 4,
+    "skipped_waves": 9999977
+  },
+  "large_outputs": {
+    "cap": 256,
+    "descriptor_count": 7,
+    "events": 72,
+    "geometry": {
+      "K": 4097,
+      "M": 16000065,
+      "N": 65,
+      "tk": 64,
+      "tm": 16,
+      "tn": 64
+    },
+    "skipped_outputs": 2000004,
+    "skipped_waves": 130000617
+  },
+  "limitations": [
+    "single owner only; no arrivals, external capacity changes, cancellation, or runtime stop events",
+    "strict FP32 bytes only; INT4 packed-tail work needs its own exact fact producer",
+    "nonidentity solo return maps fail closed",
+    "model-to-model only; no silicon claim"
+  ],
+  "output_credit_check": {
+    "events_expanded": 22,
+    "events_powered": 18,
+    "finish_s": "57953121/247212500000",
+    "geometry": {
+      "K": 1,
+      "M": 65,
+      "N": 65,
+      "tk": 64,
+      "tm": 16,
+      "tn": 64
+    },
+    "peak_output_slots": 2,
+    "retired_outputs": 10
+  },
+  "scope": "FP32 strict output-stationary formula; exact Fraction shared HBM0/HBM1 + COMPUTE_GATE; no production certificate",
+  "status": "passed_offline_independent_solo_checks"
+}

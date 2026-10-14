@@ -1,0 +1,10 @@
+[online] link observer: disabled (ASTRA_LINK_OBSERVER=0)
+[2026-10-14 05:40:51.636] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 2 index in ring: 0 offset: 1
+[2026-10-14 05:40:51.636] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 1 index in ring: 0 offset: 2
+[2026-10-14 05:40:51.636] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 2 index in ring: 0 offset: 1
+[2026-10-14 05:40:51.636] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 1 index in ring: 0 offset: 2
+[2026-10-14 05:40:51.636] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 2 index in ring: 0 offset: 1
+[2026-10-14 05:40:51.636] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 1 index in ring: 0 offset: 2
+[2026-10-14 05:40:51.636] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 2 index in ring: 0 offset: 1
+[2026-10-14 05:40:51.636] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 1 index in ring: 0 offset: 2
+[Error] (execution_driven/windowed_reader) provenance sidecar is MISSING (fail-closed): /workspace/template/work/wscllm-workspace-e2e/request_queue.csv.provenance.json must sit next to the request queue CSV and match it (re-materialize with sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py; a queue without its provenance record cannot be told apart from a truncated one -- refusing to submit anything)

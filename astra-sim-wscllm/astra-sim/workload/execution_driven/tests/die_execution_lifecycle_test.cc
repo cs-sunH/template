@@ -32,6 +32,10 @@ Cases:
      service units AND actual bytes as separate quantities.
   D. marker under contention off: the legacy 1 ns event micro-job (issue
      tick + 1).
+  M. partial marker HBM teardown samples and retains its physical prefix
+     without notifying or terminalizing the graph node.
+  N. teardown at a shared terminal tick samples two finished marker
+     endpoints, retires them without dispatching either ready callback.
   E. teardown: an in-flight execution (big plan, partially pumped) is torn
      down with its Sys without crash, without any terminal firing, and the
      stale outer alarms drain harmlessly afterwards.
@@ -304,6 +308,37 @@ void drain_queue(const std::shared_ptr<EventQueue>& queue) {
     }
 }
 
+void no_op_event(void*) {}
+
+long double marker_read_bytes(const nlohmann::json& progress) {
+    long double bytes = 0.0L;
+    for (const auto& row : progress.at("hbm_served_bytes_exact")) {
+        bytes += std::stold(row.at(0).get<std::string>());
+    }
+    return bytes;
+}
+
+struct HbmTeardownEventContext {
+    Workload* workload = nullptr;
+    CoarseDieRuntime* bridge = nullptr;
+    std::vector<uint64_t> handles;
+    std::vector<nlohmann::json> samples;
+    bool fired = false;
+};
+
+void teardown_hbm_model_event(void* data) {
+    auto* context = static_cast<HbmTeardownEventContext*>(data);
+    const uint64_t now_ns = Sys::boostedTick();
+    if (context->bridge != nullptr) {
+        for (const uint64_t handle : context->handles) {
+            context->samples.push_back(
+                context->bridge->query_progress_at(handle, now_ns));
+        }
+    }
+    context->workload->local_hbm_bandwidth_model.reset();
+    context->fired = true;
+}
+
 std::vector<nlohmann::json> capture_metrics(Sys* sys, uint64_t end_tick) {
     FILE* file = std::tmpfile();
     if (file == nullptr) throw std::runtime_error("cannot capture metrics");
@@ -535,6 +570,11 @@ int main() {
             {"compute-cost-model", "die"}, {"die-model-profile", "coarse_die_v2"},
             {"die-model-config", config_dir + "/coarse_hardware.json"},
             {"hbm-bandwidth-contention", 1}}.dump());
+        write_text(config_dir + "/coarse_system_latency.json", nlohmann::json{
+            {"compute-cost-model", "die"}, {"die-model-profile", "coarse_die_v2"},
+            {"die-model-config", config_dir + "/coarse_hardware.json"},
+            {"hbm-bandwidth-contention", 1},
+            {"local-mem-latency", 100}}.dump());
         Fixture fixture = make_fixture(config_dir, "coarse_system.json");
         // Observe the cancellation prefix with the existing microbenchmark
         // history policy; service finalization still rejects live GPU nodes.
@@ -681,6 +721,431 @@ int main() {
         drain_queue(fixture.event_queue);
         expect_true(g_terminal_fires[50] == 1 && g_terminal_fires[51] == 1,
                     "G: completed teardown publishes no duplicate terminals");
+    }
+
+    // I: a unit-level direct Workload dispatch proves a control marker can
+    // share the canonical Runtime with a positive-workspace typed COMP. This
+    // deliberately exercises the shared-runtime boundary, not the production
+    // single-GPU availability gate (which serializes Compute nodes). The
+    // marker owns one DIE endpoint byte, never typed COMP Plan work or COMM.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        Fixture fixture = make_fixture(config_dir, "coarse_system_latency.json");
+        auto& workload = *fixture.sys->workload;
+        auto& bridge = *fixture.sys->coarse_die_runtime;
+        nlohmann::json task{{"op_kind", "ffn_region"},
+            {"tensor_shapes", {{"m", 64}, {"hidden", 128},
+                               {"ffn", 256}, {"mlp_variant", "swiglu"}}},
+            {"fusion_policy", "materialized"}, {"storage_dtype", "bf16"}};
+        const auto plan = bridge.compile(task);
+        const uint64_t workspace_bytes =
+            coarse_die::hbm_workspace_peak_bytes(*plan);
+        install_workspace_snapshot(fixture.sys.get(),
+                                   std::numeric_limits<uint64_t>::max(), 0, 0);
+        bool scalar_comp_rejected = false;
+        try {
+            workload.local_hbm_bandwidth_model->issue_compute(1, 1, nullptr);
+        } catch (const std::runtime_error& error) {
+            scalar_comp_rejected =
+                std::string(error.what()).find("typed plan") != std::string::npos;
+        }
+        expect_true(scalar_comp_rejected,
+                    "I: ordinary scalar COMP remains forbidden by coarse HBM guard");
+        OnlineNode comp;
+        comp.global_id = 80; comp.rank = 0; comp.kind = NodeKind::Compute;
+        comp.node_type = 4; comp.name = "coarse_workspace_comp";
+        comp.request_id = "r1"; comp.stage = "prefill";
+        comp.compute.die_task_json = std::make_shared<const nlohmann::json>(task);
+        fixture.source->store().add_node(comp);
+        OnlineNode marker;
+        marker.global_id = 81; marker.rank = 0; marker.kind = NodeKind::Compute;
+        marker.node_type = 4; marker.name = "coarse_first_token";
+        marker.request_id = "r1"; marker.stage = "prefill";
+        marker.compute.op_role = OpRole::ControlMarker;
+        marker.compute.num_ops = 1; marker.compute.tensor_size = 1;
+        fixture.source->store().add_node(marker);
+        // The production single-GPU COMP availability gate serializes these
+        // graph nodes. Exercise their shared Runtime boundary directly here:
+        // the typed positive-workspace COMP has already been issued, while
+        // the normal ControlMarker Workload issue path submits its local
+        // endpoint concurrently.
+        workload.issue_dep_free_nodes();
+        const auto* marker_view = fixture.source->lookup_ptr(marker.global_id);
+        if (marker_view != nullptr) workload.issue(*marker_view);
+        expect_true(workspace_bytes > 0 &&
+                        fixture.sys->workspace_admission->active_lease_count() == 1 &&
+                        fixture.sys->workspace_admission->active_workspace_bytes() ==
+                            workspace_bytes &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 2 &&
+                        bridge.has_active_executions(),
+                    "I: positive-workspace typed COMP and marker are concurrently live");
+        drain_queue(fixture.event_queue);
+        const auto counters = bridge.counters();
+        const auto& die = counters.at("served_by_category").at("die");
+        const auto& comp_category = counters.at("served_by_category").at("comp");
+        const auto& comm_send = counters.at("served_by_category").at("comm_send");
+        expect_true(g_terminal_fires[80] == 1 && g_terminal_fires[81] == 1 &&
+                        g_first_tick[81] >= 101 &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                        fixture.sys->workspace_admission->active_lease_count() == 0 &&
+                        fixture.sys->workspace_admission->active_workspace_bytes() == 0 &&
+                        !workload.die_model_adapter()->has_active_die_executions(),
+                    "I: typed COMP and delayed marker terminalize once and release GPU/workspace");
+        expect_true(die.at("hbm_served_bytes_by_row_direction_exact")[0][0] == "1" &&
+                        die.at("hbm_served_bytes_by_row_direction_exact")[0][1] == "0" &&
+                        die.at("hbm_served_bytes_by_row_direction_exact")[1][0] == "0" &&
+                        die.at("hbm_served_bytes_by_row_direction_exact")[1][1] == "0" &&
+                        die.at("int4_ops").get<double>() == 0.0 &&
+                        die.at("vec_eqops").get<double>() == 0.0 &&
+                        comp_category.at("int4_ops").get<double>() ==
+                            plan->summary.at("executed_int4_ops").get<double>() &&
+                        comm_send.at("hbm_served_bytes_by_row_direction_exact")[0][0] == "0" &&
+                        comm_send.at("hbm_served_bytes_by_row_direction_exact")[1][0] == "0" &&
+                        counters.at("served_by_category").at("comm_recv")
+                            .at("hbm_served_bytes_by_row_direction_exact")[0][1] == "0" &&
+                        workload.local_hbm_bandwidth_model->compute_bytes_served() == 1.0,
+                    "I: exactly one physical marker byte is die-owned; compatibility compute bytes stay 1 and COMM/typed ops stay clean");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires[80] == 1 && g_terminal_fires[81] == 1,
+                    "I: completed coarse marker teardown publishes no duplicate terminal");
+    }
+
+    // L: production issue_dep_free_nodes keeps the single GPU Compute gate
+    // intact while allowing a control marker and a real COMM HBM endpoint to
+    // be live together in the same Runtime under their independent gates.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        Fixture fixture = make_fixture(config_dir, "coarse_system_latency.json");
+        fixture.network_api->complete_network_callbacks(true);
+        auto& workload = *fixture.sys->workload;
+        auto& bridge = *fixture.sys->coarse_die_runtime;
+        OnlineNode marker;
+        marker.global_id = 84; marker.rank = 0; marker.kind = NodeKind::Compute;
+        marker.node_type = 4; marker.name = "coarse_marker_with_comm";
+        marker.request_id = "r1"; marker.stage = "prefill";
+        marker.compute.op_role = OpRole::ControlMarker;
+        marker.compute.num_ops = 1; marker.compute.tensor_size = 1;
+        fixture.source->store().add_node(marker);
+        OnlineNode comm;
+        comm.global_id = 85; comm.rank = 0; comm.kind = NodeKind::CommSend;
+        comm.node_type = 5; comm.name = "coarse_comm_with_marker";
+        comm.request_id = "r1"; comm.stage = "prefill";
+        comm.comm.bytes = 1; comm.comm.src = 0; comm.comm.dst = 0;
+        comm.comm.tag = 0; comm.comm.hbm_charge = true;
+        fixture.source->store().add_node(comm);
+        workload.issue_dep_free_nodes();
+        const auto snapshot = bridge.export_snapshot(Sys::boostedTick());
+        uint64_t die_endpoints = 0;
+        uint64_t comm_endpoints = 0;
+        for (const auto& execution :
+             snapshot.at("runtime_snapshot").at("executions")) {
+            const auto& endpoint =
+                execution.at("plan").at("task").at("endpoint");
+            if (endpoint.value("owner_kind", std::string()) == "die")
+                ++die_endpoints;
+            if (endpoint.value("owner_kind", std::string()) == "comm")
+                ++comm_endpoints;
+        }
+        expect_true(die_endpoints == 1 && comm_endpoints == 1 &&
+                        bridge.has_active_executions() &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
+                        workload.hw_resource->num_in_flight_gpu_comm_ops == 1 &&
+                        g_terminal_fires.count(84) == 0 &&
+                        g_terminal_fires.count(85) == 0,
+                    "L: normal availability-gated issue shares Runtime between delayed marker and real COMM endpoint");
+        drain_queue(fixture.event_queue);
+        const auto counters = bridge.counters();
+        const auto& die = counters.at("served_by_category").at("die");
+        const auto& comm_send = counters.at("served_by_category").at("comm_send");
+        expect_true(g_terminal_fires[84] == 1 && g_terminal_fires[85] == 1 &&
+                        g_first_tick[84] >= 101 &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 0 &&
+                        workload.hw_resource->num_in_flight_gpu_comm_ops == 0 &&
+                        die.at("hbm_served_bytes_by_row_direction_exact")[0][0] == "1" &&
+                        comm_send.at("hbm_served_bytes_by_row_direction_exact")[0][0] == "1" &&
+                        workload.local_hbm_bandwidth_model->compute_bytes_served() == 1.0,
+                    "L: marker and COMM endpoint both complete once with isolated DIE/COMM byte accounting");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires[84] == 1 && g_terminal_fires[85] == 1,
+                    "L: completed marker/COMM teardown does not duplicate terminals");
+    }
+
+    // J: destroying the HBM facade while a delayed marker endpoint is live
+    // retires the Runtime handle, drops handler data, and suppresses callbacks.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        Fixture fixture = make_fixture(config_dir, "coarse_system_latency.json");
+        auto& workload = *fixture.sys->workload;
+        auto& bridge = *fixture.sys->coarse_die_runtime;
+        // Make the endpoint remain in its startup delay while teardown runs.
+        fixture.sys->local_mem_latency = 1'000'000;
+        OnlineNode marker;
+        marker.global_id = 82; marker.rank = 0; marker.kind = NodeKind::Compute;
+        marker.node_type = 4; marker.name = "coarse_teardown_marker";
+        marker.request_id = "r1"; marker.stage = "prefill";
+        marker.compute.op_role = OpRole::ControlMarker;
+        marker.compute.num_ops = 1; marker.compute.tensor_size = 1;
+        fixture.source->store().add_node(marker);
+        workload.issue_dep_free_nodes();
+        expect_true(bridge.has_active_executions() &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
+                        g_terminal_fires.count(82) == 0,
+                    "J: marker endpoint is live and nonterminal before teardown");
+        workload.local_hbm_bandwidth_model.reset();
+        expect_true(!bridge.has_active_executions() &&
+                        bridge.counters().at("endpoint_registry_size") == 0 &&
+                        bridge.counters().at("transaction_registry_size") == 0 &&
+                        g_terminal_fires.count(82) == 0,
+                    "J: HBM teardown cancels and retires delayed endpoint without callback");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires.count(82) == 0,
+                    "J: stale teardown alarms drain without a marker terminal");
+    }
+
+    // K: a deliberately low declared HBM efficiency keeps the exact 1-byte
+    // marker in flight long enough to cancel after readiness. Both the DIE
+    // category and the legacy compute_bytes_served side-band must retain the
+    // same partial physical prefix from this Runtime execution.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        std::ifstream hardware_in(config_dir + "/coarse_hardware.json");
+        nlohmann::json slow_hardware;
+        hardware_in >> slow_hardware;
+        slow_hardware["performance_profile"]["eta_hbm_matrix"] = 1e-6;
+        write_text(config_dir + "/coarse_hardware_slow.json",
+                   slow_hardware.dump());
+        write_text(config_dir + "/coarse_system_slow.json", nlohmann::json{
+            {"compute-cost-model", "die"}, {"die-model-profile", "coarse_die_v2"},
+            {"die-model-config", config_dir + "/coarse_hardware_slow.json"},
+            {"hbm-bandwidth-contention", 1},
+            {"local-mem-latency", 100}}.dump());
+        Fixture fixture = make_fixture(config_dir, "coarse_system_slow.json");
+        auto& workload = *fixture.sys->workload;
+        auto& bridge = *fixture.sys->coarse_die_runtime;
+        OnlineNode marker;
+        marker.global_id = 83; marker.rank = 0; marker.kind = NodeKind::Compute;
+        marker.node_type = 4; marker.name = "coarse_partial_marker";
+        marker.request_id = "r1"; marker.stage = "prefill";
+        marker.compute.op_role = OpRole::ControlMarker;
+        marker.compute.num_ops = 1; marker.compute.tensor_size = 1;
+        fixture.source->store().add_node(marker);
+        workload.issue_dep_free_nodes();
+        fixture.event_queue->schedule_event(101, no_op_event, nullptr);
+        fixture.event_queue->proceed();
+        fixture.event_queue->proceed();
+        const uint64_t now = Sys::boostedTick();
+        const auto envelope = bridge.export_snapshot(now);
+        uint64_t endpoint_handle = 0;
+        long double expected_partial_bytes = 0.0L;
+        for (const auto& execution :
+             envelope.at("runtime_snapshot").at("executions")) {
+            const auto& endpoint_json =
+                execution.at("plan").at("task").at("endpoint");
+            if (endpoint_json.value("owner_kind", std::string()) != "die")
+                continue;
+            endpoint_handle = execution.at("handle").get<uint64_t>();
+            const auto& served = execution.at("hbm_served");
+            for (const auto& row : served) {
+                for (const auto& direction : row) {
+                    expected_partial_bytes +=
+                        std::stold(direction.get<std::string>());
+                }
+            }
+        }
+        expect_true(now == 101 && endpoint_handle != 0 &&
+                        expected_partial_bytes > 0.0L &&
+                        expected_partial_bytes < 1.0L &&
+                        g_terminal_fires.count(83) == 0,
+                    "K: endpoint has a positive strict-prefix read after its delay");
+        const auto live_progress_before =
+            bridge.query_progress(endpoint_handle);
+        const auto live_counters_before = bridge.counters();
+        const double getter_live_bytes =
+            workload.local_hbm_bandwidth_model->compute_bytes_served();
+        const auto live_progress_after =
+            bridge.query_progress(endpoint_handle);
+        const auto live_counters_after = bridge.counters();
+        const bool live_time_reversal_rejected = [&] {
+            try {
+                (void)bridge.query_progress_at(endpoint_handle, now - 1);
+            } catch (const std::invalid_argument&) {
+                return true;
+            }
+            return false;
+        }();
+        const bool stale_handle_rejected = [&] {
+            try {
+                (void)bridge.query_progress_at(0, now);
+            } catch (const std::out_of_range&) {
+                return true;
+            }
+            return false;
+        }();
+        expect_true(std::abs(static_cast<long double>(getter_live_bytes) -
+                             expected_partial_bytes) < 1e-18L &&
+                        live_progress_before == live_progress_after &&
+                        live_counters_before == live_counters_after &&
+                        bridge.has_active_executions() &&
+                        workload.hw_resource->num_in_flight_gpu_comp_ops == 1 &&
+                        g_terminal_fires.count(83) == 0 &&
+                        live_time_reversal_rejected && stale_handle_rejected,
+                    "K: const getter samples live marker bytes without mutating Runtime, slots, terminals, or fail-closed checks");
+        bridge.cancel(endpoint_handle, now, true);
+        const auto cancelled = bridge.counters();
+        const auto& die = cancelled.at("served_by_category").at("die");
+        const long double die_read = std::stold(
+            die.at("hbm_served_bytes_by_row_direction_exact")[0][0]
+                .get<std::string>());
+        const auto& comm = cancelled.at("served_by_category").at("comm_send");
+        expect_true(std::abs(die_read - expected_partial_bytes) < 1e-18L &&
+                        std::abs(static_cast<long double>(
+                                     workload.local_hbm_bandwidth_model
+                                         ->compute_bytes_served()) -
+                                 getter_live_bytes) < 1e-18L &&
+                        comm.at("hbm_served_bytes_by_row_direction_exact")[0][0] == "0" &&
+                        !bridge.has_active_executions() &&
+                        cancelled.at("endpoint_registry_size") == 0 &&
+                        cancelled.at("transaction_registry_size") == 0 &&
+                        g_terminal_fires.count(83) == 0,
+                    "K: partial cancellation preserves the same die/compatibility bytes, leaves COMM clean, and suppresses graph completion");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires.count(83) == 0,
+                    "K: cancelled marker teardown does not publish a terminal");
+    }
+
+    // M: destroying the HBM facade after a partial marker read preserves the
+    // exact physical prefix while silently retiring its Runtime callback.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        Fixture fixture = make_fixture(config_dir, "coarse_system_slow.json");
+        Workload& workload = *fixture.sys->workload;
+        CoarseDieRuntime& bridge = *fixture.sys->coarse_die_runtime;
+        OnlineNode marker;
+        marker.global_id = 86; marker.rank = 0; marker.kind = NodeKind::Compute;
+        marker.node_type = 4; marker.name = "partial_teardown_marker";
+        marker.request_id = "r1"; marker.stage = "prefill";
+        marker.compute.op_role = OpRole::ControlMarker;
+        marker.compute.num_ops = 1; marker.compute.tensor_size = 1;
+        fixture.source->store().add_node(marker);
+        HbmTeardownEventContext teardown{&workload, &bridge};
+        fixture.event_queue->schedule_event(
+            101, teardown_hbm_model_event, &teardown);
+        workload.issue_dep_free_nodes();
+        const auto before_teardown = bridge.export_snapshot(0);
+        for (const auto& execution :
+             before_teardown.at("runtime_snapshot").at("executions")) {
+            if (execution.at("plan").at("task").at("endpoint")
+                    .value("owner_kind", std::string()) == "die") {
+                teardown.handles.push_back(
+                    execution.at("handle").get<uint64_t>());
+            }
+        }
+        const auto projected = teardown.handles.empty()
+            ? nlohmann::json::object()
+            : bridge.query_progress_at(teardown.handles.front(), 101);
+        const long double expected_prefix = projected.is_object()
+            ? marker_read_bytes(projected) : 0.0L;
+        while (!teardown.fired && !fixture.event_queue->finished()) {
+            fixture.event_queue->proceed();
+        }
+        const auto counters = bridge.counters();
+        const auto& die = counters.at("served_by_category").at("die");
+        const long double retained_prefix = std::stold(
+            die.at("hbm_served_bytes_by_row_direction_exact")[0][0]
+                .get<std::string>());
+        expect_true(teardown.fired && Sys::boostedTick() == 101 &&
+                        expected_prefix > 0.0L && expected_prefix < 1.0L &&
+                        teardown.samples.size() == 1 &&
+                        std::abs(marker_read_bytes(teardown.samples.front()) -
+                                 expected_prefix) < 1e-18L &&
+                        std::abs(retained_prefix - expected_prefix) < 1e-18L &&
+                        !bridge.has_active_executions() &&
+                        counters.at("endpoint_registry_size") == 0 &&
+                        counters.at("transaction_registry_size") == 0 &&
+                        g_terminal_fires.count(86) == 0,
+                    "M: partial teardown retains the sampled DIE prefix and suppresses marker callbacks");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires.count(86) == 0,
+                    "M: partial marker teardown remains nonterminal after stale alarms drain");
+    }
+
+    // N: the first event at the physical terminal tick tears down the HBM
+    // facade before Runtime's own event can dispatch. Both marker callbacks
+    // are ready, so notify=true here would terminalize both graph nodes.
+    {
+        g_first_tick.clear();
+        g_terminal_fires.clear();
+        Fixture fixture = make_fixture(config_dir, "coarse_system_latency.json");
+        Workload& workload = *fixture.sys->workload;
+        CoarseDieRuntime& bridge = *fixture.sys->coarse_die_runtime;
+        fixture.sys->local_mem_latency = 0;
+        OnlineNode first;
+        first.global_id = 87; first.rank = 0; first.kind = NodeKind::Compute;
+        first.node_type = 4; first.name = "finished_teardown_marker_a";
+        first.request_id = "r1"; first.stage = "prefill";
+        first.compute.op_role = OpRole::ControlMarker;
+        first.compute.num_ops = 1; first.compute.tensor_size = 1;
+        fixture.source->store().add_node(first);
+        OnlineNode second = first;
+        second.global_id = 88;
+        second.name = "finished_teardown_marker_b";
+        fixture.source->store().add_node(second);
+        HbmTeardownEventContext teardown{&workload, &bridge};
+        fixture.event_queue->schedule_event(
+            1, teardown_hbm_model_event, &teardown);
+        workload.issue_dep_free_nodes();
+        // The production single-GPU gate serializes these graph nodes. Direct
+        // Workload dispatch here only creates a second ready Runtime callback
+        // so destructor notification behavior is tested at shared tick 1.
+        const auto* second_view = fixture.source->lookup_ptr(88);
+        if (second_view != nullptr) workload.issue(*second_view);
+        const auto before_teardown = bridge.export_snapshot(0);
+        for (const auto& execution :
+             before_teardown.at("runtime_snapshot").at("executions")) {
+            if (execution.at("plan").at("task").at("endpoint")
+                    .value("owner_kind", std::string()) == "die") {
+                teardown.handles.push_back(
+                    execution.at("handle").get<uint64_t>());
+            }
+        }
+        fixture.event_queue->proceed();
+        const auto counters = bridge.counters();
+        const auto& die = counters.at("served_by_category").at("die");
+        const long double retained_bytes = std::stold(
+            die.at("hbm_served_bytes_by_row_direction_exact")[0][0]
+                .get<std::string>());
+        const bool sampled_both_finished = teardown.samples.size() == 2 &&
+            std::all_of(teardown.samples.begin(), teardown.samples.end(),
+                [](const nlohmann::json& sample) {
+                    return sample.at("state") == "finished" &&
+                           sample.at("terminal").get<bool>() &&
+                           std::abs(marker_read_bytes(sample) - 1.0L) < 1e-18L;
+                });
+        expect_true(teardown.fired && Sys::boostedTick() == 1 &&
+                        teardown.handles.size() == 2 &&
+                        sampled_both_finished &&
+                        std::abs(retained_bytes - 2.0L) < 1e-18L &&
+                        !bridge.has_active_executions() &&
+                        counters.at("endpoint_registry_size") == 0 &&
+                        counters.at("transaction_registry_size") == 0 &&
+                        g_terminal_fires.count(87) == 0 &&
+                        g_terminal_fires.count(88) == 0,
+                    "N: teardown retains two physically finished bytes without dispatching either ready callback");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(g_terminal_fires.count(87) == 0 &&
+                        g_terminal_fires.count(88) == 0,
+                    "N: terminal-tick marker teardown stays silent after stale alarms drain");
     }
 
     // H: a real coarse COMP is prepared before NodeStore take/HardwareResource

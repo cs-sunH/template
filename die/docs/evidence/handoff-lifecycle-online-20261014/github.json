@@ -1,0 +1,10 @@
+{
+  "baseline_main": "037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f",
+  "branch": "codex/die-lifecycle-online-20261014",
+  "integration_branch": "main",
+  "status": "NOT READY FOR HANDOFF until PR merge and remote ancestry verified",
+  "source_commit": null,
+  "pull_request": null,
+  "source_ci": null,
+  "engineering_status": "NOT ACCEPTED; see HANDOFF"
+}

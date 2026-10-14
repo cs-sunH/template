@@ -22,7 +22,7 @@ set_target_properties(coarse_die_cabi PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMA
 option(COARSE_DIE_BUILD_TESTS "Build standalone coarse die verification" ON)
 if(COARSE_DIE_BUILD_TESTS)
   enable_testing()
-  foreach(t source_golden_test hardware_search_test compile_execution_test compiler_credit_test operator_accounting_test gemm_accounting_test gemm_tail_budget_test task_schema_test compact_batch_semantics_test equivalent_work_test fractional_work_test fused_ffn_accounting_test attention_accounting_test endpoint_allocation_test runtime_credit_scale_test runtime_counters_test estimate_driver_test runtime_semantics_test oracle_granularity_test capi_lifecycle_test capi_cache_response_test workspace_metadata_test runtime_submit_transaction_test runtime_owner_symmetry_test)
+  foreach(t source_golden_test hardware_search_test compile_execution_test compiler_credit_test gemm_os_access_counter_test operator_accounting_test gemm_accounting_test gemm_tail_budget_test task_schema_test compact_batch_semantics_test equivalent_work_test fractional_work_test fused_ffn_accounting_test attention_accounting_test endpoint_allocation_test runtime_credit_scale_test runtime_counters_test estimate_driver_test runtime_semantics_test oracle_granularity_test capi_lifecycle_test capi_cache_response_test workspace_metadata_test runtime_submit_transaction_test runtime_owner_symmetry_test)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}.cc")
       add_executable(coarse_${t} tests/${t}.cc)
       target_link_libraries(coarse_${t} PRIVATE coarse_die coarse_die_cabi)
@@ -37,6 +37,22 @@ if(COARSE_DIE_BUILD_TESTS)
     add_test(NAME coarse_grouped_gemm_oracle_test
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/grouped_gemm_oracle_test.py")
+  endif()
+  # Independent bounded Fraction LP regression against public Runtime samples.
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/owner_lp_oracle_driver.cc" AND
+     EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/validation/owner_lp_oracle.py")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_executable(coarse_owner_lp_oracle_driver
+      tests/owner_lp_oracle_driver.cc)
+    target_include_directories(coarse_owner_lp_oracle_driver PRIVATE tests)
+    target_link_libraries(coarse_owner_lp_oracle_driver PRIVATE coarse_die)
+    target_compile_definitions(coarse_owner_lp_oracle_driver PRIVATE
+      COARSE_DIE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+      COARSE_DIE_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
+    add_test(NAME coarse_owner_lp_oracle_test
+      COMMAND "${Python3_EXECUTABLE}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/validation/owner_lp_oracle.py"
+        "$<TARGET_FILE:coarse_owner_lp_oracle_driver>")
   endif()
   # A measurement executable, not a passing granularity assertion. The
   # independent Python oracle applies the frozen error limits to its output.

@@ -21,7 +21,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 硬件 `die/src/Hardware.cc`；计划/任务/映射 `Plan.cc`、`Compiler.cc`、`Mapping.cc`；执行 `Execution.cc`；ABI `Capi.cc`。
 - 接口在 `die/include/coarse_die/`；配置、工具、测试分别在 `configs/`、`tools/`、`tests/`。
 - 依赖 C++17、CMake、Python3 和 vendored `astra-sim-wscllm/extern/helper/json/json.hpp`；TX8 工具仅 Python 标准库。
-- 下一环境应核实真实工具安装。本环境 CMake 在 `work/tooling/cmake/data/bin/`，Protobuf 3.21.12 安装在 `work/deps/protobuf/`；这些忽略目录不是跨账号依赖交付。
+- 下一环境应核实真实工具安装。本环境 CMake 在 `work/tooling/cmake/cmake/data/bin/`，Protobuf 3.21.12 安装在 `work/deps/protobuf/`；这些忽略目录不是跨账号依赖交付。
 - `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release` 是公共库入口；benchmark 宏缺失已修复。实际最新构建/CTest 状态以 HANDOFF 为准。
 - 独立 Runtime/hardware_search 和 TX8 审计的真实命令、日志与结果在 HANDOFF 与 `docs/evidence/`。
 
@@ -41,7 +41,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-最新交接工作分支 codex/die-workspace-runtime-20261014；共享集成分支仍为 main。上轮 PR #5 已 merged，开始基线 c47ae85f479edd0953bbb432bc05139ef1c63541。当前源码交付提交 45cf4d23d56bfe37c19af1f62163bb821d65c55f，PR #6；源码 SHA/已实跑 CI 及最终 GitHub 状态入口见 docs/evidence/handoff-runtime-20261014/github.json；只有进入 main 并核对后才能接棒。本 Session 已按用户指令停止开发并进行交接。
+最新交接工作分支 `codex/die-lifecycle-online-20261014`；共享集成分支仍为 `main`。已合并 PR #6 的 main `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f` 是本轮基线。本轮真实源码 SHA、PR/已完成 CI 入口见 `docs/evidence/handoff-lifecycle-online-20261014/github.json`；只有合入 main 并 fetch 核实后才能安全接棒。用户最新指令为当前最小任务完成后交接并停止，本 Session 不再启动新开发任务。
 
 ## 重要决定及变更记录
 
@@ -60,3 +60,5 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 独立compiled参考改为设计owner Q/α及真实GEMM LOCAL-Q，legacy equal-progress并列保留；生产E5 finish/busy仍failed，门槛不变。whole-output exact scratch已在solo R=10⁶跳过输出周期；双owneroffset仍fail-closed且大整数增长。520-event严格affine contraction proof只覆盖固定full-MN区段，未接入生产、不引入GMP、不证明flat256发现。下一步合成有界piecewise affine表示与workspace显式v2容量桥接；TX8reference和target priors继续冻结。
 
 - 2026-10-14 最终交接：实现公共候选延迟seal/原结构校验、提交失败回滚、完全同构owner块LP压缩、精确workspace accessor；无LRU wscllm bridge v2/发射前lease/权威KV容量epoch/取消typed统计闭环及typed硬件loader。公共25/25、wscllm最终源7/7、Python在线106/106、硬件/train35/35通过；五仓20文件同digest，ABI/config真实范围以HANDOFF证据为准。生产K-wave oracle仍failed、E8/E16不可用，真实Online E2E未启动，四仓workspace待推广，cold/J32全域预算未通过。新nested affine/固定精度研究只限已证明fixture，未进生产；TX8冻结。本轮用户明确要求交接后立即停止。
+
+- 2026-10-14 接续及交接：公共 endpoint 可选 ready delay 保持旧省略字段摘要；独立 Fraction LP 实际 Runtime 对照与精确 OS 每 K access counter（未接入生产）加入正式测试。五仓 ControlMarker 专用 1B DIE endpoint/本地延迟、read-only live prefix、无通知 teardown，保留 legacy/carrier/pool/join，JOINT virtual pipeline sink 恰好一次。最终公共27/27、五仓定向16/16、21文件同digest、双ABI/config83/83通过；base生产 tiny Online E2E 成功但早于最后teardown源，四仓workspace仍待推广。新 geometry-generated symbolic return/标准C++ outward lowering和solo sharedHBM研究保存，完整双owner256发现及生产E5精度仍failed、E8/E16不可用，counter尚未落地timing；TX8冻结，无新host预算证书。详细依赖与验收边界在当前HANDOFF，用户要求合并交接后立即停止。

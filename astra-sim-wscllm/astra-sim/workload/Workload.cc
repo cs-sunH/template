@@ -601,13 +601,21 @@ void Workload::issue_die_comp(
     }
     if (node.compute.op_role == ExecutionDriven::OpRole::ControlMarker) {
         // Legacy micro-job semantics, byte-for-byte (contract §7.3): with
-        // the HBM fluid model the marker drains a (1 op, 1 byte) COMP job
-        // (the model's own latency phase included); without it a 1 ns
-        // event. No die macro-group launch, no plan, no PE/VEC stages.
+        // the legacy HBM fluid model the marker drains a (1 op, 1 byte) COMP
+        // job (including its local latency phase). Coarse mode uses the same
+        // one-byte service as a dedicated canonical endpoint with the same
+        // one-shot latency; it does not enter the typed COMP Plan path.
+        // Without an HBM facade it remains a 1 ns event. No macro-group
+        // launch, workspace lease, typed COMP Plan, or PE/VEC stages are
+        // created; the endpoint Runtime owns its ordinary endpoint Plan.
         WorkloadLayerHandlerData* wlhd = new WorkloadLayerHandlerData;
         wlhd->node_id = node.global_id;
         if (local_hbm_bandwidth_model != nullptr) {
-            local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+            if (sys->coarse_die_runtime != nullptr) {
+                local_hbm_bandwidth_model->issue_control_marker(wlhd);
+            } else {
+                local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+            }
         } else {
             // (wscllm note: the write-only tics_gpu_ops accumulator was
             // removed repo-wide on 2026-09-27; the occupancy invariant is

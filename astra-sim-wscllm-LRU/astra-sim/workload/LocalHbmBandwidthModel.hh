@@ -65,6 +65,7 @@ class LocalHbmBandwidthModel : public Callable {
         POOL_READ,
         POOL_WRITE,
         DIE_COMPUTE,
+        CONTROL_MARKER,
         KIND_COUNT,
     };
     static constexpr size_t kJobKindCount =
@@ -76,6 +77,9 @@ class LocalHbmBandwidthModel : public Callable {
     void issue_compute(uint64_t num_ops,
                        uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
+    // Preserve the one-byte marker through a dedicated coarse endpoint;
+    // ordinary scalar COMPUTE remains forbidden in coarse mode.
+    void issue_control_marker(WorkloadLayerHandlerData* wlhd);
     void issue_restore(uint64_t tensor_size,
                        WorkloadLayerHandlerData* wlhd);
     void issue_comm_read(uint64_t bytes,
@@ -138,9 +142,9 @@ class LocalHbmBandwidthModel : public Callable {
     double hbm_shared_ns() const {
         return this->hbm_shared_ns_;
     }
-    double compute_bytes_served() const {
-        return this->bytes_served_by_kind_[kind_index(JobKind::COMPUTE)];
-    }
+    // Legacy COMP-byte view plus the exact live/retired prefix of coarse
+    // control-marker endpoints. Marker service is not typed COMP work.
+    double compute_bytes_served() const;
     double restore_bytes_served() const {
         return this->bytes_served_by_kind_[kind_index(JobKind::RESTORE)];
     }
@@ -203,6 +207,11 @@ class LocalHbmBandwidthModel : public Callable {
         CallData* die_data = nullptr;
     };
 
+    struct CoarseJob {
+        WorkloadLayerHandlerData* wlhd = nullptr;
+        JobKind kind = JobKind::COMM_READ;
+    };
+
     class TransitionData : public CallData {
       public:
         explicit TransitionData(uint64_t generation)
@@ -254,7 +263,8 @@ class LocalHbmBandwidthModel : public Callable {
     double coarse_pool_write_served_ = 0.0;
     double coarse_die_read_served_ = 0.0;
     double coarse_die_write_served_ = 0.0;
-    std::map<uint64_t, WorkloadLayerHandlerData*> coarse_jobs_;
+    double coarse_control_marker_bytes_served_ = 0.0;
+    std::map<uint64_t, CoarseJob> coarse_jobs_;
 
     Tick last_update_tick;
     uint64_t event_generation;

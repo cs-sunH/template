@@ -244,8 +244,13 @@ LOCAL/REMOTE LRU、pool/restore、远端 KV 传输与 `hbm-charge` 计费**原�
 可达）；`die` 与 `roofline-enabled=1` / `replay-only=1` 并存即冲突矩阵报错。
 **die 后端 COMP 分发序**（`Workload::issue_die_comp`，冻结）：timer op → 旧 timer 路径；
 cpu op → replay；`op_role=control_marker`（first_token/drain/exit/sentinel/join/pstart 等
-`comp(name,1,1)` 微节点，生成侧显式标注）→ 旧微作业语义逐字节保留；有 die_spec →
-DieModelAdapter；真 COMP 缺 spec → throw。
+`comp(name,1,1)` 微节点，生成侧显式标注）→ legacy HBM 下保留旧 `(1 op, 1 byte)`
+fluid job；coarse_die_v2 下由同一 canonical Runtime 提交唯一 1-byte `owner_kind=die`
+read endpoint，并将 `local-mem-latency` 作为启动延迟，不创建 typed COMP Plan；无 HBM
+facade 时仍为 1ns 事件；有 die_spec → DieModelAdapter；真 COMP 缺 spec → throw。
+`compute_bytes_served` 兼容 getter 汇总 marker 已服务物理字节，COMM/RESTORE/POOL
+分类与 join 生命周期保持原口径。销毁 HBM facade 时保留 marker 已服务字节前缀并静默
+取消，不分发 Runtime 中已就绪的 graph completion callbacks。
 
 **配置链五步**：硬件 JSON `die` 节（六参数，本仓默认点 large/0.75MB SRAM/800mm²/
 NoC 512bit/HBM 4×1 单侧；与 `compute` 节互斥，remote-memory 节正交保留）→
@@ -876,7 +881,8 @@ fork 探针、die_spec→adapter→finish_generic_node 恰一次、control_marke
 缺 spec fail-closed throw、parser runtime_ns 冲突、利用率三口径聚合对账）、
 `..._DieExecutionLifecycleTest`（Timer/Memory 混合计划端到端、一次性
 local_mem_latency 外部死区、contention=0 自驱 vs 独立满速 oracle、contention=1 仲裁、
-槽位占用/释放、单 terminal、在飞拆除）、`..._LocalHbmDieMemoryTest`
+coarse marker 的 DIE byte/latency、marker+COMM 共 Runtime、live/cancel prefix 与
+facade teardown（partial-prefix 与 terminal-tick 双 marker）、槽位占用/释放、单 terminal、在飞拆除）、`..._LocalHbmDieMemoryTest`
 （DIE_COMPUTE 服务量作业：均分排空序列、sink 完成时刻、actual/service 两列分列、
 坏请求拒绝、cancel_die_jobs_of 拆除；与 COMM_READ 同池竞争）。
 

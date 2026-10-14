@@ -1163,7 +1163,11 @@ void Workload::issue_pipeline_control_marker(
         // execution: a 1-op/1-byte COMPUTE fluid job, paid through the real
         // HBM latency/share model, with completion forwarded to the owning
         // transport sink by Workload::call.
-        local_hbm_bandwidth_model->issue_compute(1, 1, completion_cookie);
+        if (sys->coarse_die_runtime != nullptr) {
+            local_hbm_bandwidth_model->issue_control_marker(completion_cookie);
+        } else {
+            local_hbm_bandwidth_model->issue_compute(1, 1, completion_cookie);
+        }
         return;
     }
 
@@ -1213,7 +1217,11 @@ void Workload::issue_die_comp(const ExecutionDriven::NodeView& node) {
         wlhd->workload = this;
         wlhd->node_id = node.global_id;
         if (local_hbm_bandwidth_model != nullptr) {
-            local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+            if (sys->coarse_die_runtime != nullptr) {
+                local_hbm_bandwidth_model->issue_control_marker(wlhd);
+            } else {
+                local_hbm_bandwidth_model->issue_compute(1, 1, wlhd);
+            }
         } else {
             hw_resource->tics_gpu_ops += 1;
             sys->register_event(this, EventType::General, wlhd, 1);

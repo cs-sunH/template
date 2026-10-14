@@ -1,146 +1,151 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-14（Asia/Shanghai）。用户已明确要求停止开发并完成 GitHub 交接。本 Session 已停止启动新开发任务；仅进行保存、必要验证及提交/合并收尾。交接完成后停止。下一账号收到新的开发指令后从本文件 Next Step 继续，不能继承本 Session 的停止指令为永久项目限制。
+记录日期：2026-10-14（UTC）。用户最新指令为停止启动新任务，在当前最小任务完成后保存、合入 main 并停止。本 Session 已完成在途 marker teardown 收尾，未继续启动功能开发。下一账号收到新的开发指令后按 Next Step 接续；停工指令不是永久项目限制。
 
 ## Current Status
 
-**公共源和 wscllm 定向回归已验证；工程整体与模型精度仍 NOT ACCEPTED。** 本轮从已合并 PR #5 的 main c47ae85f479edd0953bbb432bc05139ef1c63541 开始，保留既有 compact batch、fractional κ、Plan v2/v3、C ABI v2、缓存响应与所有旧计数成果。
+**公共/五仓定向回归通过，代码交接待远端合并核实；工程整体仍 NOT ACCEPTED。** 本轮从已合并 PR #6 的 main `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f` 开始，复用既有 compact batch、fractional κ、Plan v2/v3、C ABI v2、缓存、事务回滚、owner LP 对称商及 wscllm workspace v2，不重复这些成果。
 
-最终公共默认 targets 构建和 25/25 CTest 通过。新增精确 workspace 读取、提交失败事务回滚、完全相同 owner 块的 LP 对称压缩；GEMM 编译仅延后落选候选的 canonical seal，所有原结构/物理校验和同源 Runtime 保留。五仓已统一发布 20 文件，digest 为 6c2340b9d409f863d7a373d2f3c7ffe3d8d38db3361ab287adb779c15dc12468。
+本轮公共默认构建/27 CTest 通过；新增 exact Fraction LP 对照、每 K OS access counter 基础（尚未接入生产）、端点可选 ready delay。五仓修复 coarse ControlMarker 的 scalar COMP 错误路径，保留 legacy 时序与各仓 carrier/pool/join，处理 live prefix/取消/teardown。五仓 Online 及所选 targets 构建成功，最终定向 CTest 共 16/16（3+4+3+3+3）；五仓两 ABI 最终构建成功，显式配置测试 83/83（20+15+18+17+13），无跳过。21 个 canonical 文件发布 digest 为 `f5e49a82f534db77623eada68657d44c63830afd076f152a8262f5ba864cbde3`。
 
-无 LRU wscllm 实现发射前 workspace lease、v2 request/response/ack、Python KV authority snapshot、跨 epoch fit hold 与取消一次释放。最终源重建 Online 和所选 targets，7/7 CTest；最终 Python 在线 discovery 106/106，typed hardware+train 定向 35/35（显式 ABI，无跳过）。最终五仓两 ABI 均构建成功，显式配置测试 83/83（20+15+18+17+13，无跳过）；完整构建统计见 evidence/handoff-runtime-20261014/verification.json；其他四仓本轮未推广 workspace 协议，也没有完整业务/Online E2E 证书。
+真实 wscllm Python↔C++ 两 rank Online E2E 本轮已运行并成功：20 typed COMP、正 workspace FFN、3 个 schema2 ack、31 成功 terminals、REQUEST_COMPLETE、进程均 exit 0。该 E2E 早于最后 teardown 修正，实际二进制身份保留，不冒充最终源码 E2E。其他四仓 workspace v2 尚未移植，完整业务 E2E 未跑。
 
-真实 compiled E5 oracle 重跑仍 failed，独占 finish 误差约 3.827%、HBM busy 约 124.951%；生产 E8/E16 unavailable/not_run。新 affine 嵌套及固定精度原型仅为独立研究，未接入生产。
+实际 compiled E5 oracle 新重跑仍 failed：独占 finish 约 3.827%、HBM busy 约 124.951%，原 3%/5% 阈值不变；生产 E8/E16 unavailable/not_run。新 geometry-generated affine return/固定精度 lowering 与 solo shared-HBM 完整研究有明确证明边界，尚未接入生产；双 owner 完整发现仍无法在全局 256 cap 闭环。TX8 没有新测量或重新拟合，host performance 没有新最终源证书。
 
-本交接是否可以直接接棒以 GitHub 为准：[PR #6](https://github.com/cs-sunH/template/pull/6) 必须 merged 到 main，且 fetch/ancestry 核实包含源码交付提交和本交接元数据。未合并、推送失败、必要测试阻塞或远端未确认时为 NOT READY FOR HANDOFF。模型验收失败、未跑的 E2E 和后续研究边界另行保留，不冒充项目完成。源码 SHA、PR 与已实跑源码 CI 元数据写在本目录 evidence/handoff-runtime-20261014/github.json；未来 merge SHA 与该文件自身提交 SHA 无法提前写入，必须从所链接 PR/fetch 获取，不能编造。
+本轮 GitHub 入口及真实源码交付 SHA/已完成 CI 将保存在 `evidence/handoff-lifecycle-online-20261014/github.json`。只有所链接 PR merged 到 main，fetch/ancestry 确认包含源码与交接文档后才能安全代码接棒；此前为 NOT READY FOR HANDOFF。合并不等于模型/工程验收。
 
 ## Integration Branch
 
-- 共享集成分支：main。
-- 本轮工作分支：codex/die-workspace-runtime-20261014。
-- 上轮 PR #5 已 merged，merge/main SHA 为 c47ae85f479edd0953bbb432bc05139ef1c63541。
-- 本轮源码/成果交付提交：45cf4d23d56bfe37c19af1f62163bb821d65c55f；[PR #6](https://github.com/cs-sunH/template/pull/6) 目标 main。该源码提交 GitHub Actions [run 38516660520](https://github.com/cs-sunH/template/actions/runs/38516660520) 的公共构建/测试与交接检查均 success，结果保存为 source-ci.json。其后的提交只补交接元数据。最终 head/merge SHA 与 merged 状态取链接 PR；没有 force-push 或覆盖他人提交。
-- 下一账号先 fetch 最新 main，确认包含交付源码；忽略目录 work/、依赖与二进制不跨账号共享，按保存的源码/命令重建。
+- 共享集成分支：`main`；本轮工作分支：`codex/die-lifecycle-online-20261014`。
+- 上轮 [PR #6](https://github.com/cs-sunH/template/pull/6) 已 merged，merge/main SHA 为 `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f`。上轮工作与失败证据原样保留。
+- 本轮源码、测试、研究、Online 证据与本 HANDOFF 一起提交；真实新提交/PR/源码 CI 见本轮 `github.json`、`source-ci.json`。后续仅补交接元数据，不 force-push。最终 merge SHA/本元数据文件自身 commit 不提前猜测，从 PR/fetch 获取。
+- 下一账号 fetch 最新 main，核源码 ancestry、21 文件 source digest 和证据索引，再建独立工作分支。忽略目录 work/、工具/依赖/二进制不跨账号共享，保存的源码和命令可重建。
 
 ## Last Verified Base
 
-启动工作区为旧干净 work 分支 9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8；fetch 后切换 main 至 c47ae85，创建本轮分支。GitHub API 确认 PR #5 merged，head fc6460f2713448a75404b87280ef78512ad9bf07，merge c47ae85。交接前再次 fetch 远端 main，仍为此基线，没有发现外部并行提交；推送/合并前将再次检查。
+本 Session 接续开发前同步并核实 main `037f87f`，读取 AGENTS、PROJECT、HANDOFF、根架构/设计文档及相关代码；新分支以该已合并基线创建。交接收尾再次 `git fetch origin main`，远端仍为 `037f87fa6c2e9a6a0e0c665598f7bcad0e41b87f`，未发现外部并行提交或无法解释的修改；合并前继续核实，不覆盖他人提交。
 
-根两份硬件/设计文档和 TX8 工作簿未修改。历史证据保留于 handoff-20261013-final、runtime-waves-20261013、cache-lifecycle-20261014；不覆盖旧样本。当前新增证据在 evidence/handoff-runtime-20261014，研究和未完成实验准备在 analysis/handoff-runtime-20261014。
+根两份设计文档/TX8 工作簿未修改。之前的 `evidence/handoff-runtime-20261014`、`analysis/handoff-runtime-20261014` 及更早证据保持原样。本轮新增证据在 `evidence/handoff-lifecycle-online-20261014`，可重建研究/实验源码在 `analysis/generated-lifecycle-20261014`；两树 ARTIFACTS.json 是保存文件的 SHA256 索引。
 
 ## Completed
 
-### 公共 Runtime 正确性与容量读取
+### 公共端点与 LP 验证
 
-- Plan.hh 新增 hbm_workspace_peak_bytes(Plan)：只接受精确非负 uint64 JSON 整数，缺失、bool、float、负值、越界 fail closed；workspace 是增量容量，不是 HBM 流量或权重/KV。真实 materialized FFN 与 Plan roundtrip 测试通过。
-- Runtime::submit_impl 在 tentative execution 插入后的 settle/allocate 异常中删除新执行，恢复旧 rates/alpha、累计分类服务量及 event/allocation/generation；只有成功返回才递增 handle。旧世界先 advance_to(now) 的真实服务保留。成功后才登记 facade callback；登记/预约异常清理已接受 handle。
-- submit_endpoint 在接受工作前分配 endpoint/transaction registry，失败清除本次 reservation。真实 solver precision failure、完整 snapshot 相等、未来 tick 服务、ID 重用均测试。没有 bad_alloc/malloc 故障注入；不宣称该项已实测。
-- 对完整且精确相同的 owner 活动块取 LP 对称商：work/Q 全局行乘 multiplicity，PRIVATE/credit 不乘，每 owner alpha 保留；同 fair owner 跨多个活跃 execution 不压缩。等价比较不使用 epsilon phase/cycle equality；progress 不进入瞬时 LP，之后依旧逐真实活动终结、积分和记 busy。完全不同的 owner 仍走一般 solver。
-- 平坦 block range 避免逐 owner map/vector 分配；J=1 不做对称签名。96 活动及 256-pivot 上限未提高。32-owner 独立闭式、空/中/满 credit、混合边界、取消和 snapshot 重建测试通过。静态独立审查支持商 LP 与回滚；准备的额外 Fraction oracle 未执行，不是新证书。
+- `src/Execution.cc`：endpoint JSON 可选 `initial_delay_ns` 使用现有 exact uint64 parser（非负整数或严格十进制字符串），省略默认0；写入 endpoint Plan.launch_ns，复用 Runtime ready gate，delay 内不服务/不记 HBM busy。只有显式字段才加入 summary，保留旧省略字段的 canonical summary/fingerprint 行为；snapshot import 校验 launch 与 endpoint delay 一致。不是给所有真实 COMP/COMM 或每 region 实现 launch/setup。
+- `tests/endpoint_allocation_test.cc`：pre-ready/ready tick、snapshot/replay/fork、部分取消、registry 清理及非法 float/negative/bool/overflow；旧省略字段 summary 无新 key。端点 delay 加法沿原 checked 路径，未改变 ABI layout 或旧 Plan 版本。
+- `tests/owner_lp_oracle_driver.cc` + `validation/owner_lp_oracle.py`：真正 public Runtime 输出对照独立 stdlib Fraction vertex LP，5 static cases 和13实际快照，完整/商 LP、PRIVATE、不同 Q、同 fair owner 跨 execution、顺序、arrival/completion、capacity/cancel/snapshot。规模最多5 service variables 加 fairness floor、dimension≤6；不是96活动、pivot极值/异构J32性能证书。
+- `tests/runtime_owner_symmetry_test.cc` 正式加入 phase-offset arrival/member-change，真实 finishes=5s/6s、HBM busy=6s/shared=4s。上轮 scratch 的7s误预期不再作为依据；上轮回滚/对称商实现未重做。CMake 注册新的独立 LP CTest。
 
-### 候选编译效率与兼容边界
+### 每 K OS access counter（完成基础，未生产接入）
 
-- Mapping 私有 enumerate_mappings_for_compile 仅对顶层 GEMM 延后 seal；公开 enumerate_mappings 仍逐候选返回真实 hash。Compiler 私有候选调用 detail::estimate_candidate_latency_ns，最终 winner 完整 seal。
-- 新候选 API 先调用 Plan.cc 原 validate_plan_structure（不构造 JSON/hash），再经同一 Runtime::submit_impl 的硬件/物理/credit 校验；只略过内部 trial 的 fingerprint-required 检查，只返回 typed latency，没有可逃逸 Runtime、句柄或 snapshot。公共 submit 仍拒绝未 seal Plan；没有 sentinel 假 hash。
-- 28 个 128³ 候选及 odd INT4、strict FP32+fractional κ、低 SRAM OS/WR、2 layers×3 passes 逐项比较 sealed/trial latency、完整 tie tuple、winner summary/hash。128³ canonical hash 为 1bf9ea72a8fcad7149ed2ad50c6dba5e0a1abade8b4cf10366c3cbcddbfcd096。
-- 历史默认七样本 hash/summary 证据保留；本轮没有另跑完整七样本冻结对拍，不将上述新案例推广为所有输入的 hash 证书。候选数量/固定档位、模型公式和公开版本未减少或替换。
+- `src/GemmOSAccessCounter.hh` 是内部纯 O(1) 计数器：调用方提供实际 m/n/k tail、first/final K、存储 dtype 和 matrix path；OS only、WR 拒绝。没有 mapping 选择、L/C/S readiness、buffer ownership、time 或 cycle skip。
+- 支持 FP32/BF16/INT4/INT32、target INT4 PE 与 strict FP32 Vec；checked u128 中间积/和、u64 byte/ops 输出，Vec 用既有 EquivalentWork whole-u128/exact dyadic fraction，不能把大 whole 与 tiny fraction 合成损失精度的浮点。
+- 每 K input HBM/load SRAMwrite、native/converted execution inputs及4B scale、target INT32 partial、非 first accumulator read/每 K write、仅 final cast/store/HBM output；LOCAL 只为 Compute SRAM R+W，与当前 Mapping action ledger 对应。INT32 storage4B、strict cast1eq/元素、target quant κ、final INT32 cast1eq/元素。
+- `tests/gemm_os_access_counter_test.cc` 手算 odd INT4 packing、first/middle/final、转换、fractional κ、非法/overflow；独立逐 tile 小和对拍两 profiles 所有可行 OS 固定候选（含INT32）；whole=2^54/fraction=2^-20 组合拒绝损失。正式 CMake 单项及最终27套通过。
+- **Mapping.cc/Runtime 没有调用此 header**。下一步从此构造真实 consumption 类 descriptor，不能宣称当前 compiler 已有真实 K lifecycle 或精度通过。
 
-### wscllm workspace v2 与业务容量
+### 五仓 ControlMarker、指标及拆除
 
-- Sys 持有每 rank WorkspaceAdmission：checked base/active sum、精确 fit、Blocked/Impossible、move-only RAII lease、rank/node/generation/lease identity、revision 为所有活跃 lease release 预留空间。
-- Workload 先原 availability gate，再 prepare 同一 immutable Plan、acquire、随后 take/occupy/issue；不足时节点保留 free、不占 slot/stat，不忙循环。零 workspace 仍校验字段并使用唯一 lease。adapter 完成先 release，再统计/terminal/deferred issue；live cancel 使用已服务工作利用率、既有 Skipped watch 状态和新增 die_cancelled_comp_count；shutdown suppress callback，不排正常重试。dispatch 异常是 fatal cleanup，不宣称提供 graph rollback/retry。
-- SH_WORKSPACE_ADMISSION=auto|required|off；默认 auto：coarse required、legacy off；off+coarse、required+legacy、混合 rank profile fail closed。legacy v1 wire 保留；required v2 不允许缺省容量字段。
-- 唯一序列字段：request.delivery_sequence、response.source_delivery_sequence、ack.delivery_sequence+batch_id。v2 request.workspace_state={protocol_version:1,ranks:[{rank,workspace_revision,active_workspace_bytes}]}；response.workspace_capacity_snapshot={protocol_version:1,ranks:[{rank,workspace_revision,capacity_bytes,model_weight_bytes,resident_kv_bytes,reserved_request_bytes}]}。全 rank 升序，exact uint64，revision echo 与 seq 绑定。
-- 完整 GraphBatch preflight（包括 online-validate=0）先纯校验；commit 后、任何 issue 前安装全部 rank snapshot，再 issue touched ∪ capacity_changed ranks。坏 batch 不改 graph/capacity view。仅 capacity 改变的 rank 也唤醒。
-- Python manager 为容量权威；workspace 单独 fit margin，不进入 NodeHBMState.used_bytes、KV journal、传输或 pool。下一 delivery 在 policy/KV mutation 前安装绝对 hold，返回 mutation 后 base snapshot，重复 delivery 返回原缓存 snapshot。仅 hold 导致 deficit 也沿原冷会话 eligibility/order 回收最小前缀；当前 hold 下空实例也不够则保留 KV 等释放，不误报永久不可行。所有 reserve/history/grow/move fit 路径沿同一入口。
-- workspace revision 更新 WSC capacity_epoch。跨 epoch 100/base60/hold30 再 reserve25 超订反例、release 后重试、严格 ack true、stale/坏类型/全 rank、冷会话最小前缀已覆盖。
-- 实际 Online 输入准备暴露 loader 旧 generic peak 必填问题；修复 WscLlmHardware/_to_wsc_llm_hardware，coarse 保留独立 INT4 ops/s 与 Vec FP32-equivalent ops/s，generic peak 可 None；legacy 保留正数 scalar，旧 roofline getter 对 coarse 明确拒绝。没有把 INT4 TOPS 冒充 TFLOPS。
-- 2 rank P/D、64-token prefill+1 decode 的官方 loader/plan_materializer 输入已物化；实际 Python↔C++ request/response/ack Online E2E 未启动，正 workspace COMP 与终止输出尚未证实。准备脚本/输入在 analysis/online-preparation，重生成写入 work/。不能仅凭描述中的 positive-workspace 字样声称该场景经过正 workspace 准入。
+- 本轮真实 Online 失败暴露 `ControlMarker -> issue_compute(1,1)` 进入 coarse scalar guard。五仓 `Workload.cc` 使用专用 `issue_control_marker()`；LocalHbmBandwidthModel coarse 分支发唯一 canonical `owner_kind=die`、1B read、route=false、initial_delay=local_mem_latency。无 typed math/vector/int4 ops、无 workspace lease。普通 scalar COMP/DIE_COMPUTE 仍拒绝；legacy 回落仍原 `issue_compute(1,1)`、100ns+1 drain timing，原无 HBM 路径保留。
+- 五仓保留各自 JobKind ordinal（新增 CONTROL_MARKER 在 KIND_COUNT 前）、carrier、restore/pool分类、旧 join/abandon/Workload callback。JOINT 的 virtual pipeline marker 也改用该入口，原 pipeline_sink cookie 恰好移交一次，未解除 coarse projection frozen guard。
+- `CoarseDieRuntime::{hh,cc}` 新 read-only `query_progress_at(handle,now)`：copy public Runtime、advance copy、读 per-handle progress；不调用 export_snapshot，不改变 live clock/service/counters/slots，不发布 graph callbacks；stale/reverse fail closed。`compute_bytes_served()` 原 COMP 兼容视图累计已关闭 marker prefix并采样仍活跃 marker，COMM/RESTORE/POOL 不挪入。
+- 正常 marker explicit cancel 回调记录已服务 prefix一次；**teardown** 先 query 精确 prefix、从本地 map退休对应记录、`cancel(handle,now,false)` 并回收原 cookie/join；不能用 notify=true 获取前缀，因为它会分发同 tick已完成 marker或兄弟 terminal，造成析构时错误成功。LRU/JOINT map删除顺序按原取消无通知合同保持；所有最终测试覆盖 partial prefix与fully served/callback pending sibling suppress。
+- MetricCollector 未重写；coarse Runtime 全局 payload为权威总量，COMP兼容 getter/`die_compute_*` 的 legacy aliases可能重叠，不能相加当第二份流量/分母。只修 marker view，不冒称所有 legacy指标已覆盖真实coarse全部类别。
+- lifecycle测试包含延迟/一次完成/零 math/分类隔离/live采样无副作用/取消/teardown，JOINT追加 zero-network-byte TileTransportAdapter pipeline sink。base CaseI直接 Workload dispatch验证 shared Runtime，不证明生产单Compute gate允许 COMP+marker自然并发；CaseL正常 availability 路径验证 marker+COMM、slots0及分类分离。
+- 所有五仓 Online+定向 targets成功构建；3+4+3+3+3 CTest通过，最终21文件发布与双 ABI/config验证通过。marker专属adapter snapshot恢复、四仓完整业务/RemoteReadExecutor E2E未跑。四仓 workspace v2仍未实施；原 LRU/pool/FACE/JOINT策略不互换。
 
-### 有界 K 生命周期研究（未生产接入）
+### 真实 wscllm Online E2E
 
-- 旧 520-event exact proof 上新增嵌套 K/output 表示：每 output 8 类、32 个 representative event steps；58 个 middle-K 宏是精确状态恒等，队列/cursor 平移，保留 K-final→store→retire。
-- half map 为 x'=(849475/2156112)x+548564055014789/8288669491200000；平方精确复原旧 whole-cycle map/time。逐类别独立 grouped LOCAL-Q LP、严格 event-order/tie、slot、byte/ops/LOCAL 与正率 busy union 守恒。
-- Q128 向外区间及标准 C++17 long-double outward evaluator，固定 256-bit decimal input limbs，无 GMP/公共第三方新增。root 实跑独立 Fraction 1/10/100/995 与 Q128至10¹²对照通过；995 段 time enclosure 3.747e−16 s（<1ns），整数 stop 123可跳/124不可跳，257-bit/零分母 fail closed。超过995只证明 numeric powering，不跨 N-tail 声称生命周期正确。
-- 只覆盖 offset=1/20、单 Core OS strict FP32、full M/N、特定三域容量。类别取自旧 trace；未实现通用 bounded event-order/LP-cell discovery、多 Core/WR/tail/容量变化/取消。不得给生产 E5/E8/E16 颁证。完整源码和边界报告已保存，生产库未加入 GMP 或该原型。
-- 额外 owner review oracle/probe 保存为 unexecuted；member_change_runtime.cc 的旧 7s 预期错误已在 README 明列应为6s/shared4s，未编译/实跑，不作为 pass。
+- 生产 Online C++ + Python `online_service.py`、官方 config loader/plan materializer、`derive_20_first_30_seconds.py` provenance gate；2 ranks P/D，1 request=64 prefill/1decode，tiny1layer hidden128/FFN256/heads4/vocab512，144GB/rank。合法显式 `SH_FIRST_TOKEN_SPLIT=1`、workspace auto、online-validate0仍保留必需 workspace preflight；没有 monkeypatch manager/policy或伪造 wire。
+- 3 exchanges/成功 schema2 ack，全rank/seq/batch/revision echo和base+workspace≤capacity；final revisions [20,20]、active [0,0]，每stage10次Plan acquire/release。captured20 COMP specs以同 CABI重编全通过；prefill/decode FFN workspace分别65536/1024B，attention/FFN两region都存在。
+- first_token_ns=completion_ns=36185，prefill25294/decode10890；31成功terminal，0Skipped/other，accepted1/completed1/active0/pending_alarm0，metrics一致性通过。rank1Die2B来自join+first-token markers，Die math=0，两rank typed COMP服务正数。
+- wire只在phase-drain观察 active0；不声称它直接捕获正live hold，相关真实live lease测试在lifecycle夹具。strace加开销，不是CPU/RSS/吞吐证书。
+- E2E Online SHA `9bc7d51869c821b7748b11955bbc1988a1a839cb1bb4b79377568dfa77b72ec4`，Python/C++coarse CABI同 SHA `49e596bc661b410ac3ef7499fc7f68af4065e3946be2dbd2b36d224f859ef3cd`。provenance中的gitHEAD037是当时dirty tree基线，不是声称已commit该运行源。正常完成路径成功发生在最后teardown修改前；最终focused验证覆盖新修复，没有重跑整次E2E。
+- scalar marker cpp134/python1失败与更早missing provenance setup失败均保存；完整decodedwire、日志/指标、原始strace SHA/bytes与重生成脚本保留。大型strace不提交，work中仍保留；详见证据README与analysis/online-reproduction。
 
-### TX8 超参数校准
+### 生命周期研究（非生产证书）
 
-无新可审计硬件测量，本轮未重新拟合；复用已验证的 source/cache 和条件 reference。工作簿 SHA256 为 eba181c80a2d51bd5a604bad6928610ea5039824b4ec4d5d9bd023ee4bda52ee；原九条测量已移除，没有原始重复/预热/独立留出。
+- `analysis/generated-lifecycle-20261014/discovery/` 从 geometry、shared HBM grouped LOCAL-Q LP和离散2input/2output queues生成 exact symbolic initial-offset propagation/guard；不从旧trace抽类，不用epsilon相等或三点拟合。全局256 cap不按output重置，只跳守卫内精确 middle-K identity；外部arrival前停止。
+- solo/同步双owner65³K4097：120 probes、跳595/1190waves，对独立design-aligned grouped discrete oracle实际C++selectedfixture误差<1.2e-15s。offset1/20小场景完整需要1950probes（研究诊断cap4000），normal256 failedclosed，独立误差<9.55e-15s；不能抬生产上限冒称闭环。
+- M15985/N63937/K4097在256内生成26 guarded one-output returns、middle跳842waves，但完整仍failedclosed；K64000001仍failedclosed，middle跳约14M也不能替代output powering。
+- 保存首return：1state、11ledgers、36代表steps、297guards（202ge/95gt/0eq），a=849475/2156112，b=6183347594952049573/18255628780978176000。strict domain=[65101124099499917/130771586319360000,73426828337688317/130771586319360000]；完整初/末queue/cursor/guard/账本在first-return-certificate.json。初态全full-MN可996次，end后追加995，997跨firstnonfull64935。与旧fixture坐标不同，不能混用旧b。
+- root三exactorbit points bounded replay，每次260expanded events、queue/cursor及11ledgers精确；复用新geometry/ratehelper，独立于旧trace但不是独立LP算法或全256证书。
+- `interval/` standardC++17 64significand LD、每primitive nextafter outward、固定256bit input limbs，无GMP；flags -frounding-math/-fno-fast-math/-ffp-contract=off。Fraction独立重建全部297guards/严格边界并验证1/10/100/996state与11ledgers包含；996宽3.9551695e-16s=3.95517e-7ns，integer stop13099179518ns可123/不可124，20compositions搜索。10^6/10^12仅numeric-only，不延长tail/cancel覆盖。
+- `solo-shared-hbm/` exact shared L/S HBM+OS完整solo生命周期：65/65/4097为72probes vs1310expanded，617waves/4outputs跳过，全部账本/time exact；K64000001/2000010output cases均72，大N6400001为37/100001outputs；240 small full/tail、K1/2outputslots/store-retire通过。只固定strictFP32单Core、无外部事件；Fraction大整数offline不证明production可用/性能。`selfcheck` synthetic small geometry重构与equal-progress范围已标记，grouped accelerated vs自身expanded不冒充hardware验证。
+- independent-server-maxplus原型没有sharedHBM，保留有效数学历史，不能作为生产默认。新研究不变更当前Mapping/Runtime，不新增公共第三方依赖；未完成部分完整保存，不丢失。
 
-| 参数/结果 | 数值 | 证据边界 |
+### TX8 校准（冻结，未新拟合）
+
+工作簿 SHA `eba181c80a2d51bd5a604bad6928610ea5039824b4ec4d5d9bd023ee4bda52ee`。原九条日志已移除，无独立重复/预热/heldout；本轮没有新目标硬件数据。
+
+| 参数/结果 | 值 | 证据边界 |
 |---|---:|---|
-| eta_compute_reference | 0.9079551923877489 | 条件3363μs整个FFN解释，固定128T/1T、共享矩阵/向量效率 |
-| eta_vector_memory_reference | 0.3411668292682927 | reported_anchor 246μs完整Norm、固定byte假设 |
-| 向量DDR有效吞吐 | 68.23336585365854e9 B/s | reference DDR，不是目标HBM |
-| 矩阵DDR有效吞吐 | 140e9 B/s | 200GB/s×0.70工程设定，未独立拟合 |
-| 13组reference合计 | 11897.602619368332μs | 源公式复现，XML B16 cache约11897.602619368336 |
-| 最大单组reference误差 | 约4.55e−13μs | 复算误差，不是预测精度 |
+| eta_compute_reference | 0.9079551923877489 | 条件整个FFN3363μs，固定128T/1T |
+| eta_vector_memory_reference | 0.3411668292682927 | Norm246μs reported anchor、固定bytes |
+| vector DDR有效吞吐 | 68.23336585365854e9 B/s | reference DDR，非目标HBM |
+| matrix DDR | 140e9 B/s | 工程200GB/s×.7，非新拟合 |
+| 13组合计 | 11897.602619368332μs | XML B16约11897.602619368336 |
+| 最大单组复算误差 | 约4.55e-13μs | 源公式复现，非预测精度 |
 
-Norm 第二次为锚点复用；其它组派生/工程重建，拟合权重0；19数学节点不是19独立样本。唯一Excel公式为B16=SUM(B2:B14)，B15硬总计；AV→PV映射一次，Attention/FFN/BLOCK不重复相加。
+Norm复用锚点；其余派生/工程组weight0；19math节点不是19独立测量。B16=SUM(B2:B14)是唯一公式，B15hard total；AV→PV一次，Attention/FFN/BLOCK不重复相加。
 
-目标 engineering priors 冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta_sram=1，eta_local/mesh/inject=.70，rho_sram=.90，launch=1000ns/setup=0，quant=4 eq-op/元素、acc convert=2。Plan.new_plan().launch_ns 仍为0，launch consumer尚未兑现。target calibration/heldout 仍 not_available，不迁移 TX8 BF16/DDR 参数到 INT4/HBM。
+target priors继续冻结：eta_pe=eta_vec=.90，eta_hbm_matrix/vector=.70，eta_sram=1，eta_local/mesh/inject=.70，rho_sram=.90，launch1000ns/setup0，κquant4/κacc2。真实region Plan.launch仍0，consumer未兑现；endpoint delay为独立兼容语义，不算目标启动校准完成。target calibration/heldout not_available，不能迁移BF16/DDR参数到INT4/HBM。
 
 ## Next Step
 
-以下是明确优先级及依赖；不是任意阶段/额度上限。接手后先核 main/source digest，复用25项和workspace成果，不重复 compact/fractional/cache 开发或无数据重拟合。
+按依赖推进，以下不是人为数量/阶段限额。先核最新main/source digest和证据；复用27套、marker与base workspace/E2E，不重做cache/fractional/compact/LP对称商或无数据重新拟合。
 
-1. P0：真实编译有界 K lifecycle/busy union。读当前 affine/general-offset-analysis 与旧 grouped oracle；需要从真实 Plan geometry/lifecycle/LP active sets 合成有上限的 piecewise affine descriptor，不能手贴 fixture map。先单 Core OS→offset/tail→多 Core/WR fence→外部容量/取消；严格止于外部事件，byte/ops/slots与正率busy守恒。通用 state≤3J，deadline/LP guard cells可能爆炸，256 cap不能按每 output无限重置。保留独占3%/并发与busy5%、E≤8/16；生产未通过前 failed/not_run。
-2. P1：wscllm真实Online E2E与兼容输出。准备源码已保存，typed loader已修；重建当前Online/两ABI，运行2-rank实际桥接，核schema2全rank/revision/base+workspace、原request first-token/完成/key/window、正workspace Plan、COMPs release/terminal与进程终止。必要时选合法显式fusion实验，不能为了证明强改生产策略或伪造workspace。然后完整workload业务/CPU/RSS；此前7/7与Python discovery不替代E2E。
-3. P1：在基础E2E明确后逐仓 workspace rollout。wscllm-LRU先读已保存审计：保留 whole-session LRU/remote_store/pool、永久overflow异常、history四路径与事务rollback，hold阻塞restore不得改remote debit/发transfer，release后一次restore；独立测试store-before-restore/容量epoch。FACE/FACE-LRU保留selector composition/score、p_context/ready/history/pool，再JOINT live import/fork/overlay/network join；未验证前不移除frozen projection guard。其他四仓本轮只是同源发布/ABI配置验证。
-4. P1：剩余输入/成本。launch/setup按真实区域/层/pass时序收费依赖有界生命周期；向量参数按consumer-Core首次读取与完整切片fit复用、Norm/RoPE长行两遍读/存储转换、residency/readiness/TP局部区间仍未完整。不要把启动lump在开头，不重做已完成 fractional κ、strict INT4转换、compact batch。
-5. P2：性能。最终flat owner probe J=32中/空P95约19.048/19.779μs，满credit55.694μs仍超50；只是完全对称 synthetic 13-domain fixture，不证明异构J32。一般LP仍可能256-pivot fail closed；完善表示/active-set，不抬上限。pre-flat N30 cold C++P95仍4.055ms失败、CABI miss1.902ms/hit12.119μs仅该fixture；新的flat source未重测cold N30。保留源码/二进制身份和caller计时，cold includes创建/解析/resolve，不能与hot compile或cache hit混列。以后验证三profiles/大span/FFN/J32/全workload≤10%开销，别用一组均值外推全域。
-6. 无新增独立测量时TX8 reference和target priors保持冻结。目标数据缺失按not_available记录；source复现、reference、粒度、硬件精度、五仓业务、host性能分别升级证据。
+1. **P0真实有界K生命周期**：以新GemmOSAccessCounter→actual Plan geometry与storage/native/conversion ledger→first/middle/final/full/tail/cohort类（预算≤32）→generated LP/deadline guard+queue/output-slot retire→固定区间lowering/外部stop→公共Runtime落地。先单Core OS solo/sharedHBM完整闭环，继而offset双owner+tail，再multiCore/WR。新generator的大双owner不能仅靠已生成首return交付：还要守卫表示/外层return powering/边界切换，且整次256不能每output重置。保存 exact byte/ops/LOCAL及positive-rate busy union，不做逐tile生产fallback/epsilon phase equality，不提高96活动/256pivot上限。
+2. **P0验收随实现走**：生产一旦接入，对真实compiled driver重跑E5/可用E8/E16、原独占3%/并发及busy5%，包含capacity/arrival/cancel/snapshot/fork/namespace及止于外部事件。研究checker各自pass不等价于生产证书；未接入层级明确not_run。OS counter是工作量基础，不能把timing简化成其合计。
+3. **P1 workspace五仓推广**：base tiny Online已成功，下一步其多request/memory压力/取消窗口/旧record key及全business验证，然后WSCLLM-LRU。读旧analysis/handoff-runtime-20261014/LRU audit与本轮marker审计：保留whole-session LRU/remote_store/pool、overflow/history路径/事务rollback；workspace仅fit hold，blocked restore不debit remote/不发transfer，release后一次restore，测试capacity epoch/store-before-restore。再FACE/FACE-LRU selector composition/score/p_context/ready/pool，最后JOINT liveimport/fork/overlay/networkjoin，保持frozen projection guard直到真正验证。marker完成不等于workspace协议已推广。
+4. **P1输入与成本余项**：真实region/layer/pass launch/setup时序依赖生命周期；endpoint delay仅marker使用，其它endpoint延迟需独立审计，不能宣称generalCOMM setup已补。vector consumer-Core首次参数读/完整切片fit、Norm/RoPE长行两遍读与存储转换、residency/readiness/TP局部区间仍缺。兼容指标alias不能加总，未来采样优化保留readonly语义。
+5. **P2准确身份的性能证据**：无新当前源CPU/RSS。旧finalflat J32 full-credit P95=55.694μs仍fail50；中/空19.048/19.779μs仅完全对称fixture，异构未证。旧preflat n30 C++cold4.055ms fail2ms；CABI miss1.902ms/hit12.119μs仅该fixture，不套用当前源。待算法落地后测三profiles/大span/FFN/J32/真实Online≤10%开销，caller timing含cold创建/解析/resolve，cache hit/miss/hostRSS分别列身份。
+6. 无新独立测量时TX8reference/targetpriors保持冻结。遇新数据先验证粒度、dtype和测量来源/heldout，再谈可识别超参；架构源自变量/13物理域/候选覆盖继续按原文，不能借校准抵消缺失生命周期。
 
 ## Important Decisions
 
-1. 根架构源文决定硬件；设计文档决定执行/ABI；13物理域、PRIVATE、保守COMPUTE_GATE、最多128 GEMM候选与原tie规则保留。die/是唯一公共源，五仓固定摘要。
-2. 工作量为整个epoch总量，repeat_count仅审计；数学/physical payload/D÷eta与时间预算区分。owner为node/execution/generation，request只追踪，不因拆分增加份额。
-3. 整数Plan v2、非零fraction Plan v3、snapshot迁移和fixed C ABI v2布局保留。新bridge JSON v2与Plan/Chakra/C ABI版本分开。canonical candidate seal延迟只在内部、原校验不省。
-4. LP精确同构压缩不等于cycle skipping；积分仍逐真实活动、busy仍正率并集。极端work/Q×multiplicity可能数值overflow fail closed，未证实旧solver可处理该极端；不能宣称任意参数J32精度/预算通过。
-5. workspace是容量增量，不是KV reservation或HBM访问；Python容量权威+全rank绝对revision视图，发射前lease，释放一次。原KV/LRU/网络/selector/journal未互换；只在wscllm实施。
-6. v2 ack需要字面success=true；legacy Success/Skipped watch枚举不扩展，cancel typed指标另列。未知submit是否接受不能静默retry；graph dispatch失败仍fatal。
-7. generic TFLOPS不能由INT4 TOPS替代；typedrate可有限正浮点，精确byte仍uint64。coarse旧roofline getter fail closed。
-8. 4096/64MiB retained cache上限不是RSS。profile gprof粗采样只是热点定位；性能identity按前后源隔离，不把pre-flat样本当最终flat证明。
-9. 独立 affine/prototype与未执行review分目录；no epsilon repeat、no GMP生产、no逐tile fallback。当前源码交接可完成，不代表模型或五仓整体工程验收。
+- 根架构源文决定硬件，设计文决定执行与ABI。die唯一公共源，五仓固定digest；13物理域、PRIVATE、保守COMPUTE_GATE、最多128GEMM候选及原tie规则保留。
+- 工作量是epoch总量，repeat_count仅审计；source math/physical payload/D÷eta/time budget分开。owner=node/execution/generation，request只追踪；不因拆分增份额。
+- 整数Plan v2/nonzero fraction v3、snapshot迁移、C ABI v2固定布局、cache/retained limits与candidate内部delayed seal保持；endpoint optional JSON不改变旧省略字段，bridge v2与Plan/Chakra/ABI不是同一版本。
+- LP精确同构商不等于cycle skipping；busy按positive-rate并集。bounded guard discovery、固定精度区间与实际生产接入/精度验收分层，no epsilon repeat/no GMP生产/no逐tile fallback；不以无限重置cap隐藏线性开销。
+- workspace是增量容量，非KV reservation/HBM访问；Python权威全rankabsolute revision，发射前lease/释放一次，目前只base wscllm。未知submit接受不能静默retry，graph dispatch异常仍fatal cleanup，非graph rollback证书。
+- ControlMarker保留1B物理占用与本地ready delay，不记typed math/no workspace；legacy+101保持。正常cancel与teardown区分，teardown针对handle无通知，不触发全体finished callback。只用copy Runtime采样。
+- genericTFLOPS不能由INT4TOPS替代，typed rate可正浮点，精确bytes为uint64；旧roofline coarse getter failclosed。metrics alias不二次汇总。
+- 代码安全接棒与模型/工程验收分别判定；保存所有有效部分成果和失败证据，未跑不写pass。用户stop后只保存/验证/合并，不继续新开发。
 
 ## Files to Continue
 
-- 公共：src/Execution.cc、Compiler.cc、Mapping.cc、Plan.cc；include/coarse_die/Plan.hh、Execution.hh；新tests/runtime_submit_transaction_test.cc、runtime_owner_symmetry_test.cc、workspace_metadata_test.cc、扩展estimate_driver_test.cc。
-- wscllm C++：WorkspaceAdmission.hh、Sys、Workload、DieModelAdapter、CoarseDieRuntime、DecisionMailbox/Bridge、ParsedGraphBatch、GraphBatchCommitter、main_online、MetricCollector；对应新增/扩展测试。其他四仓coarse vendoring已同步，不误以为workspace也已同步。
-- wscllm Python：session_kv_manager.py、online/{online_scheduler_base,wsc_llm_online_scheduler,decision_bridge,online_service,test_workspace_admission}.py、wsc_llm_scheduler.py、generate_wsc_llm_trace.py及typed硬件/train测试。
-- 真compiler oracle：validation/compiled_gemm_oracle.py、grouped_gemm_oracle.py、compiled_gemm_oracle_driver.cc。新失败输出保存，不以measurement成功当精度pass。
-- 研究：analysis/handoff-runtime-20261014/affine；旧bounded-lifecycle-20261014保留；新online-preparation和LRU audit。unexecuted-review目录先读README再运行。
-- TX8：calibration/report.md、reference configs、tools/calibrate_tx8.py；本轮未重生成伪造新测量。
-- 真实日志/源码/binary identity：evidence/handoff-runtime-20261014，旧evidence保持原样。
+- 公共：`src/{Execution,Mapping,Compiler,Plan}.cc`、`src/GemmOSAccessCounter.hh`、`src/EquivalentWork.hh`；`tests/{gemm_os_access_counter,endpoint_allocation,runtime_owner_symmetry}_test.cc`、`tests/owner_lp_oracle_driver.cc`；`validation/owner_lp_oracle.py`、compiled/grouped oracle与真实driver。旧workspace/rollback/candidate tests继续保留。
+- 五仓：各 `astra-sim/workload/{Workload,LocalHbmBandwidthModel,CoarseDieRuntime}.{cc,hh}` 与 `execution_driven/tests/die_execution_lifecycle_test.cc`；JOINT `issue_pipeline_control_marker`/TileTransportAdapter/RemoteReadExecutor；原variant joins/pool callbacks必须逐仓读。FACE两README更新，其它原legacy说明未统一重写。
+- base workspace：WorkspaceAdmission、Sys、DieModelAdapter、DecisionMailbox/Bridge、ParsedGraphBatch/Committer、main_online、MetricCollector；Python session_kv_manager、online schedulers/service/bridge、config loader/trace materializer与现有 tests。此前v2完整设计见旧HANDOFF提交/PROJECT记录，本轮没推倒重做。
+- 本轮研究/重建：`analysis/generated-lifecycle-20261014/README.md`及discovery/interval/solo-shared-hbm/online-reproduction；旧affine和unexecuted-review按其边界复用，不把旧trace拟合当新generated证明。
+- 校准：`calibration/report.md`、reference configs、tools/calibrate_tx8.py；本轮无新生成数据。最新真实证据及GitHub身份入口：`evidence/handoff-lifecycle-online-20261014/README.md`、verification/github/source-ci JSON。
 
 ## Tests
 
-- 公共最终source默认targets build，25/25 CTest，无跳过；保留已通过22项，新增workspace metadata、submit transaction、owner symmetry，estimate driver增加sealed/trial语义验证。最终日志ctest-die-cohort-flat.log。
-- wscllm最终digest Online及所选targets重建，7/7 CTest，无跳过。真实FFN workspace blocked/free/前置lease、正服务取消、served util、Skipped、slot/lease一次释放、dependent issue与die_cancelled_comp_count已断言。
-- 最终Python online discovery106/106；typed scheduler/train35/35且显式ABI无跳过。交接前更新后的五仓两ABI/config执行范围、每仓数量/日志在verification.json；没有继承旧17/17为本轮五仓业务通过。
-- compiled实际C++ driver对正确grouped oracle仍failed，账本checks全部通过；E8/E16 not_run/unavailable，阈值没变。
-- 128³/28候选/pre-flat各30样本：C++ cold P50/P95=2.225458/4.055090ms，hot compile1.729552/2.260951ms，estimate-alone241.523/439.331μs；CABI miss1.694489/1.902401ms，真实same-model hit10.325/12.119μs。baseline c47 C++cold3.496709/4.250943ms、miss3.405632/4.333397ms。冷cpp失败，CABI预算仅此夹具通过；RSS分别13056/9344KiB。metadata给精确测量SHA，不套用之后flat Runtime。
-- 最终flat n30 synthetic J=1/8/32 probe：最大J32满credit55.694μs失败；中/空19.048/19.779μs；数值/复杂度/覆盖单列，非全域工程证书。旧LP J8边界曾256 fail、J32中约38.5ms；保留原始对照。
-- root实跑nested/固定精度独立checker通过上述限定范围。额外review oracle/probe未运行，已保存不算pass。
-- 本轮未跑production sanitizer、malloc failure注入、目标硬件留出或实际Online E2E。TX8 historical source/cache复用，不作为本轮重新测量。
+- 本轮最终公共configure/default all targets build exit0，27/27 CTest，无skip，17.11s；`public/final-{configure,build,ctest}.log`。owner LP包含5 static+13 Runtime snapshot，counter为新正式单项。此前26及新counter1日志保留，不累加当第二轮覆盖。
+- 五仓最终 Online/selected targets build exit0；WSCLLM、FACE、FACE-LRU各3/3（Lifecycle/Adapter/LocalHbmDieMemory），WSCLLM-LRU4/4（Lifecycle/Adapter/LocalHbmBandwidthModel/LocalHbmModel），JOINT3/3（Lifecycle/Adapter/LocalHbmDieMemory）；合计16/16无skip。partial/full pending teardown与legacy timing均通过。日志、final binary/sourceSHA在integration/verification索引；不声称whole业务覆盖。
+- 21文件sync/check pass；每仓coarse_die_cabi+die_model_cabi最终增量构建exit0，显式ABI config83/83无skip，真实cmd/binarySHA在five-abi-config.json。JOINTlegacyABI与其它不同为原仓实现，不要求相同binary。
+- 本轮wscllm production Online E2E exit0/0，protocol/lifecycle/positiveworkspace/metrics通过，source identity与时间先后如Completed；failed尝试保留。没有重跑final teardown后wholeE2E或其它四仓业务。
+- 新compiled实际driver oracle exit1 expected精度失败，所有服务账本checks通过，E8/E16not_run；raw/source identity保存。root generated return replay/interval checker、solo研究selfcheck按限定范围实跑通过，完整offset discovery仍failedclosed，不作为CTest pass替代。
+- PR #6 public25/wscllm7/Python106/typed35为已合并历史，本轮未重跑Python整套，不冒称新测试。没有新sanitizer、malloc fault、硬件heldout、hostCPU/RSS/performance测试。
+- 编译仍有既存 `__int128` pedantic/Plan.cc temporary possibly-dangling等GCC warnings，build exit0；本轮没有独立确认所有warning或新增warning修复任务，未将warnings当成通过的内存安全证书。
 
-依赖需重建：CMake4.4.4（本地pip安装于work/tooling/cmake/cmake/data/bin）、GCC14.2.0、Protobuf3.21.12（work/deps/protobuf），Python3.12.14/protobuf4.25.8（work/deps/python-protobuf）。此次protobuf-all-21.12.tar.gz SHA256为2c6a36c7b5a55accae063667ef3c55f2642e67476d96d355ff0acb13dbb47f09，与上轮不同tar包，不混身份。configure和build都设PROTOBUF_FROM_SOURCE=True、PATH含protobuf/bin、CMAKE_PREFIX_PATH指该prefix。aggregate原repo/backend/frontend三个subdirectory，Release/congestion_aware/library backend；generated Chakra在build tree，不提交。
+重建命令：`cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release`，`cmake --build work/build-die --parallel 2`，`ctest --test-dir work/build-die --output-on-failure`。五仓aggregate CMake enable_testing后 add_subdirectory(repo)、analytical backend、analytical frontend，`ASTRA_SIM_ROOT`指定variant；Release/congestion_aware/NETWORK_BACKEND_BUILD_AS_LIBRARY=ON。`analysis/.../integration-reproduction/` 保存aggregate与本轮验证脚本供重建，工具prefix按新环境调整。
+
+本环境CMake4.4.4在work/tooling/cmake/cmake/data/bin，GCC14.2、Python3.12.14；Protobuf3.21.12 prefix work/deps/protobuf，Python protobuf4.25.8 work/deps/python-protobuf。configure/build同时设置PROTOBUF_FROM_SOURCE=True，PATH含protobuf/bin，CMAKE_PREFIX_PATH指prefix。tarSHA `2c6a36c7b5a55accae063667ef3c55f2642e67476d96d355ff0acb13dbb47f09`；generatedChakra在build tree不提交。Online runner依赖strace且保存旧attempt。
 
 ## Blocking Issues
 
-- 生产真K readiness/K-final store/retire有界曲线未闭环，busy/并发误差失败；prototype不覆盖通用offset/tail/多Core/WR/外部事件。
-- launch/setup/instance时序、向量参数/长行转换和完整residency/readiness/TP语义仍缺。
-- workspace只有wscllm定向验证；真实Online E2E未启动，四仓workspace/LRU/pool/FACE/JOINT及全旧key/window业务未验收。
-- C++ cold P95、J32 full-credit/异构仲裁与完整online开销仍未达标或未测。
-- TX8无新原始日志/独立目标数据，不能辨识目标INT4/HBM/NoC/启动超参。
-- 合并/远端确认失败会阻止代码交接；未执行项和expected failed精度独立如实记录。
+- 生产真实K readiness/final store/outputretire未闭环，finish/busy精度failed，双owner大场景256发现仍failedclosed；counter和研究尚未接入，不覆盖generaloffset/tail/multiCore/WR/外部cancel。
+- launch/setup/region instance、vector参数/长行转换/residency/readiness/TP仍缺；delay字段只兑现marker兼容，不把其当所有真实任务成本。
+- base tiny Online成功但多request/压力/旧业务全域未证；其它四仓workspace/restore/pool/FACE/JOINT及完整Online未验收，marker专属snapshot未单独测。
+- 当前源C++cold/J32异构及全Online开销未达标或未测；研究Fraction性能不代表production；GCC既存warning尚未全部审查。
+- TX8无新raw/独立目标heldout，不可辨识目标INT4/HBM/NoC/launch超参。
+- PR未merged、push失败、必要测试阻塞或远端未确认将阻止代码交接；上述expected工程失败独立如实保留，不以失败隐瞒或以merge误报验收。
 
 ## Handoff Notes
 
-本轮收到明确停止/交接指令，已经停止新开发任务；保存全部有效源码、测试、精确样本和有边界的研究。未运行的Online准备、未执行审查与已知错误scratch都标注，不留聊天独占的关键后续判断。临时依赖/二进制、gmon缓存和大型生成产物不提交；保存可重建的源码与精确身份。
+本轮收到明确停止/交接指令，所有在途子任务已收尾冻结，保存有效代码/测试/计数基础/研究/校准状态/Online失败与成功证据。重要判断和下一步依赖均入仓，不依赖其它账号的隐藏聊天。没有丢弃有效修改或覆盖外部提交；二进制、依赖缓存、大型可重生成strace/重复descriptor不提交，保留来源身份与源码。
 
-请以evidence/handoff-runtime-20261014/github.json读取真实源码SHA/PR/CI/merge信息，再fetch/ancestry核对main。只有代码和本HANDOFF进入main并确认后才可以直接新建另一账号任务接棒；否则NOT READY FOR HANDOFF。合并后的代码交接不使工程整体状态从NOT ACCEPTED变成通过。
-
-完成GitHub交接后本Session立即停止。下一账号先读AGENTS/PROJECT/本HANDOFF，再按Next Step推进。不要重复已完成模块，也不要把原Session忽略目录或其它账号隐藏聊天当依赖。
+读取本轮github.json链接PR及实跑source CI，然后fetch核main源码与元数据ancestry。只有main包含代码和此HANDOFF且远端确认后才能直接创建另一账号任务接棒；否则NOT READY FOR HANDOFF。最终head/merge的API事实以后写入最终报告，不预编未来SHA。本轮用户要求交接后立即停止，合并核实完成后不继续开发；下一账号先读AGENTS/PROJECT/HANDOFF，再按Next Step推进。

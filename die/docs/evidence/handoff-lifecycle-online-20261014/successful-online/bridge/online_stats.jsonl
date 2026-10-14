@@ -1,0 +1,4 @@
+{"delivery_sequence": 0, "node_count": 14, "processing_ns": 2876577, "reasons": ["ARRIVAL"], "scheduler_self_ns": 1333796, "tick": 1}
+{"delivery_sequence": 1, "node_count": 17, "processing_ns": 2971729, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 1509550, "tick": 25295}
+{"delivery_sequence": 2, "node_count": 0, "processing_ns": 1449931, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 571310, "tick": 36185}
+{"ack_count": 3, "channel_bytes": 35460, "delivery_count": 3, "forced_flush_count": 3, "gil_wait_ns": 54956870, "handler_calls": 3, "kv_deep_gap_events": 0, "mode": "strategy", "python_callback_count_by_reason": {"ARRIVAL": 1, "DECODE_COMPLETION": 1, "PREFILL_DRAIN": 1, "REQUEST_COMPLETE": 1}, "python_callback_total": 3, "scheduler_self_ns_avg_per_delivery": 1138218, "scheduler_self_ns_total": 3414656, "sensing": false, "summary": true}

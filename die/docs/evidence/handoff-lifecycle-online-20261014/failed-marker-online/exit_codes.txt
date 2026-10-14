@@ -1,0 +1,2 @@
+cpp_exit=134
+python_exit=1
