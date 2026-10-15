@@ -1,0 +1,6 @@
+(16, 64, 64): driver=0 oracle=passed (validated actual compiled OS Runtime raw)
+(16, 64, 4096): driver=0 oracle=failed (validated actual compiled OS Runtime raw)
+(80, 128, 4096): driver=0 oracle=failed (validated actual compiled OS Runtime raw)
+(65, 65, 4097): driver=0 oracle=failed (validated actual compiled OS Runtime raw)
+(256, 64, 64): driver=0 oracle=failed (validated actual compiled OS Runtime raw)
+(16, 64, 6400): driver=0 oracle=failed (validated actual compiled OS Runtime raw)

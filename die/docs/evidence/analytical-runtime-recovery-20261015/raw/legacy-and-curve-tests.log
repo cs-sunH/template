@@ -1,0 +1,17 @@
+Test project /workspace/template/work/build-die
+    Start  3: coarse_os_service_scaling_test
+1/6 Test  #3: coarse_os_service_scaling_test ..........   Passed    0.05 sec
+    Start  5: coarse_service_curve_runtime_test
+2/6 Test  #5: coarse_service_curve_runtime_test .......   Passed    0.07 sec
+    Start 26: coarse_runtime_clock_translation_test
+3/6 Test #26: coarse_runtime_clock_translation_test ...   Passed    0.08 sec
+    Start 29: coarse_runtime_semantics_test
+4/6 Test #29: coarse_runtime_semantics_test ...........   Passed    0.04 sec
+    Start 32: coarse_capi_cache_response_test
+5/6 Test #32: coarse_capi_cache_response_test .........   Passed    5.90 sec
+    Start 40: coarse_k_readiness_runtime_self_test
+6/6 Test #40: coarse_k_readiness_runtime_self_test ....   Passed    0.01 sec
+
+100% tests passed out of 6
+
+Total Test time (real) =   6.16 sec

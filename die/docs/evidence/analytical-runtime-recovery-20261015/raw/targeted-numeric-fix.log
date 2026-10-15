@@ -1,0 +1,30 @@
+Test project /workspace/template/work/build-die
+    Start  1: coarse_packing_allocator_test
+1/8 Test  #1: coarse_packing_allocator_test ...........   Passed    0.00 sec
+    Start  2: coarse_os_service_curve_test
+2/8 Test  #2: coarse_os_service_curve_test ............   Passed    0.01 sec
+    Start  3: coarse_os_service_scaling_test
+3/8 Test  #3: coarse_os_service_scaling_test ..........   Passed    0.04 sec
+    Start  4: coarse_service_curve_schema_test
+4/8 Test  #4: coarse_service_curve_schema_test ........   Passed    0.01 sec
+    Start  5: coarse_service_curve_runtime_test
+5/8 Test  #5: coarse_service_curve_runtime_test .......***Failed    0.01 sec
+FAIL service_curve_runtime_test: invalid_snapshot: saved state was not settled at its event boundary
+
+    Start  6: coarse_capi_cost_query_test
+6/8 Test  #6: coarse_capi_cost_query_test .............   Passed    0.02 sec
+    Start 32: coarse_capi_cache_response_test
+7/8 Test #32: coarse_capi_cache_response_test .........***Failed    4.88 sec
+FAIL capi_cache_response_test: each successful result row commits its own handle after output allocation
+
+    Start 38: coarse_analytical_service_oracle_test
+8/8 Test #38: coarse_analytical_service_oracle_test ...   Passed    0.12 sec
+
+75% tests passed, 2 tests failed out of 8
+
+Total Test time (real) =   5.08 sec
+
+The following tests FAILED:
+	  5 - coarse_service_curve_runtime_test (Failed)
+	 32 - coarse_capi_cache_response_test (Failed)
+Errors while running CTest
