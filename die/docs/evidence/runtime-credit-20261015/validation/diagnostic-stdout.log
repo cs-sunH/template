@@ -1,0 +1,2 @@
+candidate 1 failed after 4 steps at requested ns 4118263434: numerical_failure: credit crossed a finite buffer boundary
+candidates=8

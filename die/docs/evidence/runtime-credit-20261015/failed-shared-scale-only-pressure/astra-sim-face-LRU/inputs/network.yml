@@ -1,0 +1,5 @@
+# Generated from /workspace/template/work/face-future-pressure-20261015/stage/face-lru/sh_test_mesh/hardware/face_tiny_coarse_die_v2.json (capacity profile: coarse-die-144000000000-bytes)
+topology: [ Line, Line ]
+npus_count: [ 6, 9 ]
+bandwidth: [ 4050.0, 4050.0 ]
+latency: [ 5, 5 ]

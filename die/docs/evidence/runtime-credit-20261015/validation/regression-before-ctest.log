@@ -1,0 +1,14 @@
+Internal ctest changing into directory: /workspace/template/work/build-attention
+Test project /workspace/template/work/build-attention
+    Start 18: coarse_runtime_credit_scale_test
+1/1 Test #18: coarse_runtime_credit_scale_test ...***Failed    0.01 sec
+FAIL runtime_credit_scale_test: numerical_failure: credit crossed a finite buffer boundary
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.02 sec
+
+The following tests FAILED:
+	 18 - coarse_runtime_credit_scale_test (Failed)
+Errors while running CTest

@@ -46,8 +46,12 @@ def main():
             for rel in manifest["files"]:
                 dest = target / rel
                 dest.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(source / rel, dest)
-            (target / "RELEASE.json").write_text(json.dumps(manifest, indent=2)+"\n")
+                if not dest.is_file() or dest.read_bytes() != (source / rel).read_bytes():
+                    shutil.copyfile(source / rel, dest)
+            release = target / "RELEASE.json"
+            release_text = json.dumps(manifest, indent=2)+"\n"
+            if not release.is_file() or release.read_text() != release_text:
+                release.write_text(release_text)
             cmake = parent / "CMakeLists.txt"
             text = cmake.read_text()
             marker = '# Canonical coarse_die_v2 release (synced from template/die).'

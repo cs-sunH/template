@@ -1,0 +1,2296 @@
+[
+  {
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 10,
+      "capacity": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "compute_busy_ns": 4116589954.837898,
+      "compute_busy_ns_exact": "4116589954.837897581979632378",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 4120334201.652893,
+      "hbm_busy_ns_exact": "4120334201.652892929269000888",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          1488944365568.0,
+          89477120.0
+        ],
+        [
+          1488944365568.0,
+          89477120.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "1488944365568",
+          "89477120"
+        ],
+        [
+          "1488944365568",
+          "89477120"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 14,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 4121567734,
+      "row_busy_ns": [
+        4120334201.652893,
+        4120334201.652893
+      ],
+      "row_busy_ns_exact": [
+        "4120334201.652892929269000888",
+        "4120334201.652892929269000888"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 10,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              1488944365568.0,
+              89477120.0
+            ],
+            [
+              1488944365568.0,
+              89477120.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "1488944365568",
+              "89477120"
+            ],
+            [
+              "1488944365568",
+              "89477120"
+            ]
+          ],
+          "int4_ops": 2931986268160.0,
+          "int4_ops_exact_decimal": "2931986268160.000000238418579102",
+          "vec_eqops": 6024495890432.0,
+          "vec_eqops_exact_decimal": "6024495890432"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "index": 0,
+    "status": "finished",
+    "steps": 9,
+    "summary": {
+      "active_cores": 88,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "consumption_wave_count": 509440,
+      "conversion_elements": 1511939985408,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 2931986268160,
+      "executed_matrix_ops": 2931986268160,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 2977888731136,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 178954240,
+      "int4_input_bytes": 744472182784,
+      "kind": "logits",
+      "local_bus_bytes": 4839248142336,
+      "logical_tensor_bytes": 6039707648,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates"
+      ],
+      "output_round_count": 1990,
+      "physical_transfer_bytes": 2978067685376,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "source_matrix_ops": 2931986268160,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 21584,
+      "sram_read_bytes": 3908657913856,
+      "sram_write_bytes": 3908657913856,
+      "template_id": "logits_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 64,
+      "tm": 1,
+      "tn": 64,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 6024495890432,
+      "wave_count": 509440
+    }
+  },
+  {
+    "error": "numerical_failure: credit crossed a finite buffer boundary",
+    "index": 1,
+    "requested_ns": 4118263434,
+    "status": "failed",
+    "steps": 4,
+    "summary": {
+      "active_cores": 88,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "consumption_wave_count": 127360,
+      "conversion_elements": 1494760378368,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 2931986268160,
+      "executed_matrix_ops": 2931986268160,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 2977888731136,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 178954240,
+      "int4_input_bytes": 744472182784,
+      "kind": "logits",
+      "local_bus_bytes": 4560071073792,
+      "logical_tensor_bytes": 6039707648,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates"
+      ],
+      "output_round_count": 1990,
+      "physical_transfer_bytes": 2978067685376,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "source_matrix_ops": 2931986268160,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 83984,
+      "sram_read_bytes": 3769069379584,
+      "sram_write_bytes": 3769069379584,
+      "template_id": "logits_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 256,
+      "tm": 1,
+      "tn": 64,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 5972957069312,
+      "wave_count": 127360
+    }
+  },
+  {
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 10,
+      "capacity": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "compute_busy_ns": 4058094686.0323267,
+      "compute_busy_ns_exact": "4058094686.032326851738616824",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 4072795455.0177083,
+      "hbm_busy_ns_exact": "4072795455.017708086408674717",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          1471764496384.0,
+          89477120.0
+        ],
+        [
+          1471764496384.0,
+          89477120.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "1471764496384",
+          "89477120"
+        ],
+        [
+          "1471764496384",
+          "89477120"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 14,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 4077638575,
+      "row_busy_ns": [
+        4072795455.0177083,
+        4072795455.0177083
+      ],
+      "row_busy_ns_exact": [
+        "4072795455.017708086408674717",
+        "4072795455.017708086408674717"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 10,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              1471764496384.0,
+              89477120.0
+            ],
+            [
+              1471764496384.0,
+              89477120.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "1471764496384",
+              "89477120"
+            ],
+            [
+              "1471764496384",
+              "89477120"
+            ]
+          ],
+          "int4_ops": 2931986268160.0,
+          "int4_ops_exact_decimal": "2931986268160",
+          "vec_eqops": 5955776413696.0,
+          "vec_eqops_exact_decimal": "5955776413696.000000476837158203"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "index": 2,
+    "status": "finished",
+    "steps": 9,
+    "summary": {
+      "active_cores": 88,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "consumption_wave_count": 128256,
+      "conversion_elements": 1494760116224,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 2931986268160,
+      "executed_matrix_ops": 2931986268160,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 2943528992768,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 178954240,
+      "int4_input_bytes": 735882248192,
+      "kind": "logits",
+      "local_bus_bytes": 4783413567488,
+      "logical_tensor_bytes": 6039707648,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates"
+      ],
+      "output_round_count": 501,
+      "physical_transfer_bytes": 2943707947008,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "source_matrix_ops": 2931986268160,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 85328,
+      "sram_read_bytes": 3863560757248,
+      "sram_write_bytes": 3863560757248,
+      "template_id": "logits_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 64,
+      "tm": 1,
+      "tn": 256,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 5955776413696,
+      "wave_count": 128256
+    }
+  },
+  {
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 10,
+      "capacity": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "compute_busy_ns": 360573892.987013,
+      "compute_busy_ns_exact": "360573892.987012996629346162",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 356996799.57988197,
+      "hbm_busy_ns_exact": "356996799.579881938552716747",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          114575802368.0,
+          89477120.0
+        ],
+        [
+          114575802368.0,
+          89477120.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "114575802368",
+          "89477120"
+        ],
+        [
+          "114575802368",
+          "89477120"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 14,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 363112233,
+      "row_busy_ns": [
+        356996799.57988197,
+        356996799.57988197
+      ],
+      "row_busy_ns_exact": [
+        "356996799.579881938552716747",
+        "356996799.579881938552716747"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 10,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              114575802368.0,
+              89477120.0
+            ],
+            [
+              114575802368.0,
+              89477120.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "114575802368",
+              "89477120"
+            ],
+            [
+              "114575802368",
+              "89477120"
+            ]
+          ],
+          "int4_ops": 2931986268160.0,
+          "int4_ops_exact_decimal": "2931986268160",
+          "vec_eqops": 527021637632.0,
+          "vec_eqops_exact_decimal": "527021637632.000000029802322388"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "index": 3,
+    "status": "finished",
+    "steps": 9,
+    "summary": {
+      "active_cores": 88,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "consumption_wave_count": 32000,
+      "conversion_elements": 137571422208,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 2931986268160,
+      "executed_matrix_ops": 2931986268160,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 229151604736,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 178954240,
+      "int4_input_bytes": 57287901184,
+      "kind": "logits",
+      "local_bus_bytes": 710763257856,
+      "logical_tensor_bytes": 6039707648,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates"
+      ],
+      "output_round_count": 125,
+      "physical_transfer_bytes": 229330558976,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "source_matrix_ops": 2931986268160,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 37904,
+      "sram_read_bytes": 470046908416,
+      "sram_write_bytes": 470046908416,
+      "template_id": "logits_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 64,
+      "tm": 16,
+      "tn": 64,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 527021637632,
+      "wave_count": 32000
+    }
+  },
+  {
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 11,
+      "capacity": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "compute_busy_ns": 313213362.87357736,
+      "compute_busy_ns_exact": "313213362.873577368241967633",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 317292501.5348289,
+      "hbm_busy_ns_exact": "317292501.534828886156901717",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          114575802368.0,
+          89477120.0
+        ],
+        [
+          114575802368.0,
+          89477120.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "114575802368",
+          "89477120"
+        ],
+        [
+          "114575802368",
+          "89477120"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 15,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 319058462,
+      "row_busy_ns": [
+        317292501.5348289,
+        317292501.5348289
+      ],
+      "row_busy_ns_exact": [
+        "317292501.534828886156901717",
+        "317292501.534828886156901717"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 11,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              114575802368.0,
+              89477120.0
+            ],
+            [
+              114575802368.0,
+              89477120.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "114575802368",
+              "89477120"
+            ],
+            [
+              "114575802368",
+              "89477120"
+            ]
+          ],
+          "int4_ops": 2931986268160.0,
+          "int4_ops_exact_decimal": "2931986268160.000000238418579102",
+          "vec_eqops": 475482816512.0,
+          "vec_eqops_exact_decimal": "475482816512"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "index": 4,
+    "status": "finished",
+    "steps": 9,
+    "summary": {
+      "active_cores": 88,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "consumption_wave_count": 8000,
+      "conversion_elements": 120391815168,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 2931986268160,
+      "executed_matrix_ops": 2931986268160,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 229151604736,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 178954240,
+      "int4_input_bytes": 57287901184,
+      "kind": "logits",
+      "local_bus_bytes": 435620585472,
+      "logical_tensor_bytes": 6039707648,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates"
+      ],
+      "output_round_count": 125,
+      "physical_transfer_bytes": 229330558976,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "source_matrix_ops": 2931986268160,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 114704,
+      "sram_read_bytes": 332475572224,
+      "sram_write_bytes": 332475572224,
+      "template_id": "logits_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 256,
+      "tm": 16,
+      "tn": 64,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 475482816512,
+      "wave_count": 8000
+    }
+  },
+  {
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 10,
+      "capacity": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "compute_busy_ns": 334291403.6363637,
+      "compute_busy_ns_exact": "334291403.63636368463630788",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 319811194.2266825,
+      "hbm_busy_ns_exact": "319811194.22668245664681308",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          97395933184.0,
+          89477120.0
+        ],
+        [
+          97395933184.0,
+          89477120.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "97395933184",
+          "89477120"
+        ],
+        [
+          "97395933184",
+          "89477120"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 14,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 342721209,
+      "row_busy_ns": [
+        319811194.2266825,
+        319811194.2266825
+      ],
+      "row_busy_ns_exact": [
+        "319811194.22668245664681308",
+        "319811194.22668245664681308"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 10,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              97395933184.0,
+              89477120.0
+            ],
+            [
+              97395933184.0,
+              89477120.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "97395933184",
+              "89477120"
+            ],
+            [
+              "97395933184",
+              "89477120"
+            ]
+          ],
+          "int4_ops": 2931986268160.0,
+          "int4_ops_exact_decimal": "2931986268160",
+          "vec_eqops": 458302160896.0,
+          "vec_eqops_exact_decimal": "458302160896.000000029802322388"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "index": 5,
+    "status": "finished",
+    "steps": 9,
+    "summary": {
+      "active_cores": 88,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "consumption_wave_count": 8192,
+      "conversion_elements": 120391553024,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 2931986268160,
+      "executed_matrix_ops": 2931986268160,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 194791866368,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 178954240,
+      "int4_input_bytes": 48697966592,
+      "kind": "logits",
+      "local_bus_bytes": 658955214848,
+      "logical_tensor_bytes": 6039707648,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates"
+      ],
+      "output_round_count": 32,
+      "physical_transfer_bytes": 194970820608,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "source_matrix_ops": 2931986268160,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 136208,
+      "sram_read_bytes": 426963017728,
+      "sram_write_bytes": 426963017728,
+      "template_id": "logits_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 64,
+      "tm": 16,
+      "tn": 256,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 458302160896,
+      "wave_count": 8192
+    }
+  },
+  {
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 10,
+      "capacity": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "compute_busy_ns": 255853801.5584416,
+      "compute_busy_ns_exact": "255853801.558441608125576749",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 239813783.69539553,
+      "hbm_busy_ns_exact": "239813783.695395541755715385",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          45857374208.0,
+          89477120.0
+        ],
+        [
+          45857374208.0,
+          89477120.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "45857374208",
+          "89477120"
+        ],
+        [
+          "45857374208",
+          "89477120"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 14,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 259826940,
+      "row_busy_ns": [
+        239813783.69539553,
+        239813783.69539553
+      ],
+      "row_busy_ns_exact": [
+        "239813783.695395541755715385",
+        "239813783.695395541755715385"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 10,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              45857374208.0,
+              89477120.0
+            ],
+            [
+              45857374208.0,
+              89477120.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "45857374208",
+              "89477120"
+            ],
+            [
+              "45857374208",
+              "89477120"
+            ]
+          ],
+          "int4_ops": 2931986268160.0,
+          "int4_ops_exact_decimal": "2931986268160",
+          "vec_eqops": 252147924992.0,
+          "vec_eqops_exact_decimal": "252147924992.000000014901161194"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "index": 6,
+    "status": "finished",
+    "steps": 9,
+    "summary": {
+      "active_cores": 88,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "consumption_wave_count": 8192,
+      "conversion_elements": 68852994048,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 2931986268160,
+      "executed_matrix_ops": 2931986268160,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 91714748416,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 178954240,
+      "int4_input_bytes": 22928687104,
+      "kind": "logits",
+      "local_bus_bytes": 504339013632,
+      "logical_tensor_bytes": 6039707648,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates"
+      ],
+      "output_round_count": 32,
+      "physical_transfer_bytes": 91893702656,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "source_matrix_ops": 2931986268160,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 90128,
+      "sram_read_bytes": 298116358144,
+      "sram_write_bytes": 298116358144,
+      "template_id": "logits_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 64,
+      "tm": 64,
+      "tn": 64,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 252147924992,
+      "wave_count": 8192
+    }
+  },
+  {
+    "counters": {
+      "accounting_history_complete": true,
+      "active_activities": 0,
+      "active_hbm_owners": 0,
+      "active_owners": 0,
+      "allocation_updates": 10,
+      "capacity": [
+        1.0,
+        11264000000000.0,
+        11264000000000.0,
+        1971199999999.9998,
+        2355200000000.0,
+        2355200000000.0,
+        0.0,
+        0.0,
+        246400000000.0,
+        246400000000.0,
+        179200000000.0,
+        179200000000.0,
+        7033600000000.0
+      ],
+      "compute_busy_ns": 122494429.23258556,
+      "compute_busy_ns_exact": "122494429.232585567362548318",
+      "endpoint_registry_size": 0,
+      "hardware_raw": {
+        "available": true,
+        "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+        "hbm_row_peak_Bps": [
+          2355200000000.0,
+          2355200000000.0
+        ],
+        "peak_int4_ops_per_s": 769296000000000.0,
+        "peak_vec_fp32_eq_ops_per_s": 76924619200000.0
+      },
+      "hbm_busy_ns": 127140416.5289256,
+      "hbm_busy_ns_exact": "127140416.528925596459885128",
+      "hbm_direction_order": [
+        "read",
+        "write"
+      ],
+      "hbm_served_bytes_by_row_direction": [
+        [
+          45857374208.0,
+          89477120.0
+        ],
+        [
+          45857374208.0,
+          89477120.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "45857374208",
+          "89477120"
+        ],
+        [
+          "45857374208",
+          "89477120"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 14,
+      "legacy_unclassified_hbm_bytes_by_row_direction": [
+        [
+          0.0,
+          0.0
+        ],
+        [
+          0.0,
+          0.0
+        ]
+      ],
+      "legacy_unclassified_hbm_bytes_by_row_direction_exact": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "legacy_unclassified_typed_totals_unknown": false,
+      "now_ns": 130769393,
+      "row_busy_ns": [
+        127140416.5289256,
+        127140416.5289256
+      ],
+      "row_busy_ns_exact": [
+        "127140416.528925596459885128",
+        "127140416.528925596459885128"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "row_shared_owners": [
+        0,
+        0
+      ],
+      "runtime_generation": 10,
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              45857374208.0,
+              89477120.0
+            ],
+            [
+              45857374208.0,
+              89477120.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "45857374208",
+              "89477120"
+            ],
+            [
+              "45857374208",
+              "89477120"
+            ]
+          ],
+          "int4_ops": 2931986268160.0,
+          "int4_ops_exact_decimal": "2931986268159.999999761581420898",
+          "vec_eqops": 200609103872.0,
+          "vec_eqops_exact_decimal": "200609103872"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "served_category_totals_semantics": "complete_lifetime_totals",
+      "transaction_registry_size": 0,
+      "typed_totals_history_complete": true
+    },
+    "index": 7,
+    "status": "finished",
+    "steps": 9,
+    "summary": {
+      "active_cores": 88,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "consumption_wave_count": 2048,
+      "conversion_elements": 51673387008,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 2931986268160,
+      "executed_matrix_ops": 2931986268160,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 91714748416,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 178954240,
+      "int4_input_bytes": 22928687104,
+      "kind": "logits",
+      "local_bus_bytes": 229398061056,
+      "logical_tensor_bytes": 6039707648,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates"
+      ],
+      "output_round_count": 32,
+      "physical_transfer_bytes": 91893702656,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "source_matrix_ops": 2931986268160,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 213008,
+      "sram_read_bytes": 160645881856,
+      "sram_write_bytes": 160645881856,
+      "template_id": "logits_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 256,
+      "tm": 64,
+      "tn": 64,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 200609103872,
+      "wave_count": 2048
+    }
+  }
+]

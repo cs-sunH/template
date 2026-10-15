@@ -1,0 +1,59 @@
+{
+  "base_commit": "321b098d076ad0caf63d5b6998ae0d1a2b926ee6",
+  "canonical23_digest": "80637c3ed93c58570c2ea05aedeb38f7db0e9911b05d246d4e13d64d56e69646",
+  "coarse_library_sha256": "0d4aa60101f440f80379715801f3e0b76a53d0b9402e617de29b1e3b97cd626a",
+  "public_ctests": 30,
+  "joint_focused_ctests": 8,
+  "ws_lifecycle_each": 1,
+  "face_focused_each": 3,
+  "config_tests_by_repo": [
+    20,
+    15,
+    18,
+    17,
+    13
+  ],
+  "face_python_tests": [
+    132,
+    151
+  ],
+  "pressure": [
+    {
+      "run": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T034518Z-71564",
+      "unique_trace_nodes": 7944,
+      "completed_requests": 24,
+      "terminal_success": 7944,
+      "history_actions": {
+        "NO_HISTORY": 12,
+        "RECOMPUTE": 9,
+        "LOCAL_HIT": 1,
+        "NOC_MIGRATE": 2
+      },
+      "release_counts": {
+        "noc_ack": 12
+      },
+      "actual_remote_store_nodes": 0,
+      "actual_restore_write_nodes": 0,
+      "source_reuse_checks": 6
+    },
+    {
+      "run": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T034518Z-71557",
+      "unique_trace_nodes": 5998,
+      "completed_requests": 24,
+      "terminal_success": 5998,
+      "history_actions": {
+        "NO_HISTORY": 12,
+        "REMOTE_RESTORE": 5,
+        "LOCAL_HIT": 7
+      },
+      "release_counts": {
+        "remote_store_ack": 20,
+        "direct_store": 10
+      },
+      "actual_remote_store_nodes": 30,
+      "actual_restore_write_nodes": 30,
+      "source_reuse_checks": 30
+    }
+  ],
+  "e5_precision": "all comparable OS cases still fail original3%/5%; WR outside OS oracle preconditions"
+}

@@ -1,0 +1,20 @@
+[  7%] Built target spdlog
+[  7%] Built target fmt
+[ 11%] Built target die_model
+[ 34%] Built target yaml-cpp
+[ 34%] Building CXX object AstraSim/extern/die_model/coarse/CMakeFiles/coarse_die.dir/src/Execution.cc.o
+[ 42%] Built target Analytical_Congestion_Aware
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Execution.cc: In member function ‘void coarse_die::Runtime::allocate()’:
+/workspace/template/astra-sim-face-LRU/extern/die_model/coarse/src/Execution.cc:1073:48: warning: missing initializer for member ‘coarse_die::Runtime::allocate()::Ref::mirrors’ [-Wmissing-field-initializers]
+ 1073 |                          first_resource, q, 0.0});
+      |                                                ^
+[ 42%] Linking CXX static library libcoarse_die.a
+[ 46%] Built target coarse_die
+[ 88%] Built target AstraSim
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_Online
+[100%] Built target AstraSim_Analytical_Congestion_Aware_Online
+[100%] Built target coarse_die
+[100%] Linking CXX shared library ../../../../lib/libcoarse_die_cabi.so
+[100%] Built target coarse_die_cabi
+[ 50%] Built target die_model
+[100%] Built target die_model_cabi

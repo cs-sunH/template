@@ -1,0 +1,262 @@
+[2026-10-15 03:34:12.074] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-15 03:34:12.074] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-15 03:34:12.074] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-15 03:34:12.074] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-15 03:34:12.074] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-15 03:34:12.074] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-15 03:34:12.074] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-15 03:34:12.074] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-15 03:34:12.532] [workload] [debug] issue,sys->id=20, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 20, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 20, dimension: vertical total nodes in ring: 3 index in ring: 0 total nodes in ring 3
+[2026-10-15 03:34:12.532] [workload] [debug] issue,sys->id=21, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 21, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 21, dimension: vertical total nodes in ring: 3 index in ring: 0 total nodes in ring 3
+[2026-10-15 03:34:12.532] [workload] [debug] issue,sys->id=26, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 26, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 26, dimension: vertical total nodes in ring: 3 index in ring: 1 total nodes in ring 3
+[2026-10-15 03:34:12.532] [workload] [debug] issue,sys->id=27, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 27, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 27, dimension: vertical total nodes in ring: 3 index in ring: 1 total nodes in ring 3
+[2026-10-15 03:34:12.532] [workload] [debug] issue,sys->id=32, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 32, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 32, dimension: vertical total nodes in ring: 3 index in ring: 2 total nodes in ring 3
+[2026-10-15 03:34:12.532] [workload] [debug] issue,sys->id=33, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 33, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:34:12.532] [system::topology::RingTopology] [info] custom ring, id: 33, dimension: vertical total nodes in ring: 3 index in ring: 2 total nodes in ring 3
+[2026-10-15 03:34:12.533] [workload] [debug] callback,sys->id=20, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.533] [workload] [debug] callback,sys->id=21, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.533] [workload] [debug] callback,sys->id=26, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.533] [workload] [debug] callback,sys->id=27, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.533] [workload] [debug] callback,sys->id=32, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.533] [workload] [debug] callback,sys->id=33, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.533] [workload] [debug] issue,sys->id=20, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.533] [workload] [debug] issue,sys->id=21, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.533] [workload] [debug] issue,sys->id=26, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.533] [workload] [debug] issue,sys->id=27, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.533] [workload] [debug] issue,sys->id=32, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.534] [workload] [debug] issue,sys->id=33, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.534] [workload] [debug] callback,sys->id=20, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.534] [workload] [debug] callback,sys->id=21, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.534] [workload] [debug] callback,sys->id=26, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.534] [workload] [debug] callback,sys->id=27, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.534] [workload] [debug] callback,sys->id=32, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.534] [workload] [debug] callback,sys->id=33, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:34:12.535] [workload] [debug] issue,sys->id=20, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.535] [workload] [debug] issue,sys->id=21, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.536] [workload] [debug] issue,sys->id=26, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.536] [workload] [debug] issue,sys->id=27, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.537] [workload] [debug] issue,sys->id=32, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.538] [workload] [debug] issue,sys->id=33, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.546] [workload] [debug] callback,sys->id=20, tick=48008256, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.546] [workload] [debug] callback,sys->id=21, tick=48008256, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.546] [workload] [debug] callback,sys->id=26, tick=48008256, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.546] [workload] [debug] callback,sys->id=27, tick=48008256, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.546] [workload] [debug] callback,sys->id=32, tick=48008256, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.546] [workload] [debug] callback,sys->id=33, tick=48008256, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.553] [workload] [debug] issue,sys->id=20, tick=48008256, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.560] [workload] [debug] issue,sys->id=21, tick=48008256, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.566] [workload] [debug] issue,sys->id=26, tick=48008256, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.573] [workload] [debug] issue,sys->id=27, tick=48008256, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.580] [workload] [debug] issue,sys->id=32, tick=48008256, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.587] [workload] [debug] issue,sys->id=33, tick=48008256, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.605] [workload] [debug] callback,sys->id=26, tick=6573129376, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.605] [workload] [debug] callback,sys->id=27, tick=6573129376, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.605] [workload] [debug] callback,sys->id=32, tick=6573129376, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.605] [workload] [debug] callback,sys->id=33, tick=6573129376, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.607] [workload] [debug] issue,sys->id=26, tick=6573129376, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.609] [workload] [debug] issue,sys->id=27, tick=6573129376, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.611] [workload] [debug] issue,sys->id=32, tick=6573129376, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.613] [workload] [debug] issue,sys->id=33, tick=6573129376, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.615] [workload] [debug] callback,sys->id=26, tick=6719042449, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.615] [workload] [debug] callback,sys->id=27, tick=6719042449, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.615] [workload] [debug] callback,sys->id=32, tick=6719042449, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.615] [workload] [debug] callback,sys->id=33, tick=6719042449, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.619] [workload] [debug] issue,sys->id=26, tick=6719042449, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.624] [workload] [debug] issue,sys->id=27, tick=6719042449, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.629] [workload] [debug] issue,sys->id=32, tick=6719042449, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.633] [workload] [debug] issue,sys->id=33, tick=6719042449, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.639] [workload] [debug] callback,sys->id=20, tick=6883831606, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.640] [workload] [debug] callback,sys->id=21, tick=6883831606, node->id=4, node->name=batch_train_i0_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.643] [workload] [debug] issue,sys->id=20, tick=6883831606, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.645] [workload] [debug] issue,sys->id=21, tick=6883831606, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.647] [workload] [debug] callback,sys->id=20, tick=7036692921, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.647] [workload] [debug] callback,sys->id=21, tick=7036692921, node->id=5, node->name=batch_train_i0_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.652] [workload] [debug] issue,sys->id=20, tick=7036692921, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.657] [workload] [debug] issue,sys->id=21, tick=7036692921, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.663] [workload] [debug] callback,sys->id=26, tick=19475862485, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.663] [workload] [debug] callback,sys->id=27, tick=19475862485, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.663] [workload] [debug] callback,sys->id=32, tick=19475862485, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.663] [workload] [debug] callback,sys->id=33, tick=19475862485, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.663] [workload] [debug] issue,sys->id=26, tick=19475862485, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.663] [workload] [debug] issue,sys->id=27, tick=19475862485, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.663] [workload] [debug] issue,sys->id=32, tick=19475862485, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.663] [workload] [debug] issue,sys->id=33, tick=19475862485, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.664] [workload] [debug] callback,sys->id=20, tick=19793512957, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.664] [workload] [debug] callback,sys->id=21, tick=19793512957, node->id=6, node->name=batch_train_i0_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.664] [workload] [debug] issue,sys->id=20, tick=19793512957, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.664] [workload] [debug] issue,sys->id=21, tick=19793512957, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.664] [workload] [debug] callback,sys->id=32, tick=19794647905, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.664] [workload] [debug] callback,sys->id=33, tick=19794647905, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.665] [workload] [debug] issue,sys->id=32, tick=19794647905, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.665] [workload] [debug] issue,sys->id=33, tick=19794647905, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.666] [workload] [debug] callback,sys->id=27, tick=19794667308, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.666] [workload] [debug] callback,sys->id=26, tick=19794667308, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.667] [workload] [debug] issue,sys->id=27, tick=19794667308, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.667] [workload] [debug] issue,sys->id=26, tick=19794667308, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.668] [workload] [debug] callback,sys->id=20, tick=19794738637, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.668] [workload] [debug] callback,sys->id=21, tick=19794738637, node->id=7, node->name=batch_train_i0_1_all_layers_attention_all_reduce, node->type=7
+[2026-10-15 03:34:12.669] [workload] [debug] issue,sys->id=20, tick=19794738637, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.669] [workload] [debug] issue,sys->id=21, tick=19794738637, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.671] [workload] [debug] callback,sys->id=32, tick=19866513126, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.671] [workload] [debug] callback,sys->id=33, tick=19866513126, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.671] [workload] [debug] issue,sys->id=32, tick=19866513126, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.671] [workload] [debug] issue,sys->id=33, tick=19866513126, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.673] [workload] [debug] callback,sys->id=27, tick=19866532529, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.674] [workload] [debug] callback,sys->id=26, tick=19866532529, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.674] [workload] [debug] issue,sys->id=27, tick=19866532529, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.674] [workload] [debug] issue,sys->id=26, tick=19866532529, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.676] [workload] [debug] callback,sys->id=20, tick=19866603858, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.676] [workload] [debug] callback,sys->id=21, tick=19866603858, node->id=8, node->name=batch_train_i0_1_all_layers_attention_residual_add, node->type=4
+[2026-10-15 03:34:12.676] [workload] [debug] issue,sys->id=20, tick=19866603858, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.676] [workload] [debug] issue,sys->id=21, tick=19866603858, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.678] [workload] [debug] callback,sys->id=32, tick=19914516844, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.678] [workload] [debug] callback,sys->id=33, tick=19914516844, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.687] [workload] [debug] issue,sys->id=32, tick=19914516844, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.696] [workload] [debug] issue,sys->id=33, tick=19914516844, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.697] [workload] [debug] callback,sys->id=27, tick=19914536247, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.697] [workload] [debug] callback,sys->id=26, tick=19914536247, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.706] [workload] [debug] issue,sys->id=27, tick=19914536247, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.714] [workload] [debug] issue,sys->id=26, tick=19914536247, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.715] [workload] [debug] callback,sys->id=20, tick=19914607576, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.715] [workload] [debug] callback,sys->id=21, tick=19914607576, node->id=9, node->name=batch_train_i0_1_all_layers_mlp_input_layernorm, node->type=4
+[2026-10-15 03:34:12.724] [workload] [debug] issue,sys->id=20, tick=19914607576, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.733] [workload] [debug] issue,sys->id=21, tick=19914607576, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.743] [workload] [debug] issue,sys->id=2, tick=20000000000, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.743] [workload] [debug] issue,sys->id=3, tick=20000000000, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.743] [workload] [debug] issue,sys->id=8, tick=20000000000, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.743] [workload] [debug] issue,sys->id=9, tick=20000000000, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.743] [workload] [debug] issue,sys->id=14, tick=20000000000, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.743] [workload] [debug] issue,sys->id=15, tick=20000000000, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=2, tick=20000000001, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=3, tick=20000000001, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=8, tick=20000000001, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=9, tick=20000000001, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=14, tick=20000000001, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=15, tick=20000000001, node->id=1, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_arrival_timer_gate, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=2, tick=20000000001, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 2, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 2, dimension: vertical total nodes in ring: 3 index in ring: 0 total nodes in ring 3
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=3, tick=20000000001, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 3, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 3, dimension: vertical total nodes in ring: 3 index in ring: 0 total nodes in ring 3
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=8, tick=20000000001, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 8, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 8, dimension: vertical total nodes in ring: 3 index in ring: 1 total nodes in ring 3
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=9, tick=20000000001, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 9, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 9, dimension: vertical total nodes in ring: 3 index in ring: 1 total nodes in ring 3
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=14, tick=20000000001, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 14, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 14, dimension: vertical total nodes in ring: 3 index in ring: 2 total nodes in ring 3
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=15, tick=20000000001, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 15, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:34:12.744] [system::topology::RingTopology] [info] custom ring, id: 15, dimension: vertical total nodes in ring: 3 index in ring: 2 total nodes in ring 3
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=2, tick=20000004437, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=3, tick=20000004437, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=8, tick=20000004437, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=9, tick=20000004437, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=14, tick=20000004437, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [workload] [debug] callback,sys->id=15, tick=20000004437, node->id=2, node->name=q0002_capacity_session_1_turn0_capacity_request_1_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=2, tick=20000004437, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=3, tick=20000004437, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=8, tick=20000004437, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=9, tick=20000004437, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=14, tick=20000004437, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.744] [workload] [debug] issue,sys->id=15, tick=20000004437, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.745] [workload] [debug] callback,sys->id=2, tick=20000004538, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.745] [workload] [debug] callback,sys->id=3, tick=20000004538, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.745] [workload] [debug] callback,sys->id=8, tick=20000004538, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.745] [workload] [debug] callback,sys->id=9, tick=20000004538, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.745] [workload] [debug] callback,sys->id=14, tick=20000004538, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.745] [workload] [debug] callback,sys->id=15, tick=20000004538, node->id=3, node->name=batch_train_i1_1_pstart_capacity_request_1_0, node->type=4
+[2026-10-15 03:34:12.752] [workload] [debug] issue,sys->id=2, tick=20000004538, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.753] [workload] [debug] issue,sys->id=3, tick=20000004538, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.753] [workload] [debug] issue,sys->id=8, tick=20000004538, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.754] [workload] [debug] issue,sys->id=9, tick=20000004538, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.755] [workload] [debug] issue,sys->id=14, tick=20000004538, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.755] [workload] [debug] issue,sys->id=15, tick=20000004538, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.761] [workload] [debug] callback,sys->id=2, tick=20048008256, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.761] [workload] [debug] callback,sys->id=3, tick=20048008256, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.761] [workload] [debug] callback,sys->id=8, tick=20048008256, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.761] [workload] [debug] callback,sys->id=9, tick=20048008256, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.762] [workload] [debug] callback,sys->id=14, tick=20048008256, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.762] [workload] [debug] callback,sys->id=15, tick=20048008256, node->id=4, node->name=batch_train_i1_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:34:12.768] [workload] [debug] issue,sys->id=2, tick=20048008256, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.774] [workload] [debug] issue,sys->id=3, tick=20048008256, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.781] [workload] [debug] issue,sys->id=8, tick=20048008256, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.790] [workload] [debug] issue,sys->id=9, tick=20048008256, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.796] [workload] [debug] issue,sys->id=14, tick=20048008256, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.803] [workload] [debug] issue,sys->id=15, tick=20048008256, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.828] [workload] [debug] callback,sys->id=8, tick=26573129376, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.828] [workload] [debug] callback,sys->id=9, tick=26573129376, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.828] [workload] [debug] callback,sys->id=14, tick=26573129376, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.829] [workload] [debug] callback,sys->id=15, tick=26573129376, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.831] [workload] [debug] issue,sys->id=8, tick=26573129376, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.833] [workload] [debug] issue,sys->id=9, tick=26573129376, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.835] [workload] [debug] issue,sys->id=14, tick=26573129376, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.836] [workload] [debug] issue,sys->id=15, tick=26573129376, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.838] [workload] [debug] callback,sys->id=8, tick=26719042449, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.838] [workload] [debug] callback,sys->id=9, tick=26719042449, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.838] [workload] [debug] callback,sys->id=14, tick=26719042449, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.838] [workload] [debug] callback,sys->id=15, tick=26719042449, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.842] [workload] [debug] issue,sys->id=8, tick=26719042449, node->id=7, node->name=batch_train_i1_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.846] [workload] [debug] issue,sys->id=9, tick=26719042449, node->id=7, node->name=batch_train_i1_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.851] [workload] [debug] issue,sys->id=14, tick=26719042449, node->id=7, node->name=batch_train_i1_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.855] [workload] [debug] issue,sys->id=15, tick=26719042449, node->id=7, node->name=batch_train_i1_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.859] [workload] [debug] callback,sys->id=2, tick=26883831606, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.860] [workload] [debug] callback,sys->id=3, tick=26883831606, node->id=5, node->name=batch_train_i1_1_all_layers_attention_qkv_projection, node->type=4
+[2026-10-15 03:34:12.862] [workload] [debug] issue,sys->id=2, tick=26883831606, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.863] [workload] [debug] issue,sys->id=3, tick=26883831606, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.864] [workload] [debug] callback,sys->id=2, tick=27036692921, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.865] [workload] [debug] callback,sys->id=3, tick=27036692921, node->id=6, node->name=batch_train_i1_1_all_layers_attention_region, node->type=4
+[2026-10-15 03:34:12.868] [workload] [debug] issue,sys->id=2, tick=27036692921, node->id=7, node->name=batch_train_i1_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.873] [workload] [debug] issue,sys->id=3, tick=27036692921, node->id=7, node->name=batch_train_i1_1_all_layers_attention_output_projection, node->type=4
+[2026-10-15 03:34:12.918] [workload] [debug] callback,sys->id=32, tick=37127733591, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.918] [workload] [debug] callback,sys->id=33, tick=37127733591, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.918] [workload] [debug] issue,sys->id=32, tick=37127733591, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.918] [workload] [debug] issue,sys->id=33, tick=37127733591, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.920] [workload] [debug] callback,sys->id=27, tick=37128927393, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.920] [workload] [debug] callback,sys->id=26, tick=37128927393, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.920] [workload] [debug] issue,sys->id=27, tick=37128927393, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.920] [workload] [debug] issue,sys->id=26, tick=37128927393, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.920] [workload] [debug] callback,sys->id=20, tick=37128998722, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.921] [workload] [debug] callback,sys->id=21, tick=37128998722, node->id=10, node->name=batch_train_i0_1_all_layers_ffn_region, node->type=4
+[2026-10-15 03:34:12.921] [workload] [debug] issue,sys->id=20, tick=37128998722, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.921] [workload] [debug] issue,sys->id=21, tick=37128998722, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.921] [workload] [debug] callback,sys->id=32, tick=37130133670, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.921] [workload] [debug] callback,sys->id=33, tick=37130133670, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.921] [workload] [debug] issue,sys->id=32, tick=37130133670, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.921] [workload] [debug] issue,sys->id=33, tick=37130133670, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.922] [workload] [debug] callback,sys->id=27, tick=37130153073, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.922] [workload] [debug] callback,sys->id=26, tick=37130153073, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.922] [workload] [debug] issue,sys->id=27, tick=37130153073, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.922] [workload] [debug] issue,sys->id=26, tick=37130153073, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.923] [workload] [debug] callback,sys->id=20, tick=37130224402, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.923] [workload] [debug] callback,sys->id=21, tick=37130224402, node->id=11, node->name=batch_train_i0_1_all_layers_mlp_all_reduce, node->type=7
+[2026-10-15 03:34:12.924] [workload] [debug] issue,sys->id=20, tick=37130224402, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.924] [workload] [debug] issue,sys->id=21, tick=37130224402, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.926] [workload] [debug] callback,sys->id=32, tick=37201998891, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.926] [workload] [debug] callback,sys->id=33, tick=37201998891, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.927] [workload] [debug] issue,sys->id=32, tick=37201998891, node->id=13, node->name=batch_train_i0_1_all_passes_final_layernorm, node->type=4
+[2026-10-15 03:34:12.927] [workload] [debug] issue,sys->id=33, tick=37201998891, node->id=13, node->name=batch_train_i0_1_all_passes_final_layernorm, node->type=4
+[2026-10-15 03:34:12.929] [workload] [debug] callback,sys->id=27, tick=37202018294, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.929] [workload] [debug] callback,sys->id=26, tick=37202018294, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.930] [workload] [debug] issue,sys->id=27, tick=37202018294, node->id=13, node->name=batch_train_i0_1_all_passes_final_layernorm, node->type=4
+[2026-10-15 03:34:12.930] [workload] [debug] issue,sys->id=26, tick=37202018294, node->id=13, node->name=batch_train_i0_1_all_passes_final_layernorm, node->type=4
+[2026-10-15 03:34:12.932] [workload] [debug] callback,sys->id=20, tick=37202089623, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.932] [workload] [debug] callback,sys->id=21, tick=37202089623, node->id=12, node->name=batch_train_i0_1_all_layers_mlp_residual_add, node->type=4
+[2026-10-15 03:34:12.933] [workload] [debug] issue,sys->id=20, tick=37202089623, node->id=13, node->name=batch_train_i0_1_all_passes_final_layernorm, node->type=4
+[2026-10-15 03:34:12.933] [workload] [debug] issue,sys->id=21, tick=37202089623, node->id=13, node->name=batch_train_i0_1_all_passes_final_layernorm, node->type=4
+[2026-10-15 03:34:12.935] [workload] [debug] callback,sys->id=32, tick=37202371013, node->id=13, node->name=batch_train_i0_1_all_passes_final_layernorm, node->type=4
+[2026-10-15 03:34:12.936] [workloa

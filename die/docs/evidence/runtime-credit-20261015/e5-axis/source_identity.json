@@ -1,0 +1,17 @@
+{
+  "build_directory": "/workspace/template/work/build-attention",
+  "driver_path": "/workspace/template/work/build-attention/coarse_compiled_gemm_oracle_driver",
+  "driver_sha256": "02cc04e0f1a032626bf60aa20d8560cb7d593de2f0cb4e18de583ba4abfaca98",
+  "git_head": "321b098d076ad0caf63d5b6998ae0d1a2b926ee6",
+  "runner_sha256": "10177f88a5debc390381461965136549ceec6f1f135d8089a1fa64c010dc6141",
+  "source_sha256": {
+    "die/src/Compiler.cc": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+    "die/src/Execution.cc": "a354856928328ad3a9371b3a7068033bb13bb88701bbeb53af2d1d5445d378ab",
+    "die/src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+    "die/src/Mapping.cc": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+    "die/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+    "die/tests/compiled_gemm_oracle_driver.cc": "760bd4231682891d5fc047208d7b579449b9f508ca8e2d9fb565e69b44169973",
+    "die/validation/compiled_gemm_oracle.py": "8a900374203019a962c53fd0f6b53ff54b7af362671172021f09e8f33da5fe7d",
+    "die/validation/grouped_gemm_oracle.py": "7c62ab241e77dd3600136fbec797627bd32f9e63d95820e4948f78e98bd54499"
+  }
+}

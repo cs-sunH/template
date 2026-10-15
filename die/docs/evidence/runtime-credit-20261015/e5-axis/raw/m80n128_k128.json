@@ -1,0 +1,1253 @@
+{
+  "compiled_plan": {
+    "E": 5,
+    "compiler_path": "coarse_die::compile() -> detail::enumerate_mappings()",
+    "epochs": [
+      {
+        "activities": [
+          {
+            "canonical_q": 920.0,
+            "credit_delta": [
+              1.0,
+              0.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                460,
+                0
+              ],
+              [
+                460,
+                0
+              ]
+            ],
+            "id": 1,
+            "int4_ops": 0,
+            "private_time_s": 9.215999999999999e-28,
+            "role": "load",
+            "vec_eqops": 0,
+            "work_by_resource": [
+              0.0,
+              0.0,
+              921.6,
+              0.0,
+              460.8,
+              460.8,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        ],
+        "credit_capacity": [
+          2.0,
+          2.0
+        ],
+        "credit_initial": [
+          0.0,
+          0.0
+        ],
+        "name": "weight_resident_v2_load_first",
+        "repeat_count": 1
+      },
+      {
+        "activities": [
+          {
+            "canonical_q": 920.0,
+            "credit_delta": [
+              1.0,
+              0.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                460,
+                0
+              ],
+              [
+                460,
+                0
+              ]
+            ],
+            "id": 4,
+            "int4_ops": 0,
+            "private_time_s": 9.215999999999999e-28,
+            "role": "load",
+            "vec_eqops": 0,
+            "work_by_resource": [
+              0.0,
+              0.0,
+              921.6,
+              0.0,
+              460.8,
+              460.8,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "canonical_q": 34048.0,
+            "credit_delta": [
+              -1.0,
+              1.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "id": 5,
+            "int4_ops": 0,
+            "private_time_s": 0.00010355463417100672,
+            "role": "compute",
+            "vec_eqops": 16384,
+            "work_by_resource": [
+              0.00010355463417100672,
+              33536.0,
+              512.0,
+              34048.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        ],
+        "credit_capacity": [
+          2.0,
+          2.0
+        ],
+        "credit_initial": [
+          1.0,
+          0.0
+        ],
+        "name": "weight_resident_v2_first_overlap",
+        "repeat_count": 1
+      },
+      {
+        "activities": [
+          {
+            "canonical_q": 145616.0,
+            "credit_delta": [
+              158.0,
+              0.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                72808,
+                0
+              ],
+              [
+                72808,
+                0
+              ]
+            ],
+            "id": 7,
+            "int4_ops": 0,
+            "private_time_s": 1.456128e-25,
+            "role": "load",
+            "vec_eqops": 0,
+            "work_by_resource": [
+              0.0,
+              0.0,
+              145612.8,
+              0.0,
+              72806.4,
+              72806.4,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "canonical_q": 5379584.0,
+            "credit_delta": [
+              -158.0,
+              158.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "id": 8,
+            "int4_ops": 0,
+            "private_time_s": 0.016361632199019063,
+            "role": "compute",
+            "vec_eqops": 2588672,
+            "work_by_resource": [
+              0.016361632199019063,
+              5298688.0,
+              80896.0,
+              5379584.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "canonical_q": 40448.0,
+            "credit_delta": [
+              0.0,
+              -158.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                0,
+                20224
+              ],
+              [
+                0,
+                20224
+              ]
+            ],
+            "id": 9,
+            "int4_ops": 0,
+            "private_time_s": 4.0448e-26,
+            "role": "store",
+            "vec_eqops": 0,
+            "work_by_resource": [
+              0.0,
+              40448.0,
+              0.0,
+              0.0,
+              20224.0,
+              20224.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        ],
+        "credit_capacity": [
+          2.0,
+          2.0
+        ],
+        "credit_initial": [
+          1.0,
+          1.0
+        ],
+        "name": "weight_resident_v2_interior_repeat",
+        "repeat_count": 158
+      },
+      {
+        "activities": [
+          {
+            "canonical_q": 34048.0,
+            "credit_delta": [
+              -1.0,
+              1.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "id": 11,
+            "int4_ops": 0,
+            "private_time_s": 0.00010355463417100672,
+            "role": "compute",
+            "vec_eqops": 16384,
+            "work_by_resource": [
+              0.00010355463417100672,
+              33536.0,
+              512.0,
+              34048.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          },
+          {
+            "canonical_q": 256.0,
+            "credit_delta": [
+              0.0,
+              -1.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                0,
+                128
+              ],
+              [
+                0,
+                128
+              ]
+            ],
+            "id": 12,
+            "int4_ops": 0,
+            "private_time_s": 2.5599999999999998e-28,
+            "role": "store",
+            "vec_eqops": 0,
+            "work_by_resource": [
+              0.0,
+              256.0,
+              0.0,
+              0.0,
+              128.0,
+              128.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        ],
+        "credit_capacity": [
+          2.0,
+          2.0
+        ],
+        "credit_initial": [
+          1.0,
+          1.0
+        ],
+        "name": "weight_resident_v2_last_overlap",
+        "repeat_count": 1
+      },
+      {
+        "activities": [
+          {
+            "canonical_q": 256.0,
+            "credit_delta": [
+              0.0,
+              -1.0
+            ],
+            "hbm_bytes_by_row_direction": [
+              [
+                0,
+                128
+              ],
+              [
+                0,
+                128
+              ]
+            ],
+            "id": 15,
+            "int4_ops": 0,
+            "private_time_s": 2.5599999999999998e-28,
+            "role": "store",
+            "vec_eqops": 0,
+            "work_by_resource": [
+              0.0,
+              256.0,
+              0.0,
+              0.0,
+              128.0,
+              128.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        ],
+        "credit_capacity": [
+          2.0,
+          2.0
+        ],
+        "credit_initial": [
+          0.0,
+          1.0
+        ],
+        "name": "weight_resident_v2_store_last",
+        "repeat_count": 1
+      }
+    ],
+    "fingerprint": "ae174a14916b371c16e46acd7ac7ad4293bafb9c48f555f49f6ea4c9de47773c",
+    "hardware_fingerprint": "synthetic-model-to-model:014f7da550d3c73f197375480e8c2ea5eb5200d1e8331565d4a672476c6eeeb2",
+    "summary": {
+      "active_cores": 1,
+      "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+      "activity_work_semantics": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1",
+      "alone_estimate_status": "ok_assumed",
+      "candidate_count": 29,
+      "candidate_estimate_source": "estimate_alone(shared_runtime_engine)",
+      "consumption_wave_count": 320,
+      "conversion_elements": 0,
+      "dataflow_id": "weight_resident_v2",
+      "estimated_latency_ns": 16580518,
+      "evidence_flags": [
+        "engineering_assumption",
+        "hardware_source_derived"
+      ],
+      "executed_int4_ops": 0,
+      "executed_matrix_ops": 2621440,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 147456,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 40960,
+      "int4_input_bytes": 0,
+      "kind": "gemm",
+      "local_bus_bytes": 5447680,
+      "logical_tensor_bytes": 147456,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates",
+        "exact_per_tile_INT4_tail_packing"
+      ],
+      "output_round_count": 160,
+      "physical_transfer_bytes": 188416,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "selected_template": "gemm_weight_resident_v2",
+      "selection_rule": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th",
+      "source_matrix_ops": 2621440,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 34048,
+      "sram_read_bytes": 5406720,
+      "sram_write_bytes": 229376,
+      "template_id": "gemm_weight_resident_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 64,
+      "tm": 1,
+      "tn": 64,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 2621440,
+      "wave_count": 320
+    },
+    "task": {
+      "execution_profile": "fp32_vec_matrix_assumed_v1",
+      "fusion_policy": "auto",
+      "layer_instances": 1,
+      "op_kind": "gemm",
+      "phase": "prefill",
+      "schema": "coarse_die_task_v2",
+      "spans": [],
+      "storage_dtype": {
+        "accumulator": "fp32",
+        "activations": "fp32",
+        "kv": "bf16",
+        "output": "fp32",
+        "parameters": "bf16",
+        "scores": "fp32",
+        "weights": "fp32"
+      },
+      "tensor_shapes": {
+        "k": 128,
+        "m": 80,
+        "n": 128
+      },
+      "tp_slice": {
+        "tensor_parallel": 1,
+        "tensor_parallel_rank": 0
+      },
+      "weight_passes": 1
+    }
+  },
+  "measurement_source": "compiled_plan_and_actual_cpp_runtime",
+  "schema_version": 1,
+  "standalone": {
+    "arrival_ns": 0,
+    "counters": {
+      "accounting_history_complete": true,
+      "allocation_updates": 10,
+      "compute_busy_ns": 16568741.467361078,
+      "compute_busy_ns_exact": "16568741.467361077148780168",
+      "hbm_busy_ns": 16281629.564848056,
+      "hbm_busy_ns_exact": "16281629.56484805556738138",
+      "hbm_served_bytes_by_row_direction": [
+        [
+          73728.0,
+          20480.0
+        ],
+        [
+          73728.0,
+          20480.0
+        ]
+      ],
+      "hbm_served_bytes_by_row_direction_exact": [
+        [
+          "73728",
+          "20480"
+        ],
+        [
+          "73728",
+          "20480"
+        ]
+      ],
+      "hbm_shared_ns": 0.0,
+      "hbm_shared_ns_exact": "0",
+      "internal_events": 14,
+      "row_busy_ns": [
+        16281629.564848056,
+        16281629.564848056
+      ],
+      "row_busy_ns_exact": [
+        "16281629.56484805556738138",
+        "16281629.56484805556738138"
+      ],
+      "row_shared_ns": [
+        0.0,
+        0.0
+      ],
+      "row_shared_ns_exact": [
+        "0",
+        "0"
+      ],
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              73728.0,
+              20480.0
+            ],
+            [
+              73728.0,
+              20480.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "73728",
+              "20480"
+            ],
+            [
+              "73728",
+              "20480"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 2621440.0,
+          "vec_eqops_exact_decimal": "2621440"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction": [
+            [
+              0.0,
+              0.0
+            ],
+            [
+              0.0,
+              0.0
+            ]
+          ],
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops": 0.0,
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops": 0.0,
+          "vec_eqops_exact_decimal": "0"
+        }
+      }
+    },
+    "event_advances": 9,
+    "finish_ns": 16580518,
+    "finish_s": 0.016580518,
+    "request": "solo"
+  },
+  "synthetic_hardware": {
+    "core_columns_nx": 1,
+    "core_count": 1,
+    "core_rows_ny": 1,
+    "core_sram_bytes_per_core": 262144,
+    "eta_hbm_matrix": 1.0,
+    "eta_vec": 0.02,
+    "fixture_kind": "synthetic_model_to_model",
+    "p_vec_per_core_ops_per_s": 7910800000.0,
+    "resource_capacities": [
+      {
+        "capacity": 1.0,
+        "enabled": true,
+        "id": "COMPUTE_GATE",
+        "resource_id": 0
+      },
+      {
+        "capacity": 1e+30,
+        "enabled": true,
+        "id": "SRAM_READ",
+        "resource_id": 1
+      },
+      {
+        "capacity": 1e+30,
+        "enabled": true,
+        "id": "SRAM_WRITE",
+        "resource_id": 2
+      },
+      {
+        "capacity": 1e+30,
+        "enabled": true,
+        "id": "LOCAL",
+        "resource_id": 3
+      },
+      {
+        "capacity": 50000000.0,
+        "enabled": true,
+        "id": "HBM0",
+        "resource_id": 4
+      },
+      {
+        "capacity": 50000000.0,
+        "enabled": true,
+        "id": "HBM1",
+        "resource_id": 5
+      },
+      {
+        "capacity": 0.0,
+        "enabled": false,
+        "id": "INJECT0",
+        "resource_id": 6
+      },
+      {
+        "capacity": 0.0,
+        "enabled": false,
+        "id": "INJECT1",
+        "resource_id": 7
+      },
+      {
+        "capacity": 0.0,
+        "enabled": false,
+        "id": "XPOS",
+        "resource_id": 8
+      },
+      {
+        "capacity": 0.0,
+        "enabled": false,
+        "id": "XNEG",
+        "resource_id": 9
+      },
+      {
+        "capacity": 0.0,
+        "enabled": false,
+        "id": "YPOS",
+        "resource_id": 10
+      },
+      {
+        "capacity": 0.0,
+        "enabled": false,
+        "id": "YNEG",
+        "resource_id": 11
+      },
+      {
+        "capacity": 0.0,
+        "enabled": false,
+        "id": "HOP",
+        "resource_id": 12
+      }
+    ],
+    "rho_sram": 0.9,
+    "source_core_table_sha256": "8e7d393ff9a96dd556088fa7c98a6fd80ed0b277e03cde7c3909a0f118e45f36",
+    "synthetic_hardware_fingerprint": "synthetic-model-to-model:014f7da550d3c73f197375480e8c2ea5eb5200d1e8331565d4a672476c6eeeb2"
+  },
+  "two_comp": [
+    {
+      "counters": {
+        "accounting_history_complete": true,
+        "allocation_updates": 11,
+        "compute_busy_ns": 33137482.93472215,
+        "compute_busy_ns_exact": "33137482.934722152849644772",
+        "hbm_busy_ns": 32563259.129696112,
+        "hbm_busy_ns_exact": "32563259.129696111136581749",
+        "hbm_served_bytes_by_row_direction": [
+          [
+            147456.0,
+            40960.0
+          ],
+          [
+            147456.0,
+            40960.0
+          ]
+        ],
+        "hbm_served_bytes_by_row_direction_exact": [
+          [
+            "147456",
+            "40960"
+          ],
+          [
+            "147456",
+            "40960"
+          ]
+        ],
+        "hbm_shared_ns": 32563259.129696112,
+        "hbm_shared_ns_exact": "32563259.129696111136581749",
+        "internal_events": 19,
+        "row_busy_ns": [
+          32563259.129696112,
+          32563259.129696112
+        ],
+        "row_busy_ns_exact": [
+          "32563259.129696111136581749",
+          "32563259.129696111136581749"
+        ],
+        "row_shared_ns": [
+          32563259.129696112,
+          32563259.129696112
+        ],
+        "row_shared_ns_exact": [
+          "32563259.129696111136581749",
+          "32563259.129696111136581749"
+        ],
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                147456.0,
+                40960.0
+              ],
+              [
+                147456.0,
+                40960.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "147456",
+                "40960"
+              ],
+              [
+                "147456",
+                "40960"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 5242880.0,
+            "vec_eqops_exact_decimal": "5242880"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        }
+      },
+      "event_advances": 9,
+      "finish_ns_by_request": {
+        "comp0": 33161035,
+        "comp1": 33161035
+      },
+      "finish_s_by_request": {
+        "comp0": 0.033161035,
+        "comp1": 0.033161035
+      },
+      "phase_offset_ns": 0,
+      "phase_offset_s": 0.0,
+      "request_names": [
+        "comp0",
+        "comp1"
+      ]
+    },
+    {
+      "counters": {
+        "accounting_history_complete": true,
+        "allocation_updates": 20,
+        "compute_busy_ns": 33137482.93472215,
+        "compute_busy_ns_exact": "33137482.934722151576352189",
+        "hbm_busy_ns": 32563259.129696112,
+        "hbm_busy_ns_exact": "32563259.129696111129305791",
+        "hbm_served_bytes_by_row_direction": [
+          [
+            147456.0,
+            40960.0
+          ],
+          [
+            147456.0,
+            40960.0
+          ]
+        ],
+        "hbm_served_bytes_by_row_direction_exact": [
+          [
+            "147456",
+            "40960"
+          ],
+          [
+            "147456",
+            "40960"
+          ]
+        ],
+        "hbm_shared_ns": 0.0,
+        "hbm_shared_ns_exact": "0",
+        "internal_events": 28,
+        "row_busy_ns": [
+          32563259.129696112,
+          32563259.129696112
+        ],
+        "row_busy_ns_exact": [
+          "32563259.129696111129305791",
+          "32563259.129696111129305791"
+        ],
+        "row_shared_ns": [
+          0.0,
+          0.0
+        ],
+        "row_shared_ns_exact": [
+          "0",
+          "0"
+        ],
+        "served_by_category": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                147456.0,
+                40960.0
+              ],
+              [
+                147456.0,
+                40960.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "147456",
+                "40960"
+              ],
+              [
+                "147456",
+                "40960"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 5242880.0,
+            "vec_eqops_exact_decimal": "5242880"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        }
+      },
+      "event_advances": 9,
+      "finish_ns_by_request": {
+        "comp0": 16580518,
+        "comp1": 66580518
+      },
+      "finish_s_by_request": {
+        "comp0": 0.016580518,
+        "comp1": 0.066580518
+      },
+      "phase_offset_ns": 50000000,
+      "phase_offset_s": 0.05,
+      "request_names": [
+        "comp0",
+        "comp1"
+      ]
+    }
+  ]
+}

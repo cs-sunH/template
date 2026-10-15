@@ -1,0 +1,22 @@
+Internal ctest changing into directory: /workspace/template/work/build-joint
+Test project /workspace/template/work/build-joint
+    Start  3: NativeCoarseProjectionTest
+    Start 32: AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest
+1/8 Test #32: AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest ...   Passed    0.03 sec
+    Start 28: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+2/8 Test #28: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest ..........   Passed    0.01 sec
+    Start 29: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+3/8 Test #29: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ....   Passed    0.01 sec
+    Start 30: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+4/8 Test #30: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest ........   Passed    0.00 sec
+    Start  4: NativeCoarseDieDomainTest
+5/8 Test  #4: NativeCoarseDieDomainTest .........................................   Passed    0.04 sec
+    Start  2: NativeProjectionCApiTest
+6/8 Test  #2: NativeProjectionCApiTest ..........................................   Passed    0.00 sec
+    Start  1: JointPipelineWindowTest
+7/8 Test  #1: JointPipelineWindowTest ...........................................   Passed    0.00 sec
+8/8 Test  #3: NativeCoarseProjectionTest ........................................   Passed    0.59 sec
+
+100% tests passed, 0 tests failed out of 8
+
+Total Test time (real) =   0.60 sec

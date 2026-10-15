@@ -1,0 +1,11 @@
+[ 12%] Building CXX object coarse/CMakeFiles/coarse_die.dir/src/Execution.cc.o
+/workspace/template/astra-sim-wscllm/extern/die_model/coarse/src/Execution.cc: In member function ‘void coarse_die::Runtime::allocate()’:
+/workspace/template/astra-sim-wscllm/extern/die_model/coarse/src/Execution.cc:1073:48: warning: missing initializer for member ‘coarse_die::Runtime::allocate()::Ref::mirrors’ [-Wmissing-field-initializers]
+ 1073 |                          first_resource, q, 0.0});
+      |                                                ^
+[ 25%] Linking CXX static library libcoarse_die.a
+[ 75%] Built target coarse_die
+[ 87%] Linking CXX shared library ../lib/libcoarse_die_cabi.so
+[100%] Built target coarse_die_cabi
+[ 77%] Built target die_model
+[100%] Built target die_model_cabi

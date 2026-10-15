@@ -1,0 +1,25 @@
+session_id,turn_index,request_id,prefill_length,decode_length,session_arrival_time_ns,inter_request_interval_ns,description
+capacity_session_0,0,capacity_request_0_0,1024,2,0,,synthetic closed-input capacity and source-release exercise
+capacity_session_0,1,capacity_request_0_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_1,0,capacity_request_1_0,1024,2,20000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_1,1,capacity_request_1_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_2,0,capacity_request_2_0,1024,2,40000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_2,1,capacity_request_2_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_3,0,capacity_request_3_0,1024,2,60000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_3,1,capacity_request_3_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_4,0,capacity_request_4_0,1024,2,80000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_4,1,capacity_request_4_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_5,0,capacity_request_5_0,1024,2,100000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_5,1,capacity_request_5_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_6,0,capacity_request_6_0,1024,2,120000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_6,1,capacity_request_6_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_7,0,capacity_request_7_0,1024,2,140000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_7,1,capacity_request_7_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_8,0,capacity_request_8_0,1024,2,160000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_8,1,capacity_request_8_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_9,0,capacity_request_9_0,1024,2,180000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_9,1,capacity_request_9_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_10,0,capacity_request_10_0,1024,2,200000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_10,1,capacity_request_10_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise
+capacity_session_11,0,capacity_request_11_0,1024,2,220000000000,,synthetic closed-input capacity and source-release exercise
+capacity_session_11,1,capacity_request_11_1,512,2,,1000000000000,synthetic closed-input capacity and source-release exercise

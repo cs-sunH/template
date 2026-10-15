@@ -1,6 +1,6 @@
 {
   "schema": "coarse_die_release_v2",
-  "source_digest": "45b7bf3d8df9969b8155323c79eecf1a81f8d1c7499177e811b6aedf2c4c3264",
+  "source_digest": "80637c3ed93c58570c2ea05aedeb38f7db0e9911b05d246d4e13d64d56e69646",
   "files": {
     "CMakeLists.txt": "7fa17ffb2eb8ef8eca8393455efe09eda047c460c9b68bee0b830550bb6021ce",
     "include/coarse_die/Capi.h": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
@@ -11,7 +11,7 @@
     "src/Capi.cc": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87",
     "src/Compiler.cc": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
     "src/EquivalentWork.hh": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
-    "src/Execution.cc": "c96a0555cb23c8c31ba5ab191aae275dbdaa65b7d17e15eb0249a9c35e9c2cb3",
+    "src/Execution.cc": "a354856928328ad3a9371b3a7068033bb13bb88701bbeb53af2d1d5445d378ab",
     "src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
     "src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
     "src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",

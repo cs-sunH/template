@@ -1,0 +1,66 @@
+Internal ctest changing into directory: /workspace/template/work/build-attention
+Test project /workspace/template/work/build-attention
+      Start 30: coarse_owner_lp_oracle_test
+      Start 24: coarse_capi_cache_response_test
+ 1/30 Test #24: coarse_capi_cache_response_test ..........   Passed    3.45 sec
+      Start 22: coarse_oracle_granularity_test
+ 2/30 Test #22: coarse_oracle_granularity_test ...........   Passed    0.48 sec
+      Start 29: coarse_grouped_gemm_oracle_test
+ 3/30 Test #29: coarse_grouped_gemm_oracle_test ..........   Passed    0.36 sec
+      Start 16: coarse_attention_accounting_test
+ 4/30 Test #16: coarse_attention_accounting_test .........   Passed    0.15 sec
+      Start 28: coarse_runtime_owner_symmetry_test
+ 5/30 Test #28: coarse_runtime_owner_symmetry_test .......   Passed    0.05 sec
+      Start 10: coarse_gemm_tail_budget_test
+ 6/30 Test #10: coarse_gemm_tail_budget_test .............   Passed    0.03 sec
+      Start 20: coarse_estimate_driver_test
+ 7/30 Test #20: coarse_estimate_driver_test ..............   Passed    0.03 sec
+      Start  8: coarse_operator_accounting_test
+ 8/30 Test  #8: coarse_operator_accounting_test ..........   Passed    0.02 sec
+      Start  3: coarse_compile_execution_test
+ 9/30 Test  #3: coarse_compile_execution_test ............   Passed    0.02 sec
+      Start  2: coarse_hardware_search_test
+10/30 Test  #2: coarse_hardware_search_test ..............   Passed    0.02 sec
+      Start 14: coarse_fractional_work_test
+11/30 Test #14: coarse_fractional_work_test ..............   Passed    0.01 sec
+      Start  9: coarse_gemm_accounting_test
+12/30 Test  #9: coarse_gemm_accounting_test ..............   Passed    0.01 sec
+      Start 11: coarse_task_schema_test
+13/30 Test #11: coarse_task_schema_test ..................   Passed    0.02 sec
+      Start  1: coarse_source_golden_test
+14/30 Test  #1: coarse_source_golden_test ................   Passed    0.01 sec
+      Start 26: coarse_workspace_envelope_test
+15/30 Test #26: coarse_workspace_envelope_test ...........   Passed    0.03 sec
+      Start  6: coarse_gemm_os_geometry_test
+16/30 Test  #6: coarse_gemm_os_geometry_test .............   Passed    0.00 sec
+      Start 12: coarse_compact_batch_semantics_test
+17/30 Test #12: coarse_compact_batch_semantics_test ......   Passed    0.01 sec
+      Start  7: coarse_gemm_os_resource_facts_test
+18/30 Test  #7: coarse_gemm_os_resource_facts_test .......   Passed    0.01 sec
+      Start  5: coarse_gemm_os_access_counter_test
+19/30 Test  #5: coarse_gemm_os_access_counter_test .......   Passed    0.01 sec
+      Start 15: coarse_fused_ffn_accounting_test
+20/30 Test #15: coarse_fused_ffn_accounting_test .........   Passed    0.01 sec
+      Start 21: coarse_runtime_semantics_test
+21/30 Test #21: coarse_runtime_semantics_test ............   Passed    0.01 sec
+      Start 17: coarse_endpoint_allocation_test
+22/30 Test #17: coarse_endpoint_allocation_test ..........   Passed    0.01 sec
+      Start 19: coarse_runtime_counters_test
+23/30 Test #19: coarse_runtime_counters_test .............   Passed    0.00 sec
+      Start 23: coarse_capi_lifecycle_test
+24/30 Test #23: coarse_capi_lifecycle_test ...............   Passed    0.00 sec
+      Start 25: coarse_workspace_metadata_test
+25/30 Test #25: coarse_workspace_metadata_test ...........   Passed    0.00 sec
+      Start  4: coarse_compiler_credit_test
+26/30 Test  #4: coarse_compiler_credit_test ..............   Passed    0.00 sec
+      Start 27: coarse_runtime_submit_transaction_test
+27/30 Test #27: coarse_runtime_submit_transaction_test ...   Passed    0.00 sec
+      Start 18: coarse_runtime_credit_scale_test
+28/30 Test #18: coarse_runtime_credit_scale_test .........   Passed    0.02 sec
+      Start 13: coarse_equivalent_work_test
+29/30 Test #13: coarse_equivalent_work_test ..............   Passed    0.00 sec
+30/30 Test #30: coarse_owner_lp_oracle_test ..............   Passed   10.78 sec
+
+100% tests passed, 0 tests failed out of 30
+
+Total Test time (real) =  10.78 sec

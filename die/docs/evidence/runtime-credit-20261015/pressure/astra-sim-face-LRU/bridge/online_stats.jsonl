@@ -1,0 +1,85 @@
+{"delivery_sequence": 0, "node_count": 96, "processing_ns": 8106341, "reasons": ["ARRIVAL"], "scheduler_self_ns": 7154175, "tick": 1}
+{"delivery_sequence": 1, "node_count": 102, "processing_ns": 4141345, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3080959, "tick": 20000000000}
+{"delivery_sequence": 2, "node_count": 84, "processing_ns": 8422118, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 2697543, "tick": 37333234268}
+{"delivery_sequence": 3, "node_count": 102, "processing_ns": 8614055, "reasons": ["ARRIVAL"], "scheduler_self_ns": 7483416, "tick": 40000000000}
+{"delivery_sequence": 4, "node_count": 84, "processing_ns": 41660156, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 39862740, "tick": 57333234268}
+{"delivery_sequence": 5, "node_count": 102, "processing_ns": 4238542, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3048143, "tick": 60000000000}
+{"delivery_sequence": 6, "node_count": 90, "processing_ns": 70682160, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 65705398, "tick": 74929642909}
+{"delivery_sequence": 7, "node_count": 0, "processing_ns": 878007, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 540168, "tick": 75656224940}
+{"delivery_sequence": 8, "node_count": 84, "processing_ns": 3618727, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 2561684, "tick": 77333234268}
+{"delivery_sequence": 9, "node_count": 102, "processing_ns": 8897233, "reasons": ["ARRIVAL"], "scheduler_self_ns": 7843307, "tick": 80000000000}
+{"delivery_sequence": 10, "node_count": 90, "processing_ns": 20502519, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 19645072, "tick": 94929642909}
+{"delivery_sequence": 11, "node_count": 0, "processing_ns": 1159783, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 732743, "tick": 95656224940}
+{"delivery_sequence": 12, "node_count": 84, "processing_ns": 4135328, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 2931600, "tick": 97333234268}
+{"delivery_sequence": 13, "node_count": 102, "processing_ns": 8056638, "reasons": ["ARRIVAL"], "scheduler_self_ns": 7009162, "tick": 100000000000}
+{"delivery_sequence": 14, "node_count": 90, "processing_ns": 48233994, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 47256430, "tick": 114929642909}
+{"delivery_sequence": 15, "node_count": 0, "processing_ns": 915673, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 516182, "tick": 115656224940}
+{"delivery_sequence": 16, "node_count": 84, "processing_ns": 3500519, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 2531348, "tick": 117333234268}
+{"delivery_sequence": 17, "node_count": 102, "processing_ns": 4117530, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3022443, "tick": 120000000000}
+{"delivery_sequence": 18, "node_count": 90, "processing_ns": 15451376, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 14082144, "tick": 134929642909}
+{"delivery_sequence": 19, "node_count": 0, "processing_ns": 975580, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 542782, "tick": 135656224940}
+{"delivery_sequence": 20, "node_count": 84, "processing_ns": 5363149, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 3850656, "tick": 137333234268}
+{"delivery_sequence": 21, "node_count": 102, "processing_ns": 4124300, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3029023, "tick": 140000000000}
+{"delivery_sequence": 22, "node_count": 90, "processing_ns": 10523149, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 9633775, "tick": 154929642909}
+{"delivery_sequence": 23, "node_count": 0, "processing_ns": 840711, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 505586, "tick": 155656224940}
+{"delivery_sequence": 24, "node_count": 84, "processing_ns": 3483193, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 2541683, "tick": 157333234268}
+{"delivery_sequence": 25, "node_count": 102, "processing_ns": 35674277, "reasons": ["ARRIVAL"], "scheduler_self_ns": 34217276, "tick": 160000000000}
+{"delivery_sequence": 26, "node_count": 90, "processing_ns": 45711916, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 44497853, "tick": 174929642909}
+{"delivery_sequence": 27, "node_count": 0, "processing_ns": 937273, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 560658, "tick": 175656224940}
+{"delivery_sequence": 28, "node_count": 84, "processing_ns": 3783607, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 2620500, "tick": 177333234268}
+{"delivery_sequence": 29, "node_count": 132, "processing_ns": 5055845, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3924685, "tick": 180000000000}
+{"delivery_sequence": 30, "node_count": 90, "processing_ns": 10171579, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 9336626, "tick": 194929642909}
+{"delivery_sequence": 31, "node_count": 0, "processing_ns": 906268, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 589370, "tick": 195656224940}
+{"delivery_sequence": 32, "node_count": 84, "processing_ns": 3717089, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 2619168, "tick": 197333234268}
+{"delivery_sequence": 33, "node_count": 124, "processing_ns": 5526681, "reasons": ["ARRIVAL"], "scheduler_self_ns": 4338566, "tick": 200000000000}
+{"delivery_sequence": 34, "node_count": 90, "processing_ns": 10352316, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 9443373, "tick": 214929642909}
+{"delivery_sequence": 35, "node_count": 0, "processing_ns": 866800, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 561640, "tick": 215656224940}
+{"delivery_sequence": 36, "node_count": 84, "processing_ns": 4159902, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 2927202, "tick": 217336509748}
+{"delivery_sequence": 37, "node_count": 120, "processing_ns": 4674112, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3568679, "tick": 220000000000}
+{"delivery_sequence": 38, "node_count": 90, "processing_ns": 9747704, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 8891279, "tick": 234929642909}
+{"delivery_sequence": 39, "node_count": 0, "processing_ns": 883034, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 508481, "tick": 235656224940}
+{"delivery_sequence": 40, "node_count": 84, "processing_ns": 5654618, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 4065883, "tick": 237340559665}
+{"delivery_sequence": 41, "node_count": 90, "processing_ns": 10894593, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 10018190, "tick": 254932918389}
+{"delivery_sequence": 42, "node_count": 0, "processing_ns": 896463, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 581599, "tick": 255659500420}
+{"delivery_sequence": 43, "node_count": 84, "processing_ns": 5548081, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 3994918, "tick": 257339498533}
+{"delivery_sequence": 44, "node_count": 90, "processing_ns": 10427394, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 9501316, "tick": 274936968306}
+{"delivery_sequence": 45, "node_count": 0, "processing_ns": 825939, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 513388, "tick": 275663550337}
+{"delivery_sequence": 46, "node_count": 90, "processing_ns": 11000360, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 10115704, "tick": 294935907174}
+{"delivery_sequence": 47, "node_count": 0, "processing_ns": 924204, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 603391, "tick": 295662489205}
+{"delivery_sequence": 48, "node_count": 180, "processing_ns": 8102482, "reasons": ["ARRIVAL"], "scheduler_self_ns": 6916481, "tick": 1075656224940}
+{"delivery_sequence": 49, "node_count": 184, "processing_ns": 6596008, "reasons": ["ARRIVAL"], "scheduler_self_ns": 5293926, "tick": 1095656224940}
+{"delivery_sequence": 50, "node_count": 90, "processing_ns": 17608375, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 16673064, "tick": 1113540973775}
+{"delivery_sequence": 51, "node_count": 0, "processing_ns": 905146, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 546757, "tick": 1114280606585}
+{"delivery_sequence": 52, "node_count": 150, "processing_ns": 6368882, "reasons": ["ARRIVAL"], "scheduler_self_ns": 4664986, "tick": 1115656224940}
+{"delivery_sequence": 53, "node_count": 90, "processing_ns": 12472523, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 11621737, "tick": 1133540412717}
+{"delivery_sequence": 54, "node_count": 0, "processing_ns": 1026515, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 546146, "tick": 1134280045527}
+{"delivery_sequence": 55, "node_count": 158, "processing_ns": 5321046, "reasons": ["ARRIVAL"], "scheduler_self_ns": 4124169, "tick": 1135656224940}
+{"delivery_sequence": 56, "node_count": 90, "processing_ns": 10532930, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 9686461, "tick": 1153535272914}
+{"delivery_sequence": 57, "node_count": 0, "processing_ns": 872489, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 563282, "tick": 1154274905724}
+{"delivery_sequence": 58, "node_count": 156, "processing_ns": 41495219, "reasons": ["ARRIVAL"], "scheduler_self_ns": 4754680, "tick": 1155656224940}
+{"delivery_sequence": 59, "node_count": 102, "processing_ns": 9191613, "reasons": ["ARRIVAL"], "scheduler_self_ns": 8022266, "tick": 1175656224940}
+{"delivery_sequence": 60, "node_count": 90, "processing_ns": 11553251, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 10680532, "tick": 1191414023419}
+{"delivery_sequence": 61, "node_count": 0, "processing_ns": 971756, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 647186, "tick": 1192153656229}
+{"delivery_sequence": 62, "node_count": 102, "processing_ns": 4282685, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3283409, "tick": 1195656224940}
+{"delivery_sequence": 63, "node_count": 90, "processing_ns": 11869013, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 10578537, "tick": 1213528628948}
+{"delivery_sequence": 64, "node_count": 0, "processing_ns": 885247, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 568840, "tick": 1214268261758}
+{"delivery_sequence": 65, "node_count": 102, "processing_ns": 5260338, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3822365, "tick": 1215656224940}
+{"delivery_sequence": 66, "node_count": 90, "processing_ns": 10475888, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 9602448, "tick": 1229293075818}
+{"delivery_sequence": 67, "node_count": 0, "processing_ns": 894330, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 575279, "tick": 1230032708628}
+{"delivery_sequence": 68, "node_count": 90, "processing_ns": 10857131, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 9507198, "tick": 1233528628948}
+{"delivery_sequence": 69, "node_count": 0, "processing_ns": 870265, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 555601, "tick": 1234268261758}
+{"delivery_sequence": 70, "node_count": 102, "processing_ns": 4348711, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3203960, "tick": 1235656224940}
+{"delivery_sequence": 71, "node_count": 90, "processing_ns": 45297122, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 44315262, "tick": 1253528628948}
+{"delivery_sequence": 72, "node_count": 0, "processing_ns": 886459, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 568410, "tick": 1254268261758}
+{"delivery_sequence": 73, "node_count": 102, "processing_ns": 4290625, "reasons": ["ARRIVAL"], "scheduler_self_ns": 3395634, "tick": 1255659500420}
+{"delivery_sequence": 74, "node_count": 90, "processing_ns": 11627348, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 10625628, "tick": 1273528628948}
+{"delivery_sequence": 75, "node_count": 0, "processing_ns": 968190, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 574979, "tick": 1274268261758}
+{"delivery_sequence": 76, "node_count": 102, "processing_ns": 3914249, "reasons": ["ARRIVAL"], "scheduler_self_ns": 2928965, "tick": 1275663550337}
+{"delivery_sequence": 77, "node_count": 90, "processing_ns": 10405143, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 9602498, "tick": 1293531904428}
+{"delivery_sequence": 78, "node_count": 0, "processing_ns": 1090410, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 650931, "tick": 1294271537238}
+{"delivery_sequence": 79, "node_count": 102, "processing_ns": 3991773, "reasons": ["ARRIVAL"], "scheduler_self_ns": 2994371, "tick": 1295662489205}
+{"delivery_sequence": 80, "node_count": 90, "processing_ns": 44493395, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 43174808, "tick": 1313535954345}
+{"delivery_sequence": 81, "node_count": 0, "processing_ns": 827152, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 532386, "tick": 1314275587155}
+{"delivery_sequence": 82, "node_count": 90, "processing_ns": 44725908, "reasons": ["PREFILL_DRAIN"], "scheduler_self_ns": 43865167, "tick": 1333534893213}
+{"delivery_sequence": 83, "node_count": 0, "processing_ns": 855393, "reasons": ["DECODE_COMPLETION", "REQUEST_COMPLETE"], "scheduler_self_ns": 544584, "tick": 1334274526023}
+{"ack_count": 84, "channel_bytes": 8360932, "delivery_count": 84, "die_predictor_disclosure": {"approximate_predictor": true, "collectives_included": false, "composition_profile": "face_legacy_selector", "d2d_cost_profile": "fixed_latency_addend", "explicit_queue_delay_included": false, "local_plan_profile": "coarse_die_v2", "representative_tp_rank": 0}, "forced_flush_count": 84, "gil_wait_ns": 30390970241, "handler_calls": 84, "kv_deep_gap_events": 0, "mode": "strategy", "python_callback_count_by_reason": {"ARRIVAL": 24, "DECODE_COMPLETION": 24, "PREFILL_DRAIN": 36, "REQUEST_COMPLETE": 24}, "python_callback_total": 84, "scheduler_self_ns_avg_per_delivery": 8524057, "scheduler_self_ns_total": 716020840, "sensing": false, "summary": true}

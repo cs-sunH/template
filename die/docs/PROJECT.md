@@ -20,7 +20,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 当前代码与运行方式
 
-- 2026-10-15 future/source-release接线：FACE两仓启动finite C++容量证书、固定E protocol2和真实ACK/源释放依赖；C++各8/8、Python132/151无skip、各900实际Plan受界、六次最终Online通过（186/378/270终态，含overlap与cap2+split）。大模型容量压力两仓失败，单实际logits任务经原ABI独立复现Runtime credit越界status11，先修后复跑；不作压力或模型精度验收。证据/入口face-future-workspace-20261015，canonical23与TX8未变。
+- 2026-10-15 Runtime数值/原压力检查点：owner共享progress scale与非递减lexicographic minimum修复真实TP logits credit越界，不放宽模型/容差。public30、五仓配置83、相关生命周期/native、FACE Python132/151全过；原模型/队列/144GB SKU压力两仓均0/0、各24完成（FACE7944/LRU5998成功节点），真实source reuse顺序通过。canonical23=`80637c3ed93c58570c2ea05aedeb38f7db0e9911b05d246d4e13d64d56e69646`；重复publish保留mtime。新E5 axis仍failed原3%/5%，继续K readiness。范围/原始失败与成功证据见runtime-credit-20261015，整体NOT ACCEPTED。
+- 2026-10-15 future/source-release接线：FACE两仓启动finite C++容量证书、固定E protocol2和真实ACK/源释放依赖；C++各8/8、Python132/151无skip、各900实际Plan受界、六次最终Online通过（186/378/270终态，含overlap与cap2+split）。该历史检查点压力失败，单logits原ABI复现status11；后续修复和同输入成功见最新Runtime记录；不作压力或模型精度验收。证据/入口face-future-workspace-20261015，canonical23与TX8未变。
 - 2026-10-15最小KV检查点：FACE两仓manager支持opt-in不可变E与max(A,E) fit、结构不可行提前拒绝，相关Python39/39与34/34无skip；默认active-only协议不变。生产启用仍待C++容量protocol2/manifest证书/source-release接线与实跑，证据见face-future-manager-20261015。
 - 2026-10-15持续开发检查点：FACE/FACE-LRU coarse活动workspace admission/v2 handshake已独立C++各8/8、Python120/118全过、六个真实Online通过，含tick150000正lease采样98304B；legacy OFF兼容、原KV/远端策略及单COMP gate保持。该历史检查点E=0；后续future/source-release结果见最新记录，容量极限压力仍待补，不作全业务/精度验收。新JOINT冻结known-capacity事件经Domain/Runtime同源接入，native/window4/4；known cancel/生产live import/sh30仍待接。分析/证据见face-workspace-20261015及native-world-capacity-20261015，TX8与canonical源不变。
 - 硬件 `die/src/Hardware.cc`；计划/任务/映射 `Plan.cc`、`Compiler.cc`、`Mapping.cc`；执行 `Execution.cc`；ABI `Capi.cc`。

@@ -40,6 +40,22 @@ void scaled_signed_credit_gemm_estimates_complete() {
   }
 }
 
+void large_logits_gemm_keeps_credit_feasible() {
+  const auto hw = example_hardware();
+  // Both vocab extents occur in the real TP=6 logits producer.
+  for (const auto n : {21846ULL, 21845ULL}) {
+    auto task = gemm_task(512, n, 16384);
+    task["weight_passes"] = 8;
+    // tm=1 candidates have 1988 interior repeats and canonical Q differs
+    // by four orders of magnitude across L/C/S.
+    const auto plan = compile(hw, task);
+    const auto estimate = estimate_alone(hw, *plan);
+    require(estimate.at("status") == "ok_assumed" &&
+                estimate.at("estimated_latency_ns").get<std::uint64_t>() > 0,
+            "actual large logits TP extent completes without crossing finite credit");
+  }
+}
+
 void singleton_matches_split_owner_and_respects_credit() {
   std::array<double,resource_count> rates{};
   rates[HBM0]=10.0;
@@ -78,5 +94,6 @@ void singleton_matches_split_owner_and_respects_credit() {
 int main() {
   return run_test("runtime_credit_scale_test",
                   [] { scaled_signed_credit_gemm_estimates_complete();
+                       large_logits_gemm_keeps_credit_feasible();
                        singleton_matches_split_owner_and_respects_credit(); });
 }

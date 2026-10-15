@@ -588,6 +588,7 @@ std::uint64_t row_bytes(std::uint64_t total, double fraction) {
 }
 
 enum class LpStatus { Optimal, Infeasible, Unbounded, PivotBudget };
+constexpr double kLpEpsilon = 1.0e-10;
 
 struct LpResult {
   LpStatus status = LpStatus::Infeasible;
@@ -715,7 +716,7 @@ class DenseSimplex {
   }
 
  private:
-  static constexpr double kEps = 1.0e-10;
+  static constexpr double kEps = kLpEpsilon;
   int m_ = 0;
   int n_ = 0;
   std::vector<int> basis_;
@@ -1220,7 +1221,7 @@ void Runtime::allocate() {
     for (std::size_t i = 0; i < count; ++i) {
       const double work = refs[i].live->definition.work[resource];
       if (work > 0.0) {
-        c.a[i] = work / refs[i].q * static_cast<double>(refs[i].multiplicity);
+        c.a[i] = work * static_cast<double>(refs[i].multiplicity);
         used = true;
       }
     }
@@ -1230,7 +1231,7 @@ void Runtime::allocate() {
     const double private_time = refs[i].live->definition.private_time_s;
     if (private_time <= 0.0) continue;
     Constraint c{std::vector<double>(count, 0.0), 1.0 / private_time};
-    c.a[i] = 1.0 / refs[i].q;
+    c.a[i] = 1.0;
     base.push_back(std::move(c));
   }
 
@@ -1251,7 +1252,7 @@ void Runtime::allocate() {
         for (std::size_t i = 0; i < count; ++i) {
           if (refs[i].execution != execution) continue;
           const double delta = refs[i].live->definition.credit_delta[buffer];
-          const double coefficient = (lower_boundary ? -delta : delta) / refs[i].q;
+          const double coefficient = lower_boundary ? -delta : delta;
           if (coefficient != 0.0) {
             c.a[i] = coefficient;
             used = true;
@@ -1353,15 +1354,17 @@ void Runtime::allocate() {
       failure("fairness scale is nonfinite");
     }
 
-    // Scale each canonical service variable by its share at a normalized
-    // fairness level: x_i = alpha_i*z_scale*y_i. Then the LP tier constraint
-    // is simply y_i >= z. In particular, activities of one owner with very
-    // different Q retain the same progress scale in their signed-credit
-    // rows; scaling by each activity's independent capacity made those rows
-    // ill-conditioned and admitted small inward rates at a credit boundary.
+    // x_i = Q_i*r_i and alpha_i = Q_i/owner_Q, so the same fairness
+    // transform is r_i = (z_scale/owner_Q)*y_i and its tier is y_i >= z.
+    // Assemble physical/private/credit rows in progress-rate coordinates
+    // first. Computing (delta/Q_i)*(alpha_i*z_scale) separately leaves
+    // unequal coefficients for one owner's equal signed credit deltas;
+    // cancellation during simplex pivots can amplify that discrepancy.
+    // One shared progress scale per owner keeps those equalities exact.
     for (std::size_t i = 0; i < count; ++i) {
       if (excluded[i]) continue;
-      variable_scale[i] = refs[i].alpha * z_scale;
+      variable_scale[i] = static_cast<double>(
+          static_cast<long double>(z_scale) / owner_q.at(refs[i].owner_key));
       if (!std::isfinite(variable_scale[i]) || variable_scale[i] <= 0.0) {
         failure("fairness variable scale is outside simplex precision");
       }
@@ -1375,6 +1378,7 @@ void Runtime::allocate() {
     }
 
     bool restart_with_fewer_activities = false;
+    double minimum_tier = 0.0;
     while (std::any_of(frozen.begin(), frozen.end(), [](bool value) { return !value; })) {
       if (++total_tiers > count * 2) failure("lexicographic max-min exceeded activity bound");
       std::vector<Constraint> rows = normalized_base;
@@ -1410,7 +1414,16 @@ void Runtime::allocate() {
           !std::isfinite(tier.objective)) {
         failure("signed-credit max-min LP failed");
       }
-      const double normalized_z = std::max(0.0, tier.primal[count]);
+      const double reported_z = std::max(0.0, tier.primal[count]);
+      if (reported_z < minimum_tier -
+              kLpEpsilon * std::max(1.0, minimum_tier)) {
+        failure("lexicographic minimum decreased beyond simplex precision");
+      }
+      // A simplex-feasible point can still fall just below the prior tier
+      // within its existing epsilon. Preserve the exact monotone minimum
+      // when recording a new bottleneck; never relax the credit boundary.
+      const double normalized_z = std::max(minimum_tier, reported_z);
+      minimum_tier = normalized_z;
       const double z = normalized_z * z_scale;
       if (!std::isfinite(z)) failure("lexicographic objective overflowed");
       std::vector<std::size_t> freeze_indices;
@@ -1486,7 +1499,7 @@ void Runtime::allocate() {
         continue;
       }
       if (!std::isfinite(solved[i]) || solved[i] < -1.0e-10) failure("nonfinite lexicographic solution");
-      publish(refs[i], std::max(0.0, solved[i] * variable_scale[i]) / refs[i].q,
+      publish(refs[i], std::max(0.0, solved[i] * variable_scale[i]),
               refs[i].alpha);
     }
     return;

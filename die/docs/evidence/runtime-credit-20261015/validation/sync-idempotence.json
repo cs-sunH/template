@@ -1,0 +1,16 @@
+{
+  "result": {
+    "status": "passed",
+    "repositories": [
+      "astra-sim-wscllm",
+      "astra-sim-wscllm-LRU",
+      "astra-sim-face",
+      "astra-sim-face-LRU",
+      "astra-sim-joint"
+    ],
+    "source_digest": "80637c3ed93c58570c2ea05aedeb38f7db0e9911b05d246d4e13d64d56e69646",
+    "files": 23
+  },
+  "identical_file_timestamps_preserved": true,
+  "verified_files": 120
+}
