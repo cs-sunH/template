@@ -73,6 +73,117 @@ class GroupedOracleTest(unittest.TestCase):
         self.assert_rates(grouped.grouped_rates(active, capacities(), [1, 2, 1]),
                           [Fraction(1, 100), Fraction(1, 2), Fraction(9, 100)])
 
+    def test_full_output_slots_allow_nonfinal_compute_and_hold_final_until_store(self):
+        waves = []
+        for output_tile in range(3):
+            for k_tile in range(2):
+                final_k = k_tile == 1
+                waves.append(legacy.Wave(
+                    output_tile=output_tile, k_tile=k_tile, final_k=final_k,
+                    read_row_bytes=(0, 1),
+                    write_row_bytes=(100 if final_k else 0, 0),
+                    vec_ops=1, compute_work_s=1.0, eta_hbm=1.0,
+                    compute_local_bytes=1))
+
+        exact_capacities = capacities(hbm0=25, hbm1=1)
+
+        def exact_rates(active, resource_capacities):
+            rates = [0.25 if item.stage == "store" else 1.0
+                     for item in active]
+            for resource in range(len(legacy.RESOURCE_NAMES)):
+                used = sum(item.work[resource] * rate
+                           for item, rate in zip(active, rates))
+                self.assertLessEqual(used, resource_capacities[resource] + 1e-12)
+            return rates
+
+        result = legacy.discrete_oracle(
+            waves, output_count=3, arrival_times=[0.0],
+            capacities=exact_capacities, rate_allocator=exact_rates,
+            capture_lifecycle_trace=True)
+        self.assertEqual(result["readiness_semantics_revision"],
+                         "final_k_output_reservation_v2")
+        trace = result["lifecycle_trace"]
+
+        full_nonfinal = [event for event in trace
+                         if event["event"] == "stage_start"
+                         and event.get("stage") == "compute"
+                         and event.get("wave") == 4]
+        self.assertEqual(len(full_nonfinal), 1)
+        self.assertFalse(full_nonfinal[0]["final_k"])
+        self.assertEqual(full_nonfinal[0]["output_occupancy_before"], 2)
+        self.assertEqual(full_nonfinal[0]["time_s"], 5.0)
+
+        final_wait = [event for event in trace
+                      if event["event"] == "compute_waiting_for_output_slot"
+                      and event["wave"] == 5]
+        self.assertEqual(len(final_wait), 1)
+        self.assertTrue(final_wait[0]["final_k"])
+        self.assertEqual(final_wait[0]["output_occupancy_before"], 2)
+        self.assertEqual(final_wait[0]["time_s"], 6.0)
+
+        first_store_completion = next(
+            event for event in trace
+            if event["event"] == "stage_complete" and event["stage"] == "store"
+            and event["wave"] == 1)
+        self.assertEqual(first_store_completion["time_s"], 7.0)
+        self.assertEqual(first_store_completion["output_occupancy_before"], 2)
+        self.assertEqual(first_store_completion["output_occupancy"], 1)
+        final_start = next(
+            event for event in trace
+            if event["event"] == "stage_start" and event.get("stage") == "compute"
+            and event.get("wave") == 5)
+        self.assertEqual(final_start["time_s"], first_store_completion["time_s"])
+        self.assertEqual(final_start["output_occupancy_before"], 1)
+        self.assertEqual(final_start["output_occupancy_after_reservation"], 2)
+
+        observed_occupancies = []
+        for event in trace:
+            observed_occupancies.append(event["output_occupancy"])
+            observed_occupancies.extend(
+                event[key] for key in ("output_occupancy_before",
+                                       "output_occupancy_after_reservation")
+                if key in event)
+        self.assertLessEqual(max(observed_occupancies), 2)
+        self.assertEqual(result["finish_s_by_request"]["comp0"], 15.0)
+        self.assertEqual(result["stage_completions"],
+                         {"load": 6, "compute": 6, "store": 3})
+
+    def test_k_readiness_report_marks_compiled_plan_as_fact_source_only(self):
+        production_raw = json.loads((SOURCE / "docs/analysis/runtime-waves-20261013/"
+                                     "bounded-lifecycle-v1/raw-fixture.json").read_text())
+        production_report = grouped.build_report(production_raw)
+        diagnostic_raw = json.loads((SOURCE / "docs/evidence/k-readiness-20261015/"
+                                     "raw/full_tile_k4096.json").read_text())
+        diagnostic_report = grouped.build_report(diagnostic_raw)
+
+        self.assertEqual(diagnostic_report["fixture_kind"],
+                         "diagnostic_cpp_k_readiness_facts_and_actual_public_runtime")
+        self.assertEqual(diagnostic_report["oracle"],
+                         "independent_compiled_gemm_grouped_discrete_consumption_wave_v3")
+        self.assertEqual(diagnostic_report["readiness_semantics_revision"],
+                         "final_k_output_reservation_v2")
+        self.assertEqual(diagnostic_report["diagnostic_scope"], {
+            "diagnostic_only": True,
+            "baseline_compiled_plan_executed": False,
+            "compiled_plan_role": "geometry_mapping_and_work_facts_only",
+            "diagnostic_stage_plans_hand_constructed": True,
+            "acceptance_limits_are_production_certification": False,
+        })
+        self.assertIn("not executed by this diagnostic",
+                      diagnostic_report["compiled_plan"]["execution_role"])
+        self.assertEqual(diagnostic_report["available_granularity_levels"], {
+            "diagnostic_k_readiness_comparison": diagnostic_report["status"],
+            "production_granularity_validation": "not_run",
+        })
+        self.assertEqual(diagnostic_report["root_cause_clue"]["applicability"],
+                         "compiled_plan_metadata_only; compiled_plan_not_executed")
+        self.assertNotIn("no Plan was hand-constructed",
+                         " ".join(diagnostic_report["notes"]))
+        self.assertEqual(production_report["fixture_kind"],
+                         "synthetic_model_to_model")
+        self.assertIn("selected_minimum_E",
+                      production_report["available_granularity_levels"])
+
     def test_nonbinding_local_work_still_defines_canonical_quantity(self):
         active = [activity(0, gate=10, local=100), activity(0, hbm0=2),
                   activity(1, gate=10)]
@@ -87,6 +198,12 @@ class GroupedOracleTest(unittest.TestCase):
         self.assertEqual(expected["local_bus_bytes"], 9636640)
         old = legacy.build_report(raw)
         new = grouped.build_report(raw)
+        self.assertEqual(old["oracle"],
+                         "independent_compiled_gemm_discrete_consumption_wave_v2")
+        self.assertEqual(new["oracle"],
+                         "independent_compiled_gemm_grouped_discrete_consumption_wave_v3")
+        self.assertEqual(new["readiness_semantics_revision"],
+                         "final_k_output_reservation_v2")
         self.assertEqual(new["legacy_equal_progress_comparisons"], old["comparisons"])
         self.assertEqual(new["acceptance_limits"], old["acceptance_limits"])
         self.assertEqual(new["status"], "failed")

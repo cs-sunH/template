@@ -18,6 +18,8 @@ import compiled_gemm_oracle as reference
 
 DOMAINS = tuple(reference.RESOURCE_IDS[name]
                 for name in ("COMPUTE_GATE", "HBM0", "HBM1"))
+K_READINESS_DIAGNOSTIC_SOURCE = (
+    "diagnostic_cpp_k_ready_facts_and_actual_public_runtime")
 
 
 def grouped_rates(active: list[Any], capacities: list[float],
@@ -144,7 +146,9 @@ def build_report(raw: dict[str, Any]) -> dict[str, Any]:
               all(item["status"] == "passed" for item in comparisons["two_comp"]))
     status = "passed" if passed else "failed"
     report.update(schema_version=2,
-                  oracle="independent_compiled_gemm_grouped_discrete_consumption_wave_v2",
+                  oracle="independent_compiled_gemm_grouped_discrete_consumption_wave_v3",
+                  readiness_semantics_revision=(
+                      reference.READINESS_SEMANTICS_REVISION),
                   allocation_policy="owner_grouped_q_alpha",
                   legacy_equal_progress_comparisons=legacy_comparisons,
                   comparisons=comparisons, status=status)
@@ -159,6 +163,46 @@ def build_report(raw: dict[str, Any]) -> dict[str, Any]:
     report["notes"].append(
         "This oracle corrects the reference allocation policy; it does not alter "
         "the 3%/5% error limits or certify a production K lifecycle.")
+    if (raw.get("measurement_source") == K_READINESS_DIAGNOSTIC_SOURCE and
+            raw.get("baseline_compiled_plan_executed") is False):
+        diagnostic_only = raw.get("diagnostic_only")
+        if diagnostic_only is None:
+            diagnostic_only = raw.get("standalone", {}).get(
+                "readiness_diagnostic", {}).get("diagnostic_only")
+        report["fixture_kind"] = "diagnostic_cpp_k_readiness_facts_and_actual_public_runtime"
+        report["status_scope"] = "diagnostic_only"
+        report["diagnostic_scope"] = {
+            "diagnostic_only": diagnostic_only is True,
+            "baseline_compiled_plan_executed": False,
+            "compiled_plan_role": "geometry_mapping_and_work_facts_only",
+            "diagnostic_stage_plans_hand_constructed": True,
+            "acceptance_limits_are_production_certification": False,
+        }
+        report["compiled_plan"]["execution_role"] = (
+            "geometry_mapping_and_work_facts_only; not executed by this diagnostic")
+        report["fixture_scope"]["hardware_evidence"] = (
+            "actual public C++ Runtime with synthetic fixture hardware capacities; "
+            "diagnostic only")
+        report["available_granularity_levels"] = {
+            "diagnostic_k_readiness_comparison": status,
+            "production_granularity_validation": "not_run",
+        }
+        report["root_cause_clue"] = {
+            "applicability": (
+                "compiled_plan_metadata_only; compiled_plan_not_executed"),
+            "baseline_compiled_plan_executed": False,
+            "finding": (
+                "This comparison checks discrete per-K readiness against the actual "
+                "public Runtime using diagnostic stage Plans. It does not measure "
+                "compiled E5 execution or select a production granularity."),
+        }
+        report["notes"] = [
+            note for note in report["notes"]
+            if "no Plan was hand-constructed" not in note]
+        report["notes"].append(
+            "The compiled plan supplies geometry, mapping, and work facts only. "
+            "The C++ diagnostic executes hand-constructed per-stage Plans through "
+            "the public Runtime; its comparison does not certify E5 or minimum E.")
     return report
 
 

@@ -1,0 +1,97 @@
+{
+  "schema_version": 1,
+  "driver": "/workspace/template/work/build-k-readiness/coarse_k_readiness_runtime_driver",
+  "diagnostic_only": true,
+  "cases": [
+    {
+      "shape": {
+        "m": 80,
+        "n": 128,
+        "k": 4096
+      },
+      "driver_command": [
+        "/workspace/template/work/build-k-readiness/coarse_k_readiness_runtime_driver",
+        "--m",
+        "80",
+        "--n",
+        "128",
+        "--k",
+        "4096"
+      ],
+      "driver_exit_code": 0,
+      "raw_stdout": "/workspace/template/work/k-readiness-final/m80_n128_k4096.stdout.json",
+      "driver_stderr": "/workspace/template/work/k-readiness-final/m80_n128_k4096.stderr.log",
+      "oracle_command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/template/die/validation/grouped_gemm_oracle.py",
+        "--raw",
+        "/workspace/template/work/k-readiness-final/m80_n128_k4096.stdout.json",
+        "--output",
+        "/workspace/template/work/k-readiness-final/m80_n128_k4096.grouped.json"
+      ],
+      "oracle_exit_code": 0,
+      "grouped_report": "/workspace/template/work/k-readiness-final/m80_n128_k4096.grouped.json",
+      "oracle_stderr": "/workspace/template/work/k-readiness-final/m80_n128_k4096.oracle.stderr.log"
+    },
+    {
+      "shape": {
+        "m": 80,
+        "n": 128,
+        "k": 4097
+      },
+      "driver_command": [
+        "/workspace/template/work/build-k-readiness/coarse_k_readiness_runtime_driver",
+        "--m",
+        "80",
+        "--n",
+        "128",
+        "--k",
+        "4097"
+      ],
+      "driver_exit_code": 0,
+      "raw_stdout": "/workspace/template/work/k-readiness-final/m80_n128_k4097.stdout.json",
+      "driver_stderr": "/workspace/template/work/k-readiness-final/m80_n128_k4097.stderr.log",
+      "oracle_command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/template/die/validation/grouped_gemm_oracle.py",
+        "--raw",
+        "/workspace/template/work/k-readiness-final/m80_n128_k4097.stdout.json",
+        "--output",
+        "/workspace/template/work/k-readiness-final/m80_n128_k4097.grouped.json"
+      ],
+      "oracle_exit_code": 0,
+      "grouped_report": "/workspace/template/work/k-readiness-final/m80_n128_k4097.grouped.json",
+      "oracle_stderr": "/workspace/template/work/k-readiness-final/m80_n128_k4097.oracle.stderr.log"
+    },
+    {
+      "shape": {
+        "m": 65,
+        "n": 65,
+        "k": 4097
+      },
+      "driver_command": [
+        "/workspace/template/work/build-k-readiness/coarse_k_readiness_runtime_driver",
+        "--m",
+        "65",
+        "--n",
+        "65",
+        "--k",
+        "4097"
+      ],
+      "driver_exit_code": 0,
+      "raw_stdout": "/workspace/template/work/k-readiness-final/m65_n65_k4097.stdout.json",
+      "driver_stderr": "/workspace/template/work/k-readiness-final/m65_n65_k4097.stderr.log",
+      "oracle_command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/template/die/validation/grouped_gemm_oracle.py",
+        "--raw",
+        "/workspace/template/work/k-readiness-final/m65_n65_k4097.stdout.json",
+        "--output",
+        "/workspace/template/work/k-readiness-final/m65_n65_k4097.grouped.json"
+      ],
+      "oracle_exit_code": 0,
+      "grouped_report": "/workspace/template/work/k-readiness-final/m65_n65_k4097.grouped.json",
+      "oracle_stderr": "/workspace/template/work/k-readiness-final/m65_n65_k4097.oracle.stderr.log"
+    }
+  ]
+}

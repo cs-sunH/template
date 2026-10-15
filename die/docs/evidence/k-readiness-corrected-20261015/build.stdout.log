@@ -1,0 +1,4 @@
+[ 75%] Built target coarse_die
+[ 87%] Building CXX object CMakeFiles/coarse_k_readiness_runtime_driver.dir/tests/k_readiness_runtime_driver.cc.o
+[100%] Linking CXX executable coarse_k_readiness_runtime_driver
+[100%] Built target coarse_k_readiness_runtime_driver

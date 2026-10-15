@@ -1,8 +1,8 @@
 {
   "schema": "coarse_die_release_v2",
-  "source_digest": "80637c3ed93c58570c2ea05aedeb38f7db0e9911b05d246d4e13d64d56e69646",
+  "source_digest": "dd62e6787557ff2f764fc5be8f38865a2c15916c20f1a9fc95a28ebcd4fb7005",
   "files": {
-    "CMakeLists.txt": "7fa17ffb2eb8ef8eca8393455efe09eda047c460c9b68bee0b830550bb6021ce",
+    "CMakeLists.txt": "33e24d7ffc83588d267f4c65acbcfa0d6c8a484af6e4865094f6ede8903b2c85",
     "include/coarse_die/Capi.h": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
     "include/coarse_die/Execution.hh": "3916d001b1c42e87b71177da362d91c8d9d056668e6f7524d9b4c551e2e7f5e1",
     "include/coarse_die/Hardware.hh": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
@@ -14,6 +14,7 @@
     "src/Execution.cc": "a354856928328ad3a9371b3a7068033bb13bb88701bbeb53af2d1d5445d378ab",
     "src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
     "src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "src/GemmOSReadiness.hh": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
     "src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
     "src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
     "src/Hardware.cc": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",

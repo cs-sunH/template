@@ -1,10 +1,19 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-15（Asia/Shanghai；既有20261014证据目录保留原标识）。用户最新指令为停止启动新任务，当前最小任务收尾后立即 GitHub 交接并停止；本指令覆盖下方历史持续开发检查点。本轮继续使用新活动 `astra-sim-joint`，`astra-sim-joint_old` 仅供历史查询，未修改。工程整体 **NOT ACCEPTED**；检查点同步不等于模型精度、全部五仓业务或目标测量验收。
+记录日期：2026-10-15（Asia/Shanghai；既有20261014证据目录保留原标识）。用户最新指令为继续自主开发；上轮停止/最终交接仅为历史记录，不约束本轮。本轮继续使用新活动 `astra-sim-joint`，`astra-sim-joint_old` 仅供历史查询，未修改。工程整体 **NOT ACCEPTED**；检查点同步不等于模型精度、全部五仓业务或目标测量验收。
 
 ## Current Status
 
-### 本轮最终交接（2026-10-15；以下旧检查点按时间阅读）
+### 本轮持续开发：K readiness 修正检查点（2026-10-15）
+
+已从干净旧工作区 fast-forward 最新 main `d1151179d2a3c3246e0b7a896db9e3dacef52885`，创建 `codex/die-k-readiness-20261015`。Python/C++ 诊断仅 final-K Compute 预约输出槽；两套独立从空状态的反例均得 nonfinal@5s、final wait@6s、Store release/final start@7s、finish15s。原错误同域小夹具没有达到output满，失败记录保留。旧raw逐字节不动；旧K4096重评 comparisons 原有字段全等（仅新增revision元数据）。参考语义 `final_k_output_reservation_v2`，grouped oracle v3，诊断不再冒用E5/minimum-E标签。
+
+新增内部 `GemmOSReadiness.hh`：复用bounded geometry/per-K 13域facts，六个单调计数器表达两个FIFO与槽预约，严格顺序、final-only输出、原子restore、多Core/overflow拒绝已有测试。显式槽位driver在真实Runtime的每次准入/完成/恢复与Cursor逐项相等。M80/N128/K4096、K4097、M65/N65/K4097均OS16×64×64，solo/sync/50ms-offset九项grouped比较passed；最大完成相对误差2.367e-6、shared-HBM约5.060e-4，原3%/5%门限不变。三shape未观察到output满非final（均0），独立反例另报。定向CTest3/3含Python13项通过；metadata/cursor不是生产Plan生命周期，driver仍O(events)，不计生产E5/效率证书。
+
+canonical发布24文件，digest `dd62e6787557ff2f764fc5be8f38865a2c15916c20f1a9fc95a28ebcd4fb7005`；五仓check/独立tests-OFF CMake configure5/5。新发布只新增内部头文件/CMake目标，原Runtime/Mapping/Plan/Compiler、TX8和目标先验未改；先前public30/five83/压力成果复用，未重跑或重新认证Online。仅新活动JOINT参与发布。证据/源码SHA/原始报告/复现见 `analysis/k-readiness-corrected-20261015/` 与同名evidence。本检查点按普通git快进同步共享main；精确SHA由包含本文的Git提交确定，最终以远端HEAD/祖先关系实核，不以本地提交冒充共享。继续下一依赖，不停止开发。
+
+
+### 上轮最终交接（2026-10-15；历史记录）
 
 用户已要求迅速交接并停止。生产源码最后检查点 `e73a378511f34c50261d6074e437e382e8ae68a2` 已核实同时在工作分支和 main；本次交接在其上保存 K-readiness **部分诊断**、只读复用盘点和完整接力说明，没有新增生产模型/校准参数。当前交接提交 SHA 以包含本文的 Git commit 为准；共享分支仍是 main，最终同步必须以 fetch/远端 exact SHA 实核，不以本地提交或 PR 创建代替合入。GitHub API Forbidden，不能创建/核实新 PR/CI；可用普通 git fast-forward 推送 main，不 force-push。
 
@@ -53,10 +62,10 @@ WS兼容修复 `ca604f5e49dc6df387888a33c75b0134642d42f3` 已正常推送main并
 
 ## Integration Branch / Last Verified Base
 
-- 共享分支 `main`；当前工作分支 `codex/die-joint-runtime-20261014`。
+- 共享分支 `main`；本轮工作分支 `codex/die-k-readiness-20261015`，基线 main `d1151179`。下方较早分支/SHA仅为历史实核。
 - 本次最终交接前 `git fetch origin main` 和 `git ls-remote` 核实 main/工作分支同为 `e73a378511f34c50261d6074e437e382e8ae68a2`，工作区生产源码干净；本次仅提交新诊断/证据/接力文档。前一检查点远端实核记录在 `evidence/k-readiness-20261015/previous-checkpoint-remote-verification.json`。
 - 起始远端/本地 HEAD 均 `d9cc0240e07064996b5330c5659f7f8c6866998a`，工作区起始干净。当前运行使用脏工作树，实际源码按 evidence 中逐文件 SHA 绑定，不能用起始 commit 冒充全部运行代码。
-- canonical23 五仓当前 digest `80637c3ed93c58570c2ea05aedeb38f7db0e9911b05d246d4e13d64d56e69646`，sync/check 通过；`_old` 不参与发布。
+- 历史 canonical23 五仓 digest `80637c3ed93c58570c2ea05aedeb38f7db0e9911b05d246d4e13d64d56e69646`，sync/check 通过；`_old` 不参与发布。
 - Git fetch 和 branch push dry-run 成功。当前环境 `gh api` 对 `api.github.com` 返回 Forbidden，不能声称 PR 已创建或 CI 已核实；检查点通过正常 git 推送及远端 ancestry 核实同步，不 force-push。
 
 ## Completed
@@ -123,15 +132,16 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Next Step
 
-本 Session 按用户指令交接后立即停止。下一账号从最新 main 创建新工作分支，读 AGENTS/PROJECT/本文并核实 HEAD/工作区/远端后，按下列依赖继续；不重跑未修改且已验证的全套工作。
+当前为持续开发，不按检查点自动停止。K参考门控修正、独立反例和三组full/tail九场景诊断已完成，不重复。
 
-1. **首先修 K readiness 的验证基准。** 阅读 `analysis/k-readiness-20261015/README.md` 和 `periodic-k-readiness-inventory.md`，复用已有 geometry/counter/13域 facts，先为“output满+非final Compute”增加独立反例，按设计将 oracle 与诊断改成仅final预约输出槽；证明依赖/容量不丢失，再重跑 M80/N128/K4096、K4097、M65/N65/K4097 的 solo/sync/50ms-offset。旧原始证据保留并区分修前/修后。K128选WR，不能混入OS对照。不要把原 checker 的 E5标签/元数据当此诊断的验收。
-2. **再形成有界生产生命周期。** 固定少量full/tail M/N/K事实、紧凑row-major cursor、两输入/两pending输出槽，Read全完成才Compute、final Compute全完成才Store；同 owner Q/alpha/private/13资源保持。先单Core OS，再multiCore cohorts/WR。在联合owner/slot/LP region确证稳定后用简单周期/闭式跳过；arrivals/cancel/capacity/class边界切段。现有GMP/Fraction/固定phase affine仅研究，不能直接移植或把O(R×Tk)诊断部署生产。先解决schema/旧Plan兼容、守恒/ready/busy/并发/取消/快照/实际开销，再运行生产E5原3%/5%并选择真正最小E。
-3. **JOINT生产接线。** domain/native-session wire、实际Sys只读sample→Domain、known capacity已完成，不重做；保留四项busy字符串±1e-16ns严格不等。补known cancel、Sys已知事件采集、真实graph/ledger/lease/active-leg归属与回放；审查PipelineKernel/WorkLedger/remote-read/pool和唯一local endpoint。复用现有native session，不能将scalar流量伪装恢复或删除sh30 guard。`export_snapshot(now)`有推进/回调副作用，只读必须Runtime副本。`live_world_import_supported=false`在真实全world接通前保留。
-4. **其余五仓兼容/容量。** FACE两仓immutable E/protocol2/startup证书、source-release依赖和原129层压力已验证，不重复；扩到其他端口/拓扑/竞争与完整业务，完善finite-manifest形式覆盖/效率、完整GQA producer及KV/weights/TP/transfer/readiness链。源ACK和本地发送完成对后续容量用户的排序需继续保留，不能用pool store→restore tails替代。WS两仓typed diagnostic共存/lease已有通过，不套用JOINT不同wire互斥规则。仅新JOINT活动。
-5. **性能与校准后置。** 生命周期结构通过后实测当前source cold/hit/update/J32/Online CPU/RSS/cache/event/LP与成本余项；没有独立目标raw/heldout不重拟TX8/目标效率，不用BF16/DDR数字代替INT4/HBM测量。reference和target具体参数见Important Decisions及configs，当前全部冻结。
+1. **有界生产生命周期。** 复用新Descriptor/六计数器Cursor、原Geometry/Counter/13域facts。先单Core OS，证明同输出非final middle-K的同步零进度两活动窄周期：Store/输出为空、仅一个owner两活动、同事实/容量。实际Runtime见证后还须覆盖跳跃horizon的deadline/整数ns舍入、busy/served累加；一次见证不能当一般long-double平移证明。其余情形fail closed；再考虑输出行/multiCore cohorts/WR。不要部署O(R×Tk)诊断或照搬GMP/Fraction/fixed-phase研究。生产schema/旧Plan兼容、取消/完整快照/ready/busy/守恒/实际开销通过后，才重跑生产原3%/5%并选择最小有效E。
+2. **新JOINT生产接线。** domain/native-session wire、实际Sys只读sample→Domain、known capacity已完成。补known cancel、Sys已知事件采集、真实graph/ledger/lease/active-leg与回放；保留四项busy ±1e-16ns严格差异记录。使用现有native session、唯一local endpoint，不能将scalar伪装恢复；完整world前保留 `live_world_import_supported=false` 与sh30 guard。Sys export_snapshot(now)会推进/回调，只读用Runtime副本。
+3. **其余五仓业务。** FACE两仓固定E/protocol2/startup证书/source-release及原129层压力已验证；扩展其他端口/拓扑/竞争与完整GQA producer，保留KV/weights/TP/transfer/readiness及ACK/本地发送完成→容量复用顺序。不重做未改且通过部分；WS typed diagnostic共存/lease有效。
+4. **性能和校准。** 生命周期结构稳定后实测source cold/hit/update/J32/Online CPU/RSS/cache/event/LP。没有独立目标raw/heldout，不重新拟合TX8或目标效率，不将BF16/DDR结果代替INT4/HBM。reference/target参数继续冻结。
 
 ## Important Decisions
+
+- 本轮Descriptor/Cursor是内部基础，六计数器只表达严格序的离散就绪；没有新增生产Plan schema、signed-credit服务行或压缩。规范发布现在canonical24，未执行的生产/业务测试不因新摘要升级。最新诊断参考已修final-only输出门；历史raw/报告不重写。
 
 - K-readiness新诊断是部分研究代码，实际 public Runtime 服务13域facts，但facts本来没有signed-credit，硬槽reservation/终态队列提供就绪；这不证明生产signed-credit行或周期路径已接通。只读旧方案包含尚未采纳的credit生命周期构想。output满时非final不应阻塞的设计规则须先纠正参考实现，再评判数值。
 - 预算口径已核：Runtime `advance_to` 的1e6是单调用内部实际interval guard；256 simplex pivots是一次`allocate()`内各tier/fallback共享预算；standalone estimate另有累计driver event_guard；研究scratch的expanded/discovery cap是独立口径。下一实现应分开逻辑完成/跳过与实际探测/求解计数，不能混称lifetime256事件，也不任意扩大原预算。
@@ -148,6 +158,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Files to Continue
 
+- 当前基础：`die/src/GemmOSReadiness.hh`、`tests/gemm_os_readiness_test.cc`、`tests/k_readiness_runtime_driver.cc`、`validation/{compiled,grouped}_gemm_oracle.py`。新复现 `analysis/k-readiness-20261015/run_corrected.py`，说明与证据在 `k-readiness-corrected-20261015`。归档未修probe只作历史。
+
 - 最新部分成果：`die/docs/analysis/k-readiness-20261015/{README.md,replay.py,k-readiness-proposal-original.md,periodic-k-readiness-inventory.md}`，原始源码/日志/JSON与summary/identity/checksums在同名evidence目录。无需依赖旧账号work/路径；replay复制原源码并替换绝对include，固定单形状，交接时仅做语法/帮助检查，未宣称新入口全重放。
 
 - `die/src/Execution.cc`/`die/tests/runtime_credit_scale_test.cc`：已完成数值修复；新证据入口runtime-credit-20261015。下一步主要`die/src/Mapping.cc`与E5 driver/grouped oracle、已归档 `analysis/k-readiness-20261015/k-readiness-proposal-original.md`；不能再把原logits失败当未修。
@@ -160,6 +172,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
+
+- 本轮修正/紧凑基础：定向CTest3/3（含13 Python项）、C++精确15s可达反例、三shape九场景grouped全部passed；对应完整raw/计数序列化严格差值在新evidence。五份canonical24 check/独立tests-OFF configure5/5；未重跑public30/five83/完整Online，不由诊断外推生产E5或效率。
 
 - 当前最小诊断：实际C++构建与 M80/N128/K4096 solo/sync/50ms-offset运行、grouped checker已执行，三场景原输出passed；原始脚本/报告/metadata限制与共同门控问题如上，不计生产验收。K4097、tail、修正门控、压缩/多Core未执行。交接只新增归档/可移植入口/文档；不重复未修改的public30/five83。交接检查含replay语法/--help、raw逐字节/校验和、Git差异检查；实际结果保存在同名evidence packaging-validation.json。
 
@@ -186,7 +200,7 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Handoff Notes
 
-用户已明确要求本轮完成 GitHub 交接后立即停止，后续不启动新开发任务。全部有效源码、校准参数、实际成功/失败证据和新K诊断部分成果随仓；新诊断没有进入canonical发布，因此五仓digest保持不变。GPT-6-Luna Max只读盘点已收尾。没有修改old、覆盖其他人提交或丢弃有效修改。
+当前用户要求持续自主开发，仅在明确停止/关键必需决策/客观阻塞时结束。上一轮停止指令及其canonical23说明属于历史；本轮canonical24新增未启用内部基础，未改生产timing/校准。所有新诊断成功/失败与源码身份随证据保存。没有修改old、覆盖其他人提交或丢弃有效修改。
 
 实际工具来自 `/workspace/cloud-setup/activate.sh`：CMake3.31.10/GCC14.2/protoc3.21.12/Python3.12 protobuf6.33.5，无PROTOBUF_FROM_SOURCE。work内依赖、build、ELF、stage不跨账号交付；复现入口明确需要重建。`work/build-joint` 的CMake源是 `work/joint-reproduction/aggregate`，不要在旧cache换源重配；新账号优先新目录。公共库入口 `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release`；K replay入口见新README。其他真实业务入口/日志在各analysis/evidence，未改且通过的结果直接复用。
 

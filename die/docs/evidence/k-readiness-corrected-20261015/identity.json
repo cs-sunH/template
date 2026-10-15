@@ -1,0 +1,33 @@
+{
+  "base_commit": "d1151179d2a3c3246e0b7a896db9e3dacef52885",
+  "base_remote_main": "d1151179d2a3c3246e0b7a896db9e3dacef52885",
+  "measured_at_utc": "2026-10-15T04:52:27.623687+00:00",
+  "source_files_sha256": {
+    "die/CMakeLists.txt": "33e24d7ffc83588d267f4c65acbcfa0d6c8a484af6e4865094f6ede8903b2c85",
+    "die/src/GemmOSReadiness.hh": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+    "die/tests/gemm_os_readiness_test.cc": "bb86005c5103f57beb7ae6f185832d0d208af694f8844280823172f20aa8799f",
+    "die/tests/k_readiness_runtime_driver.cc": "43fc90563dc60f34682e5c05ad2e99e2a2ee217db8c15dc30be61e69e09ea71d",
+    "die/tests/grouped_gemm_oracle_test.py": "b5ee2b0cfa5f7c7a540ebc4c8f524b2b21e05d2abd2ab885c89b3be30255bf12",
+    "die/validation/compiled_gemm_oracle.py": "f098024c14ced4fd1c8daf96e6c60118b41d4f95ceb737f40eb9ab7d6aa0b387",
+    "die/validation/grouped_gemm_oracle.py": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+    "die/docs/analysis/k-readiness-20261015/run_corrected.py": "bd135f00afe603dac6837a04f4889c6cac8660b5fc1bd3851400571a5b256220",
+    "die/src/Execution.cc": "a354856928328ad3a9371b3a7068033bb13bb88701bbeb53af2d1d5445d378ab",
+    "die/src/Mapping.cc": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+    "die/src/Plan.cc": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+    "die/src/Compiler.cc": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+    "die/src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "die/src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+    "die/src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c"
+  },
+  "binaries_sha256": {
+    "work/build-k-readiness/libcoarse_die.a": "f938faab0e30196246db00618febfe918d7a7e17f0f56c91eaa240d7b226ec12",
+    "work/build-k-readiness/lib/libcoarse_die_cabi.so": "0d4aa60101f440f80379715801f3e0b76a53d0b9402e617de29b1e3b97cd626a",
+    "work/build-k-readiness/coarse_k_readiness_runtime_driver": "36791a45e3e030e9f2ef6a015f64aa56c88b77b7ae58accd062998c7296fa703",
+    "work/build-k-readiness/coarse_gemm_os_readiness_test": "7a855d82351c2a9c2bdcd53d725f44af2948f5630610587bfc996e08bcdbfbdd"
+  },
+  "toolchain": {
+    "cmake": "3.31.10 (work/tool-env)",
+    "g++": "g++ (Debian 14.2.0-19) 14.2.0",
+    "python": "Python 3.12.14"
+  }
+}

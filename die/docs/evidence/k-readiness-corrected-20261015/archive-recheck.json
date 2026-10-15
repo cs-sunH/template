@@ -1,0 +1,14 @@
+{
+  "original_raw_unchanged": true,
+  "original_report_unchanged": true,
+  "original_raw_sha256": "58584fb6f54c8b3d907b3c1181286df27a70f9873f6ac33049a063f8082a0621",
+  "old_status": "passed",
+  "corrected_status": "passed",
+  "all_preexisting_comparison_fields_equal": true,
+  "metadata_additions": [
+    "standalone/independent_discrete_oracle/readiness_semantics_revision",
+    "two_comp/0/independent_discrete_oracle/readiness_semantics_revision",
+    "two_comp/1/independent_discrete_oracle/readiness_semantics_revision"
+  ],
+  "note": "new report metadata identifies diagnostic scope and readiness revision; no production certificate"
+}

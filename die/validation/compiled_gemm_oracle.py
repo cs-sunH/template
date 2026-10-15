@@ -39,6 +39,7 @@ RESOURCE_NAMES = list(RESOURCE_IDS)
 NS_PER_SECOND = 1_000_000_000
 EPS = 1.0e-12
 NONBINDING_CAPACITY = 1.0e30
+READINESS_SEMANTICS_REVISION = "final_k_output_reservation_v2"
 
 
 def ceildiv(a: int, b: int) -> int:
@@ -417,7 +418,8 @@ def fill_rates(active: list[Active], capacities: list[float]) -> list[float]:
 
 def discrete_oracle(waves: list[Wave], output_count: int,
                     arrival_times: list[float], capacities: list[float], *,
-                    rate_allocator=None) -> dict[str, Any]:
+                    rate_allocator=None,
+                    capture_lifecycle_trace: bool = False) -> dict[str, Any]:
     names = ["comp0"] if len(arrival_times) == 1 else ["comp0", "comp1"]
     requests = [Request(name, arrival, waves, output_count)
                 for name, arrival in zip(names, arrival_times)]
@@ -429,6 +431,7 @@ def discrete_oracle(waves: list[Wave], output_count: int,
     stage_completions = {"load": 0, "compute": 0, "store": 0}
     event_count = 0
     max_events = 1000000
+    lifecycle_trace: list[dict[str, Any]] = []
     wave_ledger = {
         "wave_count_per_request": len(waves),
         "final_k_wave_count_per_request": sum(wave.final_k for wave in waves),
@@ -442,6 +445,19 @@ def discrete_oracle(waves: list[Wave], output_count: int,
     def request_done(request: Request) -> bool:
         return request.retired_outputs >= request.output_count
 
+    def output_occupancy(request: Request) -> int:
+        return (len(request.computed) + int(request.active_store is not None) +
+                int(request.active_compute is not None and
+                    waves[request.active_compute.wave].final_k))
+
+    def record_lifecycle(event: str, request: Request, **details: Any) -> None:
+        if not capture_lifecycle_trace:
+            return
+        lifecycle_trace.append({"time_s": now, "event": event,
+                                "request": request.name,
+                                "output_occupancy": output_occupancy(request),
+                                **details})
+
     def start_eligible() -> None:
         changed = True
         while changed:
@@ -452,28 +468,43 @@ def discrete_oracle(waves: list[Wave], output_count: int,
                 input_occupancy = (len(request.loaded) +
                                    int(request.active_load is not None) +
                                    int(request.active_compute is not None))
-                output_occupancy = (len(request.computed) +
-                                    int(request.active_store is not None) +
-                                    int(request.active_compute is not None and
-                                        waves[request.active_compute.wave].final_k))
                 if (request.active_load is None and request.next_load < len(waves)
                         and input_occupancy < 2):
                     wi = request.next_load
                     request.next_load += 1
                     request.active_load = Active(ri, "load", wi,
                                                  waves[wi].resource_work()["load"])
+                    record_lifecycle("stage_start", request, stage="load",
+                                     wave=wi, final_k=waves[wi].final_k)
                     changed = True
-                if (request.active_compute is None and request.loaded
-                        and output_occupancy < 2):
-                    wi = request.loaded.pop(0)
-                    request.active_compute = Active(
-                        ri, "compute", wi, waves[wi].resource_work()["compute"],
-                        waves[wi].compute_work_s)
-                    changed = True
+                if request.active_compute is None and request.loaded:
+                    wi = request.loaded[0]
+                    output_before = output_occupancy(request)
+                    final_k = waves[wi].final_k
+                    if not final_k or output_before < 2:
+                        request.loaded.pop(0)
+                        request.active_compute = Active(
+                            ri, "compute", wi,
+                            waves[wi].resource_work()["compute"],
+                            waves[wi].compute_work_s)
+                        record_lifecycle(
+                            "stage_start", request, stage="compute", wave=wi,
+                            final_k=final_k,
+                            output_occupancy_before=output_before,
+                            output_occupancy_after_reservation=(
+                                output_before + int(final_k)))
+                        changed = True
+                    else:
+                        record_lifecycle(
+                            "compute_waiting_for_output_slot", request, wave=wi,
+                            final_k=final_k,
+                            output_occupancy_before=output_before)
                 if request.active_store is None and request.computed:
                     wi = request.computed.pop(0)
                     request.active_store = Active(ri, "store", wi,
                                                   waves[wi].resource_work()["store"])
+                    record_lifecycle("stage_start", request, stage="store",
+                                     wave=wi, final_k=waves[wi].final_k)
                     changed = True
 
     while not all(request_done(request) for request in requests):
@@ -550,6 +581,7 @@ def discrete_oracle(waves: list[Wave], output_count: int,
             if item is None or item.progress < 1.0 - 1.0e-10:
                 continue
             wi = item.wave
+            output_before = output_occupancy(request)
             setattr(request, f"active_{stage}", None)
             if stage == "load":
                 request.loaded.append(wi)
@@ -560,6 +592,9 @@ def discrete_oracle(waves: list[Wave], output_count: int,
                 request.retired_outputs += 1
             stage_completions[stage] += 1
             event_count += 1
+            record_lifecycle("stage_complete", request, stage=stage, wave=wi,
+                             final_k=waves[wi].final_k,
+                             output_occupancy_before=output_before)
             if event_count > max_events:
                 raise RuntimeError("discrete oracle exceeded the fixed event budget")
         for request in requests:
@@ -568,7 +603,8 @@ def discrete_oracle(waves: list[Wave], output_count: int,
         if delta <= EPS and next_arrival > now + EPS:
             raise RuntimeError("discrete oracle made no progress")
 
-    return {
+    result = {
+        "readiness_semantics_revision": READINESS_SEMANTICS_REVISION,
         "finish_s_by_request": {request.name: request.finish_s for request in requests},
         "hbm_busy_s": hbm_busy,
         "hbm_shared_s": shared_hbm,
@@ -588,6 +624,9 @@ def discrete_oracle(waves: list[Wave], output_count: int,
             "output_slot_lifetime": "reserved at final-K compute start; freed only after copyout completes",
         },
     }
+    if capture_lifecycle_trace:
+        result["lifecycle_trace"] = lifecycle_trace
+    return result
 
 
 def make_capacities(raw: dict[str, Any]) -> list[float]:
@@ -838,7 +877,8 @@ def build_report(raw: dict[str, Any]) -> dict[str, Any]:
     fixture_status = "passed" if all(all_fixture_checks) else "failed"
     return {
         "schema_version": 1,
-        "oracle": "independent_compiled_gemm_discrete_consumption_wave_v1",
+        "oracle": "independent_compiled_gemm_discrete_consumption_wave_v2",
+        "readiness_semantics_revision": READINESS_SEMANTICS_REVISION,
         "fixture_kind": "synthetic_model_to_model",
         "measurement_source": raw["measurement_source"],
         "compiled_plan": {
