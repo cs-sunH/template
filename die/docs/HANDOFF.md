@@ -1,10 +1,23 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-15（Asia/Shanghai；既有20261014证据目录保留原标识）。用户最新指令为停止新任务、迅速完成GitHub交接，并在main同步实核后立即停止。本轮仅使用新活动 `astra-sim-joint`，`astra-sim-joint_old` 仅供历史查询，未修改。工程整体 **NOT ACCEPTED**；代码可接棒不等于模型精度、全部五仓业务或目标测量验收。
+记录日期：2026-10-15（Asia/Shanghai；既有20261014证据目录保留原标识）。用户本次仅授权更新文档和接续提示词，不修改代码/测试/配置；新任务按最新提示词继续开发。本次文档以main `5e2fb0a`为基线；活动JOINT为 `astra-sim-joint`，`astra-sim-joint_old` 已在该main删除，不恢复。工程整体 **NOT ACCEPTED**；代码可接棒不等于模型精度、全部五仓业务或目标测量验收。
 
 ## Current Status
 
-### 本轮最终交接（2026-10-15）
+### 最新有效指令：解析粗粒度路线与本次文档范围（2026-10-15）
+
+**生产必须采用解析工作量 + 固定数量分段累计服务曲线 + 稳定区间直接积分。** 这落实原设计§1/§8.2/§13；当前完整合同为根设计§1.5/§8.2.1/§13与AGENTS。本段和下方最新Next Step替代所有历史“先恢复Program、逐K推进、再精确周期证明/跳周期”的建议；归档保留，不作为生产待办。
+
+本次从GitHub最新main `5e2fb0a10e34563e08e798217670592606eaae8d` 创建独立文档分支 `codex/die-analytical-model-docs-20261015`。保留用户已提交的K参考/Cursor c13e9a7、clock b22e065、新JOINT known cancel 0f56921、Program归档3c8face及old目录删除5e2fb0a。本次只改Markdown，不修改/恢复任何源代码、测试、配置、构建文件、canonical release、raw证据或归档patch；未运行新代码测试，也未实现新模型。历史33/33、83/83等仅按其原源码/证据范围复用，canonical24 `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`保持。工程 **NOT ACCEPTED**。
+
+强制边界：服务曲线从循环/真实输入/工作量解析生成；输入K消费单位与输出块单位分别统一，首输出为工作进度门槛；静态SRAM字节峰值与动态credit分别负责。缓冲触边后改变可行速率连续积分，不逐块满空切换。每primitive最多5段起，必要时8/16，所有曲线折点/描述符切换计入同一预算；固定外部事件与活跃规模，重复放大不增加线性内部事件。owner Q/alpha、13域、PRIVATE和每owner最多三个活动不变。周期搜索、精确周期/相位证明、大整数周期求解、逐K回放排除出生产路线；小规模离线wave oracle仅作误差工具。
+
+速度和精度从第一版同时验收：轻量查询/规范化缓存与曲线修改同步；命中P95≤20μs、常规冷编译P95≤2ms、J≤32单次仲裁更新P95≤50μs及原五仓端到端预算保持。原3%/5%和busy定义不变，另报绝对误差/参考共享时长/覆盖域；未通过标failed或tradeoff_unresolved，任何口径调整需用户另行明确决定。不保证固定16段必能覆盖所有离散脉冲情形，不以精确时间线作为默认目标。
+
+本次文档更新的交付SHA以包含本段的Git提交为准，须正常push/fetch实核main。新任务可复制 `RELAY_PROMPT.md` 的提示词；该新任务授权持续自主开发，本次“只改文档”是当前任务范围，不要求接手任务也停留在文档修改。
+
+
+### 前次代码交接（2026-10-15；历史事实，接续路线以上方为准）
 
 本轮已验证成果按顺序合入并实核main：K就绪参考/紧凑Cursor `c13e9a7`，绝对时钟修复 `b22e0654ed5894322f1474b20a42f85f63631196`，新JOINT冻结已知取消 `0f56921b9830961101d241899fd1ebda1ed3d43d`。工作分支 `codex/die-k-readiness-20261015`。最终归档/文档提交以包含本段的Git提交为准，须再次push/fetch/远端exact SHA确认；无新PR/CI可核实，采用普通git fast-forward main，不force-push。
 
@@ -16,7 +29,7 @@
 
 已完成部分的真实结果：公共Release all build/33项CTest通过；clock72种平移/取消/容量/import及旧库负回归通过（旧实现确实失败）；full/tail诊断九场景通过；五仓两ABI重建+配置83/83无skip；新JOINT native/window/Domain4/4及Python6/6无skip，portable重放通过。没有新全Online/压力、生产E5/E8/E16、host预算或目标heldout结果。TX8没有重新拟合，conditional reference与目标先验见下方Important Decisions，目标raw仍not_available。
 
-接手优先级已经固定：恢复并完成归档Program定向测试/兼容审阅 → 新来源独立oracle九场景 → 有界周期/批量累计与开销 → 原门限生产粒度选择；再推进新JOINT生产Sys known事件采集/graph/ledger/lease回放及其他五仓业务压力。先前通过未修改部分直接复用，不重做。完整live world前继续保留sh30和`live_world_import_supported=false`；无独立目标数据不重新拟合TX8或目标效率。完成本次main同步实核即停止。
+前次提出的“恢复Program→独立oracle→有界周期”优先级现已撤出生产主线；新的解析累计曲线/有限宏段路线见上方及Next Step。历史待办仅说明归档当时的状态；再推进新JOINT生产Sys known事件采集/graph/ledger/lease回放及其他五仓业务压力。先前通过未修改部分直接复用，不重做。完整live world前继续保留sh30和`live_world_import_supported=false`；无独立目标数据不重新拟合TX8或目标效率。完成本次main同步实核即停止。
 
 ### 新JOINT已知取消检查点（2026-10-15）
 
@@ -164,14 +177,18 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Next Step
 
-以下供下一账号接续；本Session按用户最新交接指令在main实核后停止。先恢复 `analysis/gemm-os-program-partial-20261015/` 中未验收片段，按其verification修复，不重新规划或默认启用。K参考门控修正、独立反例、clock和三组full/tail九场景诊断已完成，不重复。
+**按解析分析模型继续，不恢复逐K Program或周期精确路线。** 先同步最新main并核对已完成范围；K参考final-only输出门/独立15s反例、clock、full/tail九诊断与新JOINT冻结known cancel已有验证，不重复。下列步骤服务于依赖顺序，不是任务数量或自主开发额度限制。
 
-1. **有界生产生命周期。** 时钟原点1ns漂移已修并验证，不重复。下一片为显式opt-in单Core OS程序，旧Plan默认路径保持；复用Descriptor/六计数器Cursor、原Geometry/Counter/13域facts和公共LP，最多三个当前stage槽。先用明确小展开预算验证真实Runtime的取消、完整快照、ready/busy/工作量守恒；该受限O(events)入口只作诊断，不能默认部署到五仓或认证效率。随后实现同输出非final middle-K同步零进度窄周期：Store/输出为空、一个owner、同事实/容量；还需覆盖horizon、busy/served bulk累加和实际探测计数，其余fail closed。再考虑输出行/multiCore cohorts/WR，不照搬GMP/Fraction/fixed-phase研究。完整生命周期和开销通过后，才重跑原3%/5%并选最小有效E。
-2. **新JOINT生产接线。** domain/native-session wire、实际Sys只读sample→Domain、known capacity、无gate/barrier副作用的冻结known cancel已完成，不重复。下一步Sys已知事件采集、真实graph/ledger/lease/active-leg与回放，再扩有唯一lease ownership证据的取消；保留四项busy ±1e-16ns严格差异记录。使用现有native session、唯一local endpoint，不能将scalar伪装恢复；完整world前保留 `live_world_import_supported=false` 与sh30 guard。Sys export_snapshot(now)会推进/回调，只读用Runtime副本。
-3. **其余五仓业务。** FACE两仓固定E/protocol2/startup证书/source-release及原129层压力已验证；扩展其他端口/拓扑/竞争与完整GQA producer，保留KV/weights/TP/transfer/readiness及ACK/本地发送完成→容量复用顺序。不重做未改且通过部分；WS typed diagnostic共存/lease有效。
-4. **性能和校准。** 生命周期结构稳定后实测source cold/hit/update/J32/Online CPU/RSS/cache/event/LP。没有独立目标raw/heldout，不重新拟合TX8或目标效率，不将BF16/DDR结果代替INT4/HBM。reference/target参数继续冻结。
+1. **复用计数和接口，生成累计服务曲线。** 从Mapping、Geometry/AccessCounter/13域facts及已修参考提取循环和工作量解析关系，输入K消费与输出块分别统一计量。首输出门槛、full/tail、稳态/排空及端点总量由解析推导，不拟合参考时间；静态SRAM峰值含双输入/累加器/待写输出/转换/中间状态。现有Cursor仅作为离线反例/守恒检查参考，不能转成生产逐K调度器。
+2. **验证最粗框架，并同步建立速度基线。** 优先最多5段/每owner三活动，用累计曲线与credit切向约束在稳定区间直接积分。固定外部事件/活跃规模，扩大Core/tile/K/repeat，验证实际事件和状态不线性增长，曲线折点纳入预算；用小规模独立wave oracle验依赖、原3%/5%、工作量/容量和busy绝对误差/参考时长。保留原外部完成、cancel、snapshot/import、容量变更与旧Plan/ABI指标兼容；不新增逐wave fallback。
+3. **同阶段优化热查询和仲裁；必要时才到8/16段。** 规范化语义缓存、轻量孤立cost查询、重复查询去重避免命中后重新枚举或生成完整报告；活跃world必须使用正确clock/generation/owner身份。解析/水填充快路径须与原Q/alpha/13域/PRIVATE公平分配等价，不支持的耦合保留原小规模求解。分别测命中P95≤20μs、常规冷编译P95≤2ms、J≤32每次更新P95≤50μs。只有证据显示5段不足时才评估8/16，取共同满足速度/精度的最小者；都不满足标failed/tradeoff_unresolved，不转周期精确、不改busy口径或放宽门槛。
+4. **五仓完整负载与剩余接线。** 仅活动新JOINT；domain/native wire、Sys只读sample→Domain、known capacity/cancel已完成，继续生产Sys已知事件采集及真实graph/ledger/lease/active-leg回放，不直接删sh30/`live_world_import_supported=false` guard。FACE固定E/protocol2/startup/source-release及原129层压力复用；扩其他端口/拓扑/竞争/GQA，保留KV/weights/TP/restore/pool/ACK及本地发送完成→容量复用顺序，WS typed兼容与lease不回退。固定事件输入和完整在线策略分开测CPU/墙钟/RSS/缓存/事件/LP及原端到端开销预算。
+5. **校准继续遵守数据边界。** 无独立目标raw/heldout不重新拟合TX8或目标效率，不以BF16/DDR参考代替INT4/HBM测量；reference/target参数冻结。新模型精度/速度未验收，不能把文档更新、oracle诊断或GitHub合入当作通过。
 
 ## Important Decisions
+
+- 2026-10-15用户明确：数学公式分析模型为生产唯一主线；周期搜索/精确周期/大整数周期/逐K回放不进入方案，历史Program归档不恢复为默认待办。只在离线小规模oracle复用其有效计数/反例，不以状态固定或opt-in绕过事件成本限制。
+- 单段解析曲线在工作进度上定义，输入/输出单位各自一致，触边更新速率可行域而非逐块轮换；折点统一预算，固定外部序列的事件放大测试和原速度/精度门槛同时执行。
 
 - 快速交接时保留未完成Program为可重放patch+新文件快照，恢复默认源到已验证clock release；不将未验收wire/Runtime发布五仓。归档逐字节及前向/反向patch检查通过，源码有效成果未丢失。
 
@@ -181,13 +198,13 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 - 本轮Descriptor/Cursor是内部基础，六计数器只表达严格序的离散就绪；没有新增生产Plan schema、signed-credit服务行或压缩。规范发布现在canonical24，未执行的生产/业务测试不因新摘要升级。最新诊断参考已修final-only输出门；历史raw/报告不重写。
 
-- K-readiness新诊断是部分研究代码，实际 public Runtime 服务13域facts，但facts本来没有signed-credit，硬槽reservation/终态队列提供就绪；这不证明生产signed-credit行或周期路径已接通。只读旧方案包含尚未采纳的credit生命周期构想。output满时非final不应阻塞的设计规则须先纠正参考实现，再评判数值。
+- K-readiness新诊断是部分研究代码，实际 public Runtime 服务13域facts，但facts本来没有signed-credit，硬槽reservation/终态队列提供就绪；这不证明生产signed-credit行或周期路径已接通。只读旧方案包含尚未采纳的credit生命周期构想。此处是早期诊断历史：output满时非final不应阻塞的参考规则现已由c13e9a7修复，后续复用已修参考，不重复该修复。
 - 预算口径已核：Runtime `advance_to` 的1e6是单调用内部实际interval guard；256 simplex pivots是一次`allocate()`内各tier/fallback共享预算；standalone estimate另有累计driver event_guard；研究scratch的expanded/discovery cap是独立口径。下一实现应分开逻辑完成/跳过与实际探测/求解计数，不能混称lifetime256事件，也不任意扩大原预算。
 
 - Runtime保存非递减lexicographic minimum是原max-min定义的不变量，不是扩大credit容差；owner共享progress变量与canonical Q/alpha数学等价。共享scale单独修复不足，TP尾片和中间失败必须保留；最终不增加LP行。相同内容的canonical发布不改mtime，仍逐文件校验digest。
 - 简单公式优先原则继续有效；复杂度仅服务于源架构/任务输入的可观察响应、容量/工作量守恒和真实依赖/竞争。native wrapper 是现有 Runtime 的生命周期桥接，没有第二套数值模型。
 - FACE v2 strict batch/revision/schema不能静默退回v1；旧typed raw+diagnostic共存适用于WS/FACE，JOINT独立新wire互斥边界保留。活动租约桥接与future E/source物理释放分开认证。
-- die 是唯一 canonical；5 仓同 digest，Python不重写 timing/capacity 公式。只改活动 JOINT，旧目录可读档案。
+- die 是唯一 canonical；5 仓同 digest，Python不重写 timing/capacity 公式。只改活动 JOINT；old已在main移除，历史资料从Git历史查，不恢复目录。
 - 顺序 layer/pass 不乘 temporary peak；compact span/batch 的当前物化集合语义保留。版本变化显式，旧证书不可复用。
 - future E 仍是 fit margin，`max(A,E)`，不计 active/KV/remote；actual Plan 超界在C++ lease/issue前拒绝，Python provisional KV事务不能由C++回滚，启动证书负责其前置覆盖；正常串行 compute gate 是 max 而非 sum 的前提。source ACK/物理完成释放与容量复用排序独立保留。
 - fresh/query 与同冻结 native-session wire parity 均不是生产 Sys live snapshot/native integration 完成，也不证明目标性能。禁用 unsupported legacy active state 时显式错误，不能给 scalar ETA 假恢复；生产 live import guard 保留。
@@ -196,11 +213,11 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Files to Continue
 
-- 下一账号首先读 `analysis/gemm-os-program-partial-20261015/{README.md,verification.json,source-identity.json}`，解压patch后恢复new-files；当前两个具体阻塞为factory mapping_assumptions不一致、runtime test嵌套main宏冲突。grouped oracle新来源分支还未实现，不把通用E5标签当证书。
+- 主线先读根设计§1.5/§8.2.1/§13、AGENTS和PROJECT最新路线；实现位置仍为 `die/src/{Mapping,Compiler,Execution,Capi}.cc` 及公共Plan/Execution接口。归档 `analysis/gemm-os-program-partial-20261015/` 仅供历史核查，不先解压恢复patch；原factory/test/oracle待办均属已撤出主线的未完成Program。
 
 - known cancel：新JOINT `NativeProjection.cc`、对应两项native/C API C++ tests与Python `joint/{resource_projection,native_projection,test_native_coarse_projection}.py`；重放 `analysis/native-world-cancel-20261015/run_checks.sh`。实际使用的vendor clock与公共Program在途版本分开识别。
 
-- 时钟：`die/src/Execution.cc`、`include/coarse_die/Execution.hh`、`tests/runtime_clock_translation_test.cc`；实际重放 `analysis/runtime-clock-20261015/replay_pair.py`。单Core opt-in的Plan/Compiler/Mapping与Runtime分工在继续，未完成前不可发布为新默认模型。
+- 时钟：`die/src/Execution.cc`、`include/coarse_die/Execution.hh`、`tests/runtime_clock_translation_test.cc`；实际重放 `analysis/runtime-clock-20261015/replay_pair.py`。原单Core opt-in Program已归档，不继续该逐K路线；后续Plan/Compiler/Mapping/Runtime按解析服务曲线改造并保持兼容。
 
 - 当前基础：`die/src/GemmOSReadiness.hh`、`tests/gemm_os_readiness_test.cc`、`tests/k_readiness_runtime_driver.cc`、`validation/{compiled,grouped}_gemm_oracle.py`。新复现 `analysis/k-readiness-20261015/run_corrected.py`，说明与证据在 `k-readiness-corrected-20261015`。归档未修probe只作历史。
 
@@ -216,6 +233,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
+
+- 本次仅文档：执行Markdown差异/链接/一致性和非文档Git对象不变检查；不运行编译、生产测试、校准或publisher，不声称历史测试已在本次重跑。最终push/fetch核实main后交付新提示词；下方均为前次源码/归档的真实结果。
 
 - 最终归档：7个tracked diff+4个新源码/测试逐字节保留、gzip/raw SHA和patch前向/反向检查通过；恢复后的五仓canonical24 check通过。归档Program库/driver/schema编译成功，runtime test编译失败；schema与full driver均exit1（mapping_assumptions重建不一致），未跑新Program oracle/全回归。此失败属于未启用片段，不能计入默认源33项通过结果。
 
@@ -251,6 +270,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 生产 e73a378、K诊断修正c13e9a7及先前源码检查点均已进入main并实核。本次时钟修复按普通git同步main并实核；精确SHA由包含本文的Git提交确定。工程NOT ACCEPTED与代码检查点安全分开，不能隐瞒未通过项。
 
 ## Handoff Notes
+
+- 最新任务仅更新文档，保留用户5e2fb0a及其全部代码/归档/删除成果；本次不恢复/清理任何源码。新任务按RELAY_PROMPT持续开发，建模路线以上方为准，历史周期建议不再生效。
 
 当前用户明确要求迅速交接并停止。本轮canonical24含未启用内部基础及绝对时钟修复，校准冻结；未验收Program整片归档而不发布。所有有效修改、成功/失败与源码身份随证据保存，没有修改old、覆盖其他人提交或丢弃有效修改。最终main实核后本Session立即停止，不启动后续任务。
 

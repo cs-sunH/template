@@ -16,15 +16,30 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 建模复杂度遵守用户 2026-10-14 新增要求：与硬件设计参数、软件任务输入参数不直接相关的细节，能用简单数学公式直接计算时，采用公式，不深入建模。优先闭式/解析计数和固定数量分段表达；内部状态只为必要的参数响应、容量/工作量守恒和外部可观察的就绪/竞争保留。新增复杂机制须指出简单公式不足的具体证据和运行成本；硬件自变量与任务输入的正确覆盖继续是硬约束。
 
-开发以有意义的验证检查点同步 GitHub。用户最新要求本Session迅速交接，main实核后立即停止；下一账号按HANDOFF接续。检查点同步不等于模型精度或五仓工程验收。
+开发以有意义的验证检查点同步 GitHub。本次Session仅获准更新文档，不修改代码/测试/配置；新任务使用RELAY_PROMPT重新授权继续开发，历史停止与本次文档范围不代替新任务指令。检查点同步不等于模型精度或五仓工程验收。
+
+## 当前强制建模路线（2026-10-15，用户确认）
+
+**解析工作量 + 固定数量的分段累计服务曲线 + 稳定区间直接积分**。完整合同见根设计§1.5、§8.2.1、§13及AGENTS。以下替代历史“恢复Program→逐K生命周期→周期证明”的接续建议：
+
+1. 复用原硬件派生、Geometry/Counter/容量/公共Runtime与五仓接口；循环及full/tail只做解析计数，重复次数进入公式，不逐Core/tile/K/wave推进。
+2. 输入以统一K消费单位、输出以统一输出块单位分别生成累计曲线；首输出门槛定义在工作进度，端点对应真实总量，不拟合参考时间。SRAM静态字节峰值与流体credit分别负责；边界切向速率约束连续推进，不做逐块启停轮换。
+3. 每primitive优先最多5段，必要时8/16段，每owner最多三活动；曲线折点/隐藏切换统一计入预算。固定外部事件序列及活跃规模，放大Core/tile/K/repeat时，内部事件与状态不线性增长。
+4. 保留owner Q/alpha、13域、PRIVATE及真实外部依赖/指标；解析/水填充仅在与原公平定义等价时使用。轻量查询、规范化缓存和速度基线同步推进，不把性能后置。
+5. 从第一版共同检查原3%/5%及命中P95≤20μs、常规冷编译P95≤2ms、J≤32单次仲裁P95≤50μs和五仓端到端预算。busy定义不变，另报绝对误差、参考共享时长和适用范围；failed/tradeoff_unresolved如实保留，口径变更须用户另行明确决定。
+6. **周期搜索、精确周期/相位返回证明、大整数周期求解、逐K回放不进入生产方案。** 归档Program只作历史参考，离线小规模逐wave oracle仅用于误差验证，不恢复为默认实现主线。
+
+当前方案只更新文档，尚未实现或通过新验收；工程仍 **NOT ACCEPTED**。活动JOINT是 `astra-sim-joint`；`astra-sim-joint_old` 已由main的 `5e2fb0a` 删除，不恢复。
 
 ## 当前代码与运行方式
 
-- 2026-10-15最终交接：已完成K参考/Cursor c13e9a7、clock b22e065、新JOINT取消0f56921均在main并实核。未验收单Core OS Program全部源码patch/新文件/测试/SHA/真实构建记录保存在 `analysis/gemm-os-program-partial-20261015/`，默认公共源保留已验证clock版，五仓canonical24不混入半成品。下一账号先恢复该片段完成定向测试及新oracle来源识别，再周期/精度/效率；TX8与目标先验不变，整体NOT ACCEPTED。最终归档/文档提交main实核后本Session停止。
+- 2026-10-15本次文档更新基于最新main `5e2fb0a10e34563e08e798217670592606eaae8d`，保留c13e9a7、b22e065、0f56921及后续归档/删除。仅更新Markdown，canonical24 digest、生产代码、ABI/配置和历史测试证据不变；不重新声称运行代码测试。新任务按上方解析路线和HANDOFF Next Step继续。
+
+- 2026-10-15最终交接：已完成K参考/Cursor c13e9a7、clock b22e065、新JOINT取消0f56921均在main并实核。未验收单Core OS Program全部源码patch/新文件/测试/SHA/真实构建记录保存在 `analysis/gemm-os-program-partial-20261015/`，默认公共源保留已验证clock版，五仓canonical24不混入半成品。该历史接续建议已由解析累计服务曲线路线替代；下一账号不恢复Program/周期路线，归档仅供参考；TX8与目标先验不变，整体NOT ACCEPTED。最终归档/文档提交main实核后本Session停止。
 
 - 2026-10-15新JOINT known cancel：冻结可选coarse_cancel_events复用Domain/Runtime，same-tick终态优先、pending取消不造handle、partial served保留、重复事件幂等；不传播success/依赖，不猜测gate/barrier lease释放。snapshot消费前缀、双向终态绑定和原子非法拒绝通过；真实clock版native/window/Domain4/4+Python6/6无skip，portable重放通过。旧wire/完整liveworld与sh30 guard保留，生产Sys采集/graph/lease回放仍待接；公共Program开发不混入该检查点。证据native-world-cancel-20261015。
 
-- 2026-10-15时钟检查点：真实middle-K两活动发现大绝对起点使ceil漂移1ns；内部改为checked整数原点+[0,1)小数，next_event整数相加，服务/LP/credit/校准不变，旧Plan及snapshot v2/v3 wire保留。72项跨起点/partial import/cancel/capacity严格比较、legacy小数/u64边界、完整33/33 CTest、full/tail九诊断及五仓双ABI/config83/83（0skip）通过。canonical24 digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`。尚无周期skip或生产E5新证书；下一步显式opt-in有界单Core OS生命周期与新JOINT known cancel。详见runtime-clock-20261015分析/证据；保持持续开发。
+- 2026-10-15时钟检查点：真实middle-K两活动发现大绝对起点使ceil漂移1ns；内部改为checked整数原点+[0,1)小数，next_event整数相加，服务/LP/credit/校准不变，旧Plan及snapshot v2/v3 wire保留。72项跨起点/partial import/cancel/capacity严格比较、legacy小数/u64边界、完整33/33 CTest、full/tail九诊断及五仓双ABI/config83/83（0skip）通过。canonical24 digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`。尚无周期skip或生产E5新证书；此处历史opt-in后续计划已由上方解析主线替代，新JOINT known cancel后续已完成。详见runtime-clock-20261015分析/证据；保持持续开发。
 
 - 2026-10-15本轮恢复持续开发：main d115117→`codex/die-k-readiness-20261015`。已修oracle/诊断final-only输出门，独立Python/C++可达反例精确15s；新六计数器Cursor与真实13域Runtime显式槽位逐步一致，三组full/tail九场景grouped通过，定向CTest3/3（含Python13项）。新内部基础尚未进入生产Plan/Runtime生命周期，O(events)诊断不作E5/E8/效率认证。canonical24 digest dd62e6787557ff2f764fc5be8f38865a2c15916c20f1a9fc95a28ebcd4fb7005；五仓check/独立configure5/5，原生产timing/TX8未改。下一步生产有界生命周期与新JOINT剩余接线；旧停止/交接段落是历史，当前不按阶段停工。证据见HANDOFF及k-readiness-corrected-20261015。
 
@@ -57,9 +72,11 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-当前持续开发分支 `codex/die-k-readiness-20261015`，从远端 `main` 的 `d1151179d2a3c3246e0b7a896db9e3dacef52885` 恢复。用户最新要求迅速完成本轮交接并停止，以HANDOFF最上方最终交接为准。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。已修 attention sequential layer/pass workspace peak（v3 template、workspace revision v2）、native fresh local-domain bridge 和同冻结输入 native session wire 恢复，并形成真实 E5 shape-axis 失败证据；生产 Sys/ledger/network/pool live 输入与 sh30 guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
+前次代码分支 `codex/die-k-readiness-20261015` 的成果已在main；本次文档分支 `codex/die-analytical-model-docs-20261015` 从 `5e2fb0a` 创建。新开发任务同步最新main另建分支，按最新解析建模合同和HANDOFF接续。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。已修 attention sequential layer/pass workspace peak（v3 template、workspace revision v2）、native fresh local-domain bridge 和同冻结输入 native session wire 恢复，并形成真实 E5 shape-axis 失败证据；生产 Sys/ledger/network/pool live 输入与 sh30 guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
 
 ## 重要决定及变更记录
+
+- 2026-10-15用户确认解析粗粒度路线：固定分段服务曲线/切向credit/稳定直接积分，排除周期精确与逐K生产推进，速度精度同时验收。本次仅文档，不改用户最新代码、不恢复已删除old仓；下一账号提示词见RELAY_PROMPT。
 
 - 2026-10-15 最小任务：native Domain新增已知物理容量变更接口，复用canonical Runtime校验/更新，保持旧速率结算与同tick terminal优先顺序；共享COMP+endpoint减速、暂停、恢复和import/fork序列、invalid原子拒绝通过，最终4/4 native/window。生产world容量事件、sh30和FACE闭环仍待接，不改变公共模型或校准。按用户要求提交此最小任务后继续开发。
 

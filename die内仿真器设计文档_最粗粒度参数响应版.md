@@ -1,7 +1,7 @@
 # 单 die 仿真器设计文档：最粗粒度参数响应版
 
 版本：coarse_die_v2（审查修订，待实现）  
-日期：2026-10-13  
+日期：2026-10-13；解析粗粒度路线澄清：2026-10-15<br>
 推荐实现：C++17 公共库，C ABI，五仓库各保留薄适配层  
 建议源码位置：template/die/；交付给各仓库的固定版本位于 extern/die_model/  
 资料基线：cs-sunH/template，提交 9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8
@@ -66,6 +66,18 @@
 实现优先采用闭式计算、解析计数及固定数量的分段公式。几何派生、容量合计、重复工作量和可以直接求解的辅助环节不增加独立模拟对象或内部事件。内部状态仅为保留架构/任务自变量的可观察影响、精确容量与工作量守恒，以及实际外部依赖和共享竞争所需的机制而保留。
 
 需要新增状态或复杂数值机制时，应明确指出其对应的输入参数或可观察行为、简单公式不能满足的具体证据，以及准确性收益与仿真开销。已有复杂研究不能成为继续扩展的理由。源架构变量、真实 shape/精度/TP/span、必要的就绪/容量/竞争约束及原验收门槛继续有效。
+
+### 1.5 已确认的解析粗粒度主线（2026-10-15）
+
+用户确认采用**解析工作量、固定数量的分段累计服务曲线、稳定区间直接积分**。本次落实§1/§8.2/§13的原目标，不另建第二套Python时间模型；本节是后续实现约束，不表示代码已实现或验收通过。
+
+内部循环只用于解析计数、full/tail分类、映射与容量公式，重复次数只作为数值进入公式。生产不逐Core/tile/K/wave推进，不恢复归档Program作为接续主线；周期搜索、精确周期/相位返回证明、大整数周期求解和逐K回放均排除出本生产方案。即使状态量固定，逐K推进仍不符合运行成本要求。已归档源码/失败证据保留，小规模逐wave oracle仅在离线误差验证中使用，不扩展为生产依赖或新的精确周期研究项目。
+
+逐primitive从最多5个服务段开始，必要时评估8/16段；保留最多32个解析工作类别，复合region保持原64段上限。每owner至多三个活动，所有累计曲线的折点、活动边界及描述符切换必须统一计入实际复杂度预算，不能在少量宏段下隐藏逐块展开或为每条曲线另设无约束段数。固定外部事件序列和活跃规模后，放大Core/tile/K/repeat不能导致内部状态/事件数线性增长；真实外部事件和输入span数量的成本单列。
+
+服务曲线、单位及切向约束按§8.2.1生成；总量/容量/外部依赖严格正确，内部细碎交错采用显式聚合近似，不以复现每个离散就绪时刻作为默认目标。保留架构变量响应、owner Q/alpha、13域、PRIVATE及五仓业务/指标兼容。解析或水填充仲裁只在与原公平定义等价时启用，多资源不能简单均分带宽后取最小值。
+
+速度和精度从第一版共同作为准入条件，规范化缓存、轻量查询与模型修改同步实施；§13的原性能目标、独占3%/并发与共享HBM busy 5%及busy定义保持不变。另报busy绝对误差、参考共享时长及适用范围，未通过标failed或tradeoff_unresolved；任何验收口径调整需用户另行明确决定，不用放宽门槛、事后修busy或逐tile fallback掩盖取舍。
 
 ## 2. 粒度与公共架构
 
@@ -340,7 +352,7 @@ D_C_write = b_C*M*N
 
 上述简式适用于整数 byte/element；INT4 用同一循环的块类别求精确 packed byte。末轮空核不消费数学工作或物理字节。计算预算按轮内最慢核的实际块计算，轮间相加；统计始终保留真实2MNK，不能把空槽或补零算成真实 FLOP。
 
-**WR：weight_resident_sram_v2。** n_tile 按递增顺序组成每轮至多 N_core 个列块，core=n_tile mod N_core；每核一次装入完整 K×tn 权重片，然后按 m_tile、k_tile 递增完成该列所有 M 输出块。只允许这个权重驻留，不顺便赠送输入跨列/跨核复用。完整驻留权重、两个A输入槽、累加与输出等同时通过容量检查才合法。列组切换先完成旧计算/写回、释放旧权重，再装下一组完整权重，不能未计双份权重容量就跨列组预取；此串行边界以周期描述和重复数计费。
+**WR：weight_resident_sram_v2。** n_tile 按递增顺序组成每轮至多 N_core 个列块，core=n_tile mod N_core；每核一次装入完整 K×tn 权重片，然后按 m_tile、k_tile 递增完成该列所有 M 输出块。只允许这个权重驻留，不顺便赠送输入跨列/跨核复用。完整驻留权重、两个A输入槽、累加与输出等同时通过容量检查才合法。列组切换先完成旧计算/写回、释放旧权重，再装下一组完整权重，不能未计双份权重容量就跨列组预取；此串行边界以有限阶段描述和重复数计费。
 
 ~~~text
 output_round_count = ceil(Tn/N_core)*Tm
@@ -564,15 +576,47 @@ W=1只有L1→C1→S1；W=2只有首装→(C1,L2)→(C2,S1)→S2。FIRST不提�
 
 到credit边界后速率必须满足切向约束；例如输入满时dl/dt≤dc/dt，输入空时dc/dt≤dl/dt。无需每周期轮换读写事件。典型双输入/双输出模板B_in=B_out=2，进入中间段时q_in0=q_out0=1；不同模板使用自己的实际槽数，不拿这个示例替代容量检查。
 
-有K累加、延后输出、不同byte/wave的模板，AccessCounter必须提供确定的load_ready/compute_consumed/output_produced/store_retired credit曲线与周期类别，不能机械套用l−c=c−s。曲线用固定数量的分段仿射描述；真实离散tile readiness用离线oracle验证，流体近似不声称能看到半个真实tile。原图的外部ready只在对应区域或显式输出写回完整终结后触发，不能由平滑credit提前发布。
+有K累加、延后输出、不同byte/wave的模板，AccessCounter必须提供确定的load_ready/compute_consumed/output_produced/store_retired credit曲线与解析循环类别，不能机械套用l−c=c−s。曲线用固定数量的分段仿射描述；真实离散tile readiness用离线oracle验证，流体近似不声称能看到半个真实tile。原图的外部ready只在对应区域或显式输出写回完整终结后触发，不能由平滑credit提前发布。
 
 最多32个循环类别按原循环次序记录，重复次数可很大。默认合并为少量服务epoch；不等类别不能仅做无顺序的max(sum(work/capacity))。可在首/尾、K首末、输出产生、瓶颈/活跃核变化处解析细分，规则见8.6；不按重复次数展开。
+
+### 8.2.1 累计服务曲线、计量单位和边界推进合同
+
+每条活动进度p_L/p_C/p_S在[0,1]内。AccessCounter根据选中循环、真实shape/精度/TP/span、full/tail及活跃核数，解析生成固定数量的分段仿射函数：
+
+| 曲线 | 含义 | 计量单位 |
+|---|---|---|
+| L_in(p_L) | 已就绪输入累计量 | 该模板统一的K消费单位 |
+| C_in(p_C) | 计算已消费输入累计量 | 与L_in完全相同 |
+| C_out(p_C) | 可写回输出累计量 | 该模板统一的输出块单位 |
+| S_out(p_S) | 已完成写回累计量 | 与C_out完全相同 |
+
+无K累加的模板使用自身解析输入消费单位，不人为引入K循环。K消费单位与输出块单位分别统一，不能互换或与byte混用；每个单位对应的物理byte/ops由原计数账本明确给出。曲线保留解析得到的首输出进度门槛、稳态和排空，各端点严格对应实际累计总量。竞争通过进度率改变到达门槛的时刻，不把孤立估值的固定时间当门槛。曲线不得根据参考完成时间自由拟合；不要求重现每个内部块的阶梯就绪瞬间。
+
+~~~text
+q_in  = q_in0  + L_in(p_L)  - C_in(p_C)
+q_out = q_out0 + C_out(p_C) - S_out(p_S)
+0 <= q_in <= B_in;  0 <= q_out <= B_out
+~~~
+
+SRAM静态检查继续精确计入双输入、累加器、待写输出、转换和中间状态的存活字节峰值；流体credit限制重叠和预取，不能代替静态检查，也不因credit使用抽象单位而改变字节需求。B_in/B_out必须来自同一模板的实际槽位合同。
+
+缓冲满/空时直接约束可行速率（v为相应p的时间导数，曲线折点使用当前有效分段）：
+
+~~~text
+输入满：L_in'(p_L)*v_L <= C_in'(p_C)*v_C
+输入空：L_in'(p_L)*v_L >= C_in'(p_C)*v_C
+输出满：C_out'(p_C)*v_C <= S_out'(p_S)*v_S
+输出空：C_out'(p_C)*v_C >= S_out'(p_S)*v_S
+~~~
+
+稳定分段内用p(t+Δt)=p(t)+v*Δt直接积分到必要宏段/活动/credit边界或真实外部事件。到边界只更新约束，不通过逐块“满→停→空→启动”轮换制造事件。物理服务仍满足Σ_a work[a,r]*v_a≤capacity[r]及原PRIVATE/owner公平约束；变化的是解析就绪表示，不是物理流量或Q/alpha策略。外部ready只在对应区域或显式输出完整终结后发布，真实collective/KV/restore/migrate/ACK源释放依赖保持。
 
 ### 8.3 去掉theta的动态共享预留
 
 旧theta包络满足固定容量下 sum(max(w/cap))≤theta*max(sum(w)/cap)，但不是时变竞争的轨迹或上界。theta*工作拿去仲裁会把并不存在的占用分给其它任务。
 
-本版动态仲裁只使用基本资源工作：真实payload、D/eta、解析计算服务秒及PRIVATE局部约束。theta只允许作为offline_conservative_diagnostic或与旧v1结果比较的字段；**不得乘到共享域工作、实际byte、输出操作数或公平请求上。** 不等周期误差用活动/类别细分处理，不用拟合theta追平Excel。
+本版动态仲裁只使用基本资源工作：真实payload、D/eta、解析计算服务秒及PRIVATE局部约束。theta只允许作为offline_conservative_diagnostic或与旧v1结果比较的字段；**不得乘到共享域工作、实际byte、输出操作数或公平请求上。** 不等循环类的聚合误差用有界活动/类别分段处理，不用拟合theta追平Excel。
 
 每个L/C/S活动仍可同时需要多个路径域，例如一次HBM加载受到排、入口、Mesh、SRAM落地的共同限速；其向量内采用同一进度，避免把同payload逐层串行相加。是否需要将一次活动再拆小，只由8.6证据触发，默认不逐链路、逐PE/Vec拆分。
 
@@ -916,7 +960,7 @@ snapshot_schema=coarse_die_snapshot_v2，语义对C++对象和wire相同：
 |---|---|
 | 身份/时钟 | ABI/schema、硬件/plan/template/topology/calibration指纹、时刻、同tick排序/舍入版本 |
 | 容量/profile | 各域当前容量、启停、单位、shared_service_profile版本及已知变更 |
-| pipeline | kernel/epoch/周期类、未消费重复量、首尾状态与每个L/C/S active/blocked/done、WR列组切换等周期边界；不能只存一个phi |
+| pipeline | kernel/epoch/解析循环类、未消费重复量、首尾状态与每个L/C/S active/blocked/done、WR列组切换等宏段边界；不能只存一个phi |
 | 活动工作 | 各活动剩余资源向量/独立progress、PRIVATE、Q、alpha、owner/group与fairness epoch |
 | 有限缓冲 | 实际槽容量、占用/可用credit、累计ready/consume/produce/retire曲线位置、缓冲owner及依赖 |
 | 所有权/事件 | request/node/execution/activity/endpoint/transaction ID、generation、GPU槽、ready/cancel/terminal、下一预约 |
@@ -1074,7 +1118,7 @@ JOINT的recompute是前向历史token重放以重建KV；代码中的batch_train
 
 Core资源查表与几何O(1)。GEMM最多128个模板候选，Attention最多16基本组合×两种固定方案；融合FFN最多128次容量试探，物化FFN调用固定四个子kernel而不枚举笛卡尔积。每候选至多32个类别、16个epoch/primitive及3条独立活动；复合region最多64个epoch。
 
-总工作约O(候选×固定类别/epoch×kernel/输入span)。causal和Core归属使用闭式/floor_sum（可O(log dimension)），不允许O(token²)、O(Core×tile)、逐wave数组。巨大repeat_count只增整数/浮点运算成本，不增事件/状态。独立span数是实际输入成本，同shape/位置规则可聚合repeat；不能强行改成最大shape。
+总工作约O(候选×固定类别/epoch×kernel/输入span)。causal和Core归属使用闭式/floor_sum（可O(log dimension)），不允许O(token²)、O(Core×tile)、逐wave数组。巨大repeat_count只增整数/浮点运算成本，不增事件/状态；不得用逐K展开、运行时周期搜索或精确周期证明作为实现该上限的生产路线。独立span数是实际输入成本，同shape/位置规则可聚合repeat；不能强行改成最大shape。
 
 ### 13.2 热路径
 
@@ -1085,6 +1129,10 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 每epoch内部活动/credit/描述符切换有固定上限，须在维度×repeat扩大测试中证明event_count不跟tile数线性增长。只预约最早本地事件，与原外部事件合并；取消及时回收代号/句柄，不积无限墓碑。稳定资源下事件量O固定epoch；动态外部到达/取消本来会增加事件，按其数量单独报告。
 
 ### 13.3 与原Roofline比较的开销验收
+
+速度与精度从第一版同时测，不等待全部结构实现后再补性能。除固定事件/活跃规模下的Core/tile/K/repeat放大测试，还记录实际描述符/曲线折点、内部事件、候选估值、LP更新及JSON字节和缓存命中/未命中次数。计时区分单次仲裁更新、整次执行、孤立查询与完整world预测；不得用总耗时除以更新数冒充单次更新P95。
+
+规范化缓存键统一由C++语义生成，保留shape、精度、TP/span、驻留/就绪等有意义的输入，只剔除已证明不影响计算的追踪标签。命中查询不重新枚举候选或构造完整诊断报告；轻量孤立估值可复用同一公共Runtime在相同HW/profile/revision下已得结果。活跃world查询必须保留clock/generation/owner/overlay身份，不能误用孤立缓存。完整旧接口、指标及版本化兼容继续保留。
 
 以下为初始工程目标，尚非测量结果。指定CPU/编译器、Release、日志关闭和缓存状态，重复测量p50/p95及内存，保存命令/代码身份。
 
@@ -1098,6 +1146,8 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 | 五仓同workload端到端运行 | 相对旧Roofline CPU墙钟增加≤10%作为初始项目预算；各仓/候选强度分别报告 |
 
 开销报告同时列legacy Roofline、旧mesh_die_v1及coarse_v2：cold/hot ns与倍率、总host CPU time/wall time、峰值RSS、缓存命中、事件/仲裁次数、候选world数。测量固定输入图/调度事件序列以隔离后端开销，再另跑完整在线策略看延迟变化造成的图数量差异；不能把两种实验混成一个倍率。真实硬件模型输出的延迟与host仿真耗时分开。
+
+独占3%/并发与共享HBM busy 5%的相对门槛不变；同时报告busy绝对误差、参考共享时长和覆盖范围，不以平均占用率乘积或事后修正统计替代原busy定义。
 
 最低验证粒度5→8→16的精度/事件/CPU曲线同时报告，选满足误差与开销门槛的最小者。若没有共同满足者，标tradeoff_unresolved并改聚合表示/批量缓存；不能删除SRAM或互连约束，也不能宣称“最粗粒度已验证”。多个入口情景、离散oracle和拟合均离线，不增加默认热路径成本。
 
@@ -1268,7 +1318,7 @@ resolver按源公式求L0、最小W/H；不能用显示的2.56355mm近似值执�
 - 指定地址偏斜/单栈热点：从两排均匀条带升级为稀疏栈/控制器组。
 - 指定位置热点：从中央截面/总hop升级为少量关键边资源，而非立即逐flit。
 - 同die多kernel的PE/Vec独立并发：从COMPUTE_GATE升级为分离服务域。
-- 精确tile交错或router credit：需更细事件版本，不进入默认路径。
+- 精确tile交错或router credit：不属于当前解析生产方案；只能在用户明确另立研究目标后讨论独立扩展，不能作为本项目默认接续路线或失败fallback。
 - 线长/PHY、DVFS、热反馈：补证据与输入机制后建立扩展profile。
 
 扩展需另记granularity_profile、误差证书与开销；不能静默增加默认调用成本或共用未区分缓存。最多16段仍失败先检视表示/结构，不能为了通过就盲目提高tile粒度。
