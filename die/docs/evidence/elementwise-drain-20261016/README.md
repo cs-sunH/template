@@ -1,0 +1,1 @@
+Final production evidence is prefetch/. Top-level oracle/, extra/, benchmark and conservative-source/ are the earlier uncommitted v2 with a known offset shared-HBM regression. baseline/ is a frozen a0d327a build for nine additional cases. All attempts retained; see ../../analysis/elementwise-drain-20261016/README.md for exact scope and replay. No ELF/build artifacts committed.

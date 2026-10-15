@@ -1469,6 +1469,7 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
     return f;
   };
   const bool single=g.total_blocks==g.first_blocks;
+  const bool separate_two_cohort_drain=executions==1 && g.rounds==2;
   const u64 first_max=g.full_blocks ? 256 : g.tail;
   Flow load=io_for(g.full_blocks,g.tail,executions,false,
       mul128(serial_bytes(ad),input_streams,"elementwise input service"));
@@ -1497,9 +1498,27 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
   first_load.credit={{static_cast<long double>(g.first_blocks),0}};
   append("_load_first",first_load,{}, {},{{0,0}},g.active);
   first_compute.credit={{-static_cast<long double>(g.first_blocks),0}};
-  append("_first_output_work",{},first_compute,{},
-      {{static_cast<double>(g.first_blocks),0}},g.active);
-  if(!single) {
+  if(separate_two_cohort_drain) {
+    // Fixed first/last cohorts: the second input slot supports this bounded
+    // prefetch during First Compute. Last Compute then has independent
+    // progress, so it can finish before First Store without a fluid load tie.
+    Flow last_load=subtract_io_flow(load,first_load);
+    Flow last_compute=subtract_compute_flow(compute,first_compute);
+    Flow first_store=subtract_io_flow(store,final_store);
+    last_load.credit={{static_cast<long double>(g.last_blocks),0}};
+    append("_first_output_work_and_last_load",last_load,first_compute,{},
+        {{static_cast<double>(g.first_blocks),0}},g.active);
+    last_compute.credit={{-static_cast<long double>(g.last_blocks),0}};
+    first_store.credit={{0,-static_cast<long double>(g.first_blocks)}};
+    // Keep First Store's full active prefix. Last Compute retains its own
+    // longest-Core compute/PRIVATE bounds for a partial final cohort.
+    append("_last_compute_and_first_store",{},last_compute,first_store,
+        {{static_cast<double>(g.last_blocks),static_cast<double>(g.first_blocks)}},g.active);
+  } else {
+    append("_first_output_work",{},first_compute,{},
+        {{static_cast<double>(g.first_blocks),0}},g.active);
+  }
+  if(!single && !separate_two_cohort_drain) {
     Flow remaining_load=subtract_io_flow(load,first_load);
     Flow remaining_compute=subtract_compute_flow(compute,first_compute);
     Flow early_store=subtract_io_flow(store,final_store);
@@ -1514,8 +1533,14 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
   append("_store_last",{}, {},final_store,{{0,static_cast<double>(g.last_blocks)}},g.last_blocks);
   const auto descriptions=service_description_count(plan)-description_begin;
   if(descriptions>8)fail("mapping_invariant: elementwise description budget exceeded");
+  const auto& first_epoch=plan.epochs.at(begin+1);
+  const auto first_compute_activity=std::find_if(first_epoch.activities.begin(),
+      first_epoch.activities.end(),[](const Activity& a){return a.role==Role::Compute;});
+  if(first_compute_activity==first_epoch.activities.end())
+    fail("mapping_invariant: first elementwise Compute is absent");
   plan.summary["service_curves"].push_back({
-      {"model","analytical_cumulative_elementwise_v1"},{"epoch_begin",begin},
+      {"model",separate_two_cohort_drain ? "analytical_cumulative_elementwise_v3_two_cohort_prefetch" :
+          "analytical_cumulative_elementwise_v1"},{"epoch_begin",begin},
       {"epoch_count",plan.epochs.size()-begin},{"description_count",descriptions},
       {"description_budget",descriptions<=5 ? 5 : 8},
       {"input_unit","one_elementwise_input_block_all_streams"},
@@ -1527,7 +1552,8 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
       {"first_load_units",g.first_blocks},{"first_load_elements",g.first_elements},
       {"first_output_input_bytes",as_u64(input_bytes(g.first_elements),"elementwise first input")},
       {"first_output_compute_work_s",as_double(first_compute.compute_s,"elementwise first work")},
-      {"first_output_release","first_cohort_compute_terminal"},{"first_output_epoch",begin+1},
+      {"first_output_release","first_cohort_compute_activity_terminal"},{"first_output_epoch",begin+1},
+      {"first_output_activity_id",first_compute_activity->id},
       {"final_drain_units",g.last_blocks},
       {"input_capacity_units",slots*g.active},{"output_capacity_units",slots*g.active},
       {"allocated_input_slots_per_core",slots},{"allocated_output_slots_per_core",slots},
@@ -1535,7 +1561,9 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
       {"mapping","invocation_local_round_robin_256_element_blocks"},
       {"routing","byte_weighted_full_prefix_and_tail_point_v1"},
       {"hbm_row_striping","input_streams_concatenated_per_block_invocation_restarts_row0"},
-      {"readiness_approximation","aggregate_bulk_affine_including_invocation_boundaries"}});
+      {"readiness_approximation",separate_two_cohort_drain
+          ? "last_input_prefetch_during_first_compute_epoch_barrier_before_first_store"
+          : "aggregate_bulk_affine_including_invocation_boundaries"}});
   m.logical=add128(m.logical,add128(in,out,"elementwise logical bytes"),"logical bytes");
   m.hbm_read=add128(m.hbm_read,in,"elementwise reads");
   m.hbm_write=add128(m.hbm_write,out,"elementwise writes");

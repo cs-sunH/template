@@ -1,0 +1,48 @@
+[
+  {
+    "phase": "configure",
+    "command": [
+      "cmake",
+      "-S",
+      "/workspace/template/work/elementwise-drain-baseline/source/die",
+      "-B",
+      "/workspace/template/work/elementwise-drain-baseline/build",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON"
+    ],
+    "started_utc": "2026-10-15T16:58:01.672951+00:00",
+    "wall_seconds": 0.8368625059993064,
+    "exit_code": 0,
+    "log": "configure.log"
+  },
+  {
+    "phase": "build",
+    "command": [
+      "cmake",
+      "--build",
+      "/workspace/template/work/elementwise-drain-baseline/build",
+      "--target",
+      "coarse_elementwise_oracle_driver",
+      "-j2"
+    ],
+    "started_utc": "2026-10-15T16:58:02.510129+00:00",
+    "wall_seconds": 33.95712220200039,
+    "exit_code": 0,
+    "log": "build.log"
+  },
+  {
+    "phase": "extra-cases",
+    "command": [
+      "python3",
+      "/workspace/template/die/docs/analysis/elementwise-drain-20261016/run_extra_cases.py",
+      "--driver",
+      "/workspace/template/work/elementwise-drain-baseline/build/coarse_elementwise_oracle_driver",
+      "--output",
+      "/workspace/template/die/docs/evidence/elementwise-drain-20261016/baseline/extra"
+    ],
+    "started_utc": "2026-10-15T16:58:36.590684+00:00",
+    "wall_seconds": 0.6510140869995666,
+    "exit_code": 0,
+    "log": "extra-cases.log"
+  }
+]

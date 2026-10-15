@@ -1,0 +1,7 @@
+{
+  "confirmed_main_before_phase": "a0d327aeeb4a966faab56b426ed88d61e5607478",
+  "confirmed_branch": "codex/die-explicit-continue-20261015",
+  "local_head": "a0d327aeeb4a966faab56b426ed88d61e5607478",
+  "method": "normal branch/main push, fetch, ls-remote; exact equality observed before drain edits",
+  "formal_vendor_publish": false
+}

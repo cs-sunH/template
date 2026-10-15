@@ -1,10 +1,21 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch实核HEAD与main均为 `f4d576bc4c066b7afdae6699bc377e9a0ff628a7`，这是已合入的上一检查点。包含本页的Git提交是本次ready修复检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前已普通push/fetch/ls-remote实核HEAD与main均为 `a0d327aeeb4a966faab56b426ed88d61e5607478`，这是已合入的ready修复检查点。包含本页的Git提交是本次两cohort预取/尾部检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
 
 ## Current Status
 
-### 当前有效检查点：单region启动/首访响应与合法小数时间
+### 当前有效检查点：两cohort预取、独立尾Compute与真实首输出
+
+- 仅R=1恰好两个输出cohort升级v3：Lfirst → (Cfirst∥Llast) → (Clast∥Sfirst) → Slast，真实双输入槽预取和独立尾Compute progress。六活动描述+ready七，仍8预算，无新Runtime/DAG/逐wave状态。部分末Core保持真实PRIVATE，首Store保留完整active核服务；字节/ops/路由及槽位守恒不变。
+- 首Compute可能早于prefetch结束，新增first_output_activity_id；离线driver按真实Runtime activity_id/done捕获首输出，不能以epoch结束替代。10.1ms计算/20ms装载的反例已测（公开ceil可多1ns）。StoreFirst仍受epoch保守屏障，外部节点照旧完整Plan终态发布；不是全greedy/多Core时间精度证书。
+- 最终一致Release **45/45通过，19.81s**；原守恒/容量/route/snapshot/取消/公平及放大保留。最大内部事件12，浮点byte reconciliation残差1.77635683940025046468e-15，非严格整数全等。初始fixture未去ready、首输出未计ceil的失败raw均保留，未放宽物理/精度门槛。
+- 原17case×3场景：17/17 driver/总量/各HBM行账本通过，严格inv barrier完成+原busy达到10%的11→24场景，失败39→27；原完成覆盖仍27目标、9在10%—20%未接受、15>20% failed。257 balanced solo完成30.039063ms/参考30.0390625ms，Compute busy原99.61%误差消失。R>1/更多cohort旧路未修，整体精度仍failed。
+- 防止只挑1元素tail，新增residual321/511/512×balanced/memory/compute共9case/27场景，完成+原busy+首输出全部≤10%，9/9工作账通过。独立冻结a0d Release证明511/512原24.93%/25%完成误差已有；最终仅0.5/1ns差。曾未提交v2保守drain把compute511/512 offset shared busy退化至25.4%，**未交付该方案**；最终v3该退化已消失，完整失败/raw/源存档。参考oracle SHA/数值未变，非拟合。
+- 最终单独30样本cold128³ **1.845687ms**，residual/SwiGLU0.461622/0.519788ms、hot4.066—4.807μs通过；OS J1/J8/J32 **18.087/50.435/47.350μs**，J8 **failed**。上次a0d及中间v2的所有通过/失败保留，尾部不稳定仍未解决，不挑最佳一次；五仓CPU not_run。
+- 只改die/；最终证据在elementwise-drain-20261016的**prefetch/**，顶层oracle/extra/benchmark属于未交付v2，不能混用。baseline/为真实冻结a0d新增9case；源码身份、全部raw及复现见同名analysis README。正式五仓未publisher/未跑最终业务，R>1 ready仍not_available；TX8/目标先验冻结、target raw缺失，无目标校准声称。
+
+
+### 已合入a0d327a：单region启动/首访响应与合法小数时间
 
 - 完整region组合后复用Plan.launch_ns：R=layer_instances×weight_passes=1且首次HBM为独立初始Load时，launch+一次setup合并为整数ready等待。FFN/attention/QKV+RoPE不按内部kernel多收；无HBM不收setup。等候不占owner Q/alpha、13资源域、PRIVATE、busy/served；ready切换计入描述预算。没有新Runtime状态、周期或逐repeat回放。
 - **R>1仍not_available**：旧bulk没有逐实例ready/materialization窗口，保留body数值与物理账本，audit modeled_instances=0；Compiler/full estimate/cost-only都传播不可用。不能前置R×delay冒充竞争语义正确。公共Runtime可运行body用于诊断；正式五仓新发布前必须检查消费者不把不可用数值当完整预测。
@@ -265,12 +276,12 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本检查点的main与分支/HEAD；读取region-ready README/最终identity。45/45是当前功能基线。显式硬件搜索移除、R1启动/首次HBM响应和合法fraction修复已完成，不重复历史待办；正常同步后继续开发。
-2. 优先处理R>1真实region间materialization依赖与每实例ready/setup的固定数量解析表示。当前明确not_available，不前置总等待、不逐repeat/wave/K回放、不恢复周期/Program。由shape/实际循环推导曲线，工作/容量/依赖及原公平约束不按10%/20%放宽。
-3. 继续逐元素预取/尾块及多inv依赖误差。f4d绑定51场景有25%/33.33%完成、99.61% compute busy反例；当前没有宣称修复。用最终真实driver重跑适用小规模oracle，分报首输出/完成/原busy；10%—20%未自动接受，不拿历史raw当新源证书。
-4. 最终30样本速度本次所测通过，所有先前尾部失败保留；模型变更时同步测精度、复杂度和速度。不要删合法软件候选或validation求速度。可评估已只读识别的重复SRAM峰值计算/loser结果JSON/ready时空refs reserve，但只有真实收益和完整语义验证才保留，不无故重跑挑最好一次。
-5. 公共源稳定后，在隔离SDK检查not_available真实消费者，再重建五仓双ABI/配置/业务和CPU预算，最后才正式publisher。JOINT依赖路径已解决，before-guard SDK旧4+6+13+45/legacy tiny不是最终源证书；provider/live/sh30保护保留，E2E不能以tiny或CABI代替。
-6. WR/Norm/softmax/Attention/FFN其余曲线、OS二阶/odd-row限制按真实依赖推进；无可识别独立数据不重新拟合TX8或目标效率，target raw保持not_available。持续保存有效源码/raw并在有意义检查点安全同步GitHub，不按阶段停工。
+1. fetch核实包含本页的main与HEAD，读取elementwise-drain README与prefetch/最终identity；当前45/45功能基线19.81s。显式硬件移除搜索、R1 ready、小数时间和R1两cohort预取/drain已完成，不重复历史待办。正常同步检查点后继续自主开发。
+2. 当前精度缺口集中在R>1及更长cohort bulk依赖/正服务busy，ready/setup逐实例窗口仍not_available。先从真实shape/循环推导固定前后缀与稳态；必要时有数据评估8/16段。禁止逐repeat/K/wave或周期搜索，不能将总等待前置或改busy定义。两cohort的真实Compute done诊断/预取保留，不能恢复未交付v2的共享busy退化或错误epoch首输出门。
+3. 最终速度J8 P95 50.435μs failed，历史J32尾部失败仍有效。可先落实已盘点的轻量去重（空ready refs reserve、activity vector reserve、loser JSON等），保留generation/计数、真实Runtime事件、所有合法软件映射和完整validation；改后适配回归及固定门槛计时，不反复挑最好一次。
+4. 新模型按实际改动重跑相应oracle：当前原17case/51场景仍27完成+busy失败，另9case/27场景全10%只证明单Core两cohort范围。旧raw/初版v2属于各自明确源码，不能当最终验收；10%—20%未自动接受，目标硬件数据缺失不拟合eta掩盖结构误差。
+5. 公共源稳定后，隔离SDK检查not_available真实消费者，再重建五仓双ABI/配置/业务及CPU预算，最后正式publisher。JOINT依赖已解决，但before-guard旧SDK证书不是最终源；provider/live/sh30保护保留，E2E不能以tiny/CABI替代。
+6. WR/Norm/softmax/Attention/FFN其它曲线、OS二阶/odd-row限制按真实依赖继续；TX8/reference与目标先验冻结，无独立raw就not_available。保存所有有效源码/失败/raw，持续在有意义检查点安全同步GitHub。
 
 下方为历史接续记录，冲突时以上为准。
 
@@ -362,7 +373,7 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Tests
 
-当前：region-ready最终Release45/45（19.20s），独立delay Fraction21,435零差异及UBSan、真实CABI参数响应与fraction修复均通过；最终30样本常规预算本次通过，历史失败仍有效。范围、命令/source/ELF及全部raw见region-ready-overheads-20261016，未跑最终五仓业务/CPU或目标校准。下方旧结果按各自源码范围复用，不是当前最终源全验收。
+当前：elementwise-drain最终prefetch Release45/45（19.81s），单Core原17+新增9case真实对拍/守恒已跑；原17仍27完成+busy失败，新9全10%只限两cohort范围。最终30样本J8 50.435μs failed，非全速验收。所有初始fixture/中间v2退化及其源/ELF保留，不混用顶层v2与prefetch最终结果。未跑最终五仓业务/CPU或目标校准；下方旧结果按各自源码范围复用。
 
 本次最终：公共42/42（22.34s）、隔离双ABI五仓、配置83/83、FACE133/133与152/152均已执行通过，范围与源码版本见本页最上方及explicit-input-integration证据。新native仅构建，Online链接failed；新native/Python/Online/E2E预算及最终行省略性能均not_run。收到停止指令后未新增测试。
 
@@ -417,7 +428,7 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Blocking Issues
 
-当前有效：R>1固定region延迟/物化窗口not_available，逐元素及其它模板busy/精度缺口未修完，所有历史性能尾部失败保留；正式五仓未发布/最终源业务及CPU预算未验收，目标raw缺失。R1启动已修，vector已实现，protobuf环境已修，最终性能已测；下面旧“未启动/缺路径/未计时”是历史，不再执行为当前待办。
+当前有效：R>1固定region延迟/物化窗口not_available，R1两cohort已改进但更多批次及其它模板busy/精度缺口未修完，最终J8仲裁P95 50.435μs failed，所有历史性能尾部失败保留；正式五仓未发布/最终源业务及CPU预算未验收，目标raw缺失。R1启动已修，vector已实现，protobuf环境已修，最终性能已测；下面旧“未启动/缺路径/未计时”是历史，不再执行为当前待办。
 
 以下为历史限制，冲突时以上方最新检查点为准。
 

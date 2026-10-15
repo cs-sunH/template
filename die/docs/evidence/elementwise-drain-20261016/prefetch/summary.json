@@ -1,0 +1,63 @@
+{
+  "oracle": {
+    "invocation_barrier": {
+      "completion_and_busy_status": {
+        "failed": 27,
+        "passed_target_10_percent": 24
+      },
+      "completion_status": {
+        "target_10_percent": 27,
+        "within20_unaccepted": 9,
+        "failed": 15
+      },
+      "case_count": 17,
+      "ledger_passed": 17,
+      "first_output_all_within_10_percent": true,
+      "max_first_output_relative_error": 0.08333336666666685,
+      "max_first_output_absolute_error_s": 0.002500001000000005
+    },
+    "independent_invocations_pipeline": {
+      "completion_and_busy_status": {
+        "failed": 18,
+        "passed_target_10_percent": 33
+      },
+      "completion_status": {
+        "target_10_percent": 39,
+        "within20_unaccepted": 12
+      },
+      "case_count": 17,
+      "ledger_passed": 17,
+      "first_output_all_within_10_percent": true,
+      "max_first_output_relative_error": 0.08333336666666685,
+      "max_first_output_absolute_error_s": 0.002500001000000005
+    }
+  },
+  "extra": {
+    "invocation_barrier": {
+      "completion_and_busy_status": {
+        "passed_target_10_percent": 27
+      },
+      "completion_status": {
+        "target_10_percent": 27
+      },
+      "case_count": 9,
+      "ledger_passed": 9,
+      "first_output_all_within_10_percent": true,
+      "max_first_output_relative_error": 0.0017304666666669024,
+      "max_first_output_absolute_error_s": 5.1914000000007066e-05
+    },
+    "independent_invocations_pipeline": {
+      "completion_and_busy_status": {
+        "passed_target_10_percent": 27
+      },
+      "completion_status": {
+        "target_10_percent": 27
+      },
+      "case_count": 9,
+      "ledger_passed": 9,
+      "first_output_all_within_10_percent": true,
+      "max_first_output_relative_error": 0.0017304666666669024,
+      "max_first_output_absolute_error_s": 5.1914000000007066e-05
+    }
+  }
+}

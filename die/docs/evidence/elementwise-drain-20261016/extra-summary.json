@@ -1,0 +1,110 @@
+[
+  {
+    "case": "residual-e321-i1-balanced-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "passed_target_10_percent",
+    "solo_completion_error": 0.07803121248499403,
+    "solo_compute_busy_error": 1.383455482398949e-16,
+    "scenarios": {
+      "offset": "within_20_percent_unaccepted_without_recorded_attempts",
+      "solo": "passed_target_10_percent",
+      "sync": "passed_target_10_percent"
+    }
+  },
+  {
+    "case": "residual-e321-i1-compute-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "passed_target_10_percent",
+    "solo_completion_error": 0.018408382894364365,
+    "solo_compute_busy_error": 2.2135287718383188e-16,
+    "scenarios": {
+      "offset": "passed_target_10_percent",
+      "solo": "passed_target_10_percent",
+      "sync": "passed_target_10_percent"
+    }
+  },
+  {
+    "case": "residual-e321-i1-memory-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "passed_target_10_percent",
+    "solo_completion_error": 0.003987538940809944,
+    "solo_compute_busy_error": 2.1616491912483576e-16,
+    "scenarios": {
+      "offset": "passed_target_10_percent",
+      "solo": "passed_target_10_percent",
+      "sync": "passed_target_10_percent"
+    }
+  },
+  {
+    "case": "residual-e511-i1-balanced-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "failed",
+    "solo_completion_error": 0.24926688719452578,
+    "solo_compute_busy_error": 1.738118238160715e-16,
+    "scenarios": {
+      "offset": "within_20_percent_unaccepted_without_recorded_attempts",
+      "solo": "failed",
+      "sync": "failed"
+    }
+  },
+  {
+    "case": "residual-e511-i1-compute-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "passed_target_10_percent",
+    "solo_completion_error": 0.04536559786514863,
+    "solo_compute_busy_error": 0.0,
+    "scenarios": {
+      "offset": "failed",
+      "solo": "passed_target_10_percent",
+      "sync": "passed_target_10_percent"
+    }
+  },
+  {
+    "case": "residual-e511-i1-memory-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "passed_target_10_percent",
+    "solo_completion_error": 0.00250491741682963,
+    "solo_compute_busy_error": 0.0,
+    "scenarios": {
+      "offset": "passed_target_10_percent",
+      "solo": "passed_target_10_percent",
+      "sync": "passed_target_10_percent"
+    }
+  },
+  {
+    "case": "residual-e512-i1-balanced-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "failed",
+    "solo_completion_error": 0.25000000000000006,
+    "solo_compute_busy_error": 0.0,
+    "scenarios": {
+      "offset": "within_20_percent_unaccepted_without_recorded_attempts",
+      "solo": "failed",
+      "sync": "failed"
+    }
+  },
+  {
+    "case": "residual-e512-i1-compute-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "passed_target_10_percent",
+    "solo_completion_error": 0.04545455000000004,
+    "solo_compute_busy_error": 1.3877787807814457e-16,
+    "scenarios": {
+      "offset": "failed",
+      "solo": "passed_target_10_percent",
+      "sync": "passed_target_10_percent"
+    }
+  },
+  {
+    "case": "residual-e512-i1-memory-bf16-fp32",
+    "ledger": "passed",
+    "solo_status": "passed_target_10_percent",
+    "solo_completion_error": 0.002500000000000072,
+    "solo_compute_busy_error": 1.3552527156068805e-16,
+    "scenarios": {
+      "offset": "passed_target_10_percent",
+      "solo": "passed_target_10_percent",
+      "sync": "passed_target_10_percent"
+    }
+  }
+]

@@ -88,9 +88,12 @@ void physical_ledger_and_prefix() {
           const u64 first_elements=std::min<u64>(count,2*256);
           require(payload(p->epochs[0].activities[0])==streams*b(first_elements),
               "first load is a real cohort, not average total bytes divided by rounds");
-          for(const auto& a:p->epochs[1].activities)
-            require(a.role==Role::Compute&&a.credit_delta[1]==0&&credit_at(a,0.5)[1]==0,
-                "no output is released before the real first compute terminal");
+          for(const auto& a:p->epochs[1].activities) {
+            require(a.credit_delta[1]==0 && credit_at(a,0.5)[1]==0,
+                "the first epoch must not release fractional output blocks");
+            if(a.role==Role::Compute)require(a.id==audit.at("first_output_activity_id"),
+                "first-output diagnostics must identify the actual Compute terminal");
+          }
           Runtime r(hw);const auto h=r.submit(p,owner(1,1,1),0);bounded_drain(r);
           const auto served=r.query_progress(h).at("served");
           const auto bytes=served.at("hbm_bytes_by_row_direction_exact");
@@ -140,7 +143,8 @@ void capacity_and_private() {
     hw=hardware(2);hw.rates[resource]=2.0;
     hw.derived["resources"][resource]["rate"]=2.0;
     p=compile(hw,task(257,"residual","fp32"));
-    const auto& c=p->epochs[1].activities[0];
+    const auto& first=p->epochs[1].activities;
+    const auto& c=*std::find_if(first.begin(),first.end(),[](const Activity& a){return a.role==Role::Compute;});
     const double full=resource==SRAM_READ ? 2048.0 : resource==SRAM_WRITE ? 1024.0 : 3072.0;
     require(c.private_time_s>=full,"full/tail skew must retain per-Core SRAM/LOCAL service bound");
     require(c.work[COMPUTE_GATE]<1,"per-Core memory bound must not inflate compute work");
@@ -180,6 +184,53 @@ void byte_weighted_routes() {
     }
   }
 }
+void independent_two_cohort_compute_drain() {
+  auto hw=hardware(1);
+  hw.derived["core"]["P_vec_per_core_ops_per_s"]=25600.0;
+  hw.input["performance_profile"]["launch_ns_per_macro"]=0;
+  hw.input["performance_profile"]["memory_setup_ns_per_macro"]=0;
+  hw.input["performance_profile"]["eta_vec"]=1.0;
+  hw.input["performance_profile"]["eta_hbm_vector"]=1.0;
+  hw.fingerprint="synthetic-two-cohort-drain:"+hw.fingerprint;
+  for(std::size_t r=0;r<resource_count;++r) {
+    const bool enabled=hw.derived["resources"][r].at("enabled").get<bool>();
+    const double rate=r==COMPUTE_GATE ? 1.0 : (r==HBM0 || r==HBM1) ? 51200.0 : enabled ? 1e12 : 0;
+    hw.rates[r]=rate;hw.derived["resources"][r]["rate"]=rate;
+  }
+  for(u64 count:{257,321,511,512}) {
+    auto t=task(count,"residual","bf16");t["storage_dtype"]={{"activations","bf16"},{"output","fp32"}};
+    const auto p=compile(hw,t);
+    require(p->summary.at("service_curves")[0].at("model")==
+        "analytical_cumulative_elementwise_v3_two_cohort_prefetch" && service_description_count(*p)==6,
+        "the two-cohort drain has six real service descriptions independent of tail size");
+    Runtime runtime(hw);runtime.submit(p,owner(1,1,1),0);bounded_drain(runtime);
+    const long double expected=static_cast<long double>(count)/25600.0L*1e9L;
+    const long double measured=runtime.counters().at("compute_busy_ns").get<long double>();
+    require(std::abs(measured-expected)<=1.1L,
+        "nonbinding memory/LOCAL must not stretch positive Compute service to Store duration");
+  }
+  // Memory-bound prefix: ComputeFirst ends while prefetched LoadLast is
+  // still active. The diagnostic ID must expose that actual activity event.
+  hw.derived["core"]["P_vec_per_core_ops_per_s"]=2560000.0;
+  auto t=task(512,"residual","bf16");
+  t["storage_dtype"]={{"activations","bf16"},{"output","fp32"}};
+  const auto p=compile(hw,t);Runtime runtime(hw);
+  const auto h=runtime.submit(p,owner(1,1,1),0);
+  runtime.advance_to(*runtime.next_event());runtime.advance_to(*runtime.next_event());
+  const auto q=runtime.query_progress(h);
+  require(q.at("epoch_index")==1,"prefetched load should outlive the short first Compute");
+  const auto id=p->summary.at("service_curves")[0].at("first_output_activity_id");
+  bool compute_done=false,load_active=false;
+  for(const auto& activity:q.at("activities")) {
+    if(activity.at("activity_id")==id)compute_done=activity.at("done").get<bool>();
+    if(activity.at("epoch_index")==1 && activity.at("role")=="load")
+      load_active=!activity.at("done").get<bool>();
+  }
+  require(compute_done && load_active && runtime.now_ns()>=10100000 && runtime.now_ns()<=10100001,
+      "first output is the 10.1ms Compute event within public ceil quantization, before the 20ms epoch gate");
+
+}
+
 void snapshots_and_scaling() {
   const auto hw=hardware(2);u64 largest=0;
   for(u64 repeats:{1,1024,1000000}) {
@@ -209,7 +260,7 @@ void snapshots_and_scaling() {
   require(r.query_progress(h)==fork->query_progress(h),"capacity/cancel preserves restored partial work");
 }
 void verify(){
-  independent_enumeration();physical_ledger_and_prefix();capacity_and_private();byte_weighted_routes();snapshots_and_scaling();
+  independent_enumeration();physical_ledger_and_prefix();capacity_and_private();byte_weighted_routes();independent_two_cohort_compute_drain();snapshots_and_scaling();
   std::ostringstream value;value<<std::setprecision(std::numeric_limits<long double>::max_digits10)<<max_service_residual;
   std::cout<<json{{"integer_plan_conservation","passed"},{"runtime_service_numeric_reconciliation","passed"},
       {"runtime_service_exact_integer_equality",max_service_residual==0},

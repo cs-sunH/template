@@ -126,6 +126,30 @@ json plan_data(const Plan& p) {
 }
 json run(const Hardware& hw,std::shared_ptr<const Plan> p,const std::vector<std::uint64_t>& arrivals) {
   Runtime rt(hw);
+  std::uint64_t first_output_activity_id=0;
+  if(p->summary.contains("service_curves") && !p->summary.at("service_curves").empty()) {
+    const auto& curve=p->summary.at("service_curves").at(0);
+    if(curve.contains("first_output_activity_id")) {
+      const auto& id=curve.at("first_output_activity_id");
+      if(id.is_number_unsigned())first_output_activity_id=id.get<std::uint64_t>();
+      else if(id.is_number_integer() && id.get<std::int64_t>()>0)
+        first_output_activity_id=static_cast<std::uint64_t>(id.get<std::int64_t>());
+      if(!first_output_activity_id)
+        throw std::runtime_error("first-output metadata requires a positive actual activity ID");
+      std::size_t matches=0;
+      for(const auto& epoch:p->epochs)for(const auto& activity:epoch.activities)
+        if(activity.id==first_output_activity_id) {
+          ++matches;
+          if(activity.role!=Role::Compute)
+            throw std::runtime_error("first-output metadata does not identify a Compute activity");
+        }
+      if(matches!=1)
+        throw std::runtime_error("first-output metadata must identify one actual Plan activity");
+    }
+  }
+  const char* readiness_source=first_output_activity_id
+      ? "runtime_query_progress_activities_activity_id_done"
+      : "legacy_epoch_index_at_least_2_fallback_without_activity_metadata";
   std::vector<std::uint64_t> handles;
   json events=json::array();
   std::size_t next_arrival=0,advances=0;
@@ -133,8 +157,28 @@ json run(const Hardware& hw,std::shared_ptr<const Plan> p,const std::vector<std:
     json states=json::array();
     for(auto h:handles) {
       const auto q=rt.query_progress(h);
+      bool ready=false;
+      if(first_output_activity_id) {
+        bool found=false;
+        // Query the actual immutable activity identity and Runtime terminal
+        // flag. Compute may finish before a sibling Load in the same epoch.
+        for(const auto& activity:q.at("activities"))
+          if(activity.at("activity_id")==first_output_activity_id) {
+            if(found)throw std::runtime_error("Runtime returned duplicate first-output activity IDs");
+            found=true;ready=activity.at("done").get<bool>();
+          }
+        if(!found)throw std::runtime_error("Runtime query lacks the actual first-output Compute activity");
+      } else {
+        // Historical Plans lack the explicit activity metadata. Preserve the
+        // old measurement rule, and identify it as a fallback in the output.
+        ready=q.at("epoch_index").get<std::size_t>()>=2;
+      }
       states.push_back({{"handle",h},{"epoch_index",q.at("epoch_index")},{"credit",q.at("credit")},
-          {"served",q.at("served")},{"terminal",q.at("terminal")}});
+          {"served",q.at("served")},{"terminal",q.at("terminal")},
+          {"first_output_ready",ready},
+          {"first_output_activity_id",first_output_activity_id ? json(first_output_activity_id) : json(nullptr)},
+          {"first_output_activity_done",first_output_activity_id ? json(ready) : json(nullptr)},
+          {"readiness_measurement_source",readiness_source}});
     }
     events.push_back({{"tick_ns",rt.now_ns()},{"states",states}});
   };
@@ -155,11 +199,13 @@ json run(const Hardware& hw,std::shared_ptr<const Plan> p,const std::vector<std:
     finish.push_back(*rt.terminal_finish_ns(h));terminal.push_back(rt.query_progress(h));
     json first_tick=nullptr;
     for(const auto& event:events)for(const auto& state:event.at("states"))
-      if(state.at("handle")==h && state.at("epoch_index").get<std::size_t>()>=2 && first_tick.is_null())
+      if(state.at("handle")==h && state.at("first_output_ready").get<bool>() && first_tick.is_null())
         first_tick=event.at("tick_ns");
     first.push_back(first_tick);
   }
   return {{"arrivals_ns",arrivals},{"finish_ns",finish},{"first_output_ready_ns",first},
+      {"first_output_activity_id",first_output_activity_id ? json(first_output_activity_id) : json(nullptr)},
+      {"readiness_measurement_source",readiness_source},
       {"event_advances",advances},{"counters",rt.counters()},{"event_trace",events},{"terminal_states",terminal}};
 }
 }  // namespace
