@@ -1,0 +1,162 @@
+{
+  "scope": "actual 26-case rerun linked to new allocator, byte comparison of complete raw outputs including all timelines/counters; referenced originals already committed with eba",
+  "cases": [
+    {
+      "current_run_path": "work/allocation-overhead/oracle/gelu-e1-i3-balanced-int4-int4.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/gelu-e1-i3-balanced-int4-int4.raw.json",
+      "sha256": "9ac19efeb4c966746a69c7768dbe6586ae8bd942c25b1fd6510533180115ce10",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/gelu-e256-i4-balanced-fp32-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/gelu-e256-i4-balanced-fp32-fp32.raw.json",
+      "sha256": "5607b4f7319fe82c185ffe1389a60df9ef5ecaace689ac94e314e08d3fa97ecb",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/gelu-e257-i1-balanced-fp32-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/gelu-e257-i1-balanced-fp32-fp32.raw.json",
+      "sha256": "f1db27e74aea00a6b9e85d0fe385b0f0f1364b862a19d6b35729afb7a98a120d",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/gelu-e257-i1-local-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/gelu-e257-i1-local-bf16-fp32.raw.json",
+      "sha256": "3baacb81e061ec8c1a07b9fa15c2eceb7dab7b742bc37c6b07082ce36a3b198c",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/gelu-e513-i2-balanced-fp32-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/gelu-e513-i2-balanced-fp32-fp32.raw.json",
+      "sha256": "bc43823099efbc0313e155a175f7c85b6fb686bdc53522d1d93c8a0ce09eefc1",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/residual-e1-i3-balanced-int4-int4.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/residual-e1-i3-balanced-int4-int4.raw.json",
+      "sha256": "0b21a513442cefb8d39ff1682c771c802dd4158a10b6c0ca4dc158667835b9f2",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/residual-e256-i4-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/residual-e256-i4-balanced-bf16-fp32.raw.json",
+      "sha256": "8e104b150b74a24e6f5f2d66d494f9de842f53fc7a100f6df19ce643b0e96fe7",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/residual-e257-i1-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/residual-e257-i1-balanced-bf16-fp32.raw.json",
+      "sha256": "64e496d4a128c5d4f08b1bdf7842418d685bbeea0be5873e3453690eed7c4258",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/residual-e257-i1-compute-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/residual-e257-i1-compute-bf16-fp32.raw.json",
+      "sha256": "6dbc080448e1c9c994afa2e32afa459a50109d4d453afb649c23537f4fd106d5",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/residual-e257-i1-local-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/residual-e257-i1-local-bf16-fp32.raw.json",
+      "sha256": "cf1150784da60f0f4cc617fa4991ebdc31c83e84dde057c6fc897f552348f9cc",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/residual-e257-i1-memory-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/residual-e257-i1-memory-bf16-fp32.raw.json",
+      "sha256": "1117594bd2857234c4fbc4492eac91a15faacaa1a8d2a7a5b9031e340234b6ca",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/residual-e513-i2-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/residual-e513-i2-balanced-bf16-fp32.raw.json",
+      "sha256": "e9135b8690a589fb93c690f44c34bb3d0e1111ef6b41ae1bab1805948093cdb5",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/swiglu-e1-i3-balanced-int4-int4.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/swiglu-e1-i3-balanced-int4-int4.raw.json",
+      "sha256": "e46246ec4f81fc5e73f39f8ce9d88c8090233215e8d5c2645dee7e57b7d38183",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/swiglu-e256-i4-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/swiglu-e256-i4-balanced-bf16-fp32.raw.json",
+      "sha256": "6f88551940283e0cd6f66e1336a5173d8b23351031ed390b02345380e6c16051",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/swiglu-e257-i1-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/swiglu-e257-i1-balanced-bf16-fp32.raw.json",
+      "sha256": "8db852c1a6521f0d9d2e0b87ba320b1ed3ef2b735fa9ecac84b5ebcb29e43a4f",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/swiglu-e257-i1-local-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/swiglu-e257-i1-local-bf16-fp32.raw.json",
+      "sha256": "4b0ac420d18e8668f8748629ad348b59f6694e13adff9b3f8dd72ddaf21b6b18",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/oracle/swiglu-e513-i2-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/oracle/swiglu-e513-i2-balanced-bf16-fp32.raw.json",
+      "sha256": "35036f899e9a74143f3c518148bb45b1022bbc36cc3e0e723b6ce5f5766cad2f",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e321-i1-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e321-i1-balanced-bf16-fp32.raw.json",
+      "sha256": "10aa18ca19e7aaf460358e5101d04805e2a9d9a902e2db27e4fdadc480d574c0",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e321-i1-compute-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e321-i1-compute-bf16-fp32.raw.json",
+      "sha256": "6a7a2f6c1d1c3acd7ae64def8aaa8456e74bfcaf57d3a27f2247e96195e82b9c",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e321-i1-memory-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e321-i1-memory-bf16-fp32.raw.json",
+      "sha256": "83529c5ee05acbbd6c165f014abb59bc4a7cd462e6365eceb22035f00e323969",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e511-i1-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e511-i1-balanced-bf16-fp32.raw.json",
+      "sha256": "0bd15e093011e396aaf5e565c5879b59b3674a5f3bdf78b78280e43e711535be",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e511-i1-compute-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e511-i1-compute-bf16-fp32.raw.json",
+      "sha256": "01fdc91021d232011a3125eb1b2f8bac63c0ba14d979c8b887dd662ce83c7b40",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e511-i1-memory-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e511-i1-memory-bf16-fp32.raw.json",
+      "sha256": "7fa85b82446ba01278242e77a81c2d78c2821ded72757a0f59ae020b2d6e29fc",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e512-i1-balanced-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e512-i1-balanced-bf16-fp32.raw.json",
+      "sha256": "351fbe09d78733f0e0d6bb7939c7b25bfbedfb39ccea9ee0ebe2e7f6f9770978",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e512-i1-compute-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e512-i1-compute-bf16-fp32.raw.json",
+      "sha256": "11d653fd8e8221cbf152baa829e54525e0de252747f8a8fa23d0f6ac2274a044",
+      "byte_identical": true
+    },
+    {
+      "current_run_path": "work/allocation-overhead/extra/residual-e512-i1-memory-bf16-fp32.raw.json",
+      "committed_eba_raw": "die/docs/evidence/elementwise-drain-20261016/prefetch/extra/residual-e512-i1-memory-bf16-fp32.raw.json",
+      "sha256": "ce3bd744b047d96e5d72a35ad4188800ccfac845ae0f359d6d3d360a92455f23",
+      "byte_identical": true
+    }
+  ],
+  "all_byte_identical": true
+}

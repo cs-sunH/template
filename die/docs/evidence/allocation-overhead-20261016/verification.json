@@ -1,0 +1,19 @@
+{
+  "baseline_commit": "eba9e972e0514dddb4913dace1c00c57c3f63076",
+  "ctest": {
+    "passed": 45,
+    "failed": 0,
+    "seconds": 19.85
+  },
+  "source_matches_tests": true,
+  "public_outputs_8_tasks": "full_results_exactly_equal",
+  "model_outputs_26_cases": "complete_raw_byte_identical_to_committed_eba_evidence",
+  "benchmark_30_samples": "passed_for_measured_fixtures_only",
+  "historical_tail_failures": "retained",
+  "reference_residual_workload_ledger": "passed",
+  "current_runtime_XLSX_latency_calibration": "not_available",
+  "repeat_ready_overheads": "not_available",
+  "target_hardware_calibration": "not_available",
+  "five_repository_publish": "not_run",
+  "five_repository_cpu_budget": "not_run"
+}

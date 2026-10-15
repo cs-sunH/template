@@ -872,6 +872,9 @@ std::uint64_t Runtime::submit_impl(std::shared_ptr<const Plan> plan, Owner owner
   execution.served_category = plan_served_category(*plan);
   execution.plan = std::move(plan);
   execution.epoch = 0;
+  std::size_t activity_count=0;
+  for(const auto& epoch:execution.plan->epochs)activity_count+=epoch.activities.size();
+  execution.activities.reserve(activity_count);
   for (std::size_t epoch = 0; epoch < execution.plan->epochs.size(); ++epoch) {
     for (const Activity& definition : execution.plan->epochs[epoch].activities) {
       execution.activities.push_back(LiveActivity{definition, epoch, 0.0, 0.0, 0.0, false});
@@ -1171,7 +1174,6 @@ void Runtime::allocate() {
   ++generation_;
 
   std::vector<Ref> refs;
-  refs.reserve(3 * std::min<std::size_t>(executions_.size(), 32));
   std::map<std::string, long double> owner_q;
   for (auto& [handle, execution] : executions_) {
     (void)handle;
@@ -1189,6 +1191,7 @@ void Runtime::allocate() {
       while (first_resource < resource_count && live.definition.work[first_resource] <= 0.0) {
         ++first_resource;
       }
+      if(refs.empty())refs.reserve(3 * std::min<std::size_t>(executions_.size(), 32));
       refs.push_back(Ref{&execution, &live, handle, {},
                          first_resource, q, 0.0});
       // Progress cannot change during allocation. Reuse its exact segment
@@ -1219,7 +1222,7 @@ void Runtime::allocate() {
     // Refs are collected contiguously per execution before the stable LP
     // sort. Store block ranges instead of allocating two maps and one vector
     // for each owner on every arbitration update.
-    struct Block { std::size_t begin, end; unsigned boundary = 0; };
+    struct Block { std::size_t begin, end; unsigned boundary = 0; bool split_owner=false; };
     std::vector<Block> blocks;
     blocks.reserve(refs.size());
     for (std::size_t begin = 0; begin < refs.size();) {
@@ -1227,6 +1230,23 @@ void Runtime::allocate() {
       while (end < refs.size() && refs[end].handle == refs[begin].handle) ++end;
       blocks.push_back({begin, end});
       begin = end;
+    }
+    // Detect repeated owners in bounded index storage. Sorting indices leaves
+    // the original block/representative order intact, including every tie.
+    // refs.size() was checked against 96 before constructing these blocks.
+    std::array<std::size_t,96> owner_order;
+    std::iota(owner_order.begin(),owner_order.begin()+blocks.size(),std::size_t{0});
+    const auto fair_owner=[](const Ref& ref) {
+      const auto& o=ref.execution->owner;
+      return std::tie(o.node_id,o.execution_id,o.generation);
+    };
+    std::sort(owner_order.begin(),owner_order.begin()+blocks.size(),[&](auto a,auto b) {
+      return fair_owner(refs[blocks[a].begin])<fair_owner(refs[blocks[b].begin]);
+    });
+    for(std::size_t i=1;i<blocks.size();++i) {
+      auto& previous=blocks[owner_order[i-1]];auto& current=blocks[owner_order[i]];
+      if(same_fair_owner(refs[previous.begin],refs[current.begin]))
+        previous.split_owner=current.split_owner=true;
     }
     const auto boundary_mask = [](const Execution& execution) {
       unsigned mask = 0;
@@ -1263,15 +1283,7 @@ void Runtime::allocate() {
     std::vector<bool> merged(refs.size(), false);
     for (std::size_t index = 0; index < blocks.size(); ++index) {
       const Block& block = blocks[index];
-      bool split_owner = false;
-      for (std::size_t other = 0; other < blocks.size(); ++other) {
-        if (other != index && same_fair_owner(refs[block.begin],
-                                            refs[blocks[other].begin])) {
-          split_owner = true;
-          break;
-        }
-      }
-      if (split_owner) continue;
+      if(block.split_owner)continue;
       const auto match = std::find_if(representatives.begin(), representatives.end(),
           [&](std::size_t candidate) {
             return equivalent_blocks(blocks[candidate], block);

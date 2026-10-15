@@ -1,0 +1,14 @@
+{
+  "baseline_commit": "eba9e972e0514dddb4913dace1c00c57c3f63076",
+  "status": "passed_new_real_capture",
+  "task_count": 8,
+  "compile_result_count": 8,
+  "estimate_result_count": 8,
+  "library_sha256": "3ddc00f77b0e25039dd367d7f45ae6f6af891a3b4ab4d30ad08ae224273a5cca",
+  "public_before_sha256": "41e486cd60daaebf6601ca85b20a576b73e5a5f8721750afa113b195ead08f94",
+  "capture_script_sha256": "39e787e588bc38dfe48af2f3a9d6cea4d8c9108fa689bdf99acf638bb07f94e3",
+  "capture_script_unchanged_during_run": true,
+  "all_consumer_inputs_equal_frozen_baseline": true,
+  "historical_initial_capture": "failed with status9 due unreleased handles; no before data was obtained then",
+  "scope": "actual eight-task public compile/estimate/hardware output only; no performance benchmark or oracle run; after-comparison belongs to main agent"
+}

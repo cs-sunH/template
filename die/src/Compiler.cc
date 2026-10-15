@@ -597,14 +597,14 @@ std::shared_ptr<const Plan> compile_normalized_impl(
   };
   std::vector<Ranked> ranked;
   ranked.reserve(candidates.size());
+  const std::string expected_hardware=hardware.fingerprint.empty()
+      ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
   for (auto& candidate : candidates) {
     // The compile-only GEMM enumerator defers candidate fingerprints because
     // losing candidates never leave this ranking pass. The dedicated Runtime
     // estimate path still performs all plan, hardware, work, and credit checks
     // while allowing only that internal trial to omit a not-yet-needed hash.
     // Public enumerate_mappings() continues to return fully sealed Plans.
-    const std::string expected_hardware = hardware.fingerprint.empty()
-        ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
     if(candidate->task != normalized || candidate->hardware_fingerprint != expected_hardware ||
        (gemm_candidates_are_unsealed ? !candidate->fingerprint.empty()
                                      : candidate->fingerprint.empty()))
@@ -612,9 +612,9 @@ std::shared_ptr<const Plan> compile_normalized_impl(
     const u64 latency = gemm_candidates_are_unsealed
         ? detail::estimate_candidate_latency_ns(immutable_hardware, candidate)
         : detail::estimate_latency_ns(immutable_hardware, candidate);
-    candidate->summary["estimated_latency_ns"] = latency;
-    candidate->summary["alone_estimate_status"] =
-        candidate->summary.value("prediction_status",std::string("ok_assumed"));
+    // Preserve status type validation for every candidate. Losing builders
+    // never escape, so only the winner needs these report fields inserted.
+    (void)candidate->summary.value("prediction_status",std::string("ok_assumed"));
     // These are still private mutable builders. Seal only the winner after
     // ranking; losing candidates never escape or enter a cache/runtime again.
     Ranked r;
@@ -636,10 +636,15 @@ std::shared_ptr<const Plan> compile_normalized_impl(
     return std::tie(r.latency, r.hbm, r.workspace, r.sram,
                     r.template_id, r.tm, r.tn, r.tk, r.th);
   };
-  std::stable_sort(ranked.begin(), ranked.end(), [&](const Ranked& a, const Ranked& b) {
-    return key(a) < key(b);
+  // min_element retains the first equal minimum, exactly like the previous
+  // stable_sort followed by front(), without reordering losing candidates.
+  const auto winner=std::min_element(ranked.begin(),ranked.end(),[&](const Ranked& a,const Ranked& b) {
+    return key(a)<key(b);
   });
-  std::shared_ptr<Plan> selected = ranked.front().plan;
+  std::shared_ptr<Plan> selected=winner->plan;
+  selected->summary["estimated_latency_ns"]=winner->latency;
+  selected->summary["alone_estimate_status"]=
+      selected->summary.value("prediction_status",std::string("ok_assumed"));
   selected->summary["candidate_count"] = static_cast<u64>(ranked.size());
   selected->summary["selected_template"] = selected->summary.value("template_id", std::string());
   selected->summary["selection_rule"] = "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th";

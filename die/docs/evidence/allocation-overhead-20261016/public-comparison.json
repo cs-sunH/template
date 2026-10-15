@@ -1,0 +1,9 @@
+{
+  "scope": "eight actual C ABI tasks, full hardware/compile/estimate outputs; only outer library SHA differs",
+  "all_results_exactly_equal": true,
+  "before_library_sha256": "3ddc00f77b0e25039dd367d7f45ae6f6af891a3b4ab4d30ad08ae224273a5cca",
+  "after_library_sha256": "86cf7ca2ab17a519633d338f0552d50b382cf5bfa37d3cabb7f21d28725a5639",
+  "task_count": 8,
+  "before_file_sha256": "41e486cd60daaebf6601ca85b20a576b73e5a5f8721750afa113b195ead08f94",
+  "after_file_sha256": "31e7c5060c3513a67693001826c7009d60f968a852ca4294a4cadbc44be092a7"
+}

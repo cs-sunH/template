@@ -1,10 +1,20 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前已普通push/fetch/ls-remote实核HEAD与main均为 `a0d327aeeb4a966faab56b426ed88d61e5607478`，这是已合入的ready修复检查点。包含本页的Git提交是本次两cohort预取/尾部检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前已普通push/fetch/ls-remote实核HEAD与main均为 `eba9e972e0514dddb4913dace1c00c57c3f63076`，这是已合入的两cohort预取检查点。包含本页的Git提交是本次编译/仲裁轻量去重检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
 
 ## Current Status
 
-### 当前有效检查点：两cohort预取、独立尾Compute与真实首输出
+### 当前有效检查点：编译/仲裁去重、结果全等与证据可比性
+
+- 仅Compiler/Execution轻量优化：每候选仍真实Runtime估值/完整validation与status类型检查，只有胜者插入结果JSON；同key min_element首相等者与旧stable_sort-front一致。submit预留已验证活动数，空ready集不reserve；split-owner用固定96槽索引排序邻接标记代替B²扫描，原block/representative/solver顺序及Q/alpha/13域/PRIVATE不变。没有模型/ABI/校准或候选集合变更。
+- 一致Release公共CTest **45/45通过，19.85s**，包括独立Fraction、跨execution同owner、32owner边界/恢复/取消及所有曲线、ready、CABI/cache。独立冻结eba Release旧CABI，7示例+1个R3任务的完整hardware/tasks/compile/estimate对象 **逐字段全等**，含Plan hash、时序、缓存字节和not_available，仅库SHA不同。
+- 新库真实重跑17+9组/26case、solo/sync/offset完整raw **与eba最终prefetch逐字节一致**。新source/library/driver SHA与真实命令绑定，原始相同内容引用已提交eba raw，不用旧通过记录冒充新源运行。精度因此仍原17/51场景27完成+busy失败、新9/27全10%；R>1窗口not_available，整体未验收。
+- 最新无并行构建30样本本次通过：cold128³ **1.712469ms**，residual/SwiGLU0.447881/0.459850ms，hot4.247—4.867μs，OS J1/J8/J32 **14.021/25.568/38.317μs**。此前eba J8 50.435μs及所有尾部失败保留，不称稳定全负载证书；五仓CPU not_run。
+- 首次public捕获脚本未释放compile handles即destroy，正确status9且没有before文件；修正后独立冻结重建旧CABI重新实际捕获，失败如实保留。全部命令/source/ELF与对比在allocation-overhead-20261016；无ELF提交、无正式五仓publisher。
+- XLSX可比性再核实：SHA与冻结ledger一致，13组已去重，但TX8缺网格/每核/端口运行参数，BF16矩阵/FP16向量峰值含工程假设；当前Runtime无同合同TX8路径。旧calibrate_tx8/max公式不当当前曲线验收，不重拟。新公开CABI在显式示例硬件核Residual M1024/H4096 BF16工作量，4,194,304 eq-op、读16,777,216B/写8,388,608B全等；表368.819912μs不作该硬件延迟目标。当前模型XLSX同硬件延迟校准及独立target raw/heldout均not_available。具体入口/缺参见analysis/allocation-overhead-20261016/reference-availability.md。
+
+
+### 已合入eba9e97：两cohort预取、独立尾Compute与真实首输出
 
 - 仅R=1恰好两个输出cohort升级v3：Lfirst → (Cfirst∥Llast) → (Clast∥Sfirst) → Slast，真实双输入槽预取和独立尾Compute progress。六活动描述+ready七，仍8预算，无新Runtime/DAG/逐wave状态。部分末Core保持真实PRIVATE，首Store保留完整active核服务；字节/ops/路由及槽位守恒不变。
 - 首Compute可能早于prefetch结束，新增first_output_activity_id；离线driver按真实Runtime activity_id/done捕获首输出，不能以epoch结束替代。10.1ms计算/20ms装载的反例已测（公开ceil可多1ns）。StoreFirst仍受epoch保守屏障，外部节点照旧完整Plan终态发布；不是全greedy/多Core时间精度证书。
@@ -276,12 +286,12 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本页的main与HEAD，读取elementwise-drain README与prefetch/最终identity；当前45/45功能基线19.81s。显式硬件移除搜索、R1 ready、小数时间和R1两cohort预取/drain已完成，不重复历史待办。正常同步检查点后继续自主开发。
-2. 当前精度缺口集中在R>1及更长cohort bulk依赖/正服务busy，ready/setup逐实例窗口仍not_available。先从真实shape/循环推导固定前后缀与稳态；必要时有数据评估8/16段。禁止逐repeat/K/wave或周期搜索，不能将总等待前置或改busy定义。两cohort的真实Compute done诊断/预取保留，不能恢复未交付v2的共享busy退化或错误epoch首输出门。
-3. 最终速度J8 P95 50.435μs failed，历史J32尾部失败仍有效。可先落实已盘点的轻量去重（空ready refs reserve、activity vector reserve、loser JSON等），保留generation/计数、真实Runtime事件、所有合法软件映射和完整validation；改后适配回归及固定门槛计时，不反复挑最好一次。
-4. 新模型按实际改动重跑相应oracle：当前原17case/51场景仍27完成+busy失败，另9case/27场景全10%只证明单Core两cohort范围。旧raw/初版v2属于各自明确源码，不能当最终验收；10%—20%未自动接受，目标硬件数据缺失不拟合eta掩盖结构误差。
-5. 公共源稳定后，隔离SDK检查not_available真实消费者，再重建五仓双ABI/配置/业务及CPU预算，最后正式publisher。JOINT依赖已解决，但before-guard旧SDK证书不是最终源；provider/live/sh30保护保留，E2E不能以tiny/CABI替代。
-6. WR/Norm/softmax/Attention/FFN其它曲线、OS二阶/odd-row限制按真实依赖继续；TX8/reference与目标先验冻结，无独立raw就not_available。保存所有有效源码/失败/raw，持续在有意义检查点安全同步GitHub。
+1. fetch核实包含本页的main/HEAD，读取allocation-overhead README/identity及elementwise-drain最终prefetch。当前45/45功能基线19.85s；硬件搜索移除、R1 ready/fraction、R1两cohort预取/真实Compute首输出和本轮轻量去重已完成，不重复历史待办。正常同步后继续自主开发。
+2. 优先处理R>1及更长cohort bulk的真实依赖/非服务窗口与原busy误差。当前R>1 ready/setup仍not_available，原17case仍27完成+busy失败；用shape/循环解析固定前后缀与稳态，必要时有据评估8/16段。禁止逐repeat/K/wave、周期或把总等待前置，不能改busy或公平定义；保留真实外部依赖/守恒/槽位。
+3. 两cohort模型/owner优化的新真实26case raw已与eba逐字节一致，已确认部分不重复跑；新增模型/消费者变更才针对对应源复验精度/复杂度/速度。当前最后30样本通过仅所测范围，历史J8/J32尾部失败仍有效，不无故反复计时挑最佳。remaining SRAM峰值重复/两套验证覆盖差异已盘点，不先删合法映射或validation。
+4. 公共模型稳定后隔离SDK验证not_available消费者，重建五仓双ABI/配置/业务及CPU预算后才正式publisher。JOINT依赖已解决，但旧before-guard SDK证书不是最终源；provider/live/sh30保护保留。未测五仓开销不能以tiny/CABI替代。
+5. XLSX旧13组去重和条件参考已完成，没有当前Runtime可比硬件延迟入口；已做真实Residual工作量核查。无完整硬件/独立数据不自行造TX8 profile或重新拟合目标效率；target raw/heldout缺失就not_available，参考/目标先验继续冻结。
+6. WR/Norm/softmax/Attention/FFN其它曲线、OS二阶/odd-row按真实依赖继续；有效部分和全部失败/raw保留，在有意义检查点安全同步GitHub，不按阶段停工。
 
 下方为历史接续记录，冲突时以上为准。
 
@@ -373,7 +383,7 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Tests
 
-当前：elementwise-drain最终prefetch Release45/45（19.81s），单Core原17+新增9case真实对拍/守恒已跑；原17仍27完成+busy失败，新9全10%只限两cohort范围。最终30样本J8 50.435μs failed，非全速验收。所有初始fixture/中间v2退化及其源/ELF保留，不混用顶层v2与prefetch最终结果。未跑最终五仓业务/CPU或目标校准；下方旧结果按各自源码范围复用。
+当前：allocation-overhead Release45/45（19.85s）；新库26case完整raw与eba最终prefetch逐字节一致、8个公开任务完整结果与冻结eba逐字段全等。最新30样本常规预算本次通过，历史尾部失败保留；原精度27场景仍failed，五仓业务/CPU与目标校准未验收。XLSX Residual shape工作量由新公共CABI实核，不是同硬件延迟校准。详见最新analysis/evidence，旧结果按各自源码范围复用。
 
 本次最终：公共42/42（22.34s）、隔离双ABI五仓、配置83/83、FACE133/133与152/152均已执行通过，范围与源码版本见本页最上方及explicit-input-integration证据。新native仅构建，Online链接failed；新native/Python/Online/E2E预算及最终行省略性能均not_run。收到停止指令后未新增测试。
 
@@ -428,7 +438,7 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Blocking Issues
 
-当前有效：R>1固定region延迟/物化窗口not_available，R1两cohort已改进但更多批次及其它模板busy/精度缺口未修完，最终J8仲裁P95 50.435μs failed，所有历史性能尾部失败保留；正式五仓未发布/最终源业务及CPU预算未验收，目标raw缺失。R1启动已修，vector已实现，protobuf环境已修，最终性能已测；下面旧“未启动/缺路径/未计时”是历史，不再执行为当前待办。
+当前有效：R>1固定region延迟/物化窗口not_available，R1两cohort已改进但更多批次及其它模板busy/精度缺口未修完，eba J8仲裁P95 50.435μs failed历史保留，最新本次速度通过但未稳定/全负载验收，所有历史性能尾部失败保留；正式五仓未发布/最终源业务及CPU预算未验收，目标raw缺失。R1启动已修，vector已实现，protobuf环境已修，最终性能已测；下面旧“未启动/缺路径/未计时”是历史，不再执行为当前待办。
 
 以下为历史限制，冲突时以上方最新检查点为准。
 
