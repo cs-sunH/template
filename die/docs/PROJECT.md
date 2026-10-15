@@ -20,6 +20,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 当前代码与运行方式
 
+- 2026-10-15最终用户交接：停止新任务，归档单Core K就绪部分诊断/原始结果/旧设计草案/周期成果盘点和replay入口。只有M80/N128/K4096三场景grouped输出passed；诊断与参考共用过严的非final输出槽门，尚未修正/量化影响，不能当生产E5/效率证书。生产源码e73a378不变、整体NOT ACCEPTED。下一账号先修验证门控反例，再K tail/有界生产路径，随后JOINT/五仓剩余项；详情以HANDOFF最新最终交接为准。完成main同步后本Session立即停止。
+
 - 2026-10-15 Runtime数值/原压力检查点：owner共享progress scale与非递减lexicographic minimum修复真实TP logits credit越界，不放宽模型/容差。public30、五仓配置83、相关生命周期/native、FACE Python132/151全过；原模型/队列/144GB SKU压力两仓均0/0、各24完成（FACE7944/LRU5998成功节点），真实source reuse顺序通过。canonical23=`80637c3ed93c58570c2ea05aedeb38f7db0e9911b05d246d4e13d64d56e69646`；重复publish保留mtime。新E5 axis仍failed原3%/5%，继续K readiness。范围/原始失败与成功证据见runtime-credit-20261015，整体NOT ACCEPTED。
 - 2026-10-15 future/source-release接线：FACE两仓启动finite C++容量证书、固定E protocol2和真实ACK/源释放依赖；C++各8/8、Python132/151无skip、各900实际Plan受界、六次最终Online通过（186/378/270终态，含overlap与cap2+split）。该历史检查点压力失败，单logits原ABI复现status11；后续修复和同输入成功见最新Runtime记录；不作压力或模型精度验收。证据/入口face-future-workspace-20261015，canonical23与TX8未变。
 - 2026-10-15最小KV检查点：FACE两仓manager支持opt-in不可变E与max(A,E) fit、结构不可行提前拒绝，相关Python39/39与34/34无skip；默认active-only协议不变。生产启用仍待C++容量protocol2/manifest证书/source-release接线与实跑，证据见face-future-manager-20261015。
@@ -47,7 +49,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-当前持续开发分支 `codex/die-joint-runtime-20261014`，从远端 `main` 的 `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，含已合并 PR #11。用户本轮重新要求持续自主推进，历史停止指令不沿用。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。已修 attention sequential layer/pass workspace peak（v3 template、workspace revision v2）、native fresh local-domain bridge 和同冻结输入 native session wire 恢复，并形成真实 E5 shape-axis 失败证据；生产 Sys/ledger/network/pool live 输入与 sh30 guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
+当前持续开发分支 `codex/die-joint-runtime-20261014`，从远端 `main` 的 `d9cc0240e07064996b5330c5659f7f8c6866998a` 恢复，含已合并 PR #11。用户此前要求持续推进；最新已要求交接并立即停止，以HANDOFF最终状态为准。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。已修 attention sequential layer/pass workspace peak（v3 template、workspace revision v2）、native fresh local-domain bridge 和同冻结输入 native session wire 恢复，并形成真实 E5 shape-axis 失败证据；生产 Sys/ledger/network/pool live 输入与 sh30 guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
 
 ## 重要决定及变更记录
 
