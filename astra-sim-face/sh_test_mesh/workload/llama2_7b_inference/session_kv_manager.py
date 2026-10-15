@@ -10,6 +10,7 @@ state, or capacity-driven remapping in this implementation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import MappingProxyType
 import os
 from typing import Any, Iterable, Mapping, Optional, Sequence
 
@@ -355,6 +356,7 @@ class SessionKVCacheManager:
         model: Any,
         *,
         strict_invariants: Optional[bool] = None,
+        prospective_workspace_bytes_by_rank: Optional[Mapping[int, int]] = None,
     ) -> None:
         if strict_invariants is not None and not isinstance(strict_invariants, bool):
             raise ValueError("strict_invariants must be a bool or None")
@@ -384,6 +386,28 @@ class SessionKVCacheManager:
                 )
                 self._rank_states[rank] = state
                 self._rank_relative_indexes[rank] = relative_rank
+        self._has_prospective_workspace = prospective_workspace_bytes_by_rank is not None
+        if prospective_workspace_bytes_by_rank is None:
+            prospective = {rank: 0 for rank in self._rank_states}
+        else:
+            if not isinstance(prospective_workspace_bytes_by_rank, Mapping):
+                raise ValueError("prospective workspace bytes must be a rank mapping")
+            for rank in prospective_workspace_bytes_by_rank:
+                _require_uint64(rank, "prospective workspace rank")
+            if set(prospective_workspace_bytes_by_rank) != set(self._rank_states):
+                raise ValueError("prospective workspace ranks must exactly match topology ranks")
+            prospective = {}
+            for rank, state in self._rank_states.items():
+                margin = prospective_workspace_bytes_by_rank[rank]
+                _require_uint64(margin, f"prospective workspace bytes for rank {rank}")
+                _require_uint64(state.capacity_bytes, f"capacity bytes for rank {rank}")
+                _require_uint64(state.model_weight_bytes, f"model weights for rank {rank}")
+                if margin > state.capacity_bytes - state.model_weight_bytes:
+                    raise ValueError(
+                        f"prospective workspace exceeds empty HBM capacity on rank {rank}")
+                prospective[rank] = margin
+        # Immutable fit policy, independent from actual leases and KV accounting.
+        self._prospective_workspace_bytes_by_rank = MappingProxyType(prospective)
         # C++ owns the temporary Plan workspace.  Mirror only its absolute
         # rank totals here, outside KV state, events, and accounting.
         self._external_workspace_revision_by_rank = {
@@ -463,6 +487,15 @@ class SessionKVCacheManager:
 
         return tuple(sorted(self._rank_states))
 
+    @property
+    def prospective_workspace_bytes_by_rank(self) -> Mapping[int, int]:
+        """Immutable future scratch floor for the serialized COMP gate."""
+        return self._prospective_workspace_bytes_by_rank
+
+    def _workspace_hold(self, rank: int) -> int:
+        return max(self._external_workspace_bytes_by_rank[rank],
+                   self._prospective_workspace_bytes_by_rank[rank])
+
     def set_external_workspace_view(
         self,
         revision_by_rank: Mapping[int, int],
@@ -508,7 +541,8 @@ class SessionKVCacheManager:
                     f"workspace bytes changed without revision advance on "
                     f"rank {rank}")
             state = self._rank_states[rank]
-            combined = state.used_bytes + active_bytes
+            combined = state.used_bytes + max(
+                active_bytes, self._prospective_workspace_bytes_by_rank[rank])
             if combined > _UINT64_MAX or combined > state.capacity_bytes:
                 raise ValueError(
                     f"workspace hold exceeds Python HBM capacity on rank "
@@ -526,7 +560,7 @@ class SessionKVCacheManager:
     def workspace_capacity_snapshot(self) -> dict:
         """Return authoritative per-rank KV capacity for bridge v2."""
 
-        return {
+        result = {
             "protocol_version": 1,
             "ranks": [
                 {
@@ -544,6 +578,13 @@ class SessionKVCacheManager:
             ],
         }
 
+        if self._has_prospective_workspace:
+            result["protocol_version"] = 2
+            for row in result["ranks"]:
+                row["prospective_workspace_bytes"] = (
+                    self._prospective_workspace_bytes_by_rank[row["rank"]])
+        return result
+
     def _remaining(self, instance_index: int) -> tuple[int, ...]:
         return tuple(
             self._rank_states[rank].remaining_bytes
@@ -551,20 +592,20 @@ class SessionKVCacheManager:
         )
 
     def _fit_remaining(self, instance_index: int) -> tuple[int, ...]:
-        """KV fit headroom after the external workspace hold."""
+        """KV headroom after max(actual and prospective workspace)."""
 
         return tuple(
             self._rank_states[rank].remaining_bytes
-            - self._external_workspace_bytes_by_rank[rank]
+            - self._workspace_hold(rank)
             for rank in self.topology.instance(instance_index).ranks
         )
 
     def workspace_fit_remaining_bytes(self, rank: int) -> int:
-        """Read KV headroom after the external workspace hold."""
+        """Read KV headroom after max(actual and prospective workspace)."""
 
         return (
             self._rank_states[rank].remaining_bytes
-            - self._external_workspace_bytes_by_rank[rank]
+            - self._workspace_hold(rank)
         )
 
     def _insufficient(
@@ -955,7 +996,9 @@ class SessionKVCacheManager:
         if len(required) != self.tp_degree or any(value < 0 for value in required):
             raise ValueError("required KV shard vector is invalid")
         maximum = tuple(
-            self._rank_states[rank].capacity_bytes - self._rank_states[rank].model_weight_bytes
+            self._rank_states[rank].capacity_bytes
+            - self._rank_states[rank].model_weight_bytes
+            - self._prospective_workspace_bytes_by_rank[rank]
             for rank in instance.ranks
         )
         impossible = tuple(
@@ -986,7 +1029,8 @@ class SessionKVCacheManager:
                 instance.ranks,
                 required,
                 maximum,
-                (self._external_workspace_bytes_by_rank[rank]
+                (max(0, self._external_workspace_bytes_by_rank[rank]
+                     - self._prospective_workspace_bytes_by_rank[rank])
                  for rank in instance.ranks),
             )
             if needed > available - workspace
