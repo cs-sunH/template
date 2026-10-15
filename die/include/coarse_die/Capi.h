@@ -59,6 +59,11 @@ const char* die_coarse_workspace_capacity_bound_v2(DieHandle,const char*);
  * contain plan_handle, plan_hash, summary. release each returned plan handle. */
 const char* die_coarse_compile_batch_v2(DieHandle,const char*);
 const char* die_coarse_estimate_batch_v2(DieHandle,const char*);
+/* Isolated compiled-plan cost only. Returns positional estimated_latency_ns,
+ * status, and plan_hash rows plus per-task errors/cache diagnostics. This uses
+ * the selected compile estimate; it never samples a live Runtime/world and
+ * does not build the full estimate report or allocate Plan handles. */
+const char* die_coarse_estimate_cost_batch_v2(DieHandle,const char*);
 int die_coarse_create_runtime_v2(DieHandle,DieHandle*);
 int die_coarse_submit_plan_v2(DieHandle,DieHandle,const DieOwnerV2*,uint64_t,DieHandle*);
 int die_coarse_submit_endpoint_v2(DieHandle,const char*,const DieOwnerV2*,uint64_t,DieHandle*);

@@ -1,0 +1,1 @@
+{"cache_accounted_bytes":0,"cache_accounting":"retained_container_capacities_with_allocator_allowances","cache_entries":0,"errors":[{"field_path":"invalid_hardware","reason":"invalid_hardware: standalone plan has no positive service rate","status_code":2}],"results":[null],"schema_version":2}

@@ -1,0 +1,179 @@
+[ 10%] Building CXX object CMakeFiles/coarse_die.dir/src/Mapping.cc.o
+In file included from /workspace/template/die/src/Mapping.cc:2:
+/workspace/template/die/src/GemmTailBudget.hh:27:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   27 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+In file included from /workspace/template/die/src/Mapping.cc:3:
+/workspace/template/die/src/EquivalentWork.hh:12:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   12 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+In file included from /workspace/template/die/src/GemmOSGeometry.hh:10,
+                 from /workspace/template/die/src/Mapping.cc:4:
+/workspace/template/die/src/GemmOSAccessCounter.hh:20:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   20 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+/workspace/template/die/src/GemmOSGeometry.hh:24:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   24 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:26:23: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+   26 | using u128 = unsigned __int128;
+      |                       ^~~~~~~~
+/workspace/template/die/src/Mapping.cc: In function ‘std::pair<__int128 unsigned, __int128 unsigned> coarse_die::detail::{anonymous}::prefix_slots_one(const Span&, u64, u64)’:
+/workspace/template/die/src/Mapping.cc:390:9: warning: ISO C++ does not support ‘__int128’ for ‘base’ [-Wpedantic]
+  390 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |         ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:390:37: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  390 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |                                     ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:390:67: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  390 |   const __int128 base = static_cast<__int128>(s.qs) - static_cast<__int128>(s.ks);
+      |                                                                   ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:394:11: warning: ISO C++ does not support ‘__int128’ for ‘first_reach’ [-Wpedantic]
+  394 |     const __int128 first_reach = base + static_cast<__int128>(r + 1) * tq;
+      |           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:394:53: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  394 |     const __int128 first_reach = base + static_cast<__int128>(r + 1) * tq;
+      |                                                     ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:397:13: warning: ISO C++ does not support ‘__int128’ for ‘numerator’ [-Wpedantic]
+  397 |       const __int128 numerator = 1 - first_reach;
+      |             ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:398:66: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  398 |       first_positive = static_cast<u64>((numerator + static_cast<__int128>(stride) - 1) / static_cast<__int128>(stride));
+      |                                                                  ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:398:103: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  398 |       first_positive = static_cast<u64>((numerator + static_cast<__int128>(stride) - 1) / static_cast<__int128>(stride));
+      |                                                                                                       ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:402:11: warning: ISO C++ does not support ‘__int128’ for ‘positive_reach’ [-Wpedantic]
+  402 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:402:63: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  402 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |                                                               ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:402:103: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+  402 |     const __int128 positive_reach = first_reach + static_cast<__int128>(first_positive) * static_cast<__int128>(stride);
+      |                                                                                                       ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:416:11: warning: ISO C++ does not support ‘__int128’ for ‘reach’ [-Wpedantic]
+  416 |     const __int128 reach = base + s.q;
+      |           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:424:11: warning: ISO C++ does not support ‘__int128’ for ‘reach’ [-Wpedantic]
+  424 |     const __int128 reach = base + s.q;
+      |           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc: In function ‘void coarse_die::detail::{anonymous}::push_epoch(coarse_die::Plan&, const coarse_die::Hardware&, Flow, Flow, Flow, u64, u64, u64, u64, double, double, const std::string&)’:
+/workspace/template/die/src/Mapping.cc:800:3: warning: this ‘if’ clause does not guard... [-Wmisleading-indentation]
+  800 |   if(has(l))epoch.activities.push_back(l);if(has(c))epoch.activities.push_back(c);if(has(s))epoch.activities.push_back(s);
+      |   ^~
+/workspace/template/die/src/Mapping.cc:800:43: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the ‘if’
+  800 |   if(has(l))epoch.activities.push_back(l);if(has(c))epoch.activities.push_back(c);if(has(s))epoch.activities.push_back(s);
+      |                                           ^~
+/workspace/template/die/src/Mapping.cc: In function ‘std::vector<std::shared_ptr<coarse_die::Plan> > coarse_die::detail::{anonymous}::enumerate_gemm(const coarse_die::Hardware&, const nlohmann::json&, const Topology&, u64, u64, u64, bool)’:
+/workspace/template/die/src/Mapping.cc:1358:13: warning: unused variable ‘ncore’ [-Wunused-variable]
+ 1358 |   const u64 ncore=du(hw,"die","core_count");
+      |             ^~~~~
+/workspace/template/die/src/Mapping.cc: In lambda function:
+/workspace/template/die/src/Mapping.cc:1481:15: warning: ISO C++ does not support ‘__int128’ for ‘threshold’ [-Wpedantic]
+ 1481 |         const __int128 threshold=static_cast<__int128>(((s.kv-1)/tk)*tk+1)-
+      |               ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1481:46: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1481 |         const __int128 threshold=static_cast<__int128>(((s.kv-1)/tk)*tk+1)-
+      |                                              ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1482:26: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1482 |             (static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |                          ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1482:54: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1482 |             (static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |                                                      ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1489:59: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1489 |         const bool sat_tail=qtail&&threshold<=static_cast<__int128>(s.q);
+      |                                                           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1498:15: warning: ISO C++ does not support ‘__int128’ for ‘threshold’ [-Wpedantic]
+ 1498 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |               ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1498:46: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1498 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |                                              ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1498:73: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1498 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |                                                                         ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1505:59: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1505 |         const bool sat_tail=qtail&&threshold<=static_cast<__int128>(s.q);
+      |                                                           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc: In lambda function:
+/workspace/template/die/src/Mapping.cc:1526:15: warning: ISO C++ does not support ‘__int128’ for ‘threshold’ [-Wpedantic]
+ 1526 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |               ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1526:46: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1526 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |                                              ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1526:73: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1526 |         const __int128 threshold=static_cast<__int128>(s.q)-static_cast<__int128>(rem)+1;
+      |                                                                         ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1533:59: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1533 |         const bool sat_tail=qtail&&threshold<=static_cast<__int128>(s.q);
+      |                                                           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1548:13: warning: ISO C++ does not support ‘__int128’ for ‘key_block_end’ [-Wpedantic]
+ 1548 |       const __int128 key_block_end=static_cast<__int128>(ceildiv(s.kv,tk)-1)*static_cast<__int128>(tk)+1;
+      |             ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1548:48: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1548 |       const __int128 key_block_end=static_cast<__int128>(ceildiv(s.kv,tk)-1)*static_cast<__int128>(tk)+1;
+      |                                                ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1548:90: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1548 |       const __int128 key_block_end=static_cast<__int128>(ceildiv(s.kv,tk)-1)*static_cast<__int128>(tk)+1;
+      |                                                                                          ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1549:13: warning: ISO C++ does not support ‘__int128’ for ‘threshold’ [-Wpedantic]
+ 1549 |       const __int128 threshold=key_block_end-(static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |             ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1549:59: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1549 |       const __int128 threshold=key_block_end-(static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |                                                           ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1549:87: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1549 |       const __int128 threshold=key_block_end-(static_cast<__int128>(s.qs)-static_cast<__int128>(s.ks));
+      |                                                                                       ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1557:56: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1557 |       const bool sat_tail=tail&&threshold<=static_cast<__int128>(s.q);
+      |                                                        ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1562:37: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1562 |       const u128 before=static_cast<__int128>(s.ks)>static_cast<__int128>(s.qs)
+      |                                     ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1562:65: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1562 |       const u128 before=static_cast<__int128>(s.ks)>static_cast<__int128>(s.qs)
+      |                                                                 ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1563:42: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1563 |           ?static_cast<u128>(static_cast<__int128>(s.ks)-static_cast<__int128>(s.qs)):0;
+      |                                          ^~~~~~~~
+/workspace/template/die/src/Mapping.cc:1563:70: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
+ 1563 |           ?static_cast<u128>(static_cast<__int128>(s.ks)-static_cast<__int128>(s.qs)):0;
+      |                                                                      ^~~~~~~~
+/workspace/template/die/src/Mapping.cc: At global scope:
+/workspace/template/die/src/Mapping.cc:597:36: warning: ‘std::pair<long double, long double> coarse_die::detail::{anonymous}::route_moments(const Topology&, const AxisDist&, u64, bool)’ defined but not used [-Wunused-function]
+  597 | std::pair<long double,long double> route_moments(const Topology& topo,
+      |                                    ^~~~~~~~~~~~~
+/workspace/template/die/src/Mapping.cc:434:6: warning: ‘coarse_die::detail::{anonymous}::u128 coarse_die::detail::{anonymous}::attention_slots(const std::vector<Span>&, u64, u64)’ defined but not used [-Wunused-function]
+  434 | u128 attention_slots(const std::vector<Span>& spans, u64 tq, u64 tk) {
+      |      ^~~~~~~~~~~~~~~
+[ 30%] Linking CXX static library libcoarse_die.a
+[ 60%] Built target coarse_die
+[ 70%] Linking CXX shared library lib/libcoarse_die_cabi.so
+[ 80%] Built target coarse_die_cabi
+[ 90%] Building CXX object CMakeFiles/coarse_os_service_curve_test.dir/tests/os_service_curve_test.cc.o
+[ 20%] Linking CXX executable coarse_os_service_curve_test
+[ 30%] Built target coarse_os_service_curve_test
+[ 10%] Building CXX object CMakeFiles/coarse_die.dir/src/Execution.cc.o
+/workspace/template/die/src/Execution.cc: In member function ‘void coarse_die::Runtime::allocate()’:
+/workspace/template/die/src/Execution.cc:1106:48: warning: missing initializer for member ‘coarse_die::Runtime::allocate()::Ref::mirrors’ [-Wmissing-field-initializers]
+ 1106 |                          first_resource, q, 0.0});
+      |                                                ^
+[ 70%] Linking CXX static library libcoarse_die.a
+[ 70%] Built target coarse_die
+[ 70%] Building CXX object CMakeFiles/coarse_die_cabi.dir/src/Capi.cc.o
+Linking CXX shared library lib/libcoarse_die_cabi.so
+Built target coarse_die_cabi
+Building CXX object CMakeFiles/coarse_os_service_scaling_test.dir/tests/os_service_scaling_test.cc.o
+Linking CXX executable coarse_os_service_scaling_test
+Built target coarse_os_service_scaling_test
+[ 60%] Built target coarse_die
+[ 80%] Built target coarse_die_cabi
+[ 90%] Linking CXX executable coarse_capi_cost_query_test
+[100%] Built target coarse_capi_cost_query_test
+[ 75%] Built target coarse_die
+[ 87%] Linking CXX executable coarse_compiled_gemm_oracle_driver
+[100%] Built target coarse_compiled_gemm_oracle_driver

@@ -1,4 +1,5 @@
 #include "coarse_die/Execution.hh"
+#include "PackingAllocation.hh"
 
 #include <algorithm>
 #include <array>
@@ -18,6 +19,7 @@
 #include <utility>
 
 namespace coarse_die {
+std::array<long double, 2> accumulated_credit(const LiveActivity& live);
 namespace {
 
 constexpr long double kNsPerSecond = 1.0e9L;
@@ -26,6 +28,25 @@ constexpr double kProgressTolerance = 2.0e-13;
 constexpr double kCreditTolerance = 2.0e-10;
 constexpr std::size_t kMaxPlanEpochs = 64;
 constexpr std::uint64_t kMaxAdvanceEvents = 1000000;
+
+// Curved Plans retain sub-binary64 progress so large analytic unit counts
+// do not amplify rounding into finite-buffer violations. Legacy progress is
+// still rounded to binary64 by integrate(), preserving its wire/trajectory.
+double curve_boundary(const LiveActivity& live) {
+  for(const auto& point:live.definition.credit_curve)
+    if(static_cast<long double>(point.progress)>live.progress)return point.progress;
+  return 1.0;
+}
+std::array<double,2> curve_derivative(const LiveActivity& live) {
+  const auto& curve=live.definition.credit_curve;
+  if(curve.empty())return live.definition.credit_delta;
+  std::size_t index=0;
+  while(index+2<curve.size()&&live.progress>=curve[index+1].progress)++index;
+  const auto& lo=curve[index];const auto& hi=curve[index+1];
+  const double dp=hi.progress-lo.progress;
+  return {{(hi.cumulative[0]-lo.cumulative[0])/dp,
+           (hi.cumulative[1]-lo.cumulative[1])/dp}};
+}
 
 const std::array<const char*, resource_count> kResourceNames = {
     "COMPUTE_GATE", "SRAM_READ", "SRAM_WRITE", "LOCAL", "HBM0",
@@ -267,8 +288,9 @@ void validate_plan(const Hardware& hardware, const Plan& plan,
   if (plan.hardware_fingerprint != hardware.fingerprint) {
     throw std::invalid_argument("incompatible_fingerprint: plan hardware fingerprint mismatch");
   }
-  if (plan.epochs.size() > kMaxPlanEpochs) {
-    throw std::invalid_argument("unsupported_plan: more than 64 runtime epochs");
+  if (plan.epochs.size()>kMaxPlanEpochs ||
+      (has_credit_curves(plan)&&service_description_count(plan)>kMaxPlanEpochs)) {
+    throw std::invalid_argument("unsupported_plan: more than 64 runtime service descriptions");
   }
   if (require_fingerprint && plan.fingerprint.empty()) {
     throw std::invalid_argument("invalid_plan: missing fingerprint");
@@ -291,6 +313,7 @@ void validate_plan(const Hardware& hardware, const Plan& plan,
       }
     }
     for (const Activity& activity : epoch.activities) {
+      detail::validate_credit_curve(activity);
       if (!activity_ids.emplace(epoch_index, activity.id).second) {
         throw std::invalid_argument("invalid_plan: duplicate activity id in epoch");
       }
@@ -373,6 +396,14 @@ nlohmann::json credit_json(const std::array<double, 2>& values,
 long double min_positive(long double current, long double candidate) {
   if (!std::isfinite(candidate) || candidate <= kTimeEpsilonNs) return current;
   return candidate < current ? candidate : current;
+}
+
+bool same_or_one_ulp(double saved, double rebuilt) {
+  if (saved == rebuilt) return true;
+  // Zero is structural (inactive, blocked, or excluded), not a rounded
+  // approximation of a positive allocation.
+  if (saved == 0.0 || rebuilt == 0.0) return false;
+  return std::nextafter(saved, rebuilt) == rebuilt;
 }
 
 struct EndpointSpec {
@@ -971,6 +1002,64 @@ void Runtime::settle() {
       }
       const Epoch& epoch = execution.plan->epochs[execution.epoch];
       execution.credit_capacity = epoch.credit_capacity;
+      // A curved activity can land within less than half a binary64 ulp of
+      // progress 1 when an unrelated event is the one that split integration.
+      // Close only such terminal roundoff, and only when the resulting whole
+      // epoch credit remains inside the existing finite-buffer tolerance.
+      // At most three activities can share an epoch, so check every subset
+      // of eligible terminal activities and prefer the largest safe closure.
+      std::vector<LiveActivity*> terminal_roundoff;
+      for (LiveActivity& live : execution.activities) {
+        if (live.epoch_index == execution.epoch && !live.done &&
+            !live.definition.credit_curve.empty() && live.progress < 1.0L &&
+            static_cast<double>(live.progress) == 1.0) {
+          terminal_roundoff.push_back(&live);
+        }
+      }
+      const auto endpoint_credit_is_valid = [&](std::size_t mask) {
+        std::array<long double, 2> projected{{epoch.credit_initial[0],
+                                               epoch.credit_initial[1]}};
+        for (const LiveActivity& live : execution.activities) {
+          if (live.epoch_index != execution.epoch) continue;
+          std::array<long double, 2> contribution{};
+          const auto candidate = std::find(terminal_roundoff.begin(),
+                                           terminal_roundoff.end(), &live);
+          const bool close = candidate != terminal_roundoff.end() &&
+              (mask & (std::size_t{1} <<
+                       static_cast<std::size_t>(candidate - terminal_roundoff.begin())));
+          if (close) {
+            contribution = {{live.definition.credit_delta[0],
+                             live.definition.credit_delta[1]}};
+          } else {
+            contribution = accumulated_credit(live);
+          }
+          for (std::size_t buffer = 0; buffer < 2; ++buffer)
+            projected[buffer] += contribution[buffer];
+        }
+        for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+          const long double capacity = epoch.credit_capacity[buffer];
+          const long double tolerance = static_cast<long double>(kCreditTolerance) *
+              std::max(1.0L, capacity);
+          if (!std::isfinite(projected[buffer]) || projected[buffer] < -tolerance ||
+              projected[buffer] > capacity + tolerance) return false;
+        }
+        return true;
+      };
+      std::size_t close_mask = 0;
+      std::size_t closed_count = 0;
+      const std::size_t subset_count = std::size_t{1} << terminal_roundoff.size();
+      for (std::size_t mask = 1; mask < subset_count; ++mask) {
+        std::size_t count = 0;
+        for (std::size_t bit = mask; bit != 0; bit >>= 1) count += bit & 1;
+        if (count < closed_count || !endpoint_credit_is_valid(mask)) continue;
+        if (count > closed_count || close_mask == 0 || mask < close_mask) {
+          close_mask = mask;
+          closed_count = count;
+        }
+      }
+      for (std::size_t i = 0; i < terminal_roundoff.size(); ++i) {
+        if (close_mask & (std::size_t{1} << i)) terminal_roundoff[i]->progress = 1.0L;
+      }
       ServedCounters& categorized = served_by_category_[
           static_cast<std::size_t>(execution.served_category)];
       if (execution.epoch == 0 && execution.activities.empty()) {
@@ -980,7 +1069,9 @@ void Runtime::settle() {
         if (live.epoch_index != execution.epoch || live.done) continue;
         bool has_service = false;
         for (double work : live.definition.work) has_service = has_service || work > 0.0;
-        const bool complete = !has_service || live.progress >= 1.0 - kProgressTolerance;
+        const bool complete = !has_service ||
+            (live.definition.credit_curve.empty() ? live.progress >= 1.0-kProgressTolerance
+                                                  : live.progress >= 1.0L);
         if (complete) {
           live.progress = 1.0;
           for (std::size_t row = 0; row < 2; ++row) {
@@ -1029,6 +1120,7 @@ void Runtime::settle() {
 }
 
 void Runtime::allocate() {
+  last_arbitration_={};
   struct Ref {
     Execution* execution = nullptr;
     LiveActivity* live = nullptr;
@@ -1126,7 +1218,9 @@ void Runtime::allocate() {
         if (a.id != b.id || a.role != b.role || a.work != b.work ||
             a.canonical_q != b.canonical_q ||
             a.private_time_s != b.private_time_s ||
-            a.credit_delta != b.credit_delta) return false;
+            a.credit_delta != b.credit_delta ||
+            curve_derivative(*refs[lhs.begin + i].live) !=
+                curve_derivative(*refs[rhs.begin + i].live)) return false;
       }
       return true;
     };
@@ -1175,7 +1269,9 @@ void Runtime::allocate() {
       mirror->alpha = alpha;
     }
   };
+  last_arbitration_.activities=refs.size();
   if (refs.size() == 1) {
+    last_arbitration_.path=ArbitrationDiagnostics::Path::Singleton;
     // The one-variable max-min LP has an exact closed solution: its sole
     // activity receives the smallest physical/private bound, unless a signed
     // credit boundary blocks that direction. This is the same feasible set
@@ -1190,8 +1286,8 @@ void Runtime::allocate() {
     for(std::size_t b=0;b<2;++b) {
       const double tolerance=kCreditTolerance*std::max(1.0,ref.execution->credit_capacity[b]);
       const double credit=ref.execution->credit[b];
-      if((credit<=tolerance&&activity.credit_delta[b]<0.0)||
-         (credit>=ref.execution->credit_capacity[b]-tolerance&&activity.credit_delta[b]>0.0))
+      if((credit<=tolerance&&curve_derivative(*ref.live)[b]<0.0)||
+         (credit>=ref.execution->credit_capacity[b]-tolerance&&curve_derivative(*ref.live)[b]>0.0))
         rate=0.0;
     }
     if(!std::isfinite(rate)||rate<0.0)
@@ -1251,7 +1347,7 @@ void Runtime::allocate() {
         bool used = false;
         for (std::size_t i = 0; i < count; ++i) {
           if (refs[i].execution != execution) continue;
-          const double delta = refs[i].live->definition.credit_delta[buffer];
+          const double delta = curve_derivative(*refs[i].live)[buffer];
           const double coefficient = lower_boundary ? -delta : delta;
           if (coefficient != 0.0) {
             c.a[i] = coefficient;
@@ -1265,6 +1361,26 @@ void Runtime::allocate() {
     }
   }
 
+  std::vector<detail::PackingRow> packing;
+  packing.reserve(base.size());
+  bool nonnegative=true;
+  for(const auto& row:base) {
+    if(std::any_of(row.a.begin(),row.a.end(),[](double x){return x<0;})) { nonnegative=false;break; }
+    packing.push_back({row.a,row.b});
+  }
+  if(nonnegative) {
+    std::vector<std::string> owners;std::vector<double> quantities, rates, shares;
+    owners.reserve(count);quantities.reserve(count);
+    for(const auto& ref:refs) { owners.push_back(ref.owner_key);quantities.push_back(ref.q); }
+    if(detail::allocate_packing(packing,owners,quantities,rates,shares)) {
+      last_arbitration_.path=ArbitrationDiagnostics::Path::Packing;
+      last_arbitration_.constraint_rows=base.size();
+      for(std::size_t i=0;i<count;++i)publish(refs[i],rates[i],shares[i]);
+      return;
+    }
+  }
+  last_arbitration_.path=ArbitrationDiagnostics::Path::SignedLP;
+  last_arbitration_.constraint_rows=base.size();
   std::size_t pivot_count = 0;
   std::vector<bool> excluded(count, false);
   std::vector<bool> frozen(count, false);
@@ -1284,7 +1400,9 @@ void Runtime::allocate() {
       b.push_back(row.b);
     }
     DenseSimplex solver(a, b, objective, pivot_count);
-    return solver.solve();
+    auto result=solver.solve();
+    last_arbitration_.pivots=pivot_count;
+    return result;
   };
 
   std::size_t total_tiers = 0;
@@ -1502,6 +1620,39 @@ void Runtime::allocate() {
       publish(refs[i], std::max(0.0, solved[i] * variable_scale[i]),
               refs[i].alpha);
     }
+    // A binary64 LP rate can round a homogeneous tangent inequality upward
+    // by an ulp. Long analytic intervals must not integrate that infeasible
+    // direction. Certify signed boundary rows in extended precision and
+    // round the positive contributor downward; never enlarge buffer epsilon.
+    if(std::any_of(refs.begin(),refs.end(),[](const Ref& ref){
+        return !ref.live->definition.credit_curve.empty();})) {
+      bool certified=false;
+      for(std::size_t pass=0;pass<=count;++pass) {
+        bool changed=false;
+        for(const auto& row:base) {
+          if(row.b!=0 || !std::any_of(row.a.begin(),row.a.end(),[](double a){return a<0;}))continue;
+          long double used=0,largest=0;std::size_t chosen=count;
+          for(std::size_t i=0;i<count;++i) {
+            const long double contribution=static_cast<long double>(row.a[i])*refs[i].live->rate;
+            used+=contribution;
+            if(row.a[i]>0 && contribution>largest) {largest=contribution;chosen=i;}
+          }
+          if(used<=0)continue;
+          if(chosen==count || used>1e-8L*std::max(1.0L,largest))
+            failure("curved tangent rate is not feasible within LP precision");
+          const long double bound=static_cast<long double>(refs[chosen].live->rate)-used/row.a[chosen];
+          if(!(bound>0))failure("curved tangent rate has no positive rounded solution");
+          double rounded=static_cast<double>(bound);
+          if(static_cast<long double>(rounded)>bound)rounded=std::nextafter(rounded,0.0);
+          if(rounded>=refs[chosen].live->rate)rounded=std::nextafter(refs[chosen].live->rate,0.0);
+          publish(refs[chosen],rounded,refs[chosen].alpha);
+          ++last_arbitration_.tangent_rounds;
+          changed=true;
+        }
+        if(!changed) {certified=true;break;}
+      }
+      if(!certified)failure("curved tangent rounding did not converge");
+    }
     return;
   }
   for (std::size_t i = 0; i < count; ++i) {
@@ -1541,10 +1692,16 @@ void Runtime::integrate(long double delta_ns) {
       if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
       long double delta_progress = static_cast<long double>(live.rate) * seconds;
       if (delta_progress <= 0.0L) continue;
-      const long double remaining = 1.0L - static_cast<long double>(live.progress);
-      if (delta_progress >= remaining - 1.0e-14L) delta_progress = remaining;
+      const long double remaining = static_cast<long double>(curve_boundary(live)) - static_cast<long double>(live.progress);
+      const bool curved=!live.definition.credit_curve.empty();
+      if (curved ? delta_ns >= remaining/live.rate*kNsPerSecond
+                 : delta_progress >= remaining-1.0e-14L) delta_progress=remaining;
       if (delta_progress <= 0.0L) continue;
-      const double next_progress = std::min(1.0, live.progress + static_cast<double>(delta_progress));
+      const double boundary = curve_boundary(live);
+      const long double next_progress = live.definition.credit_curve.empty()
+          ? static_cast<long double>(std::min(boundary,static_cast<double>(live.progress)+static_cast<double>(delta_progress)))
+          : (delta_progress >= remaining ? static_cast<long double>(boundary)
+             : std::min(static_cast<long double>(boundary),live.progress+delta_progress));
       delta_progress = static_cast<long double>(next_progress) - live.progress;
       live.progress = next_progress;
 
@@ -1620,15 +1777,36 @@ void Runtime::set_exact_time(std::uint64_t absolute_ns) {
   now_ns_ = absolute_ns;
 }
 
+// Retain the original extended-precision affine credit arithmetic. In
+// particular, converting delta*p to binary64 before summing destroys small
+// finite-buffer residuals for large repeated workloads.
+std::array<long double,2> accumulated_credit(const LiveActivity& live) {
+  const auto& a=live.definition;
+  const long double p=live.progress;
+  if(a.credit_curve.empty())
+    return {{static_cast<long double>(a.credit_delta[0])*p,
+             static_cast<long double>(a.credit_delta[1])*p}};
+  const auto upper=std::upper_bound(a.credit_curve.begin(),a.credit_curve.end(),live.progress,
+      [](long double value,const CreditPoint& point){return value<point.progress;});
+  if(upper==a.credit_curve.end())return {{a.credit_delta[0],a.credit_delta[1]}};
+  const auto& lo=*(upper-1);const auto& hi=*upper;
+  const long double f=(p-lo.progress)/(static_cast<long double>(hi.progress)-lo.progress);
+  std::array<long double,2> result{};
+  for(std::size_t b=0;b<2;++b)
+    result[b]=static_cast<long double>(lo.cumulative[b])+f*
+        (static_cast<long double>(hi.cumulative[b])-lo.cumulative[b]);
+  return result;
+}
+
 void recompute_credit(Execution& execution) {
   if (execution.epoch >= execution.plan->epochs.size()) return;
   const Epoch& epoch = execution.plan->epochs[execution.epoch];
   std::array<long double, 2> credit{epoch.credit_initial[0], epoch.credit_initial[1]};
   for (const LiveActivity& live : execution.activities) {
     if (live.epoch_index != execution.epoch) continue;
+    const auto cumulative=accumulated_credit(live);
     for (std::size_t buffer = 0; buffer < 2; ++buffer) {
-      credit[buffer] += static_cast<long double>(live.definition.credit_delta[buffer]) *
-                        static_cast<long double>(live.progress);
+      credit[buffer] += cumulative[buffer];
     }
   }
   execution.credit_capacity = epoch.credit_capacity;
@@ -1638,7 +1816,8 @@ void recompute_credit(Execution& execution) {
                                   std::max(1.0L, capacity);
     if (!std::isfinite(credit[buffer]) || credit[buffer] < -tolerance ||
         credit[buffer] > capacity + tolerance) {
-      throw std::runtime_error("numerical_failure: credit crossed a finite buffer boundary");
+      throw std::runtime_error("numerical_failure: credit crossed a finite buffer boundary: buffer="+
+          std::to_string(buffer)+" credit="+long_double_text(credit[buffer])+" capacity="+long_double_text(capacity));
     }
     if (std::abs(credit[buffer]) <= tolerance) credit[buffer] = 0.0L;
     if (std::abs(credit[buffer] - capacity) <= tolerance) credit[buffer] = capacity;
@@ -1661,7 +1840,7 @@ void Runtime::advance_to(std::uint64_t absolute_ns) {
       }
       for (const LiveActivity& live : execution.activities) {
         if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
-        const long double remain = std::max(0.0L, 1.0L - static_cast<long double>(live.progress));
+        const long double remain = std::max(0.0L, static_cast<long double>(curve_boundary(live)) - static_cast<long double>(live.progress));
         if (remain > 0.0L) {
           next_delta = min_positive(next_delta, remain / live.rate * kNsPerSecond);
         }
@@ -1670,7 +1849,7 @@ void Runtime::advance_to(std::uint64_t absolute_ns) {
       for (const LiveActivity& live : execution.activities) {
         if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
         for (std::size_t buffer = 0; buffer < 2; ++buffer) {
-          credit_rate[buffer] += static_cast<long double>(live.definition.credit_delta[buffer]) * live.rate;
+          credit_rate[buffer] += static_cast<long double>(curve_derivative(live)[buffer]) * live.rate;
         }
       }
       for (std::size_t buffer = 0; buffer < 2; ++buffer) {
@@ -1783,14 +1962,14 @@ std::optional<std::uint64_t> Runtime::next_event() const {
     }
     for (const LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
-      const long double remain = std::max(0.0L, 1.0L - static_cast<long double>(live.progress));
+      const long double remain = std::max(0.0L, static_cast<long double>(curve_boundary(live)) - static_cast<long double>(live.progress));
       if (remain > 0.0L) delta = min_positive(delta, remain / live.rate * kNsPerSecond);
     }
     long double credit_rate[2]{0.0L, 0.0L};
     for (const LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
       for (std::size_t buffer = 0; buffer < 2; ++buffer) {
-        credit_rate[buffer] += static_cast<long double>(live.definition.credit_delta[buffer]) * live.rate;
+        credit_rate[buffer] += static_cast<long double>(curve_derivative(live)[buffer]) * live.rate;
       }
     }
     for (std::size_t buffer = 0; buffer < 2; ++buffer) {
@@ -1874,6 +2053,8 @@ nlohmann::json Runtime::query_progress(std::uint64_t handle) const {
                           {"vec_served_eqops_exact", decimal_measure(live.vec_served)},
                           {"credit_delta", live.definition.credit_delta},
                           {"done", live.done}});
+    if (!live.definition.credit_curve.empty())
+      activities.back()["credit_slope"] = curve_derivative(live);
     if (live.definition.vec_eqops_fraction != 0.0) {
       activities.back()["vec_eqops"] = decimal_measure(planned_vec_eqops(live.definition));
       activities.back()["vec_eqops_whole"] = std::to_string(live.definition.vec_eqops);
@@ -2039,6 +2220,10 @@ nlohmann::json Runtime::counters() const {
 }
 
 nlohmann::json Runtime::export_snapshot() const {
+  const bool has_curved_plan = std::any_of(
+      executions_.begin(), executions_.end(), [](const auto& entry) {
+        return has_credit_curves(*entry.second.plan);
+      });
   nlohmann::json executions = nlohmann::json::array();
   for (const auto& [handle, execution] : executions_) {
     nlohmann::json activities = nlohmann::json::array();
@@ -2060,6 +2245,8 @@ nlohmann::json Runtime::export_snapshot() const {
                             {"hbm_served", std::move(activity_hbm)},
                             {"int4_served", long_double_text(live.int4_served)},
                             {"vec_served", long_double_text(live.vec_served)}});
+      if(!live.definition.credit_curve.empty())
+        activities.back()["curve_progress_exact"]=long_double_text(live.progress);
     }
     nlohmann::json hbm_served = nlohmann::json::array();
     for (std::size_t row = 0; row < 2; ++row) {
@@ -2103,7 +2290,7 @@ nlohmann::json Runtime::export_snapshot() const {
     }
     global_hbm_served.push_back(std::move(directions));
   }
-  return {{"schema", "coarse_die_snapshot_v3"},
+  nlohmann::json snapshot = {{"schema", "coarse_die_snapshot_v3"},
           {"snapshot_version", 3},
           {"hardware_fingerprint", hardware_->fingerprint},
           {"now_ns", now_ns_},
@@ -2134,6 +2321,12 @@ nlohmann::json Runtime::export_snapshot() const {
           {"transaction_owners", std::move(transactions)},
           {"event_order", "completion_credit_cancel_arrival_v2"},
           {"rounding", "exact_subns_internal_ceil_public_ns_v2"}};
+  if (has_curved_plan) {
+    // Curved snapshots retain the rate published at the last Runtime event
+    // so import does not choose a neighboring LP vertex mid-interval.
+    snapshot["allocation_state"] = "published_rates_v1";
+  }
+  return snapshot;
 }
 
 std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
@@ -2155,6 +2348,13 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
   if (snapshot.value("event_order", std::string()) != "completion_credit_cancel_arrival_v2" ||
       snapshot.value("rounding", std::string()) != "exact_subns_internal_ceil_public_ns_v2") {
     throw std::invalid_argument("incompatible_schema: event-order or rounding version mismatch");
+  }
+  const bool has_published_rates = snapshot.contains("allocation_state");
+  if (has_published_rates &&
+      (legacy_v2_snapshot || !snapshot.at("allocation_state").is_string() ||
+       snapshot.at("allocation_state").get<std::string>() !=
+           "published_rates_v1")) {
+    throw std::invalid_argument("incompatible_schema: unknown snapshot allocation state");
   }
 
   auto runtime = std::make_unique<Runtime>(hardware);
@@ -2324,6 +2524,16 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
         throw std::invalid_argument("invalid_snapshot: activity identity differs from plan");
       }
       live.progress = state.at("progress").get<double>();
+      if(!live.definition.credit_curve.empty()) {
+        if(!state.contains("curve_progress_exact"))
+          throw std::invalid_argument("invalid_snapshot: curved activity requires exact progress");
+        const auto exact=parse_long_double(state.at("curve_progress_exact"),"activity.curve_progress_exact");
+        if(static_cast<double>(exact)!=state.at("progress").get<double>())
+          throw std::invalid_argument("invalid_snapshot: curve progress scalar disagrees with progress");
+        live.progress=exact;
+      } else if(state.contains("curve_progress_exact")) {
+        throw std::invalid_argument("invalid_snapshot: legacy activity has unexpected curve progress");
+      }
       live.rate = parse_finite_nonnegative(state.at("rate"), "activity.rate");
       live.alpha = parse_finite_nonnegative(state.at("alpha"), "activity.alpha");
       live.done = state.at("done").get<bool>();
@@ -2620,7 +2830,28 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     }
   }
 
-  // Saved rates are diagnostic only. Rebuild them from the frozen live set.
+  struct SavedAllocation {
+    LiveActivity* activity = nullptr;
+    double rate = 0.0;
+    double alpha = 0.0;
+    double canonical_rate = 0.0;
+  };
+  std::vector<SavedAllocation> published_allocations;
+  if (has_published_rates) {
+    for (auto& [handle, execution] : runtime->executions_) {
+      (void)handle;
+      for (LiveActivity& live : execution.activities) {
+        published_allocations.push_back({&live, live.rate, live.alpha, 0.0});
+      }
+    }
+  }
+
+  // Rebuild a canonical allocation from the frozen live set. Current v3
+  // snapshots also carry the last published rates: validate that they are
+  // the same LP solution to binary64 precision, then restore the exact saved
+  // values. The source may be inside a stable interval whose tangent was
+  // chosen at its boundary; choosing an equivalent adjacent LP vertex here
+  // would otherwise perturb all subsequent extended-progress integration.
   for (auto& [handle, execution] : runtime->executions_) {
     (void)handle;
     for (LiveActivity& live : execution.activities) {
@@ -2636,6 +2867,130 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     throw std::invalid_argument("invalid_snapshot: saved state was not settled at its event boundary");
   }
   runtime->allocate();
+  for (SavedAllocation& saved : published_allocations) {
+    saved.canonical_rate = saved.activity->rate;
+    if (!same_or_one_ulp(saved.rate, saved.activity->rate) ||
+        !same_or_one_ulp(saved.alpha, saved.activity->alpha)) {
+      throw std::invalid_argument(
+          "invalid_snapshot: published activity allocation differs from canonical LP");
+    }
+    saved.activity->rate = saved.rate;
+    saved.activity->alpha = saved.alpha;
+  }
+  if (has_published_rates) {
+    // A neighboring LP rate is only safe to restore when it still obeys the
+    // current service rows. In particular, credit coefficients can be very
+    // large while progress rates are tiny, so an absolute/relative tolerance
+    // here could admit a real outward tangent at a finite-buffer boundary.
+    const auto add_compensated = [](long double value, long double& sum,
+                                    long double& correction) {
+      const long double next = sum + value;
+      if (std::abs(sum) >= std::abs(value))
+        correction += (sum - next) + value;
+      else
+        correction += (value - next) + sum;
+      sum = next;
+    };
+    std::vector<const LiveActivity*> all_active;
+    for (const auto& [handle, execution] : runtime->executions_) {
+      (void)handle;
+      if (execution.terminal ||
+          runtime->time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+      for (const LiveActivity& live : execution.activities) {
+        if (live.epoch_index != execution.epoch || live.done) continue;
+        const bool has_service = std::any_of(
+            live.definition.work.begin(), live.definition.work.end(),
+            [](double work) { return work > 0.0; });
+        if (has_service) all_active.push_back(&live);
+      }
+    }
+    for (std::size_t resource = 0; resource < resource_count; ++resource) {
+      long double used = 0.0L;
+      long double correction = 0.0L;
+      for (const LiveActivity* live : all_active) {
+        add_compensated(static_cast<long double>(live->definition.work[resource]) *
+                            live->rate,
+                        used, correction);
+      }
+      long double canonical_used = 0.0L;
+      long double canonical_correction = 0.0L;
+      for (const LiveActivity* live : all_active) {
+        const auto saved = std::find_if(
+            published_allocations.begin(), published_allocations.end(),
+            [live](const SavedAllocation& candidate) {
+              return candidate.activity == live;
+            });
+        if (saved == published_allocations.end())
+          throw std::logic_error("snapshot allocation lost an active activity");
+        add_compensated(static_cast<long double>(live->definition.work[resource]) *
+                            saved->canonical_rate,
+                        canonical_used, canonical_correction);
+      }
+      const long double canonical_total = canonical_used + canonical_correction;
+      const long double physical_tolerance = static_cast<long double>(kLpEpsilon) *
+          std::max(std::abs(static_cast<long double>(runtime->capacities_[resource])),
+                   std::abs(canonical_total));
+      if (used + correction > canonical_total + physical_tolerance) {
+        throw std::invalid_argument(
+            "invalid_snapshot: published rates increase physical service row " +
+            std::to_string(resource) + " beyond the canonical LP allocation");
+      }
+    }
+    for (const LiveActivity* live : all_active) {
+      const auto saved = std::find_if(
+          published_allocations.begin(), published_allocations.end(),
+          [live](const SavedAllocation& candidate) {
+            return candidate.activity == live;
+          });
+      if (saved == published_allocations.end())
+        throw std::logic_error("snapshot allocation lost an active activity");
+      const long double canonical_private =
+          static_cast<long double>(live->definition.private_time_s) *
+          saved->canonical_rate;
+      const long double private_tolerance = static_cast<long double>(kLpEpsilon) *
+          std::max(1.0L, std::abs(canonical_private));
+      if (live->definition.private_time_s > 0.0 &&
+          static_cast<long double>(live->definition.private_time_s) * live->rate >
+              canonical_private + private_tolerance) {
+        throw std::invalid_argument(
+            "invalid_snapshot: published rate increases a PRIVATE service row "
+            "beyond the canonical LP allocation");
+      }
+    }
+    for (const auto& [handle, execution] : runtime->executions_) {
+      (void)handle;
+      if (execution.terminal ||
+          runtime->time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+      std::vector<const LiveActivity*> active;
+      for (const LiveActivity& live : execution.activities) {
+        if (live.epoch_index != execution.epoch || live.done) continue;
+        const bool has_service = std::any_of(
+            live.definition.work.begin(), live.definition.work.end(),
+            [](double work) { return work > 0.0; });
+        if (has_service) active.push_back(&live);
+      }
+      for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+        const long double capacity = execution.credit_capacity[buffer];
+        const long double tolerance = static_cast<long double>(kCreditTolerance) *
+            std::max(1.0L, capacity);
+        const bool at_low = execution.credit[buffer] <= tolerance;
+        const bool at_high = execution.credit[buffer] >= capacity - tolerance;
+        if (!at_low && !at_high) continue;
+        long double net = 0.0L;
+        long double correction = 0.0L;
+        for (const LiveActivity* live : active) {
+          add_compensated(
+              static_cast<long double>(curve_derivative(*live)[buffer]) * live->rate,
+              net, correction);
+        }
+        const long double tangent = net + correction;
+        if ((at_low && tangent < 0.0L) || (at_high && tangent > 0.0L)) {
+          throw std::invalid_argument(
+              "invalid_snapshot: published rates point outside a finite-credit boundary");
+        }
+      }
+    }
+  }
   runtime->generation_ = saved_generation;
   runtime->allocation_updates_ = saved_allocations;
   return runtime;

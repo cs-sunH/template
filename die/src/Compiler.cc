@@ -1,4 +1,5 @@
 #include "coarse_die/Plan.hh"
+#include "CompilerInternal.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -482,8 +483,8 @@ nlohmann::json normalize_new_task(const nlohmann::json& raw,
   return normalized;
 }
 
-nlohmann::json normalize_task(const Hardware& hardware,
-                              const nlohmann::json& task) {
+nlohmann::json normalize_task_impl(const Hardware& hardware,
+                                   const nlohmann::json& task) {
   if (!task.is_object()) fail("task", "expected a JSON object");
   if (task.contains("die_op_spec")) {
     const auto& spec = task.at("die_op_spec");
@@ -508,9 +509,18 @@ std::string summary_string(const Plan& plan, const char* key) {
 
 }  // namespace
 
+namespace detail {
+
+nlohmann::json normalize_task(const Hardware& hardware,
+                              const nlohmann::json& task) {
+  return normalize_task_impl(hardware, task);
+}
+
+}  // namespace detail
+
 WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
                                               const nlohmann::json& task) {
-  const nlohmann::json normalized = normalize_task(hardware, task);
+  const nlohmann::json normalized = detail::normalize_task(hardware, task);
   std::vector<std::shared_ptr<Plan>> candidates =
       detail::enumerate_mappings_for_compile(hardware, normalized);
   if (candidates.empty()) {
@@ -546,7 +556,7 @@ WorkspaceEnvelope compile_workspace_envelope(const Hardware& hardware,
 
 WorkspaceCapacityBound compile_workspace_capacity_bound(
     const Hardware& hardware,const nlohmann::json& task) {
-  const nlohmann::json normalized=normalize_task(hardware,task);
+  const nlohmann::json normalized=detail::normalize_task(hardware,task);
   WorkspaceCapacityBound result;
   result.hbm_workspace_upper_bound_bytes=
       detail::workspace_capacity_upper_bound(hardware,normalized);
@@ -559,9 +569,13 @@ WorkspaceCapacityBound compile_workspace_capacity_bound(
   return result;
 }
 
-std::shared_ptr<const Plan> compile(const Hardware& hardware,
-                                   const nlohmann::json& task) {
-  const nlohmann::json normalized = normalize_task(hardware, task);
+namespace {
+
+std::shared_ptr<const Plan> compile_normalized_impl(
+    const Hardware& hardware, const nlohmann::json& normalized) {
+  if (!normalized.is_object() || !normalized.contains("op_kind")) {
+    fail("task", "normalized task must be an object with op_kind");
+  }
   std::vector<std::shared_ptr<Plan>> candidates =
       detail::enumerate_mappings_for_compile(hardware, normalized);
   if (candidates.empty()) {
@@ -635,6 +649,23 @@ std::shared_ptr<const Plan> compile(const Hardware& hardware,
   selected->fingerprint.clear();
   selected->fingerprint = plan_to_json(*selected).at("fingerprint").get<std::string>();
   return selected;
+}
+
+}  // namespace
+
+namespace detail {
+
+std::shared_ptr<const Plan> compile_normalized(
+    const Hardware& hardware, const nlohmann::json& normalized_task) {
+  return compile_normalized_impl(hardware, normalized_task);
+}
+
+}  // namespace detail
+
+std::shared_ptr<const Plan> compile(const Hardware& hardware,
+                                   const nlohmann::json& task) {
+  const nlohmann::json normalized = detail::normalize_task(hardware, task);
+  return detail::compile_normalized(hardware, normalized);
 }
 
 }  // namespace coarse_die

@@ -15,10 +15,10 @@ License: MIT (see LICENSE in the repository root).
   2. 用 resolved_die_model.json(契约 §3.3;显式参数 → env
      DIE_MODEL_CONFIG_PATH;manifest 键 die-model-config 由调用方
      online_service.py 解析后显式传入)建模型句柄;
-  3. 把 die_estimate_batch(批量孤立估值)/die_hardware_summary 按
-     C ABI(include/DieCApi.h)封成 Python 调用:estimate 返回逐条
-     CostResult dict,坏 spec 位置返回 None 并记录错误(不炸批);
-     批量级失败(入参畸形)经 die_last_error 取回抛 RuntimeError。
+  3. 把批量估值与硬件摘要按 C ABI 封成 Python 调用:estimate 保留
+     完整 CostResult;coarse 新 ABI 可选提供 estimate_cost,只返回
+     所选 cost/hash/status。坏 spec 位置返回 None 并记录错误,批量级
+     失败(入参畸形)经 last_error 取回抛 RuntimeError。
 
 只依赖标准库(ctypes/json/os/hashlib)。
 """
@@ -232,7 +232,7 @@ class DieModelOracle:
     # ------------------------------------------------------------- ABI --
 
     def _declare_abi(self) -> None:
-        """契约 §4 十一符号的 ctypes 参数表/restype 声明。
+        """声明 ctypes 参数表/restype,并记录可选的 cost-only 入口。
 
         库分配缓冲(die_hardware_summary/die_estimate_batch)的 restype
         用 c_void_p 而非 c_char_p:c_char_p 会在边界上复制成 Python
@@ -240,6 +240,7 @@ class DieModelOracle:
         (堆损坏)。取文用 ctypes.string_at,释放仍传原 c_void_p。
         """
         lib = self._lib
+        self.supports_estimate_cost = False
         if self.coarse:
             lib.die_coarse_create_model_v2.argtypes = [
                 ctypes.c_char_p, ctypes.POINTER(ctypes.c_uint64)]
@@ -249,6 +250,11 @@ class DieModelOracle:
             lib.die_coarse_estimate_batch_v2.argtypes = [
                 ctypes.c_uint64, ctypes.c_char_p]
             lib.die_coarse_estimate_batch_v2.restype = ctypes.c_void_p
+            if hasattr(lib, "die_coarse_estimate_cost_batch_v2"):
+                lib.die_coarse_estimate_cost_batch_v2.argtypes = [
+                    ctypes.c_uint64, ctypes.c_char_p]
+                lib.die_coarse_estimate_cost_batch_v2.restype = ctypes.c_void_p
+                self.supports_estimate_cost = True
             lib.die_coarse_destroy_model_v2.argtypes = [ctypes.c_uint64]
             lib.die_coarse_destroy_model_v2.restype = ctypes.c_int
             lib.die_coarse_free_result_v2.argtypes = [ctypes.c_void_p]
@@ -326,22 +332,24 @@ class DieModelOracle:
                                separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
-    def estimate(self, spec_dicts: Sequence[dict]) -> list[Optional[dict]]:
-        """批量孤立估值:一次 die_estimate_batch,逐条返回 CostResult
-        dict;坏 spec 位置返回 None 并把错误文本记入 self.last_errors
-        (好 spec 不受坏 spec 影响;A3 ABI 语义)。批量级失败抛
-        RuntimeError(经 die_last_error 取回)。"""
+    def _estimate(self, spec_dicts: Sequence[dict], *,
+                  cost_only: bool) -> list[Optional[dict]]:
         model = self._require_model()
         payload = json.dumps({"specs": list(spec_dicts)})
-        if self.coarse:
+        if cost_only:
+            handle = self._lib.die_coarse_estimate_cost_batch_v2(
+                model, payload.encode("utf-8"))
+        elif self.coarse:
             handle = self._lib.die_coarse_estimate_batch_v2(
                 model, payload.encode("utf-8"))
         else:
             handle = self._lib.die_estimate_batch(
                 model, payload.encode("utf-8"))
         if not handle:
+            endpoint = ("die_coarse_estimate_cost_batch_v2" if cost_only
+                        else "die_estimate_batch")
             raise RuntimeError(
-                "die_estimate_batch failed: {}".format(self._last_error()))
+                "{} failed: {}".format(endpoint, self._last_error()))
         try:
             out = json.loads(ctypes.string_at(handle).decode("utf-8"))
         finally:
@@ -355,8 +363,9 @@ class DieModelOracle:
                 or len(results) != len(spec_dicts) \
                 or len(errors) != len(spec_dicts):
             raise RuntimeError(
-                "die_estimate_batch returned a malformed envelope for {} "
-                "specs".format(len(spec_dicts)))
+                "{} returned a malformed envelope for {} specs".format(
+                    "die_coarse_estimate_cost_batch_v2" if cost_only else
+                    "die_estimate_batch", len(spec_dicts)))
         self.last_errors = [
             (error if isinstance(error, str) else
              error.get("reason") if isinstance(error, dict) else None)
@@ -366,7 +375,31 @@ class DieModelOracle:
             if result is None:
                 typed.append(None)
             else:
-                if self.coarse:
+                if cost_only:
+                    if not isinstance(result, dict):
+                        raise RuntimeError(
+                            "coarse_die_v2 cost estimate returned a "
+                            "non-object result")
+                    latency_ns = result.get("estimated_latency_ns")
+                    plan_hash = result.get("plan_hash")
+                    status = result.get("status")
+                    if (isinstance(latency_ns, bool) or
+                            not isinstance(latency_ns, int) or latency_ns < 0 or
+                            not isinstance(plan_hash, str) or
+                            not isinstance(status, str)):
+                        raise RuntimeError(
+                            "coarse_die_v2 cost estimate is missing or has an "
+                            "invalid estimated_latency_ns/plan_hash/status")
+                    # The cost endpoint deliberately returns no legacy timing
+                    # breakdown; FACE consumes only the selected cost and
+                    # seconds remain a direct unit conversion of that cost.
+                    typed.append({
+                        "estimated_latency_ns": latency_ns,
+                        "plan_hash": plan_hash,
+                        "status": status,
+                        "total_seconds": float(latency_ns) / 1e9,
+                    })
+                elif self.coarse:
                     latency_ns = result.get("estimated_latency_ns")
                     if latency_ns is None:
                         raise RuntimeError(
@@ -383,6 +416,21 @@ class DieModelOracle:
                             sorted(COST_RESULT_FIELDS - set(result))))
                 typed.append(result)
         return typed
+
+    def estimate(self, spec_dicts: Sequence[dict]) -> list[Optional[dict]]:
+        """批量孤立估值,返回完整 CostResult;坏 spec 位置为 None 并
+        把错误文本记入 last_errors。批量级失败抛 RuntimeError。"""
+        return self._estimate(spec_dicts, cost_only=False)
+
+    def estimate_cost(self, spec_dicts: Sequence[dict]) -> list[Optional[dict]]:
+        """批量读取选中计划的 cost/hash/status。
+
+        新 coarse C ABI 可用时走轻量 endpoint。旧 coarse ABI 与 legacy
+        后端显式回退到完整 estimate 响应,保持现有兼容行为。检查
+        supports_estimate_cost 可确认本次库是否提供轻量 endpoint。"""
+        if not self.coarse or not self.supports_estimate_cost:
+            return self.estimate(spec_dicts)
+        return self._estimate(spec_dicts, cost_only=True)
 
     def estimate_one(self, spec_dict: dict) -> dict:
         """单 spec 便捷封装;错误位直接 fail-closed 抛错(调用方

@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
@@ -13,6 +14,10 @@ constexpr std::size_t resource_count = 13;
 enum ResourceId : std::size_t { COMPUTE_GATE, SRAM_READ, SRAM_WRITE, LOCAL,
     HBM0, HBM1, INJECT0, INJECT1, XPOS, XNEG, YPOS, YNEG, HOP };
 enum class Role : unsigned { Load, Compute, Store, Endpoint };
+struct CreditPoint {
+    double progress = 0;
+    std::array<double,2> cumulative{};
+};
 struct Activity {
     std::uint64_t id = 0;
     Role role = Role::Compute;
@@ -26,7 +31,16 @@ struct Activity {
     // Fractions of each activity's [0,1] progress alter buffer occupancy.
     // Zero means that the activity does not touch this buffer.
     std::array<double,2> credit_delta{};
+    // Optional piecewise-linear cumulative credit. Empty preserves the legacy
+    // linear credit_delta * progress description.
+    std::vector<CreditPoint> credit_curve;
 };
+
+std::array<double,2> credit_at(const Activity&, double progress);
+// At an internal curve point, returns the slope of the segment to its right.
+std::array<double,2> credit_slope(const Activity&, double progress);
+// Returns the first curve point strictly greater than progress, or 1.
+double next_credit_breakpoint(const Activity&, double progress);
 
 inline long double planned_vec_eqops(const Activity& activity) {
     const long double whole = static_cast<long double>(activity.vec_eqops);
@@ -71,6 +85,18 @@ struct Plan {
     std::vector<Epoch> epochs;
     std::uint64_t launch_ns = 0;
 };
+
+// Count every independent activity's affine pieces, including its terminal
+// switch; an empty epoch contributes one closure. Different activities do not
+// share a budget entry merely because their progress endpoints are equal.
+std::size_t service_description_count(const Plan&);
+
+inline bool has_credit_curves(const Plan& plan) {
+    for(const auto& epoch:plan.epochs)
+        for(const auto& activity:epoch.activities)
+            if(!activity.credit_curve.empty())return true;
+    return false;
+}
 
 // Capacity consumers must not use json::get<uint64_t>() directly: that cast
 // accepts negative or floating-point values and can silently change the byte
@@ -131,6 +157,7 @@ nlohmann::json plan_to_json(const Plan&);
 std::shared_ptr<const Plan> plan_from_json(const nlohmann::json&);
 
 namespace detail {
+void validate_credit_curve(const Activity&);
 // Checked-u128 lifetime formula shared by mapping workspace assignment and
 // the candidate-independent compiler bound.
 std::uint64_t workspace_capacity_upper_bound(

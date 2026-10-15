@@ -112,7 +112,7 @@ def row0_partition(total: int, prefix: int) -> int:
     return (prefix + total + 1) // 2 - (prefix + 1) // 2
 
 
-def make_waves(raw: dict[str, Any]) -> tuple[list[Wave], dict[str, Any]]:
+def make_waves(raw: dict[str, Any], *, require_five_epoch_fixture: bool = True) -> tuple[list[Wave], dict[str, Any]]:
     plan = raw["compiled_plan"]
     summary = plan["summary"]
     task = plan["task"]
@@ -129,7 +129,7 @@ def make_waves(raw: dict[str, Any]) -> tuple[list[Wave], dict[str, Any]]:
     if any(task["storage_dtype"].get(name) != "fp32"
            for name in ("weights", "activations", "output")):
         raise ValueError("fixture precondition failed: all storage dtypes must be FP32")
-    if plan["E"] != 5:
+    if require_five_epoch_fixture and plan["E"] != 5:
         raise ValueError(f"fixture expected the available five macro epochs, got E={plan['E']}")
 
     tm_count, tn_count, tk_count = ceildiv(m, tm), ceildiv(n, tn), ceildiv(k, tk)

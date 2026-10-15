@@ -9,9 +9,18 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
+
+namespace coarse_die::detail {
+nlohmann::json normalize_task(const coarse_die::Hardware&,
+                              const nlohmann::json&);
+std::vector<std::shared_ptr<coarse_die::Plan>> enumerate_mappings(
+    const coarse_die::Hardware&, const nlohmann::json&);
+}  // namespace coarse_die::detail
 
 #ifndef COARSE_DIE_SOURCE_DIR
 #error "COARSE_DIE_SOURCE_DIR must point at die/"
@@ -96,6 +105,19 @@ struct Shape {
   std::uint64_t k = 4097;
 };
 
+struct MappingSelection {
+  std::optional<std::uint64_t> tm;
+  std::optional<std::uint64_t> tn;
+  std::optional<std::uint64_t> tk;
+
+  bool requested() const { return tm || tn || tk; }
+};
+
+struct DriverArgs {
+  Shape shape;
+  MappingSelection mapping;
+};
+
 std::uint64_t parse_positive_u64(std::string_view value,
                                 std::string_view option) {
   std::uint64_t parsed = 0;
@@ -108,27 +130,70 @@ std::uint64_t parse_positive_u64(std::string_view value,
   return parsed;
 }
 
-Shape parse_shape(int argc, char** argv) {
-  Shape shape;
+DriverArgs parse_args(int argc, char** argv) {
+  DriverArgs args;
   for (int i = 1; i < argc; ++i) {
     const std::string_view option(argv[i]);
     if (option == "--help" || option == "-h") {
-      std::cout << "Usage: compiled_gemm_oracle_driver [--m M --n N --k K]\n"
-                   "Defaults to the original M=65 N=65 K=4097 fixture.\n";
+      std::cout << "Usage: compiled_gemm_oracle_driver [--m M --n N --k K] "
+                   "[--tm TM --tn TN --tk TK]\n"
+                   "Shape defaults to M=65 N=65 K=4097. Tile filters select an "
+                   "actual output-stationary Mapping candidate; any subset may "
+                   "be supplied.\n";
       std::exit(0);
     }
-    if (option != "--m" && option != "--n" && option != "--k") {
+    if (option != "--m" && option != "--n" && option != "--k" &&
+        option != "--tm" && option != "--tn" && option != "--tk") {
       throw std::invalid_argument("unknown option: " + std::string(option));
     }
     if (i + 1 >= argc) {
       throw std::invalid_argument("missing value for " + std::string(option));
     }
     const std::uint64_t value = parse_positive_u64(argv[++i], option);
-    if (option == "--m") shape.m = value;
-    else if (option == "--n") shape.n = value;
-    else shape.k = value;
+    if (option == "--m") args.shape.m = value;
+    else if (option == "--n") args.shape.n = value;
+    else if (option == "--k") args.shape.k = value;
+    else if (option == "--tm") args.mapping.tm = value;
+    else if (option == "--tn") args.mapping.tn = value;
+    else args.mapping.tk = value;
   }
-  return shape;
+  return args;
+}
+
+// Keep the shape-only helper used by k_readiness_runtime_driver.cc when it
+// includes this file. The new tile filters belong to the compiled-oracle
+// entrypoint and must not silently change that diagnostic's old arguments.
+Shape parse_shape(int argc, char** argv) {
+  const DriverArgs args = parse_args(argc, argv);
+  if (args.mapping.requested())
+    throw std::invalid_argument("tile filters are not supported by the K-readiness diagnostic");
+  return args.shape;
+}
+
+std::shared_ptr<const Plan> select_os_candidate(const Hardware& hardware,
+                                                const json& task,
+                                                const MappingSelection& selection,
+                                                std::size_t& os_candidate_count) {
+  const json normalized = coarse_die::detail::normalize_task(hardware, task);
+  auto candidates = coarse_die::detail::enumerate_mappings(hardware, normalized);
+  std::shared_ptr<Plan> selected;
+  os_candidate_count = 0;
+  for (auto& candidate : candidates) {
+    const json& summary = candidate->summary;
+    if (summary.value("dataflow_id", std::string()) != "output_stationary_v2")
+      continue;
+    ++os_candidate_count;
+    if ((selection.tm && summary.at("tm").get<std::uint64_t>() != *selection.tm) ||
+        (selection.tn && summary.at("tn").get<std::uint64_t>() != *selection.tn) ||
+        (selection.tk && summary.at("tk").get<std::uint64_t>() != *selection.tk))
+      continue;
+    if (selected)
+      throw std::invalid_argument("tile filters match multiple actual OS candidates");
+    selected = candidate;
+  }
+  if (!selected)
+    throw std::invalid_argument("tile filters match no actual output-stationary Mapping candidate");
+  return selected;
 }
 
 json gemm_task(const Shape& shape) {
@@ -158,6 +223,11 @@ json activity_json(const Activity& activity) {
   json hbm = json::array();
   for (const auto& row : activity.hbm_bytes)
     hbm.push_back({row[0], row[1]});
+  json curve = json::array();
+  for (const auto& point : activity.credit_curve)
+    curve.push_back({{"progress", point.progress},
+                     {"cumulative", {point.cumulative[0],
+                                      point.cumulative[1]}}});
   return {{"id", activity.id},
           {"role", role_name(activity.role)},
           {"work_by_resource", std::move(work)},
@@ -166,7 +236,8 @@ json activity_json(const Activity& activity) {
           {"vec_eqops", activity.vec_eqops},
           {"canonical_q", activity.canonical_q},
           {"private_time_s", activity.private_time_s},
-          {"credit_delta", activity.credit_delta}};
+          {"credit_delta", activity.credit_delta},
+          {"credit_curve", std::move(curve)}};
 }
 
 json plan_json(const Plan& plan) {
@@ -181,12 +252,18 @@ json plan_json(const Plan& plan) {
                       {"credit_capacity", epoch.credit_capacity},
                       {"activities", std::move(activities)}});
   }
-  return {{"compiler_path", "coarse_die::compile() -> detail::enumerate_mappings()"},
+  return {{"compiler_path", "coarse_die::compile() or detail::enumerate_mappings()"},
           {"fingerprint", plan.fingerprint},
           {"hardware_fingerprint", plan.hardware_fingerprint},
           {"task", plan.task},
           {"summary", plan.summary},
           {"E", plan.epochs.size()},
+          {"description_count", coarse_die::service_description_count(plan)},
+          {"service_model_provenance",
+           {{"source", "compiled Plan summary.service_curves and Activity.credit_curve"},
+            {"service_curves", plan.summary.value("service_curves", json::array())},
+            {"plan_epoch_count", plan.epochs.size()},
+            {"description_count", coarse_die::service_description_count(plan)}}},
           {"epochs", std::move(epochs)}};
 }
 
@@ -311,10 +388,13 @@ json synthetic_capacity_json(const Hardware& hardware) {
 
 int main(int argc, char** argv) {
   try {
-    const Shape shape = parse_shape(argc, argv);
+    const DriverArgs args = parse_args(argc, argv);
     const Hardware hardware = synthetic_hardware();
-    const json task = gemm_task(shape);
-    const auto plan = compile(hardware, task);
+    const json task = gemm_task(args.shape);
+    std::size_t os_candidate_count = 0;
+    const auto plan = args.mapping.requested()
+        ? select_os_candidate(hardware, task, args.mapping, os_candidate_count)
+        : compile(hardware, task);
     if (!plan) throw std::runtime_error("compile returned a null GEMM plan");
     const json solo = run_standalone(hardware, plan);
     const std::uint64_t offsets_ns[] = {0, 50000000ULL};
@@ -324,6 +404,15 @@ int main(int argc, char** argv) {
     std::cout << json{{"schema_version", 1},
                       {"measurement_source", "compiled_plan_and_actual_cpp_runtime"},
                       {"synthetic_hardware", synthetic_capacity_json(hardware)},
+                      {"mapping_selection",
+                       {{"source", args.mapping.requested()
+                            ? "actual_detail::enumerate_mappings_candidate"
+                            : "coarse_die::compile_selected_candidate"},
+                        {"requested_tiles",
+                         {{"tm", args.mapping.tm ? json(*args.mapping.tm) : json(nullptr)},
+                          {"tn", args.mapping.tn ? json(*args.mapping.tn) : json(nullptr)},
+                          {"tk", args.mapping.tk ? json(*args.mapping.tk) : json(nullptr)}}},
+                        {"enumerated_os_candidate_count", os_candidate_count}}},
                       {"compiled_plan", plan_json(*plan)},
                       {"standalone", solo},
                       {"two_comp", concurrent}}

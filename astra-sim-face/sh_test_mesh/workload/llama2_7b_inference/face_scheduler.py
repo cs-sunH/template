@@ -463,7 +463,7 @@ def _estimate_iteration_time_ns_die(
     """die 路径:本地计算时间 = oracle 孤立估值;组合结构与 legacy 路径
     逐项相同(linear + max(prefill_attn, decode_attn) + d2d_latency_ns、
     max(1, ceil(...)) 取整)。全部数值来自 die_estimate_batch,本函数
-    不实现任何时间公式。"""
+    不实现任何时间公式;新 coarse C ABI 可用时只读取 cost-only 结果。"""
     specs, labels = build_die_estimate_specs(
         model,
         instance_size=instance_size,
@@ -472,13 +472,20 @@ def _estimate_iteration_time_ns_die(
         d_token=d_token,
         config_hash=cost_oracle.config_hash,
     )
-    results = cost_oracle.estimate(specs)
+    cost_only = getattr(cost_oracle, "estimate_cost", None)
+    use_cost_only = (
+        getattr(cost_oracle, "coarse", False) and
+        getattr(cost_oracle, "supports_estimate_cost", False) and
+        callable(cost_only))
+    estimate_endpoint = ("die_coarse_estimate_cost_batch_v2"
+                         if use_cost_only else "die_estimate_batch")
+    results = cost_only(specs) if use_cost_only else cost_oracle.estimate(specs)
     seconds: dict[str, float] = {}
     for label, result, error in zip(labels, results, cost_oracle.last_errors):
         if result is None:
             raise RuntimeError(
-                "die estimate spec {!r} rejected by die_estimate_batch: "
-                "{}".format(label, error))
+                "die estimate spec {!r} rejected by {}: {}".format(
+                    label, estimate_endpoint, error))
         seconds[label] = float(result["total_seconds"])
     linear_seconds = sum(
         seconds[label]

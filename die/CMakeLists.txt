@@ -22,7 +22,7 @@ set_target_properties(coarse_die_cabi PROPERTIES LIBRARY_OUTPUT_DIRECTORY "${CMA
 option(COARSE_DIE_BUILD_TESTS "Build standalone coarse die verification" ON)
 if(COARSE_DIE_BUILD_TESTS)
   enable_testing()
-  foreach(t source_golden_test hardware_search_test compile_execution_test compiler_credit_test gemm_os_access_counter_test gemm_os_geometry_test gemm_os_resource_facts_test gemm_os_readiness_test operator_accounting_test gemm_accounting_test gemm_tail_budget_test task_schema_test compact_batch_semantics_test equivalent_work_test fractional_work_test fused_ffn_accounting_test attention_accounting_test endpoint_allocation_test runtime_credit_scale_test runtime_clock_translation_test runtime_counters_test estimate_driver_test runtime_semantics_test oracle_granularity_test capi_lifecycle_test capi_cache_response_test workspace_metadata_test workspace_envelope_test runtime_submit_transaction_test runtime_owner_symmetry_test)
+  foreach(t packing_allocator_test os_service_curve_test os_service_scaling_test service_curve_schema_test service_curve_runtime_test capi_cost_query_test source_golden_test hardware_search_test compile_execution_test compiler_credit_test gemm_os_access_counter_test gemm_os_geometry_test gemm_os_resource_facts_test gemm_os_readiness_test operator_accounting_test gemm_accounting_test gemm_tail_budget_test task_schema_test compact_batch_semantics_test equivalent_work_test fractional_work_test fused_ffn_accounting_test attention_accounting_test endpoint_allocation_test runtime_credit_scale_test runtime_clock_translation_test runtime_counters_test estimate_driver_test runtime_semantics_test oracle_granularity_test capi_lifecycle_test capi_cache_response_test workspace_metadata_test workspace_envelope_test runtime_submit_transaction_test runtime_owner_symmetry_test)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/${t}.cc")
       add_executable(coarse_${t} tests/${t}.cc)
       target_link_libraries(coarse_${t} PRIVATE coarse_die coarse_die_cabi)
@@ -37,6 +37,11 @@ if(COARSE_DIE_BUILD_TESTS)
     add_test(NAME coarse_grouped_gemm_oracle_test
       COMMAND "${Python3_EXECUTABLE}"
         "${CMAKE_CURRENT_SOURCE_DIR}/tests/grouped_gemm_oracle_test.py")
+  endif()
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/analytical_service_oracle_test.py")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME coarse_analytical_service_oracle_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tests/analytical_service_oracle_test.py")
   endif()
   # Independent bounded Fraction LP regression against public Runtime samples.
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/owner_lp_oracle_driver.cc" AND
@@ -70,6 +75,13 @@ if(COARSE_DIE_BUILD_TESTS)
       COARSE_DIE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
     add_test(NAME coarse_k_readiness_runtime_self_test
       COMMAND coarse_k_readiness_runtime_driver --self-test)
+  endif()
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/service_curve_benchmark.cc")
+    add_executable(coarse_service_curve_benchmark tests/service_curve_benchmark.cc)
+    target_link_libraries(coarse_service_curve_benchmark PRIVATE coarse_die coarse_die_cabi)
+    target_compile_definitions(coarse_service_curve_benchmark PRIVATE
+      COARSE_DIE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+      COARSE_DIE_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
   endif()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark.cc")
     add_executable(coarse_die_benchmark tests/benchmark.cc)

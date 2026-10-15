@@ -165,8 +165,23 @@ double require_finite_nonnegative(const nlohmann::json& j,
   return value;
 }
 
+double require_finite_number(const nlohmann::json& j,
+                             const std::string& path) {
+  if (!j.is_number()) throw std::invalid_argument(path + ": expected number");
+  const double value = j.get<double>();
+  if (!std::isfinite(value))
+    throw std::invalid_argument(path + ": expected finite number");
+  return value;
+}
+
+void require_progress(double progress) {
+  if (!std::isfinite(progress) || progress < 0.0 || progress > 1.0)
+    throw std::invalid_argument("credit progress: expected a finite value in [0,1]");
+}
+
 nlohmann::json make_payload(const Plan& plan) {
   bool fractional = false;
+  bool curved = false;
   nlohmann::json epochs = nlohmann::json::array();
   for (const Epoch& epoch : plan.epochs) {
     nlohmann::json activities = nlohmann::json::array();
@@ -191,6 +206,16 @@ nlohmann::json make_payload(const Plan& plan) {
         activities.back()["vec_eqops_fraction"] = equivalent_fraction_to_json(activity.vec_eqops_fraction);
         fractional = true;
       }
+      if (!activity.credit_curve.empty()) {
+        nlohmann::json curve = nlohmann::json::array();
+        for (const CreditPoint& point : activity.credit_curve) {
+          curve.push_back({{"progress", point.progress},
+                           {"cumulative", {point.cumulative[0],
+                                            point.cumulative[1]}}});
+        }
+        activities.back()["credit_curve"] = std::move(curve);
+        curved = true;
+      }
     }
     epochs.push_back({
         {"name", epoch.name},
@@ -199,7 +224,10 @@ nlohmann::json make_payload(const Plan& plan) {
         {"credit_capacity", {epoch.credit_capacity[0], epoch.credit_capacity[1]}},
         {"repeat_count", epoch.repeat_count}});
   }
-  return {{"schema", fractional ? "coarse_die_plan_v3" : "coarse_die_plan_v2"},
+  const char* schema = curved ? "coarse_die_plan_v4"
+                              : (fractional ? "coarse_die_plan_v3"
+                                            : "coarse_die_plan_v2");
+  return {{"schema", schema},
           {"task", plan.task},
           {"summary", plan.summary},
           {"hardware_fingerprint", plan.hardware_fingerprint},
@@ -264,11 +292,85 @@ void validate_plan(const Plan& plan) {
           throw std::invalid_argument(ap + ".credit_delta: expected finite values");
         }
       }
+      detail::validate_credit_curve(activity);
     }
+  }
+  if (has_credit_curves(plan) && service_description_count(plan) > 64) {
+    throw std::invalid_argument(
+        "plan.service_description_count: exceeds 64 description limit");
   }
 }
 
 }  // namespace
+
+namespace detail {
+
+void validate_credit_curve(const Activity& activity) {
+  const auto& curve = activity.credit_curve;
+  if (curve.empty()) return;
+  if (curve.size() < 2 || curve.size() > 17) {
+    throw std::invalid_argument(
+        "activity.credit_curve: expected 2..17 points");
+  }
+  for (double delta : activity.credit_delta) {
+    if (!std::isfinite(delta)) {
+      throw std::invalid_argument(
+          "activity.credit_curve: credit_delta must be finite");
+    }
+  }
+  if (curve.front().progress != 0.0 ||
+      curve.front().cumulative != std::array<double, 2>{0.0, 0.0}) {
+    throw std::invalid_argument(
+        "activity.credit_curve: first point must be (0,[0,0])");
+  }
+  if (curve.back().progress != 1.0 ||
+      curve.back().cumulative != activity.credit_delta) {
+    throw std::invalid_argument(
+        "activity.credit_curve: last point must be (1,credit_delta)");
+  }
+
+  for (std::size_t i = 0; i < curve.size(); ++i) {
+    const CreditPoint& point = curve[i];
+    if (!std::isfinite(point.progress) || point.progress < 0.0 ||
+        point.progress > 1.0) {
+      throw std::invalid_argument(
+          "activity.credit_curve.progress: expected a finite value in [0,1]");
+    }
+    for (double value : point.cumulative) {
+      if (!std::isfinite(value)) {
+        throw std::invalid_argument(
+            "activity.credit_curve.cumulative: expected finite values");
+      }
+    }
+    if (i == 0) continue;
+
+    const CreditPoint& previous = curve[i - 1];
+    const double dp = point.progress - previous.progress;
+    if (!(dp > 0.0) || !std::isfinite(dp)) {
+      throw std::invalid_argument(
+          "activity.credit_curve.progress: points must be strictly increasing");
+    }
+    for (std::size_t channel = 0; channel < 2; ++channel) {
+      const double delta = activity.credit_delta[channel];
+      const double before = previous.cumulative[channel];
+      const double after = point.cumulative[channel];
+      if ((delta > 0.0 && after < before) ||
+          (delta < 0.0 && after > before) ||
+          (delta == 0.0 && (before != 0.0 || after != 0.0))) {
+        throw std::invalid_argument(
+            "activity.credit_curve.cumulative: not monotone with credit_delta");
+      }
+      // The public slope API returns double. Reject a valid finite endpoint
+      // pair whose segment derivative cannot be represented by that API.
+      if (!std::isfinite((after - before) / dp)) {
+        throw std::invalid_argument(
+            "activity.credit_curve: segment slope is not finite");
+      }
+    }
+  }
+}
+
+}  // namespace detail
 
 namespace detail {
 
@@ -279,6 +381,107 @@ void validate_plan_structure(const Plan& plan) {
 }  // namespace detail
 
 std::string stable_hash(const std::string& text) { return sha256(text); }
+
+std::array<double, 2> credit_at(const Activity& activity, double progress) {
+  require_progress(progress);
+  detail::validate_credit_curve(activity);
+  if (activity.credit_curve.empty()) {
+    std::array<double, 2> value{};
+    for (std::size_t channel = 0; channel < value.size(); ++channel) {
+      if (!std::isfinite(activity.credit_delta[channel])) {
+        throw std::invalid_argument("activity.credit_delta: expected finite values");
+      }
+      value[channel] = activity.credit_delta[channel] * progress;
+    }
+    return value;
+  }
+
+  const auto& curve = activity.credit_curve;
+  const auto upper = std::upper_bound(
+      curve.begin(), curve.end(), progress,
+      [](double value, const CreditPoint& point) {
+        return value < point.progress;
+      });
+  if (upper == curve.begin()) return curve.front().cumulative;
+  if (upper == curve.end()) return curve.back().cumulative;
+  const CreditPoint& lower_point = *(upper - 1);
+  if (lower_point.progress == progress) return lower_point.cumulative;
+  const CreditPoint& upper_point = *upper;
+  const double fraction = (progress - lower_point.progress) /
+                         (upper_point.progress - lower_point.progress);
+  std::array<double, 2> value{};
+  for (std::size_t channel = 0; channel < value.size(); ++channel) {
+    const double slope_delta = upper_point.cumulative[channel] -
+                               lower_point.cumulative[channel];
+    value[channel] = lower_point.cumulative[channel] + fraction * slope_delta;
+    if (!std::isfinite(value[channel])) {
+      throw std::overflow_error("activity.credit_curve: interpolation overflow");
+    }
+  }
+  return value;
+}
+
+std::array<double, 2> credit_slope(const Activity& activity, double progress) {
+  require_progress(progress);
+  detail::validate_credit_curve(activity);
+  if (activity.credit_curve.empty()) {
+    for (double delta : activity.credit_delta) {
+      if (!std::isfinite(delta)) {
+        throw std::invalid_argument("activity.credit_delta: expected finite values");
+      }
+    }
+    return activity.credit_delta;
+  }
+
+  const auto& curve = activity.credit_curve;
+  const auto upper = std::upper_bound(
+      curve.begin(), curve.end(), progress,
+      [](double value, const CreditPoint& point) {
+        return value < point.progress;
+      });
+  const std::size_t lower_index = upper == curve.end()
+      ? curve.size() - 2
+      : static_cast<std::size_t>(upper - curve.begin() - 1);
+  const CreditPoint& lower_point = curve[lower_index];
+  const CreditPoint& upper_point = curve[lower_index + 1];
+  const double dp = upper_point.progress - lower_point.progress;
+  std::array<double, 2> slope{};
+  for (std::size_t channel = 0; channel < slope.size(); ++channel) {
+    slope[channel] = (upper_point.cumulative[channel] -
+                      lower_point.cumulative[channel]) / dp;
+  }
+  return slope;
+}
+
+double next_credit_breakpoint(const Activity& activity, double progress) {
+  require_progress(progress);
+  detail::validate_credit_curve(activity);
+  if (activity.credit_curve.empty()) return 1.0;
+  const auto next = std::upper_bound(
+      activity.credit_curve.begin(), activity.credit_curve.end(), progress,
+      [](double value, const CreditPoint& point) {
+        return value < point.progress;
+      });
+  return next == activity.credit_curve.end() ? 1.0 : next->progress;
+}
+
+std::size_t service_description_count(const Plan& plan) {
+  std::size_t count=0;
+  for(const auto& epoch:plan.epochs) {
+    std::size_t pieces=0;
+    for(const auto& activity:epoch.activities) {
+      const auto n=activity.credit_curve.empty() ? 1 : activity.credit_curve.size()-1;
+      if(n>std::numeric_limits<std::size_t>::max()-pieces)
+        throw std::overflow_error("plan.service_description_count: size overflow");
+      pieces+=n;
+    }
+    pieces=std::max<std::size_t>(1,pieces);
+    if(pieces>std::numeric_limits<std::size_t>::max()-count)
+      throw std::overflow_error("plan.service_description_count: size overflow");
+    count+=pieces;
+  }
+  return count;
+}
 
 nlohmann::json equivalent_fraction_to_json(long double fraction) {
   static_assert(std::numeric_limits<long double>::radix == 2 &&
@@ -334,10 +537,16 @@ std::shared_ptr<const Plan> plan_from_json(const nlohmann::json& j) {
                 "plan");
   const auto schema = require_member(j, "schema", "plan");
   if (!schema.is_string() || (schema.get<std::string>() != "coarse_die_plan_v2" &&
-                             schema.get<std::string>() != "coarse_die_plan_v3")) {
-    throw std::invalid_argument("plan.schema: expected coarse_die_plan_v2 or coarse_die_plan_v3");
+                             schema.get<std::string>() != "coarse_die_plan_v3" &&
+                             schema.get<std::string>() != "coarse_die_plan_v4")) {
+    throw std::invalid_argument(
+        "plan.schema: expected coarse_die_plan_v2, coarse_die_plan_v3, or coarse_die_plan_v4");
   }
-  const bool fractional_schema = schema.get<std::string>() == "coarse_die_plan_v3";
+  const std::string schema_name = schema.get<std::string>();
+  const bool fractional_schema = schema_name == "coarse_die_plan_v3" ||
+                                 schema_name == "coarse_die_plan_v4";
+  const bool curve_schema = schema_name == "coarse_die_plan_v4";
+  bool parsed_curve = false;
   auto plan = std::make_shared<Plan>();
   plan->task = require_member(j, "task", "plan");
   plan->summary = require_member(j, "summary", "plan");
@@ -373,7 +582,7 @@ std::shared_ptr<const Plan> plan_from_json(const nlohmann::json& j) {
     for (std::size_t ai = 0; ai < activities.size(); ++ai) {
       const std::string ap = ep + ".activities[" + std::to_string(ai) + "]";
       const auto& ja = activities[ai];
-      reject_unknown(ja, {"id", "role", "work", "hbm_bytes", "int4_ops", "vec_eqops", "vec_eqops_fraction", "canonical_q", "private_time_s", "credit_delta"}, ap);
+      reject_unknown(ja, {"id", "role", "work", "hbm_bytes", "int4_ops", "vec_eqops", "vec_eqops_fraction", "canonical_q", "private_time_s", "credit_delta", "credit_curve"}, ap);
       Activity activity;
       activity.id = require_u64(require_member(ja, "id", ap), ap + ".id");
       activity.role = parse_role(require_member(ja, "role", ap), ap + ".role");
@@ -412,9 +621,46 @@ std::shared_ptr<const Plan> plan_from_json(const nlohmann::json& j) {
       for (std::size_t c = 0; c < 2; ++c) {
         activity.credit_delta[c] = require_finite_nonnegative(delta[c], ap + ".credit_delta", true);
       }
+      if (ja.contains("credit_curve")) {
+        if (!curve_schema) {
+          throw std::invalid_argument(
+              ap + ".credit_curve: requires Plan schema v4");
+        }
+        const auto& curve = ja.at("credit_curve");
+        if (!curve.is_array() || curve.size() < 2 || curve.size() > 17) {
+          throw std::invalid_argument(
+              ap + ".credit_curve: expected array of 2..17 points");
+        }
+        activity.credit_curve.reserve(curve.size());
+        for (std::size_t pi = 0; pi < curve.size(); ++pi) {
+          const std::string pp = ap + ".credit_curve[" +
+                                 std::to_string(pi) + "]";
+          const auto& point_json = curve[pi];
+          reject_unknown(point_json, {"progress", "cumulative"}, pp);
+          CreditPoint point;
+          point.progress = require_finite_number(
+              require_member(point_json, "progress", pp), pp + ".progress");
+          const auto& cumulative =
+              require_member(point_json, "cumulative", pp);
+          if (!cumulative.is_array() || cumulative.size() != 2) {
+            throw std::invalid_argument(
+                pp + ".cumulative: expected two entries");
+          }
+          for (std::size_t channel = 0; channel < 2; ++channel) {
+            point.cumulative[channel] = require_finite_number(
+                cumulative[channel], pp + ".cumulative");
+          }
+          activity.credit_curve.push_back(point);
+        }
+        parsed_curve = true;
+      }
       epoch.activities.push_back(std::move(activity));
     }
     plan->epochs.push_back(std::move(epoch));
+  }
+  if (curve_schema && !parsed_curve) {
+    throw std::invalid_argument(
+        "plan.schema: coarse_die_plan_v4 requires a nonempty credit_curve");
   }
   const auto& fingerprint = require_member(j, "fingerprint", "plan");
   if (!fingerprint.is_string()) throw std::invalid_argument("plan.fingerprint: expected string");

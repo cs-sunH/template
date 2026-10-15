@@ -1,0 +1,334 @@
+diff --git a/die/src/Capi.cc b/die/src/Capi.cc
+index 4b06046..96fb387 100644
+--- a/die/src/Capi.cc
++++ b/die/src/Capi.cc
+@@ -1,7 +1,9 @@
+ #include "coarse_die/Capi.h"
+ #include "coarse_die/Execution.hh"
+ #include "coarse_die/Memory.hh"
++#include "CompilerInternal.hh"
+ #include <algorithm>
++#include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
+ #include <iterator>
+@@ -25,6 +27,7 @@ struct Model {
+         std::string plan_hash_json;
+         std::string summary_json;
+         bool fractional = false;
++        bool curves = false;
+     };
+     struct CacheEntry {
+         std::shared_ptr<const Plan> plan;
+@@ -32,13 +35,22 @@ struct Model {
+         std::size_t bytes;
+         std::list<std::string>::iterator recency;
+     };
++    struct BatchMemo {
++        std::string raw_request;
++        std::vector<CacheEntry*> entries;
++        std::size_t bytes=0;
++    };
+     std::map<std::string, CacheEntry> cache;
+     std::list<std::string> lru;
++    // A single verified raw batch may bypass JSON parsing and normalization.
++    // Pointers refer only to current map nodes; cache structure changes clear it.
++    std::unique_ptr<BatchMemo> batch_memo;
+     std::size_t cache_bytes=0;
+ };
+ struct CachedPlan {
+     std::shared_ptr<const Plan> plan;
+     std::shared_ptr<const Model::ResponseTemplate> response;
++    std::string key;
+ };
+ struct PlanRef { std::shared_ptr<Model> model; std::shared_ptr<const Plan> plan; };
+ struct RuntimeRef { std::shared_ptr<Model> model; std::unique_ptr<Runtime> world; };
+@@ -140,11 +152,34 @@ std::size_t retained_string_capacity(const std::string& value) {
+     add_cache_bytes(result,1);
+     return result;
+ }
++std::uint64_t estimated_latency_ns(const Plan& plan) {
++    const auto latency=plan.summary.find("estimated_latency_ns");
++    if(latency==plan.summary.end())
++        throw std::runtime_error("numerical_failure: compiled Plan lacks estimated_latency_ns");
++    if(latency->is_number_unsigned())
++        return latency->get<std::uint64_t>();
++    if(latency->is_number_integer()) {
++        const auto signed_latency=latency->get<std::int64_t>();
++        if(signed_latency<0)
++            throw std::runtime_error("numerical_failure: compiled Plan has negative estimated_latency_ns");
++        return static_cast<std::uint64_t>(signed_latency);
++    }
++    throw std::runtime_error("numerical_failure: compiled Plan has non-integer estimated_latency_ns");
++}
++const std::string& cost_status(const Plan& plan) {
++    const auto status=plan.summary.find("alone_estimate_status");
++    if(status==plan.summary.end() || !status->is_string())
++        throw std::runtime_error("numerical_failure: compiled Plan lacks alone_estimate_status");
++    return status->get_ref<const std::string&>();
++}
+ std::shared_ptr<const Model::ResponseTemplate> make_response_template(const Plan& plan) {
+     auto response=std::make_shared<Model::ResponseTemplate>();
+     response->plan_hash_json=json(plan.fingerprint).dump();
+     response->summary_json=plan.summary.dump();
++    (void)estimated_latency_ns(plan);
++    (void)cost_status(plan);
+     response->fractional=has_fractional_work(plan);
++    response->curves=has_credit_curves(plan);
+     return response;
+ }
+ std::size_t retained_response_template_bytes(const Model::ResponseTemplate& response) {
+@@ -163,17 +198,71 @@ std::size_t retained_cache_entry_bytes(const Plan& plan, const std::string& key,
+     add_cache_bytes(bytes,retained_response_template_bytes(response));
+     return bytes;
+ }
++void invalidate_batch_memo(Model& model) {
++    if(!model.batch_memo) return;
++    model.cache_bytes-=model.batch_memo->bytes;
++    model.batch_memo.reset();
++}
++std::size_t retained_batch_memo_bytes(const Model::BatchMemo& memo) {
++    // Account the owned memo object and the capacities of both retained buffers,
++    // including allocator allowances for the string and pointer vector.
++    std::size_t bytes=sizeof(Model::BatchMemo)+64;
++    add_cache_bytes(bytes,retained_string_capacity(memo.raw_request));
++    add_cache_bytes(bytes,memo.entries.capacity()*sizeof(Model::CacheEntry*));
++    add_cache_bytes(bytes,64);
++    return bytes;
++}
++constexpr std::size_t kBatchMemoMaxRawBytes=64u*1024u;
++constexpr std::size_t kBatchMemoMaxRows=256;
++constexpr std::size_t kCacheByteLimit=64u*1024u*1024u;
++constexpr std::size_t kCacheEntryLimit=4096;
++const Model::BatchMemo* matching_batch_memo(const Model& model,const char* input) {
++    if(!input || !model.batch_memo) return nullptr;
++    return model.batch_memo->raw_request==input ? model.batch_memo.get() : nullptr;
++}
++void install_batch_memo(Model& model,const char* input,
++                        const std::vector<std::string>& keys) {
++    if(!input || keys.size()>kBatchMemoMaxRows) return;
++    const std::size_t raw_size=std::char_traits<char>::length(input);
++    if(raw_size>kBatchMemoMaxRawBytes) return;
++
++    auto memo=std::make_unique<Model::BatchMemo>();
++    memo->raw_request.assign(input,raw_size);
++    memo->entries.reserve(keys.size());
++    for(const auto& key:keys) {
++        const auto entry=model.cache.find(key);
++        if(entry==model.cache.end()) return;
++        memo->entries.push_back(&entry->second);
++    }
++    memo->bytes=retained_batch_memo_bytes(*memo);
++
++    // The memo is one retained cache item and shares both existing limits.
++    invalidate_batch_memo(model);
++    if(model.cache.size()>=kCacheEntryLimit || memo->bytes>kCacheByteLimit-model.cache_bytes)
++        return;
++    add_cache_bytes(model.cache_bytes,memo->bytes);
++    model.batch_memo=std::move(memo);
++}
+ CachedPlan cached(Model& m, const json& task) {
+-    auto key=stable_hash(m.hardware.fingerprint+task.dump());
++    const auto normalized=detail::normalize_task(m.hardware,task);
++    const auto normalized_text=normalized.dump();
++    const std::string hardware_identity=m.hardware.fingerprint.empty()
++        ? stable_hash(m.hardware.input.dump()) : m.hardware.fingerprint;
++    auto key=stable_hash(hardware_identity+"|coarse_die_compile_cache_v1|"+normalized_text);
+     auto i=m.cache.find(key);
+     if(i!=m.cache.end()) {
++        if(i->second.plan->task!=normalized)
++            throw std::runtime_error("numerical_failure: normalized compile cache key collision");
+         m.lru.splice(m.lru.begin(),m.lru,i->second.recency);
+-        return {i->second.plan,i->second.response};
++        return {i->second.plan,i->second.response,std::move(key)};
+     }
+-    auto p=compile(m.hardware,task);
++    auto p=detail::compile_normalized(m.hardware,normalized);
+     auto response=make_response_template(*p);
+     const std::size_t bytes=retained_cache_entry_bytes(*p,key,*response);
+-    if(bytes<=64u*1024u*1024u) {
++    if(bytes<=kCacheByteLimit) {
++        // A map insertion can invalidate cached node references through later
++        // eviction, so discard the shortcut before changing cache structure.
++        invalidate_batch_memo(m);
+         m.lru.push_front(key);
+         const auto recency=m.lru.begin();
+         std::map<std::string,Model::CacheEntry>::iterator inserted;
+@@ -196,7 +285,7 @@ CachedPlan cached(Model& m, const json& task) {
+             m.lru.erase(recency);
+             throw;
+         }
+-        while(m.cache.size()>4096 || m.cache_bytes>64u*1024u*1024u) {
++        while(m.cache.size()>kCacheEntryLimit || m.cache_bytes>kCacheByteLimit) {
+             auto victim=std::prev(m.lru.end());
+             auto e=m.cache.find(*victim);
+             if(e!=m.cache.end()) {
+@@ -206,22 +295,99 @@ CachedPlan cached(Model& m, const json& task) {
+             m.lru.erase(victim);
+         }
+     }
+-    return {std::move(p),std::move(response)};
++    return {std::move(p),std::move(response),std::move(key)};
++}
++struct ResolvedBatchRow {
++    bool success=false;
++    std::shared_ptr<const Plan> plan;
++    std::shared_ptr<const Model::ResponseTemplate> response;
++    std::string cache_key;
++    int status_code=0;
++    std::string reason;
++};
++std::vector<ResolvedBatchRow> resolve_batch(Model& model,const char* input) {
++    if(const auto* memo=matching_batch_memo(model,input)) {
++        std::vector<ResolvedBatchRow> rows;
++        rows.reserve(memo->entries.size());
++        for(const auto* entry:memo->entries)
++            rows.push_back({true,entry->plan,entry->response,{},0,{}});
++        return rows;
++    }
++
++    const auto batch=parse(input);
++    if(!batch.contains("specs") || !batch["specs"].is_array())
++        throw std::invalid_argument("invalid_input: specs must be an array");
++    const auto& specs=batch["specs"];
++    std::vector<ResolvedBatchRow> rows;
++    rows.reserve(specs.size());
++    std::vector<std::string> keys;
++    keys.reserve(specs.size());
++    bool all_success=true;
++    for(const auto& task:specs) {
++        ResolvedBatchRow row;
++        try {
++            auto value=cached(model,task);
++            row.success=true;
++            row.plan=std::move(value.plan);
++            row.response=std::move(value.response);
++            row.cache_key=std::move(value.key);
++            keys.push_back(row.cache_key);
++        } catch(const std::exception& e) {
++            row.reason=e.what();
++            row.status_code=code_for(row.reason);
++            all_success=false;
++        }
++        rows.push_back(std::move(row));
++    }
++    if(all_success) install_batch_memo(model,input,keys);
++    return rows;
+ }
+ json estimate_batch(DieHandle model,const char* in) {
+-    auto m=require(models,model); auto b=parse(in);
+-    if(!b.contains("specs") || !b["specs"].is_array()) throw std::invalid_argument("invalid_input: specs must be an array");
++    auto m=require(models,model);
++    auto rows=resolve_batch(*m,in);
+     json rs=json::array(), es=json::array();
+     // Each failure is isolated; successful siblings remain reviewable.
+-    for(const auto& task:b["specs"]) {
+-        try {
+-            const auto p=cached(*m,task).plan;
+-            rs.push_back(estimate_alone(m->hardware,*p));
+-            es.push_back(nullptr);
+-        } catch(const std::exception& e) {
+-            std::string reason=e.what();
+-            rs.push_back(nullptr); es.push_back({{"status_code",code_for(reason)},{"reason",reason},
+-                {"field_path",reason.substr(0,reason.find(':'))}});
++    for(const auto& row:rows) {
++        if(row.success) {
++            try {
++                rs.push_back(estimate_alone(m->hardware,*row.plan));
++                es.push_back(nullptr);
++            } catch(const std::exception& e) {
++                std::string reason=e.what();
++                rs.push_back(nullptr); es.push_back({{"status_code",code_for(reason)},{"reason",reason},
++                    {"field_path",reason.substr(0,reason.find(':'))}});
++            }
++        } else {
++            rs.push_back(nullptr); es.push_back({{"status_code",row.status_code},{"reason",row.reason},
++                {"field_path",row.reason.substr(0,row.reason.find(':'))}});
++        }
++    }
++    return {{"schema_version",2},{"results",rs},{"errors",es},
++            {"cache_entries",m->cache.size()},{"cache_accounted_bytes",m->cache_bytes},
++            {"cache_accounting","retained_container_capacities_with_allocator_allowances"}};
++}
++json estimate_cost_batch(DieHandle model,const char* in) {
++    auto m=require(models,model);
++    auto rows=resolve_batch(*m,in);
++    json rs=json::array(), es=json::array();
++    // The compiler already ran its isolated Runtime trials to rank candidates.
++    // Return that trusted selected cost without starting another Runtime or
++    // constructing estimate_alone's full diagnostic report.
++    for(const auto& row:rows) {
++        if(row.success) {
++            try {
++                rs.push_back({{"estimated_latency_ns",estimated_latency_ns(*row.plan)},
++                              {"plan_hash",row.plan->fingerprint},
++                              {"status",cost_status(*row.plan)}});
++                es.push_back(nullptr);
++            } catch(const std::exception& e) {
++                std::string reason=e.what();
++                rs.push_back(nullptr); es.push_back({{"status_code",code_for(reason)},
++                    {"reason",reason},{"field_path",reason.substr(0,reason.find(':'))}});
++            }
++        } else {
++            rs.push_back(nullptr); es.push_back({{"status_code",row.status_code},
++                {"reason",row.reason},{"field_path",row.reason.substr(0,row.reason.find(':'))}});
+         }
+     }
+     return {{"schema_version",2},{"results",rs},{"errors",es},
+@@ -241,25 +407,23 @@ void append_json_string(std::string& out, const std::string& value) {
+ }
+ std::string compile_batch_text(Model& model, const char* input,
+                                std::vector<CompileBatchRow>& rows) {
+-    const auto batch=parse(input);
+-    if(!batch.contains("specs") || !batch["specs"].is_array())
+-        throw std::invalid_argument("invalid_input: specs must be an array");
+-    const auto& specs=batch["specs"];
+-    rows.reserve(specs.size());
+-    for(const auto& task:specs) {
++    auto resolved=resolve_batch(model,input);
++    rows.reserve(resolved.size());
++    for(auto& item:resolved) {
+         CompileBatchRow row;
+-        try {
+-            auto value=cached(model,task);
++        if(item.success) {
++          try {
+             row.plan_handle=id();
+-            row.plan=std::move(value.plan);
+-            row.response=std::move(value.response);
++            row.plan=std::move(item.plan);
++            row.response=std::move(item.response);
+             row.success=true;
+-        } catch(const std::exception& e) {
+-            row.plan.reset();
+-            row.response.reset();
+-            row.plan_handle=0;
++          } catch(const std::exception& e) {
+             row.reason=e.what();
+             row.status_code=code_for(row.reason);
++          }
++        } else {
++            row.reason=std::move(item.reason);
++            row.status_code=item.status_code;
+         }
+         rows.push_back(std::move(row));
+     }
+@@ -317,7 +481,9 @@ std::string compile_batch_text(Model& model, const char* input,
+         out+=std::to_string(row.plan_handle);
+         out+=",\"plan_hash\":";
+         out+=response.plan_hash_json;
+-        if(response.fractional)
++        if(response.curves)
++            out+=",\"plan_schema\":\"coarse_die_plan_v4\"";
++        else if(response.fractional)
+             out+=",\"plan_schema\":\"coarse_die_plan_v3\"";
+         out+=",\"summary\":";
+         out+=response.summary_json;
+@@ -390,6 +556,7 @@ const char* die_coarse_workspace_capacity_bound_v2(DieHandle h,const char* input
+ }
+ const char* die_coarse_compile_batch_v2(DieHandle m,const char* s) { return compile_batch_result(m,s); }
+ const char* die_coarse_estimate_batch_v2(DieHandle m,const char* s) { return result([&]{return estimate_batch(m,s);}); }
++const char* die_coarse_estimate_cost_batch_v2(DieHandle m,const char* s) { return result([&]{return estimate_cost_batch(m,s);}); }
+ int die_coarse_create_runtime_v2(DieHandle m,DieHandle* out) {
+     return guarded([&]{out_handle(out); auto model=require(models,m); auto w=std::make_unique<Runtime>(model->hardware);
+         auto h=id(); runtimes.emplace(h,RuntimeRef{model,std::move(w)}); *out=h;});

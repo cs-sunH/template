@@ -1,8 +1,26 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-15（Asia/Shanghai；既有20261014证据目录保留原标识）。用户本次仅授权更新文档和接续提示词，不修改代码/测试/配置；新任务按最新提示词继续开发。本次文档以main `5e2fb0a`为基线；活动JOINT为 `astra-sim-joint`，`astra-sim-joint_old` 已在该main删除，不恢复。工程整体 **NOT ACCEPTED**；代码可接棒不等于模型精度、全部五仓业务或目标测量验收。
+记录日期：2026-10-15（本 Session UTC）。本轮实际进行了源码开发，最新用户现要求迅速交接并停止。基于 main `1f7a2424b7f49da2b1bbc4c18090cd43add129fe`，分支 `codex/die-analytical-curves-20261015`；保留全部上轮提交、归档和旧JOINT删除。以下最新检查点优先于历史“只更新文档”和旧停止记录。工程 **NOT ACCEPTED**，新源尚未发布五仓。
 
 ## Current Status
+
+### 最新：解析累计服务曲线源码检查点及停止交接
+
+本轮先核实干净工作区，0f56921 fast-forward 到最新main 1f7a242（包含3c8face归档、5e2fb0a删除、最新解析建模条款），未覆盖/丢弃外部提交。10月15日再次fetch，远端main仍为1f7a242。未恢复任何归档Program或旧JOINT。用户在开发途中要求迅速交接；本轮在现有最小边界修复/缓存任务收束后停止，不启动五仓发布/大规模验证。
+
+**当前实现为部分完成的新生产源码，不能沿用旧版本的33/33、83/83或精度证书。** Plan新增可选累计credit曲线（v4）；空曲线继续旧v2/v3。OS采用v3解析前缀：真实首K装载→首cohort整K工作（其余首cohort Load与Compute连续重叠）→其余L/C/S流体段→末输出排空；单cohort省略余量段。实际描述预算按各活动独立终止/曲线折点计数，3/4个epoch、通常7个描述归入8段预算，小形状≤5；先前v1/v2错误少算活动端点的口径已修。首输出在首cohort真实compute终态释放；K消费单位和输出块单位分离。所有字节/ops来自原有有界Geometry/Counter，未用参考时间拟合曲线。WR及其他模板仍是既有append_epoch，**尚未完成全模板累计服务升级**。
+
+Runtime以最多固定曲线点推进，边界用原signed LP连续切向积分；long double曲线进度、显式exact快照字段、signed tangent下取整防有限credit长期漂移；增加非负packing水填充快路及typed仲裁统计。最新收束修复对接近终态的曲线活动先检查整epoch信用可行才闭合，修复“进度投影1但credit先清零导致零速率”的问题。曲线snapshot保存已发布速率，在重建公平解、物理/PRIVATE及严格credit切向验证后恢复，避免1ulp差导致百万repeat续算漂移；旧Plan-only snapshot不加此标记。**这些最终修复的具体通过/失败以本节Tests最终日志为准，未完成广泛回归。**
+
+C++语义规范化成为缓存唯一Plan键；新增cost-only ABI复用选中Plan孤立估值，不再次Runtime或完整报告；compile仍每次新句柄，完整estimate保留。收束时加入单槽已验证raw-batch memo，跳过重复JSON/normalize/dump，map插入前失效、命中更新原LRU，所有保留容量计入原4096/64MiB预算；仅全成功、≤256行、≤64KiB才memo。最后测试调整明确区分Plan字节和raw memo字节；**缓存失效/内存与性能广泛验证尚待下一账号**。
+
+证据/可移植入口：`docs/analysis/analytical-curves-partial-20261015/` 与 `docs/evidence/analytical-curves-partial-20261015/`。保存中间编译失败、死锁原state、历史oracle raw、旧ABI构建/回退身份、数学笔记及未运行axis/五仓runner。work不跨账号，ELF/build不提交；源码本体与新测试直接保存在仓库，未把部分实现藏在work。
+
+TX8/reference与目标先验均未重拟：eta_compute_reference=0.9079551923877489，eta_vector_memory_reference=0.3411668292682927；Norm246μs、FFN3363μs仍只属条件参考。目标eta_pe/vec=.90、HBM=.70、SRAM=1、local/mesh/inject=.70、rho=.90、launch1000ns、memory_setup0、kappa_quant4、acc_convert2保持。无独立目标测量，target raw=not_available，不能称重新校准完成。
+
+五仓canonical仍为旧24文件digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`，本轮未publisher、未重建五仓新模型，当前`sync_repositories.py --check`预计发现源差异，**是待发布状态，不是同步通过**。仅两FACE的Python成本调用薄适配已改，新符号存在时用cost-only，缺失时仍完整estimate；真实旧vendor双ABI独立构建成功，两仓旧符号fallback均实测361ns且scheduler走旧full路径。新符号真实consumer及83配置/132+151 Python/Online/CPU预算均未跑。
+
+以下为历史记录，冲突时以上方最新检查点为准。
 
 ### 最新有效指令：解析粗粒度路线与本次文档范围（2026-10-15）
 
@@ -113,6 +131,17 @@ WS兼容修复 `ca604f5e49dc6df387888a33c75b0134642d42f3` 已正常推送main并
 
 ## Completed
 
+### 本轮新增（部分工程，非验收完成）
+
+- `Plan.hh/Plan.cc`：累计曲线校验、工作进度插值/斜率/边界，v4序列化，旧v2/v3无曲线格式保留，描述数真实计数。
+- `Mapping.cc`：OS真实K/输出单位与首输出整cohort物理前缀；SRAM精确峰值计算提前剪枝，静态byte与流体credit独立。
+- `Execution.hh/.cc`、`PackingAllocation.hh`：曲线直接积分、数值边界/快照修复、非负水填充和实际仲裁诊断；signed仍原LP，ratio快路仅推导未实现。
+- `CompilerInternal.hh`、`Compiler.cc`、`Capi.cc`、`Capi.h`、`Memory.hh`：规范语义缓存、轻量cost、单槽请求memo及其实际保留内存；不缓存执行句柄。
+- 新schema/runtime/OS/scaling/cache/packing测试，实际Plan oracle驱动扩展、独立离线分析工具、单次仲裁benchmark；测试状态见下节，不能把文件存在当作运行通过。
+- 两FACE薄适配、旧ABI真实构建与fallback；五仓runner/axis runner只准备未执行。有效草稿/推导、raw和失败日志均保存。
+
+以下为历史记录，冲突时以上方最新检查点为准。
+
 - 本轮已验：c13e9a7的K参考修正/六计数器基础、b22e065的绝对时钟修复和五仓dual ABI/config、0f56921的新JOINT冻结known cancel；详细真实结果及边界见Current Status。未验收Program全部源码/测试与失败记录已归档，默认源未启用。
 
 ### Attention workspace 生命周期修复
@@ -177,6 +206,17 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Next Step
 
+### 最新唯一接续顺序（覆盖下方历史条目）
+
+1. 首先阅读本检查点README、verification.json与最终handoff构建/测试日志；重新核实main和源。若最终定向仍失败，优先修`service_curve_runtime_test`的published-rate/credit tangent恢复、`os_service_scaling_test`的终态credit闭合或CAPI memo回归；不要先publisher或恢复Program。
+2. 做一致源码Release构建与必要公共回归。补memo命中/插入淘汰/失败兄弟/4096与64MiB边界，严格保留fresh handle和legacy wire。benchmark的alias cache字节相等假设也需区分memo，不能改性能门槛。当前未测最终P95。
+3. 同时运行`coarse_service_curve_benchmark --samples 30 --output work/...json`及保存的`run_axis.py --final-driver-ready`（先检查--help），留实际source/ELF身份；不得用总时间除更新数。重测v3 solo/sync/50ms、绝对busy误差/参考共享时长/覆盖，历史v1失败不可冒充v3结果。非负水填充已有独立Fraction LP通过记录；signed ratio闭包仅数学候选，未实现/未验证。
+4. 依据误差/CPU决定5/8/16最小描述。busy数学笔记给出明确假设下的条件下界（正服务on-run数、有限K预取、恒定消费），**不是所有表示不可能的证明**。原busy/3%/5%不变，不能利用率加权/事后修计数；无共同通过者标tradeoff_unresolved。WR/K及其他模板升级仍未做，不能声明架构全部覆盖已验收。
+5. 公共源稳定后`die/tools/sync_repositories.py`发五个活动仓，重建两ABI、83配置及两FACE真实新/旧符号、132/151套件；prepared runner在本检查点integration目录，旧baseline源来自Git的1f7a242 vendor。然后才做五仓完整固定输入开销对照和在线业务、JOINT生产依赖/lease/liveworld。保留sh30/unsupported live import guard，永不恢复旧JOINT。
+6. TX8继续独立conditional reference；有可识别新数据才校准。无target raw保持not_available，不用粒度oracle拟合eta。完成有意义检查点再正常push/整合main，保留其他提交。
+
+以下为历史记录，冲突时以上方最新检查点为准。
+
 **按解析分析模型继续，不恢复逐K Program或周期精确路线。** 先同步最新main并核对已完成范围；K参考final-only输出门/独立15s反例、clock、full/tail九诊断与新JOINT冻结known cancel已有验证，不重复。下列步骤服务于依赖顺序，不是任务数量或自主开发额度限制。
 
 1. **复用计数和接口，生成累计服务曲线。** 从Mapping、Geometry/AccessCounter/13域facts及已修参考提取循环和工作量解析关系，输入K消费与输出块分别统一计量。首输出门槛、full/tail、稳态/排空及端点总量由解析推导，不拟合参考时间；静态SRAM峰值含双输入/累加器/待写输出/转换/中间状态。现有Cursor仅作为离线反例/守恒检查参考，不能转成生产逐K调度器。
@@ -186,6 +226,15 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 5. **校准继续遵守数据边界。** 无独立目标raw/heldout不重新拟合TX8或目标效率，不以BF16/DDR参考代替INT4/HBM测量；reference/target参数冻结。新模型精度/速度未验收，不能把文档更新、oracle诊断或GitHub合入当作通过。
 
 ## Important Decisions
+
+### 本轮解析实现决定
+
+- 服务描述数是每epoch各独立活动的曲线段之和（无活动epoch仍1），不能仅数epoch或合并同progress的独立终止。v1/v2旧计数低估，当前共同7描述选8预算；不假称5段已达标。
+- 首个整K输出cohort用有界类表提取真实工作并单独终态释放；末输出在最后Compute完成后排空。prefetch credit为K消费单位，输出credit为块，SRAM另做精确byte峰值；无per-K内部生产回放。
+- 曲线使用扩展进度精度与已发布分配续算；物理/PRIVATE验证沿用原LP精度边界，credit切向不允许向外漂移。终态闭合必须检查整个epoch容量，不能恢复旧盲进度epsilon或增大credit容差。
+- 默认五仓旧模型暂不升级；当前新源是未验收开发检查点。真实旧fallback通过不代表新轻量符号/新模型整合通过。新memo为收束最小实现，正式性能结论待下一轮。
+
+以下为历史记录，冲突时以上方最新检查点为准。
 
 - 2026-10-15用户明确：数学公式分析模型为生产唯一主线；周期搜索/精确周期/大整数周期/逐K回放不进入方案，历史Program归档不恢复为默认待办。只在离线小规模oracle复用其有效计数/反例，不以状态固定或opt-in绕过事件成本限制。
 - 单段解析曲线在工作进度上定义，输入/输出单位各自一致，触边更新速率可行域而非逐块轮换；折点统一预算，固定外部序列的事件放大测试和原速度/精度门槛同时执行。
@@ -213,6 +262,15 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Files to Continue
 
+### 本轮直接入口
+
+- `src/{Mapping,Execution,Plan,Compiler,Capi}.cc`；`src/{CompilerInternal,PackingAllocation}.hh`；`include/coarse_die/{Plan,Execution,Capi,Memory}`。
+- `tests/{service_curve_runtime,service_curve_schema,os_service_curve,os_service_scaling,capi_cost_query,packing_allocator}_test.cc`、`tests/capi_cache_response_test.cc`与`service_curve_benchmark.cc`。
+- `validation/analytical_service_oracle.py`、实际`compiled_gemm_oracle_driver.cc`；本检查点analysis目录的run_axis/ratio/busy/integration/README，最终evidence中的verification与原始失败。
+- 两FACE `online/die_model_oracle.py`、`face_scheduler.py`；未碰JOINT生产源码或五仓vendor。
+
+以下为历史记录，冲突时以上方最新检查点为准。
+
 - 主线先读根设计§1.5/§8.2.1/§13、AGENTS和PROJECT最新路线；实现位置仍为 `die/src/{Mapping,Compiler,Execution,Capi}.cc` 及公共Plan/Execution接口。归档 `analysis/gemm-os-program-partial-20261015/` 仅供历史核查，不先解压恢复patch；原factory/test/oracle待办均属已撤出主线的未完成Program。
 
 - known cancel：新JOINT `NativeProjection.cc`、对应两项native/C API C++ tests与Python `joint/{resource_projection,native_projection,test_native_coarse_projection}.py`；重放 `analysis/native-world-cancel-20261015/run_checks.sh`。实际使用的vendor clock与公共Program在途版本分开识别。
@@ -233,6 +291,24 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
+
+### 本轮最终记录（不得外推）
+
+最终一致源码定向Release构建成功（6个指定target）；CTest **5/8 passed、3 failed，6.24s**：packing、OS结构/计量、curve schema、CAPI cost、Python oracle通过。失败原文：
+
+- `coarse_os_service_scaling_test`: `tiles_n65536: live work has no next Runtime event`；K4096原反例已越过，但大N仍阻塞。
+- `coarse_service_curve_runtime_test`: `invalid_snapshot: published activity allocation differs from canonical LP`；新快照费率续算尚未解决。
+- `coarse_capi_cache_response_test`: 64MiB压力预期失败，实际`entries=709, bytes=17634823`；须先检查4098行的逐行编译错误和实际footprint，不得直接放宽缓存断言。
+
+命令与完整日志在本检查点evidence的`verification.json`及`raw/handoff-{build,tests}.log`。最终新源有上述已知失败，**仅供继续开发，不可声称运行验收或发布五仓完成**。为遵照快速停止指令，不再展开修复或全量测试。
+
+中间证据：v2定向7项4通过/3失败（OS非法4×1网格夹具、曲线snapshot续算、CAPI小形状无正速率），全部保留；合法网格改2×2，v3 OS结构/计量test实际通过。v3 scaling K4096及CAPI仍无next事件，已定位为终态credit舍入，最终closure修复按最后日志验收。snapshot第一次严格物理行拒绝1+2.22e-16的原LP速率，最后改回原LP数值容差、credit仍零容差；未将该中间失败写成通过。
+
+独立Fraction owner-LP 18.62s通过，packing/schema及Python新oracle测试通过（最终Python5项）。v1 M80/N128/K4096与4097，solo/sync/50ms全部shared-busy原阈值failed；solo完成时间接近不等于busy通过。v3新axis未运行。无最终host性能证书：norm hot成本interim ctypes p50约35.4μs、p95约291.8μs，受并行扰动且早于memo，只供失败诊断，不作最终bench。benchmark构建/执行及30样本P95、五仓CPU≤10%仍未验收。
+
+旧FACE vendor真实双ABI构建成功，legacy SHA `7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68`，旧coarse SHA `bf56b1c1b7afd3c91a8cace974db19249d3e82567c3c770eda0e623e741cfddc`，与历史clock版本身份一致；两FACE缺少新符号fallback真实通过。未运行新五仓83、132/151/Online或TX8新校准；旧已通过且未改的参考门/JOINT known cancel无需重复认证。
+
+以下为历史记录，冲突时以上方最新检查点为准。
 
 - 本次仅文档：执行Markdown差异/链接/一致性和非文档Git对象不变检查；不运行编译、生产测试、校准或publisher，不声称历史测试已在本次重跑。最终push/fetch核实main后交付新提示词；下方均为前次源码/归档的真实结果。
 
@@ -263,6 +339,12 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Blocking Issues
 
+### 当前新增限制
+
+新源未完成广泛回归/精度/性能验收且未发布五仓；SRAM/工作量及schema测试通过不等于时间模型准确。v1 busy失败、v3范围/最终速度未知；WR/其他模板尚旧聚合；memo失效/内存与snapshot极端输入仍需独立覆盖；无target raw。旧完整业务/JOINT liveworld/sh30/开销缺口仍在。不要把本次GitHub交接完成写成工程ACCEPTED。
+
+以下为历史记录，冲突时以上方最新检查点为准。
+
 归档Program尚未验收：上述factory metadata/test入口错误、完整snapshot/cancel/capacity/前缀累计审查、新来源oracle、周期批量累计/效率及默认兼容还需完成；现有明确恢复顺序见Next Step和归档README。
 
 工程验收缺口：sh30/完整native live world、network/pool/ledger/cancel回放，E5精度/最小有效E，其他容量/拓扑/端口竞争压力、完整GQA/FACE future/source-release全业务验收、成本余项和host预算。目标测量not_available。以上不应由merge、fixture或条件reference数字冒充通过。
@@ -270,6 +352,14 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 生产 e73a378、K诊断修正c13e9a7及先前源码检查点均已进入main并实核。本次时钟修复按普通git同步main并实核；精确SHA由包含本文的Git提交确定。工程NOT ACCEPTED与代码检查点安全分开，不能隐瞒未通过项。
 
 ## Handoff Notes
+
+### 本次停止/交接
+
+用户明确要求完成当前最小任务后迅速保存、同步main并停止。未启动新开发、未publisher；本轮源码/新测试直接提交，原始失败、未运行runner、推导及旧ABI证据一起入库，不提交ELF/build/cache。共享分支以最终git fetch相同HEAD实核为准；GitHub API/gh既有Forbidden限制，采用普通git fast-forward main，不能伪造PR/CI。合入后本Session立即停止。精确提交SHA以包含本文的Git提交和最终答复为准。
+
+当前环境实际有`/workspace/cloud-setup/activate.sh`（GCC14.2/CMake3.31/Python3.12/protoc），历史“不存在该路径”只属于之前环境；下一账号重新检查，不依赖work ELF。此处entry scripts显式写work，原始报告中的绝对路径只作来源身份，不假定跨账号可读。
+
+以下为历史记录，冲突时以上方最新检查点为准。
 
 - 最新任务仅更新文档，保留用户5e2fb0a及其全部代码/归档/删除成果；本次不恢复/清理任何源码。新任务按RELAY_PROMPT持续开发，建模路线以上方为准，历史周期建议不再生效。
 

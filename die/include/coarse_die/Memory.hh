@@ -47,6 +47,8 @@ inline std::size_t retained_plan_bytes(const Plan& p) {
     for(const auto& e:p.epochs) {
         add(e.name.capacity()+17);
         add(e.activities.capacity()*sizeof(Activity)+16);
+        for(const auto& a:e.activities)
+            if(!a.credit_curve.empty()) add(a.credit_curve.capacity()*sizeof(CreditPoint)+16);
     }
     return total;
 }

@@ -30,7 +30,8 @@ inline constexpr std::size_t served_category_count =
 struct LiveActivity {
     Activity definition;
     std::size_t epoch_index=0;
-    double progress=0, rate=0, alpha=0;
+    long double progress=0;
+    double rate=0, alpha=0;
     bool done=false;
     std::array<std::array<long double,2>,2> hbm_served{};
     long double int4_served=0, vec_served=0;
@@ -52,6 +53,14 @@ struct ServedCounters {
     std::array<std::array<long double, 2>, 2> hbm_bytes{};
     long double int4_ops = 0.0L;
     long double vec_eqops = 0.0L;
+};
+
+// Ephemeral diagnostics of the most recent arbitration call. These describe
+// solver cost, not physical simulation state, and are not snapshot counters.
+struct ArbitrationDiagnostics {
+    enum class Path { Empty, Singleton, Packing, SignedLP };
+    Path path=Path::Empty;
+    std::size_t activities=0, constraint_rows=0, pivots=0, tangent_rounds=0;
 };
 
 class Runtime {
@@ -81,6 +90,7 @@ class Runtime {
     void destroy_execution(std::uint64_t handle);
     std::uint64_t now_ns() const { return now_ns_; }
     const Hardware& hardware() const { return *hardware_; }
+    ArbitrationDiagnostics last_arbitration() const { return last_arbitration_; }
  private:
     friend std::uint64_t detail::estimate_candidate_latency_ns(
         std::shared_ptr<const Hardware>, std::shared_ptr<const Plan>);
@@ -91,6 +101,7 @@ class Runtime {
     std::array<double,resource_count> capacities_{};
     std::uint64_t now_ns_=0, next_handle_=1, generation_=0;
     std::uint64_t allocation_updates_=0, internal_events_=0;
+    ArbitrationDiagnostics last_arbitration_;
     std::map<std::uint64_t,std::uint64_t> endpoint_registry_;
     std::map<std::uint64_t,std::pair<Owner,std::size_t>> transaction_owners_;
     long double hbm_busy_ns_=0, hbm_shared_ns_=0, compute_busy_ns_=0;

@@ -1,0 +1,1276 @@
+{
+  "plan": {
+    "epochs": [
+      {
+        "activities": [
+          {
+            "canonical_q": 612.0,
+            "credit_curve": [
+              {
+                "cumulative": [
+                  0.0,
+                  0.0
+                ],
+                "progress": 0.0
+              },
+              {
+                "cumulative": [
+                  17.0,
+                  0.0
+                ],
+                "progress": 1.0
+              }
+            ],
+            "credit_delta": [
+              17.0,
+              0.0
+            ],
+            "hbm_bytes": [
+              [
+                306,
+                0
+              ],
+              [
+                306,
+                0
+              ]
+            ],
+            "id": 1,
+            "int4_ops": 0,
+            "private_time_s": 2.8125e-10,
+            "role": "load",
+            "vec_eqops": 0,
+            "work": [
+              0.0,
+              0.0,
+              612.0,
+              0.0,
+              437.14285714285717,
+              437.14285714285717,
+              0.0,
+              0.0,
+              144.0,
+              162.0,
+              0.0,
+              333.8181818181818,
+              4410.0
+            ]
+          }
+        ],
+        "credit_capacity": [
+          34.0,
+          34.0
+        ],
+        "credit_initial": [
+          0.0,
+          0.0
+        ],
+        "name": "output_stationary_v2_load_first_k",
+        "repeat_count": 1
+      },
+      {
+        "activities": [
+          {
+            "canonical_q": 2754.0,
+            "credit_curve": [
+              {
+                "cumulative": [
+                  0.0,
+                  0.0
+                ],
+                "progress": 0.0
+              },
+              {
+                "cumulative": [
+                  -17.0,
+                  0.0
+                ],
+                "progress": 1.0
+              }
+            ],
+            "credit_delta": [
+              -17.0,
+              0.0
+            ],
+            "hbm_bytes": [
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                0
+              ]
+            ],
+            "id": 4,
+            "int4_ops": 510,
+            "private_time_s": 7.232142857142858e-09,
+            "role": "compute",
+            "vec_eqops": 1479,
+            "work": [
+              1.1439745948277428e-10,
+              1598.0,
+              1156.0,
+              2754.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0,
+              0.0
+            ]
+          }
+        ],
+        "credit_capacity": [
+          34.0,
+          34.0
+        ],
+        "credit_initial": [
+          17.0,
+          0.0
+        ],
+        "name": "output_stationary_v2_first_output_work",
+        "repeat_count": 1
+      },
+      {
+        "activities": [
+          {
+            "canonical_q": 170.0,
+            "credit_curve": [
+              {
+                "cumulative": [
+                  0.0,
+                  0.0
+                ],
+                "progress": 0.0
+              },
+              {
+                "cumulative": [
+                  0.0,
+                  -17.0
+                ],
+                "progress": 1.0
+              }
+            ],
+            "credit_delta": [
+              0.0,
+              -17.0
+            ],
+            "hbm_bytes": [
+              [
+                0,
+                85
+              ],
+              [
+                0,
+                85
+              ]
+            ],
+            "id": 7,
+            "int4_ops": 0,
+            "private_time_s": 7.8125e-11,
+            "role": "store",
+            "vec_eqops": 0,
+            "work": [
+              0.0,
+              170.0,
+              0.0,
+              0.0,
+              121.42857142857143,
+              121.42857142857143,
+              0.0,
+              0.0,
+              45.0,
+              40.0,
+              92.72727272727273,
+              0.0,
+              1225.0
+            ]
+          }
+        ],
+        "credit_capacity": [
+          34.0,
+          34.0
+        ],
+        "credit_initial": [
+          0.0,
+          17.0
+        ],
+        "name": "output_stationary_v2_store_last",
+        "repeat_count": 1
+      }
+    ],
+    "fingerprint": "63ed72aed7f6136b4ea794755571622df29a2741e763f7f0ea5c4621d14d6a87",
+    "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+    "launch_ns": 0,
+    "schema": "coarse_die_plan_v4",
+    "summary": {
+      "active_cores": 17,
+      "activity_units": "physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal",
+      "consumption_wave_count": 1,
+      "conversion_elements": 476,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 510,
+      "executed_matrix_ops": 510,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 612,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 170,
+      "int4_input_bytes": 170,
+      "kind": "gemm",
+      "local_bus_bytes": 2754,
+      "logical_tensor_bytes": 302,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates",
+        "exact_per_tile_INT4_tail_packing",
+        "analytical_cumulative_os_v3_fixed_bounded_description_budget"
+      ],
+      "output_round_count": 1,
+      "physical_transfer_bytes": 782,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "service_curves": [
+        {
+          "description_budget": 5,
+          "description_count": 3,
+          "epoch_begin": 0,
+          "epoch_count": 3,
+          "final_drain_units": 17,
+          "final_output_release": "compute_terminal_before_final_drain",
+          "first_load_units": 17,
+          "first_output_compute_progress": 1.0,
+          "first_output_compute_work_s": 1.1439745948277428e-10,
+          "first_output_epoch": 1,
+          "first_output_input_bytes": 612,
+          "first_output_input_units": 17,
+          "first_output_release": "first_cohort_compute_terminal",
+          "input_capacity_units": 34,
+          "input_unit": "one_output_tile_K_consumption",
+          "input_units": 17,
+          "model": "analytical_cumulative_os_v3",
+          "output_capacity_units": 34,
+          "output_unit": "one_output_tile",
+          "output_units": 17,
+          "readiness_approximation": "aggregate_piecewise_affine_not_discrete_tile_readiness"
+        }
+      ],
+      "service_description_count": 3,
+      "service_model_revision": "analytical_cumulative_os_v2",
+      "source_matrix_ops": 510,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 168,
+      "sram_read_bytes": 1768,
+      "sram_write_bytes": 1768,
+      "template_id": "gemm_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 3,
+      "tm": 1,
+      "tn": 5,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 1479,
+      "wave_count": 1
+    },
+    "task": {
+      "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+      "fusion_policy": "auto",
+      "layer_instances": 1,
+      "op_kind": "gemm",
+      "phase": "prefill",
+      "schema": "coarse_die_task_v2",
+      "spans": [],
+      "storage_dtype": {
+        "accumulator": "fp32",
+        "activations": "bf16",
+        "kv": "bf16",
+        "output": "bf16",
+        "parameters": "bf16",
+        "scores": "fp32",
+        "weights": "bf16"
+      },
+      "tensor_shapes": {
+        "k": 3,
+        "m": 17,
+        "n": 5
+      },
+      "tp_slice": {
+        "tensor_parallel": 1,
+        "tensor_parallel_rank": 0
+      },
+      "weight_passes": 1
+    }
+  },
+  "progress": {
+    "activities": [
+      {
+        "activity_id": 1,
+        "alpha": 0.0,
+        "canonical_q": 612.0,
+        "credit_delta": [
+          17.0,
+          0.0
+        ],
+        "credit_slope": [
+          17.0,
+          0.0
+        ],
+        "done": true,
+        "epoch_index": 0,
+        "hbm_payload_bytes": [
+          [
+            306,
+            0
+          ],
+          [
+            306,
+            0
+          ]
+        ],
+        "hbm_served_bytes": [
+          [
+            306.0,
+            0.0
+          ],
+          [
+            306.0,
+            0.0
+          ]
+        ],
+        "hbm_served_bytes_exact": [
+          [
+            "306",
+            "0"
+          ],
+          [
+            "306",
+            "0"
+          ]
+        ],
+        "int4_ops": "0",
+        "int4_served_ops": 0.0,
+        "int4_served_ops_exact": "0",
+        "planned_work": [
+          0.0,
+          0.0,
+          612.0,
+          0.0,
+          437.14285714285717,
+          437.14285714285717,
+          0.0,
+          0.0,
+          144.0,
+          162.0,
+          0.0,
+          333.8181818181818,
+          4410.0
+        ],
+        "progress": 1.0,
+        "rate": 0.0,
+        "rate_unit": "progress_per_second",
+        "remaining_work": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "role": "load",
+        "served_work": [
+          0.0,
+          0.0,
+          612.0,
+          0.0,
+          437.14285714285717,
+          437.14285714285717,
+          0.0,
+          0.0,
+          144.0,
+          162.0,
+          0.0,
+          333.8181818181818,
+          4410.0
+        ],
+        "status": "done",
+        "vec_eqops": "0",
+        "vec_served_eqops": 0.0,
+        "vec_served_eqops_exact": "0"
+      },
+      {
+        "activity_id": 4,
+        "alpha": 0.0,
+        "canonical_q": 2754.0,
+        "credit_delta": [
+          -17.0,
+          0.0
+        ],
+        "credit_slope": [
+          -17.0,
+          0.0
+        ],
+        "done": false,
+        "epoch_index": 1,
+        "hbm_payload_bytes": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "hbm_served_bytes": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "hbm_served_bytes_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "int4_ops": "510",
+        "int4_served_ops": 510.0,
+        "int4_served_ops_exact": "509.999999999999996669",
+        "planned_work": [
+          1.1439745948277428e-10,
+          1598.0,
+          1156.0,
+          2754.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "progress": 1.0,
+        "rate": 0.0,
+        "rate_unit": "progress_per_second",
+        "remaining_work": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "role": "compute",
+        "served_work": [
+          1.1439745948277428e-10,
+          1598.0,
+          1156.0,
+          2754.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "status": "blocked",
+        "vec_eqops": "1479",
+        "vec_served_eqops": 1479.0,
+        "vec_served_eqops_exact": "1478.999999999999990341"
+      },
+      {
+        "activity_id": 7,
+        "alpha": 0.0,
+        "canonical_q": 170.0,
+        "credit_delta": [
+          0.0,
+          -17.0
+        ],
+        "credit_slope": [
+          0.0,
+          -17.0
+        ],
+        "done": false,
+        "epoch_index": 2,
+        "hbm_payload_bytes": [
+          [
+            0,
+            85
+          ],
+          [
+            0,
+            85
+          ]
+        ],
+        "hbm_served_bytes": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.0
+          ]
+        ],
+        "hbm_served_bytes_exact": [
+          [
+            "0",
+            "0"
+          ],
+          [
+            "0",
+            "0"
+          ]
+        ],
+        "int4_ops": "0",
+        "int4_served_ops": 0.0,
+        "int4_served_ops_exact": "0",
+        "planned_work": [
+          0.0,
+          170.0,
+          0.0,
+          0.0,
+          121.42857142857143,
+          121.42857142857143,
+          0.0,
+          0.0,
+          45.0,
+          40.0,
+          92.72727272727273,
+          0.0,
+          1225.0
+        ],
+        "progress": 0.0,
+        "rate": 0.0,
+        "rate_unit": "progress_per_second",
+        "remaining_work": [
+          0.0,
+          170.0,
+          0.0,
+          0.0,
+          121.42857142857143,
+          121.42857142857143,
+          0.0,
+          0.0,
+          45.0,
+          40.0,
+          92.72727272727273,
+          0.0,
+          1225.0
+        ],
+        "role": "store",
+        "served_work": [
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "status": "blocked",
+        "vec_eqops": "0",
+        "vec_served_eqops": 0.0,
+        "vec_served_eqops_exact": "0"
+      }
+    ],
+    "cancelled": false,
+    "compute_gate_served_work": 1.1439745948277428e-10,
+    "compute_gate_served_work_exact": "1.143974594827742837415e-10",
+    "credit": [
+      {
+        "capacity": 34.0,
+        "index": 0,
+        "value": 0.0
+      },
+      {
+        "capacity": 34.0,
+        "index": 1,
+        "value": 0.0
+      }
+    ],
+    "elapsed_ns": 10,
+    "elapsed_ns_exact": "10",
+    "epoch_index": 1,
+    "finish_ns": null,
+    "generation": 3,
+    "handle": 1,
+    "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+    "hbm_direction_order": [
+      "read",
+      "write"
+    ],
+    "hbm_served_bytes": [
+      [
+        306.0,
+        0.0
+      ],
+      [
+        306.0,
+        0.0
+      ]
+    ],
+    "hbm_served_bytes_exact": [
+      [
+        "306",
+        "0"
+      ],
+      [
+        "306",
+        "0"
+      ]
+    ],
+    "issue_ns": 0,
+    "owner": {
+      "execution_id": 1,
+      "generation": 1,
+      "key": "1:1:1",
+      "node_id": 1,
+      "request_id": 1
+    },
+    "plan_fingerprint": "63ed72aed7f6136b4ea794755571622df29a2741e763f7f0ea5c4621d14d6a87",
+    "ready_ns": 0,
+    "served": {
+      "compute_gate_work": 1.1439745948277428e-10,
+      "compute_gate_work_exact": "1.143974594827742837415e-10",
+      "hbm_bytes_by_row_direction": [
+        [
+          306.0,
+          0.0
+        ],
+        [
+          306.0,
+          0.0
+        ]
+      ],
+      "hbm_bytes_by_row_direction_exact": [
+        [
+          "306",
+          "0"
+        ],
+        [
+          "306",
+          "0"
+        ]
+      ],
+      "int4_ops": 510.0,
+      "int4_ops_exact_decimal": "509.999999999999996669",
+      "vec_eqops": 1479.0,
+      "vec_eqops_exact_decimal": "1478.999999999999990341"
+    },
+    "state": "running",
+    "terminal": false
+  },
+  "snapshot": {
+    "allocation_state": "published_rates_v1",
+    "allocation_updates": 3,
+    "capacities": [
+      1.0,
+      11264000000000.0,
+      11264000000000.0,
+      1971199999999.9998,
+      2355200000000.0,
+      2355200000000.0,
+      0.0,
+      0.0,
+      246400000000.0,
+      246400000000.0,
+      179200000000.0,
+      179200000000.0,
+      7033600000000.0
+    ],
+    "endpoint_registry": [],
+    "event_order": "completion_credit_cancel_arrival_v2",
+    "exact_ns": "1.000000000000000000000e+01",
+    "executions": [
+      {
+        "activities": [
+          {
+            "activity_id": 1,
+            "alpha": 0.0,
+            "curve_progress_exact": "1.000000000000000000000e+00",
+            "done": true,
+            "epoch_index": 0,
+            "hbm_served": [
+              [
+                "3.060000000000000000000e+02",
+                "0.000000000000000000000e+00"
+              ],
+              [
+                "3.060000000000000000000e+02",
+                "0.000000000000000000000e+00"
+              ]
+            ],
+            "int4_served": "0.000000000000000000000e+00",
+            "progress": 1.0,
+            "rate": 0.0,
+            "vec_served": "0.000000000000000000000e+00"
+          },
+          {
+            "activity_id": 4,
+            "alpha": 0.0,
+            "curve_progress_exact": "9.999999999999999934948e-01",
+            "done": false,
+            "epoch_index": 1,
+            "hbm_served": [
+              [
+                "0.000000000000000000000e+00",
+                "0.000000000000000000000e+00"
+              ],
+              [
+                "0.000000000000000000000e+00",
+                "0.000000000000000000000e+00"
+              ]
+            ],
+            "int4_served": "5.099999999999999966693e+02",
+            "progress": 1.0,
+            "rate": 0.0,
+            "vec_served": "1.478999999999999990341e+03"
+          },
+          {
+            "activity_id": 7,
+            "alpha": 0.0,
+            "curve_progress_exact": "0.000000000000000000000e+00",
+            "done": false,
+            "epoch_index": 2,
+            "hbm_served": [
+              [
+                "0.000000000000000000000e+00",
+                "0.000000000000000000000e+00"
+              ],
+              [
+                "0.000000000000000000000e+00",
+                "0.000000000000000000000e+00"
+              ]
+            ],
+            "int4_served": "0.000000000000000000000e+00",
+            "progress": 0.0,
+            "rate": 0.0,
+            "vec_served": "0.000000000000000000000e+00"
+          }
+        ],
+        "cancelled": false,
+        "credit": [
+          0.0,
+          0.0
+        ],
+        "credit_capacity": [
+          34.0,
+          34.0
+        ],
+        "epoch_index": 1,
+        "finish_ns": null,
+        "handle": 1,
+        "hbm_served": [
+          [
+            "3.060000000000000000000e+02",
+            "0.000000000000000000000e+00"
+          ],
+          [
+            "3.060000000000000000000e+02",
+            "0.000000000000000000000e+00"
+          ]
+        ],
+        "int4_served": "5.099999999999999966693e+02",
+        "issue_ns": 0,
+        "owner": {
+          "execution_id": 1,
+          "generation": 1,
+          "key": "1:1:1",
+          "node_id": 1,
+          "request_id": 1
+        },
+        "plan": {
+          "epochs": [
+            {
+              "activities": [
+                {
+                  "canonical_q": 612.0,
+                  "credit_curve": [
+                    {
+                      "cumulative": [
+                        0.0,
+                        0.0
+                      ],
+                      "progress": 0.0
+                    },
+                    {
+                      "cumulative": [
+                        17.0,
+                        0.0
+                      ],
+                      "progress": 1.0
+                    }
+                  ],
+                  "credit_delta": [
+                    17.0,
+                    0.0
+                  ],
+                  "hbm_bytes": [
+                    [
+                      306,
+                      0
+                    ],
+                    [
+                      306,
+                      0
+                    ]
+                  ],
+                  "id": 1,
+                  "int4_ops": 0,
+                  "private_time_s": 2.8125e-10,
+                  "role": "load",
+                  "vec_eqops": 0,
+                  "work": [
+                    0.0,
+                    0.0,
+                    612.0,
+                    0.0,
+                    437.14285714285717,
+                    437.14285714285717,
+                    0.0,
+                    0.0,
+                    144.0,
+                    162.0,
+                    0.0,
+                    333.8181818181818,
+                    4410.0
+                  ]
+                }
+              ],
+              "credit_capacity": [
+                34.0,
+                34.0
+              ],
+              "credit_initial": [
+                0.0,
+                0.0
+              ],
+              "name": "output_stationary_v2_load_first_k",
+              "repeat_count": 1
+            },
+            {
+              "activities": [
+                {
+                  "canonical_q": 2754.0,
+                  "credit_curve": [
+                    {
+                      "cumulative": [
+                        0.0,
+                        0.0
+                      ],
+                      "progress": 0.0
+                    },
+                    {
+                      "cumulative": [
+                        -17.0,
+                        0.0
+                      ],
+                      "progress": 1.0
+                    }
+                  ],
+                  "credit_delta": [
+                    -17.0,
+                    0.0
+                  ],
+                  "hbm_bytes": [
+                    [
+                      0,
+                      0
+                    ],
+                    [
+                      0,
+                      0
+                    ]
+                  ],
+                  "id": 4,
+                  "int4_ops": 510,
+                  "private_time_s": 7.232142857142858e-09,
+                  "role": "compute",
+                  "vec_eqops": 1479,
+                  "work": [
+                    1.1439745948277428e-10,
+                    1598.0,
+                    1156.0,
+                    2754.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ]
+                }
+              ],
+              "credit_capacity": [
+                34.0,
+                34.0
+              ],
+              "credit_initial": [
+                17.0,
+                0.0
+              ],
+              "name": "output_stationary_v2_first_output_work",
+              "repeat_count": 1
+            },
+            {
+              "activities": [
+                {
+                  "canonical_q": 170.0,
+                  "credit_curve": [
+                    {
+                      "cumulative": [
+                        0.0,
+                        0.0
+                      ],
+                      "progress": 0.0
+                    },
+                    {
+                      "cumulative": [
+                        0.0,
+                        -17.0
+                      ],
+                      "progress": 1.0
+                    }
+                  ],
+                  "credit_delta": [
+                    0.0,
+                    -17.0
+                  ],
+                  "hbm_bytes": [
+                    [
+                      0,
+                      85
+                    ],
+                    [
+                      0,
+                      85
+                    ]
+                  ],
+                  "id": 7,
+                  "int4_ops": 0,
+                  "private_time_s": 7.8125e-11,
+                  "role": "store",
+                  "vec_eqops": 0,
+                  "work": [
+                    0.0,
+                    170.0,
+                    0.0,
+                    0.0,
+                    121.42857142857143,
+                    121.42857142857143,
+                    0.0,
+                    0.0,
+                    45.0,
+                    40.0,
+                    92.72727272727273,
+                    0.0,
+                    1225.0
+                  ]
+                }
+              ],
+              "credit_capacity": [
+                34.0,
+                34.0
+              ],
+              "credit_initial": [
+                0.0,
+                17.0
+              ],
+              "name": "output_stationary_v2_store_last",
+              "repeat_count": 1
+            }
+          ],
+          "fingerprint": "63ed72aed7f6136b4ea794755571622df29a2741e763f7f0ea5c4621d14d6a87",
+          "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+          "launch_ns": 0,
+          "schema": "coarse_die_plan_v4",
+          "summary": {
+            "active_cores": 17,
+            "activity_units": "physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal",
+            "consumption_wave_count": 1,
+            "conversion_elements": 476,
+            "dataflow_id": "output_stationary_v2",
+            "executed_int4_ops": 510,
+            "executed_matrix_ops": 510,
+            "executed_score_slots": 0,
+            "granularity_validation": "not_run",
+            "hbm_read_bytes_total": 612,
+            "hbm_workspace_peak_bytes": 0,
+            "hbm_write_bytes_total": 170,
+            "int4_input_bytes": 170,
+            "kind": "gemm",
+            "local_bus_bytes": 2754,
+            "logical_tensor_bytes": 302,
+            "mapping_assumptions": [
+              "engineering_assumption",
+              "bounded_tile_candidates",
+              "exact_per_tile_INT4_tail_packing",
+              "analytical_cumulative_os_v3_fixed_bounded_description_budget"
+            ],
+            "output_round_count": 1,
+            "physical_transfer_bytes": 782,
+            "probability_bytes": 0,
+            "recompute_matrix_ops": 0,
+            "recomputed_matrix_ops": 0,
+            "routing_evidence": {
+              "profile": "distributed_ideal_v2",
+              "status": "engineering_assumption"
+            },
+            "score_bytes": 0,
+            "service_curves": [
+              {
+                "description_budget": 5,
+                "description_count": 3,
+                "epoch_begin": 0,
+                "epoch_count": 3,
+                "final_drain_units": 17,
+                "final_output_release": "compute_terminal_before_final_drain",
+                "first_load_units": 17,
+                "first_output_compute_progress": 1.0,
+                "first_output_compute_work_s": 1.1439745948277428e-10,
+                "first_output_epoch": 1,
+                "first_output_input_bytes": 612,
+                "first_output_input_units": 17,
+                "first_output_release": "first_cohort_compute_terminal",
+                "input_capacity_units": 34,
+                "input_unit": "one_output_tile_K_consumption",
+                "input_units": 17,
+                "model": "analytical_cumulative_os_v3",
+                "output_capacity_units": 34,
+                "output_unit": "one_output_tile",
+                "output_units": 17,
+                "readiness_approximation": "aggregate_piecewise_affine_not_discrete_tile_readiness"
+              }
+            ],
+            "service_description_count": 3,
+            "service_model_revision": "analytical_cumulative_os_v2",
+            "source_matrix_ops": 510,
+            "source_vec_ops": 0,
+            "sram_capacity_bytes_per_core": 262144,
+            "sram_peak_bytes_per_core": 168,
+            "sram_read_bytes": 1768,
+            "sram_write_bytes": 1768,
+            "template_id": "gemm_output_stationary_v2",
+            "tf": 0,
+            "th": 0,
+            "tk": 3,
+            "tm": 1,
+            "tn": 5,
+            "valid_score_pairs": 0,
+            "vec_equivalent_ops": 1479,
+            "wave_count": 1
+          },
+          "task": {
+            "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+            "fusion_policy": "auto",
+            "layer_instances": 1,
+            "op_kind": "gemm",
+            "phase": "prefill",
+            "schema": "coarse_die_task_v2",
+            "spans": [],
+            "storage_dtype": {
+              "accumulator": "fp32",
+              "activations": "bf16",
+              "kv": "bf16",
+              "output": "bf16",
+              "parameters": "bf16",
+              "scores": "fp32",
+              "weights": "bf16"
+            },
+            "tensor_shapes": {
+              "k": 3,
+              "m": 17,
+              "n": 5
+            },
+            "tp_slice": {
+              "tensor_parallel": 1,
+              "tensor_parallel_rank": 0
+            },
+            "weight_passes": 1
+          }
+        },
+        "ready_ns": 0,
+        "terminal": false,
+        "vec_served": "1.478999999999999990341e+03"
+      }
+    ],
+    "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+    "internal_events": 3,
+    "next_handle": 2,
+    "now_ns": 10,
+    "rounding": "exact_subns_internal_ceil_public_ns_v2",
+    "runtime_generation": 3,
+    "schema": "coarse_die_snapshot_v3",
+    "snapshot_version": 3,
+    "stats": {
+      "accounting_history_complete": true,
+      "compute_busy_ns": "7.232142857142858288766e+00",
+      "hbm_busy_ns": "1.862824675324675279204e+00",
+      "hbm_served": [
+        [
+          "3.060000000000000000000e+02",
+          "0.000000000000000000000e+00"
+        ],
+        [
+          "3.060000000000000000000e+02",
+          "0.000000000000000000000e+00"
+        ]
+      ],
+      "hbm_shared_ns": "0.000000000000000000000e+00",
+      "legacy_unclassified_hbm": [
+        [
+          "0",
+          "0"
+        ],
+        [
+          "0",
+          "0"
+        ]
+      ],
+      "row_busy_ns": [
+        "1.862824675324675279204e+00",
+        "1.862824675324675279204e+00"
+      ],
+      "row_shared_ns": [
+        "0.000000000000000000000e+00",
+        "0.000000000000000000000e+00"
+      ],
+      "served_by_category": {
+        "comm_recv": {
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comm_send": {
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops_exact_decimal": "0"
+        },
+        "comp": {
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "306",
+              "0"
+            ],
+            [
+              "306",
+              "0"
+            ]
+          ],
+          "int4_ops_exact_decimal": "509.999999999999996669",
+          "vec_eqops_exact_decimal": "1478.999999999999990341"
+        },
+        "die": {
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops_exact_decimal": "0"
+        },
+        "pool": {
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops_exact_decimal": "0"
+        },
+        "restore": {
+          "hbm_served_bytes_by_row_direction_exact": [
+            [
+              "0",
+              "0"
+            ],
+            [
+              "0",
+              "0"
+            ]
+          ],
+          "int4_ops_exact_decimal": "0",
+          "vec_eqops_exact_decimal": "0"
+        }
+      },
+      "typed_totals_history_complete": true
+    },
+    "transaction_owners": []
+  }
+}

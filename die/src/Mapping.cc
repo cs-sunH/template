@@ -11,6 +11,7 @@
 #include <limits>
 #include <memory>
 #include <numeric>
+#include <optional>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -825,11 +826,234 @@ void append_epoch(Plan& plan,const Hardware& hw,Flow load,Flow compute,Flow stor
   push_epoch(plan,hw,Flow{},Flow{},add_flow(sb,sr),active,1,0,1,0,1,name+"_store_last");
 }
 
+// Keep physical IO totals exact while extracting the true first K load and
+// final output drain. Routing retains the selected aggregate destination
+// profile; only readiness units change. This is not a per-wave interpreter.
+Flow subtract_io_flow(const Flow& total, const Flow& part) {
+  Flow rest;
+  if (total.int4 || part.int4 || total.vec.as_long_double() || part.vec.as_long_double() ||
+      total.compute_s || part.compute_s)
+    fail("mapping_invariant: IO partition contains computation");
+  for (std::size_t r=0;r<resource_count;++r) {
+    const long double value=total.work[r]-part.work[r];
+    if (value < -1e-12L*std::max(1.0L,total.work[r]))
+      fail("mapping_invariant: IO prefix exceeds total resource work");
+    rest.work[r]=std::max(0.0L,value);
+  }
+  for (std::size_t row=0;row<2;++row) for(std::size_t dir=0;dir<2;++dir) {
+    if (part.hbm[row][dir]>total.hbm[row][dir])
+      fail("mapping_invariant: IO prefix exceeds total payload");
+    rest.hbm[row][dir]=total.hbm[row][dir]-part.hbm[row][dir];
+  }
+  return rest;
+}
+
+Flow subtract_compute_flow(const Flow& total,const Flow& prefix) {
+  Flow rest;
+  for(std::size_t r=0;r<resource_count;++r) {
+    const long double value=total.work[r]-prefix.work[r];
+    if(value<0) fail("mapping_invariant: compute prefix exceeds resource total");
+    rest.work[r]=value;
+  }
+  if(prefix.int4>total.int4 || prefix.compute_s>total.compute_s)
+    fail("mapping_invariant: compute prefix exceeds total work");
+  rest.int4=total.int4-prefix.int4;
+  rest.compute_s=total.compute_s-prefix.compute_s;
+  auto whole=total.vec.whole();
+  long double fraction=total.vec.fraction()-prefix.vec.fraction();
+  if(whole<prefix.vec.whole()) fail("mapping_invariant: Vec prefix exceeds total");
+  whole-=prefix.vec.whole();
+  if(fraction<0) {
+    if(whole==0) fail("mapping_invariant: Vec prefix exceeds total fraction");
+    --whole; fraction+=1;
+  }
+  rest.vec=EqWork::from_parts(whole,fraction);
+  const auto check=rest.vec+prefix.vec;
+  if(check.whole()!=total.vec.whole() || check.fraction()!=total.vec.fraction())
+    fail("mapping_invariant: Vec prefix partition loses precision");
+  return rest;
+}
+
+void append_os_service_curve(Plan& plan, const Hardware& hw, const Topology& topo,
+    const gemm_os_geometry::GemmOSGeometry& geometry,
+    const gemm_tail_budget::Input& budget, Flow load, Flow compute, Flow store,
+    u64 executions, u64 active, const std::string& name) {
+  const u64 inputs=as_u64(mul128(mul128(geometry.output_tile_count(),
+      geometry.k_tiles(),"OS K consumption units"),executions,"OS K consumption units"),
+      "OS K consumption units");
+  const u64 outputs=as_u64(mul128(geometry.output_tile_count(),executions,
+      "OS output block units"),"OS output block units");
+  const auto first=geometry.cohort(0);
+  const auto last=geometry.cohort(geometry.output_round_count()-1);
+  const auto first_ledger=geometry.wave_ledger(0);
+  const auto last_ledger=geometry.wave_ledger(geometry.consumption_wave_count()-1);
+  const u64 first_units=first.active_cores, drain_units=last.active_cores;
+  const u64 first_compute_input_units=as_u64(mul128(first_units,geometry.k_tiles(),
+      "OS first output K consumption units"),"OS first output K consumption units");
+  gemm_os_geometry::Ledger first_cohort;
+  for(std::size_t i=0;i<geometry.class_count();++i)
+    gemm_os_geometry::detail::add(first_cohort,gemm_os_geometry::detail::scale(
+        geometry.access_class(i).per_consumption,
+        geometry.class_consumption_count_in_cohort(0,i)));
+  const bool only_first=outputs==first_units;
+  if(!only_first && outputs<first_units+drain_units)
+    fail("mapping_invariant: OS prefix and drain output cohorts overlap");
+  for(const auto units:{inputs,outputs,inputs-first_units,outputs-drain_units,
+                         first_compute_input_units,inputs-first_compute_input_units,
+                         only_first ? u64{0} : outputs-first_units-drain_units})
+    if(static_cast<long double>(static_cast<double>(units))!=static_cast<long double>(units))
+      fail("overflow: OS cumulative credit endpoint is not exactly representable");
+  Flow first_load, cohort_load, final_store;
+  add_hbm(first_load,hw,topo,first_ledger.hbm_read_bytes,active,false,eta(hw,"eta_hbm_matrix"));
+  add_bytes_work(first_load,SRAM_WRITE,first_ledger.hbm_read_bytes,"OS first K load");
+  add_hbm(cohort_load,hw,topo,first_cohort.hbm_read_bytes,active,false,eta(hw,"eta_hbm_matrix"));
+  add_bytes_work(cohort_load,SRAM_WRITE,first_cohort.hbm_read_bytes,"OS first cohort load");
+  add_hbm(final_store,hw,topo,last_ledger.hbm_write_bytes,active,true,eta(hw,"eta_hbm_matrix"));
+  add_bytes_work(final_store,SRAM_READ,last_ledger.hbm_write_bytes,"OS final output drain");
+  Flow prefix_load=subtract_io_flow(cohort_load,first_load);
+  Flow remaining_load=subtract_io_flow(load,cohort_load);
+  Flow early_store=subtract_io_flow(store,final_store);
+
+  // A bounded class sum extracts the first whole-K cohort's real work. Its
+  // terminal event releases the first actual output blocks; there is no
+  // fitted latency or a delayed ramp pretending to be the first output.
+  const auto shape=gemm_tail_budget::detail::shape(budget,true);
+  long double first_compute=0;
+  for (std::size_t i=0;i<geometry.class_count();++i) {
+    const auto& cls=geometry.access_class(i);
+    if (geometry.class_output_count_in_range(i,first.q_begin,first.q_end)==0) continue;
+    first_compute=std::max(first_compute,
+        gemm_tail_budget::detail::per_core_tile_seconds(budget,shape,cls.m,cls.n,true));
+  }
+  Flow prefix_compute;
+  prefix_compute.work[SRAM_READ]=static_cast<long double>(first_cohort.compute_sram_read_bytes);
+  prefix_compute.work[SRAM_WRITE]=static_cast<long double>(first_cohort.compute_sram_write_bytes);
+  prefix_compute.work[LOCAL]=static_cast<long double>(first_cohort.local_bytes);
+  prefix_compute.compute_s=first_compute;
+  prefix_compute.int4=first_cohort.matrix_int4_ops;
+  prefix_compute.vec=first_cohort.vec_equivalent_ops;
+  // In the one-cohort case reuse the exact aggregate, avoiding a second
+  // floating representation of the same COMPUTE_GATE endpoint.
+  if(only_first) prefix_compute=compute;
+  Flow remaining_compute=only_first ? Flow{} : subtract_compute_flow(compute,prefix_compute);
+  const double first_output_progress=as_double(prefix_compute.compute_s/compute.compute_s,
+      "OS first output progress");
+  if (!(first_output_progress>0) || first_output_progress>1)
+    fail("mapping_invariant: invalid OS first output work threshold");
+
+  const auto begin=plan.epochs.size();
+  const auto description_begin=service_description_count(plan);
+  const auto append=[&](const std::string& suffix, Flow l, Flow c, Flow st,
+      std::array<double,2> initial, u64 service_active) -> Epoch& {
+    Epoch epoch; epoch.name=name+suffix;
+    epoch.credit_initial=initial;
+    // One K unit is one actual output tile's K consumption; one output unit
+    // is one actual output tile. Bytes never enter either credit dimension.
+    epoch.credit_capacity={{2.0*active,2.0*active}};
+    for (auto item : {std::pair<Role,Flow*>{Role::Load,&l},
+                      {Role::Compute,&c},{Role::Store,&st}}) {
+      Activity a; a.role=item.first; a.id=plan.epochs.size()*3+epoch.activities.size()+1;
+      seal_activity(a,*item.second,hw,service_active);
+      a.credit_curve={{0,{{0,0}}},{1,a.credit_delta}};
+      if (std::any_of(a.work.begin(),a.work.end(),[](double x){return x>0;}))
+        epoch.activities.push_back(std::move(a));
+    }
+    plan.epochs.push_back(std::move(epoch));
+    return plan.epochs.back();
+  };
+  first_load.credit={{static_cast<long double>(first_units),0}};
+  append("_load_first_k",first_load,{}, {},{{0,0}},active);
+  prefix_load.credit={{static_cast<long double>(first_compute_input_units-first_units),0}};
+  prefix_compute.credit={{-static_cast<long double>(first_compute_input_units),0}};
+  append("_first_output_work",prefix_load,prefix_compute,{},
+         {{static_cast<double>(first_units),0}},first.active_cores);
+  if(!only_first) {
+    remaining_load.credit={{static_cast<long double>(inputs-first_compute_input_units),0}};
+    remaining_compute.credit={{-static_cast<long double>(inputs-first_compute_input_units),
+        static_cast<long double>(outputs-first_units-drain_units)}};
+    early_store.credit={{0,-static_cast<long double>(outputs-drain_units)}};
+    append("_cumulative_service",remaining_load,remaining_compute,early_store,
+           {{0,static_cast<double>(first_units)}},active);
+  }
+  final_store.credit={{0,-static_cast<long double>(drain_units)}};
+  append("_store_last",{}, {},final_store,{{0,static_cast<double>(drain_units)}},last.active_cores);
+  const auto descriptions=service_description_count(plan)-description_begin;
+  if(descriptions>8)fail("mapping_invariant: OS curve exceeds primitive description budget");
+  plan.summary["service_curves"].push_back({
+      {"model","analytical_cumulative_os_v3"},{"epoch_begin",begin},
+      {"epoch_count",plan.epochs.size()-begin},
+      {"description_count",descriptions},{"description_budget",descriptions<=5 ? 5 : 8},
+      {"input_unit","one_output_tile_K_consumption"},{"output_unit","one_output_tile"},
+      {"input_units",inputs},{"output_units",outputs},
+      {"input_capacity_units",2*active},{"output_capacity_units",2*active},
+      {"first_load_units",first_units},{"first_output_input_units",first_compute_input_units},
+      {"first_output_input_bytes",as_u64(first_cohort.hbm_read_bytes,"OS first output input bytes")},
+      {"final_drain_units",drain_units},
+      {"first_output_compute_progress",std::min(1.0,first_output_progress)},
+      {"first_output_compute_work_s",as_double(first_compute,"OS first output work")},
+      {"first_output_release","first_cohort_compute_terminal"},
+      {"first_output_epoch",begin+1},
+      {"final_output_release","compute_terminal_before_final_drain"},
+      {"readiness_approximation","aggregate_piecewise_affine_not_discrete_tile_readiness"}});
+}
+
 std::vector<u64> options(u64 dim, std::initializer_list<u64> choices) {
   if (!dim) fail("unsupported_shape: dimensions must be positive");
   std::set<u64> result;
   for (u64 value : choices) result.insert(std::min(dim, value));
   return {result.begin(), result.end()};
+}
+
+// Exact static per-core GEMM live-storage peak. Keep this calculation pure so
+// candidate enumeration can reject over-capacity tiles before constructing
+// a Plan, Geometry, or its analytical service curves.
+u128 gemm_sram_peak(u64 M, u64 N, u64 K, u64 tm, u64 tn, u64 tk,
+                    const std::string& ad, const std::string& wd,
+                    const std::string& od, const std::string& profile,
+                    bool wr) {
+  if (!M || !N || !K || !tm || !tn || !tk)
+    fail("unsupported_shape: GEMM SRAM peak requires positive dimensions and tiles");
+  const bool int4_path = profile == "int4_matrix_vec_fp32_assumed_v1";
+  const std::string execution_dtype = int4_path ? "int4" : "fp32";
+  const bool convert_a = ad != execution_dtype, convert_w = wd != execution_dtype;
+  const u64 tK = ceildiv(K, tk);
+  const u64 max_m = std::min(M, tm), max_n = std::min(N, tn), max_k = std::min(K, tk);
+  const u128 a_exec_tile = tile_bytes(max_m, max_k, int4_path ? "int4" : "fp32");
+  const u128 w_exec_tile = tile_bytes(max_k, max_n, int4_path ? "int4" : "fp32");
+  const u128 a_raw_tile = tile_bytes(max_m, max_k, ad);
+  const u128 w_raw_tile = tile_bytes(max_k, max_n, wd);
+  const u128 a_tile = convert_a
+      ? add128(add128(a_exec_tile, a_raw_tile, "A raw and converted slots"),
+               int4_path ? 4 : 0, "A conversion scale")
+      : a_exec_tile;
+  const u128 w_tile = convert_w
+      ? add128(add128(w_exec_tile, w_raw_tile, "W raw and converted slots"),
+               int4_path ? 4 : 0, "W conversion scale")
+      : w_exec_tile;
+  const u128 accum = mul128(mul128(max_m, max_n, "acc tile"),
+                             int4_path ? 8 : 4,
+                             "accumulator and partial");
+  const u128 output = mul128(2,
+      add128(tile_bytes(max_m, max_n, od), od == "int4" ? 4 : 0,
+             "output tile and scale"),
+      "pending output slots");
+  if (wr) {
+    const u128 resident_weight = add128(
+        tile_grid_bytes(K, tk, max_n, max_n, execution_dtype),
+        convert_w
+            ? add128(tile_grid_bytes(K, tk, max_n, max_n, wd),
+                     int4_path ? mul128(tK, 4, "WR resident scales") : 0,
+                     "WR conversion buffers")
+            : 0,
+        "WR resident weight");
+    return add128(resident_weight,
+        add128(mul128(2, a_tile, "WR input slots"),
+               add128(accum, output, "WR live buffers"), "WR live buffers"),
+        "WR peak");
+  }
+  return add128(mul128(2, add128(a_tile, w_tile, "OS tile inputs"),
+                       "OS double inputs"),
+                add128(accum, output, "OS live outputs"), "OS peak");
 }
 
 void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
@@ -875,6 +1099,7 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   m.int4bytes = add128(m.int4bytes,i4total,"INT4 input bytes");
   u128 sram_r=0, sram_w=0, local=0, peops=0, conversion_count=0;
   EqWork vecops;
+  std::optional<gemm_os_geometry::GemmOSGeometry> os_geometry;
   if (!wr) {
     // The same bounded per-K facts will drive the OS readiness lifecycle.
     // Aggregate physical work here comes from those facts; repeated layers
@@ -896,8 +1121,8 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
                                : gemm_os_access_counter::MatrixPath::StrictFp32Vec;
     input.kappa_quant=perf(hw,"kappa_quant_eqops",4);
     input.kappa_acc=perf(hw,"kappa_acc_convert_eqops",2);
-    const gemm_os_geometry::GemmOSGeometry geometry(input);
-    const auto& ledger=geometry.total_ledger();
+    os_geometry.emplace(input);
+    const auto& ledger=os_geometry->total_ledger();
     if (mul128(ledger.hbm_read_bytes,executions,"OS HBM reads")!=read_total ||
         mul128(ledger.hbm_write_bytes,executions,"OS HBM writes")!=c_total ||
         mul128(ledger.source_math_ops,executions,"OS source operations")!=layer_ops)
@@ -1006,19 +1231,17 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   if(cohort_budget.output_round_count!=as_u64(rounds,"GEMM output rounds"))
     fail("mapping_invariant: GEMM cohort budget output rounds disagree with scheduler");
   const u128 wave = mul128(rounds,tK,"GEMM consumption waves");
-  append_epoch(plan,hw,std::move(load),std::move(compute),std::move(store),active,as_u64(rounds,"GEMM output rounds"),label);
-  const u128 max_m = std::min(M,tm), max_n = std::min(N,tn), max_k = std::min(K,tk);
-  const u128 a_exec_tile = tile_bytes(static_cast<u64>(max_m),static_cast<u64>(max_k),int4_path?"int4":"fp32");
-  const u128 w_exec_tile = tile_bytes(static_cast<u64>(max_k),static_cast<u64>(max_n),int4_path?"int4":"fp32");
-  const u128 a_raw_tile = tile_bytes(static_cast<u64>(max_m),static_cast<u64>(max_k),ad);
-  const u128 w_raw_tile = tile_bytes(static_cast<u64>(max_k),static_cast<u64>(max_n),wd);
-  const u128 a_tile=convert_a?add128(add128(a_exec_tile,a_raw_tile,"A raw and converted slots"),int4_path?4:0,"A conversion scale"):a_exec_tile;
-  const u128 w_tile=convert_w?add128(add128(w_exec_tile,w_raw_tile,"W raw and converted slots"),int4_path?4:0,"W conversion scale"):w_exec_tile;
-  const u128 accum = mul128(mul128(max_m,max_n,"acc tile"),int4_path?8:4,"accumulator and partial");
-  const u128 output = mul128(2,add128(tile_bytes(static_cast<u64>(max_m),static_cast<u64>(max_n),od),od=="int4"?4:0,"output tile and scale"),"pending output slots");
-  const u128 resident_weight=add128(tile_grid_bytes(K,tk,static_cast<u64>(max_n),static_cast<u64>(max_n),execution_dtype),convert_w?add128(tile_grid_bytes(K,tk,static_cast<u64>(max_n),static_cast<u64>(max_n),wd),int4_path?mul128(tK,4,"WR resident scales"):0,"WR conversion buffers"):0,"WR resident weight");
-  const u128 peak = wr ? add128(resident_weight,add128(mul128(2,a_tile,"WR input slots"),add128(accum,output,"WR live buffers"),"WR live buffers"),"WR peak")
-                       : add128(mul128(2,add128(a_tile,w_tile,"OS tile inputs"),"OS double inputs"),add128(accum,output,"OS live outputs"),"OS peak");
+  if (os_geometry) {
+    append_os_service_curve(plan,hw,topo,*os_geometry,budget_input,
+        std::move(load),std::move(compute),std::move(store),
+        as_u64(executions,"OS executions"),active,label);
+    m.assumptions.push_back("analytical_cumulative_os_v3_fixed_bounded_description_budget");
+  } else {
+    append_epoch(plan,hw,std::move(load),std::move(compute),std::move(store),active,
+        as_u64(rounds,"GEMM output rounds"),label);
+  }
+  const u128 peak = gemm_sram_peak(M,N,K,tm,tn,tk,ad,wd,od,
+                                    gets(plan.task,"execution_profile"),wr);
   m.sram_peak = std::max(m.sram_peak,peak);
   m.output_rounds = add128(m.output_rounds,rounds,"output rounds"); m.waves = add128(m.waves,wave,"consumption waves");
   m.active_cores = active; m.tm=tm; m.tn=tn; m.tk=tk; m.dataflow=wr?"weight_resident_v2":"output_stationary_v2"; m.template_id=label;
@@ -1060,6 +1283,11 @@ void finalize_summary(Plan& p, const Metrics& m, const Hardware& hw) {
   p.summary["granularity_validation"] = "not_run";
   p.summary["mapping_assumptions"] = m.assumptions;
   p.summary["activity_units"] = "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]";
+  if (p.summary.contains("service_curves")) {
+    p.summary["service_model_revision"]="analytical_cumulative_os_v3";
+    p.summary["service_description_count"]=service_description_count(p);
+    p.summary["activity_units"]="physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal";
+  }
   p.summary["routing_evidence"] = {{"profile", gets(hw.input.at("performance_profile"),"timing_topology_profile")}, {"status","engineering_assumption"}};
 }
 
@@ -1127,14 +1355,16 @@ std::vector<std::shared_ptr<Plan>> enumerate_gemm(const Hardware& hw,
   const auto ks=options(K,{64,256,1024,4096});
   const u64 layers=getu(task,"layer_instances",1), passes=getu(task,"weight_passes",1);
   const std::string ad=dtype(task,"activations"), wd=dtype(task,"weights"), od=dtype(task,"output");
+  const std::string profile=gets(task,"execution_profile");
   const u64 ncore=du(hw,"die","core_count");
   const double cap=perf(hw,"rho_sram",0.9)*dd(hw,"core","sram_bytes_per_core");
   std::vector<std::shared_ptr<Plan>> result;
   for (bool wr : {false,true}) for (u64 tm:ts) for (u64 tn:ns) for (u64 tk:ks) {
+    const u128 peak=gemm_sram_peak(M,N,K,tm,tn,tk,ad,wd,od,profile,wr);
+    if (static_cast<long double>(as_u64(peak,"SRAM peak")) > cap) continue;
     auto p=new_plan(hw,task); Metrics m; m.assumptions={"engineering_assumption","bounded_tile_candidates","exact_per_tile_INT4_tail_packing"};
     GemmChoice c{tm,tn,tk,wr};
     add_gemm_epoch(*p,m,hw,topo,M,N,K,ad,wd,od,layers,passes,c,wr?"weight_resident_v2":"output_stationary_v2");
-    if (static_cast<long double>(as_u64(m.sram_peak,"SRAM peak")) > cap) continue;
     finalize_summary(*p,m,hw);
     p->summary["template_id"] = "gemm_" + m.dataflow;
     p->summary["dataflow_id"] = m.dataflow;

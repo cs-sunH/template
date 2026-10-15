@@ -154,11 +154,16 @@ void estimate_prefill_mixed_rows_and_fractional_marker() {
   require(rows.at(0).is_object() && rows.at(1).is_null() && rows.at(2).is_object() &&
               errors.at(0).is_null() && !errors.at(1).is_null() && errors.at(2).is_null(),
           "mixed compile success/failure siblings remain at their original indices");
-  require(rows.at(0).size() == 3 && rows.at(2).size() == 3 &&
+  const std::size_t integer_row_keys=has_credit_curves(*cpp_plan) ? 4 : 3;
+  require(rows.at(0).size() == integer_row_keys && rows.at(2).size() == integer_row_keys &&
               rows.at(0).at("plan_hash").is_string() &&
               rows.at(0).at("plan_handle").is_number_unsigned() &&
               rows.at(0).at("summary").is_object(),
-          "integer compile rows preserve their keys and JSON value types");
+          "integer compile rows preserve value types and advertise a new curve schema");
+  if(has_credit_curves(*cpp_plan))
+    require(rows.at(0).at("plan_schema")=="coarse_die_plan_v4" &&
+                rows.at(2).at("plan_schema")=="coarse_die_plan_v4",
+            "curve rows identify Plan v4 even without fractional work");
   require(rows.at(0).at("plan_hash") == cpp_plan->fingerprint &&
               rows.at(0).at("summary") == cpp_plan->summary &&
               rows.at(2).at("plan_hash") == cpp_plan->fingerprint &&
@@ -193,7 +198,7 @@ void estimate_prefill_mixed_rows_and_fractional_marker() {
   const auto& row = fractional.at("results").at(0);
   require(row.size() == 5 && row.at("equivalent_work_schema") ==
               "dyadic_equivalent_work_v1" && row.at("plan_schema") ==
-              "coarse_die_plan_v3",
+              (has_credit_curves(*fractional_plan) ? "coarse_die_plan_v4" : "coarse_die_plan_v3"),
           "fractional rows retain both schema markers and their original types");
   require(row.at("plan_hash") == fractional_plan->fingerprint &&
               row.at("summary") == fractional_plan->summary &&
@@ -204,7 +209,8 @@ void estimate_prefill_mixed_rows_and_fractional_marker() {
 
 std::size_t one_entry_bytes(const Hardware& hardware, const json& task) {
   CModel model(hardware);
-  const auto response = estimate_batch(model.get(), json::array({task}));
+  const auto response = estimate_batch(model.get(), json::array({task,
+      json{{"op_kind","cache_response_test_unsupported"}}}));
   require(response.at("cache_entries") == 1,
           "single-task footprint fixture retains exactly one cache entry");
   return response.at("cache_accounted_bytes").get<std::size_t>();
@@ -234,6 +240,12 @@ void cache_capacity_lru_accounting_and_evicted_batch_rows() {
   constexpr std::size_t byte_limit = 64u * 1024u * 1024u;
   CModel model(hardware);
   PlanHandles handles;
+  // Isolate the Plan LRU's exact byte accounting from the optional raw-batch
+  // shortcut. A failed sibling is never memoized and must not affect the hit.
+  const auto estimate_without_memo = [&](const json& task) {
+    return estimate_batch(model.get(),json::array({task,
+        json{{"op_kind","cache_response_test_unsupported"}}}));
+  };
 
   // Keep fixtures tiny and vary a real GEMM dimension for unique cache keys.
   // The byte cap is reached before 4096 of these compiled Plans can fit, which
@@ -285,7 +297,7 @@ void cache_capacity_lru_accounting_and_evicted_batch_rows() {
               compile(hardware, gemm_task(capacity + 1))->fingerprint,
           "the capacity-crossing result serializes after the expected eviction");
 
-  const auto first_hit = estimate_batch(model.get(), json::array({gemm_task(1)}));
+  const auto first_hit = estimate_without_memo(gemm_task(1));
   require(first_hit.at("cache_entries") == entries_after_boundary &&
               first_hit.at("cache_accounted_bytes") == bytes_after_boundary,
           "the most-recently accessed task remains a true cache hit at the byte boundary");
@@ -308,14 +320,14 @@ void cache_capacity_lru_accounting_and_evicted_batch_rows() {
           "the evicted early task needs exactly one accounted LRU victim on reinsertion");
   const std::size_t expected_after_m2 =
       bytes_after_boundary + bytes_for_m2 - bytes_for_oldest;
-  const auto miss_for_evicted = estimate_batch(model.get(), json::array({gemm_task(2)}));
+  const auto miss_for_evicted = estimate_without_memo(gemm_task(2));
   require(miss_for_evicted.at("cache_entries") == entries_after_boundary &&
               miss_for_evicted.at("cache_accounted_bytes") == expected_after_m2,
           "access to the evicted task reinserts it and evicts exactly the oldest retained entry");
-  const auto recent_again = estimate_batch(model.get(), json::array({gemm_task(1)}));
+  const auto recent_again = estimate_without_memo(gemm_task(1));
   require(recent_again.at("cache_accounted_bytes") == expected_after_m2,
           "the recent entry stays cached after a boundary miss evicts the oldest suffix entry");
-  const auto hit_for_m2 = estimate_batch(model.get(), json::array({gemm_task(2)}));
+  const auto hit_for_m2 = estimate_without_memo(gemm_task(2));
   require(hit_for_m2.at("cache_accounted_bytes") == expected_after_m2,
           "reinserted entry becomes a cache hit without changing retained accounting");
 }

@@ -1,0 +1,32 @@
+Internal ctest changing into directory: /workspace/template/work/build-die
+Test project /workspace/template/work/build-die
+    Start  1: coarse_packing_allocator_test
+1/7 Test  #1: coarse_packing_allocator_test ...........   Passed    0.00 sec
+    Start  2: coarse_os_service_curve_test
+2/7 Test  #2: coarse_os_service_curve_test ............***Failed    0.01 sec
+FAIL os_service_curve_test: architecture.die_geometry: candidate exceeds die_max_aspect_ratio
+
+    Start  3: coarse_service_curve_schema_test
+3/7 Test  #3: coarse_service_curve_schema_test ........   Passed    0.01 sec
+    Start  4: coarse_service_curve_runtime_test
+4/7 Test  #4: coarse_service_curve_runtime_test .......***Failed    0.01 sec
+FAIL service_curve_runtime_test: large-repeat exact progress survives snapshot without finite-credit drift
+
+    Start  5: coarse_capi_cost_query_test
+5/7 Test  #5: coarse_capi_cost_query_test .............***Failed    0.01 sec
+FAIL capi_cost_query_test: default, alias, and repeated spellings all compile successfully
+
+    Start 37: coarse_analytical_service_oracle_test
+6/7 Test #37: coarse_analytical_service_oracle_test ...   Passed    0.16 sec
+    Start 38: coarse_owner_lp_oracle_test
+7/7 Test #38: coarse_owner_lp_oracle_test .............   Passed   18.62 sec
+
+57% tests passed, 3 tests failed out of 7
+
+Total Test time (real) =  18.84 sec
+
+The following tests FAILED:
+	  2 - coarse_os_service_curve_test (Failed)
+	  4 - coarse_service_curve_runtime_test (Failed)
+	  5 - coarse_capi_cost_query_test (Failed)
+Errors while running CTest
