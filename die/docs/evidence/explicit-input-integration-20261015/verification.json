@@ -9,7 +9,7 @@
     "face_tests": 133,
     "face_lru_tests": 152,
     "python_skips": 0,
-    "native_online": "running separately; not included",
+    "native_online": "four native test executables and joint_projection built; Online link failed due absent protobuf library path; tests/Online/budget not_run",
     "current_allocator_ctest": "42/42; bound separately by allocation-source-identity",
     "allocator_performance": "intermediate allocation-reuse benchmark failed; final row-pruned allocator not yet measured",
     "canonical_publish": "not performed"
@@ -61,6 +61,9 @@
     "logs/astra-sim-wscllm-LRU/build-identity.json": "f6e05d1361562c87a458b4f7849fedfc91167c86862f549ea34d02b9f18f45a5",
     "logs/astra-sim-wscllm-LRU/build.log": "a5826ab70d14912bfce73e1e08236fb13f6b6a6e205008908d4e4ed7485af59d",
     "logs/astra-sim-wscllm-LRU/configure.log": "14bf537fa0fb9747a0822f7d5ecf7f03896b5fd63b2feac127b79b8cd6e5eaea",
+    "native-incomplete/build-status.json": "2733736266debe3cb1ffba5090c6dcabd5393afdc043f2eb79fa7e2de66990ff",
+    "native-incomplete/build.log": "13d536f86accf990483f5c7167a7f2d82a4ddf94123ee4c05b07cbda46bd8498",
+    "native-incomplete/configure.log": "5cae3fc30617b4dcde3195207b179ce70785fd22bf1515574fe55cb44c62e95c",
     "python-consumers/astra-sim-face-LRU-after-order.log": "c06ff744ac1be4c3b5994798d9b913c361cfd9845811179ef06285332b16da95",
     "python-consumers/astra-sim-face-LRU-after-runtime.log": "b0aa6e5c4958eaea0e10d4ffef856321f68669cf2d7e445ba757991ad11eec55",
     "python-consumers/astra-sim-face-after-order.log": "cc06296757fd74f83e24638fdb12dcd70e0d2fd17ba18e8b03b2bedb2a2c2ab6",

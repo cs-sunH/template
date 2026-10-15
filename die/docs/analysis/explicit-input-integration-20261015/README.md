@@ -11,3 +11,5 @@
 同一检查点另保存仲裁分配的优化：预留小数组容器、避免无效Packing副本和Ratio行复制，最多3折点使用固定插入排序，已有可行floor与匹配上界时省略剩余求根但仍验证全行；Ratio还保留各变量的独立上界证据行，以向外舍入的可行包围盒省略确定不可能成为瓶颈的非负行。最后仍严格认证全部原binary64物理/PRIVATE/signed行，不改Q/alpha或容差。新增精确边界/证据行保留与多冗余行回归，独立有理数测试及全42项CTest通过（22.34s）。allocation-source-identity.json绑定此版本，早于后续向量实现。
 
 中间allocation-reuse速度仍failed，最终含冗余行省略的版本尚未重新计时。profile-compile-before-row-prune是并行构建期间的CPU/墙钟定位工具，使用行省略前的静态链接库，不是速度证书。busy条件界见上一分析目录的busy-contract-scope.md；误差目标/20%规则、busy定义和全部速度门槛不变。TX8条件参考与目标先验未改，无独立目标raw，不称目标重校准。
+
+交接补充：用户要求立即停止后未启动新工作。已保存native-incomplete/configure.log、build.log和build-status.json：4个native测试target及joint_projection构建成功，Online因配置的protobuf库路径不存在链接失败；新native测试/Online/预算not_run。向量升级没有写入任何源码。E2E预算只读短方案保存为e2e-budget-plan.md。

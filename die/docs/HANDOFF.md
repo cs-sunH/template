@@ -1,8 +1,18 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-15。当前工作分支 `codex/die-analytical-continue-20261015`，设计先行基线 `35f4580fdd881c6c5cac37c06c8d4e378f24de61` 已合入main；此前生产恢复基线为 `b7925e2`。用户授权持续开发；本次先同步硬件输入与10%/20%精度设计，再继续改造。保留全部历史有效成果；下方旧停止/仅文档/3%—5%口径是历史，最新用户决定优先。工程 **NOT ACCEPTED**，新源尚未发布五仓。
+记录日期：2026-10-15。本Session已按用户指令停止开发并快速交接。工作分支 `codex/die-analytical-continue-20261015`；交接整理前HEAD及fetch实核的远端main均为 `718818ba55217a520606c90f00b3c6eb3b6302cc`，工作区干净，无未提交生产源码或子代理草稿。最终交接提交以包含本页更新的Git提交及最终远端查询为准，正常快进同步，不force。工程 **NOT ACCEPTED**，与交接是否成功分开。
 
 ## Current Status
+
+### 本Session最终交接（优先于下方历史状态）
+
+- 已合入：`35f4580`先将用户指定硬件/取消搜索/10%目标及有据20%容许写入设计，再实施`89c2499`；最新代码`718818b`包含FACE两仓cost-only重复结果修复、真实消费者回归、allocator固定规模行复用/严格认证及非绑定行省略。此前恢复修复`fe5f45e`/`b7925e2`全部保留；未覆盖外部提交。
+- 最新公共Release全量CTest **42/42通过，22.34s**，包括独立Fraction公平分配、曲线/快照/credit与新硬件/指标策略；源/ELF绑定见`evidence/explicit-input-integration-20261015/allocation/allocation-source-identity.json`。此后没有新生产改动。逐元素向量升级仅做只读定位，**尚未创建counter/header/test、未修改Mapping或CMake，未构建/验证**，无需恢复隐藏patch。
+- 五仓仅隔离预览：冻结`89c2499`的29文件digest `74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6`，五个Release双ABI构建、83/83配置（20/15/18/17/13）、FACE133/133与FACE-LRU152/152（各原套件+1），0skip。FACE生产修复在718中；SDK预览不包含随后allocator优化。正式vendor仍旧canonical24 digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`，**未publisher**。
+- 新JOINT冻结89预览的4个native测试可执行文件及joint_projection已构建；后续Online链接因配置的`work/protobuf-root/usr/lib/x86_64-linux-gnu/libprotobuf.so`路径不存在而exit2。**未运行这些新native测试、Python native、Online或五仓CPU预算**，停止后未修依赖/重建。configure/build原日志及build-status.json在同evidence的`native-incomplete/`。不是模型功能测试失败，也不冒称通过。
+- 模型精度沿89检查点：6shape/18场景所有完成时间≤10%，5shape原busy>20%仍failed，工作量数值reconciliation通过。最终旧30样本速度仍failed：128³冷P95 2.536207ms，OSbulk J32 68.982μs，hot约2.6—7.2μs。行复用中间另一次30样本仍failed，raw已保存；**最后非绑定行省略版本尚未计时，不可拿较早结果代替**。busy条件界仅适用于当前C_in/容量假设，见`analysis/hardware-input-20261015/busy-contract-scope.md`，不改busy定义或隐去切换。
+- TX8条件参考未重拟：eta_compute_ref=0.9079551923877489、vector_memory_ref=0.3411668292682927，Norm246μs/FFN3363μs身份不变。目标eta_pe/vec=.90等工程先验完整值仍见Important Decisions；target raw仍not_available，未宣称目标校准或heldout通过。10%/20%替代旧3%/5%，精确守恒及速度预算不变。
+
 
 ### 最新用户决定：硬件输入、取消搜索、10%目标/20%容许（2026-10-15）
 
@@ -228,11 +238,11 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. 最新设计提交35f4580及其后的本实现是基线。硬件搜索已删除；使用用户给定的explicit单Die输入，保留旧格式确定性兼容，不再做面积/Core/Wafer候选研究。
-2. 以一致42/42为功能基线继续优化：128³冷编译2.536ms、OSbulk J32更新68.982μs仍未达原速度预算。ratio已独立验证接入，先减少剩余固定规模求解/collection开销，不改owner-Q/alpha/13域/PRIVATE/credit正确性。
-3. 新10%/20%实际axis的所有完成时间指标已≤10%，不用为原6.9163%尾shape增加复杂度。五个shape原busy仍>20%，保持failed；按解析分段/固定复杂度路线改表示，不改变busy定义、不用oracle拟合eta，不恢复逐K/周期生产方案。
-4. 新硬件输入与C ABI稳定后先做五个活动仓的隔离新源集成、双ABI/83配置/FACE消费者及完整业务/固定图CPU≤10%，再按实测状态发布。当前vendor仍旧canonical24，不能声称同步或验收通过；JOINT live/sh30保护保持。
-5. WR/向量/Attention/FFN全模板累计单位/首输出/静态峰值、OS路由partial二阶/odd-row限制仍在，按需要处理。基于xlsx正确分解算子做少量可识别超参粗校准；TX8条件参考与目标先验分开，无独立目标数据不声称目标实测校准。有意义阶段继续同步GitHub，自主持续开发。
+1. fetch最新main，先核对本页交接提交与718818b祖先关系；阅读`analysis/explicit-input-integration-20261015/README.md`和verification。功能基线42/42已通过，不重做未修改的K参考、clock或JOINT known cancel审计。硬件输入及10%/20%设计已落地，禁止恢复硬件搜索/旧Program。
+2. 优先修逐元素向量：`Mapping.cc::add_vector`约1303、standalone分发约2127及`finalize_summary`。现有257元素按frames均分会缩小真实首块，INT4静态峰值按比例估计且普通分支缺容量拒绝。先仅residual/mlp_activation，闭式256元素full/tail块、每invocation独立打包、真实首cohort/稳态/排空、分离input/output块credit及精确双输入/待写输出/FP32工作块峰值；先5必要8/16并统一描述预算。Norm/softmax需要整行归约依赖，不能混称已覆盖。尚无实现；先新增定向守恒/首输出/SRAM/放大不增事件测试。
+3. 当前allocator最终源718818b对应的速度not_run；用`coarse_service_curve_benchmark --samples 30 --output work/...json`在无并行构建时测并绑源/ELF，保留所有失败。冷编译profile显示28候选，WR Runtime trial占较多；别以放宽门槛或逐K回放求通过。所有完成时间现已≤10%，不为6.9163%尾shape继续增复杂度；busy>20%继续failed/tradeoff_unresolved。
+4. 五仓后续见`analysis/explicit-input-integration-20261015/e2e-budget-plan.md`。先修native配置中的真实protobuf库路径，接续已构建4 native target的相关验证；五仓发布前绑定当前源（隔离证据仅89），再publisher/check。83配置/FACE133+152只代表该冻结版本/修复，不能代替当前完整业务。三profile固定dispatch流的完整replay入口尚不存在；tiny只作smoke，JOINT coarse仍有provider/sh30/live guard，不能用于有效预算或直接删guard。
+5. WR/Attention/FFN其余模板及OS路由二阶/odd-row限制继续按解析计数与固定曲线推进；有独立可识别新数据才粗校准，不拟合oracle时间。阶段完成再同步main。当前Session交接后停止；新任务恢复自主开发，历史“仅文档”限制不延续。
 
 下方为历史接续记录，冲突时以上为准。
 
@@ -292,6 +302,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Files to Continue
 
+最新入口：`src/{Hardware,Execution,RatioAllocation,Mapping}.cc/.hh`、`tests/{hardware_input,ratio_allocator,service_curve_runtime}_test.cc`、两FACE的`online/die_model_oracle.py`及`test_die_model_oracle.py`。复现/失败/身份集中于`analysis/explicit-input-integration-20261015/`及对应evidence；硬件/指标原始axis见hardware-input证据。work/构建产物和第三方依赖不跨账号，必须重建。
+
 ### 本轮直接入口
 
 - `src/{Mapping,Execution,Plan,Compiler,Capi}.cc`；`src/{CompilerInternal,PackingAllocation}.hh`；`include/coarse_die/{Plan,Execution,Capi,Memory}`。
@@ -321,6 +333,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
+
+本次最终：公共42/42（22.34s）、隔离双ABI五仓、配置83/83、FACE133/133与152/152均已执行通过，范围与源码版本见本页最上方及explicit-input-integration证据。新native仅构建，Online链接failed；新native/Python/Online/E2E预算及最终行省略性能均not_run。收到停止指令后未新增测试。
 
 最新硬件输入/ratio/新指标检查点：最终42/42 CTest、真实explicit CABI7/7、旧Hardware完整identity字节比较通过；6shape/18场景完成时间≤10%而5shape busy>20%失败，最终速度仍failed。实际命令/源/ELF/初始失败及最终日志在 `evidence/hardware-input-20261015/verification.json`。旧条目保留历史阈值，不解释为当前新验收。
 
@@ -373,6 +387,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Blocking Issues
 
+交接新增：Online配置指向不存在的protobuf库路径，尚未修复；vector实现未启动；正式vendor未同步当前公共源；最后allocator未计时。均保留为下一任务，不因本次合入而消失。
+
 当前：原busy在五个shape仍>20%，常规冷编译与J32更新仍超预算；全模板/路由限制及五仓新源业务/CPU预算未完成，无独立目标raw。新硬件直接输入/搜索删除及其兼容回归已经完成，原尾shape6.9163%完成误差已满足新10%目标。下方旧门槛/未实现描述是历史。
 
 ### 当前新增限制
@@ -390,6 +406,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 ## Handoff Notes
 
 ### 本次停止/交接
+
+本Session最后工作区无未提交代码；两个子代理均已停止，vector未写入任何文件，E2E短方案已从work保存入analysis。保存新native构建失败日志后只更新必要交接文档，不再修复依赖或测试。远端main/工作分支在交接前均718818b；本页最终提交须正常push并ls-remote确认一致后才能称READY FOR HANDOFF。没有新PR，采用授权的直接fast-forward main；工程仍NOT ACCEPTED。
 
 用户明确要求完成当前最小任务后迅速保存、同步main并停止。未启动新开发、未publisher；本轮源码/新测试直接提交，原始失败、未运行runner、推导及旧ABI证据一起入库，不提交ELF/build/cache。共享分支以最终git fetch相同HEAD实核为准；GitHub API/gh既有Forbidden限制，采用普通git fast-forward main，不能伪造PR/CI。合入后本Session立即停止。精确提交SHA以包含本文的Git提交和最终答复为准。
 
