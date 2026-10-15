@@ -1,0 +1,46 @@
+-- {fmt} version: 11.0.2
+-- Build type: Release
+-- Build spdlog: 1.14.1
+-- Build type: Release
+CMake Warning (dev) at /workspace/template/astra-sim-joint/CMakeLists.txt:89 (find_package):
+  Policy CMP0144 is not set: find_package uses upper-case <PACKAGENAME>_ROOT
+  variables.  Run "cmake --help-policy CMP0144" for policy details.  Use the
+  cmake_policy command to set the policy and suppress this warning.
+
+  Environment variable PROTOBUF_ROOT is set to:
+
+    /workspace/template/work/protobuf-root
+
+  For compatibility, find_package is ignoring the variable, but code in a
+  .cmake module might still use it.
+This warning is for project developers.  Use -Wno-dev to suppress it.
+
+-- Configuring done (0.0s)
+-- Generating done (0.4s)
+-- Build files have been written to: /workspace/template/work/build-native-cancel-v2
+[ 25%] Built target coarse_die
+[ 50%] Built target die_model
+[ 75%] Built target joint_pipeline_core
+[100%] Built target NativeCoarseDieDomainTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target NativeCoarseProjectionTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target joint_projection
+[100%] Built target NativeProjectionCApiTest
+[ 66%] Built target die_model
+[ 33%] Built target coarse_die
+[100%] Built target joint_pipeline_core
+[100%] Built target JointPipelineWindowTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target joint_projection
+[100%] Built target die_model
+[100%] Built target die_model_cabi
+[100%] Built target coarse_die
+[100%] Built target coarse_die_cabi
+die/docs/analysis/native-world-cancel-20261015/run_checks.sh: line 43: ctest: command not found

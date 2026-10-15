@@ -4,6 +4,14 @@
 
 ## Current Status
 
+### 新JOINT已知取消检查点（2026-10-15）
+
+活动新JOINT的native冻结输入新增可选 `coarse_cancel_events`，按(time,input order)消费。复用Domain.cancel和公共Runtime，不写第二套timing；同tick物理终态/credit先结算，再cancel，再ready/arrival/capacity。未发出的Plan/endpoint只记outer cancelled且不造Domain handle；已发出执行保留真实partial served与Domain取消终态，重复事件幂等。取消不冒充success，不减少成功work计数、不释放依赖；依赖自然blocked。首片只支持唯一冻结Domain内、无acquire/release或barrier signal副作用的leg，其余明确拒绝，不能猜测lease归属后释放。
+
+snapshot仅显式非空日历增加取消状态/精确消费前缀，旧无日历wire和priority保留。导入同时检查pending事件双射、Domain binding与outer terminal，以及每个首个已消费取消事件的逆向约束：目标只能在该tick前/同tick自然done，或恰在该tick cancelled；不能前缀已消费而target仍active/pending、或更晚才done。原子非法拒绝、same-tick terminal wins、actual partial-byte direct Domain对照和source/import/fork继续均通过。首轮restore漏验取消标志被测试发现并修复；最初输出未重定向，仅保留明确标注的转录，不伪称raw。
+
+在canonical24 clock digest `23160c…7e9b`的真实新JOINT构建上，native/window/Domain CTest4/4、Python真实projection+coarse ABI6/6，0skip；portable入口实际重放通过。依赖恢复使用隔离work目录中的真实Debian protobuf3.21.12开发包/protoc，无mock。精确源码/库/命令、失败及成功日志在 `analysis/native-world-cancel-20261015/` /同名evidence。没有重跑全Online，也未接生产Sys已知事件采集/graph/lease恢复；`live_world_import_supported=false`与sh30 provider guard继续保留。公共die新Program代码仍在本地开发，不混入此检查点；本项正常同步main后继续。
+
 ### 绝对时钟平移修复（2026-10-15）
 
 在准备窄 middle-K 周期验证时，实际Runtime暴露相同两活动从不同绝对时刻开始会相差1ns的问题：`16×1×64`周期从43521变43520ns，`1×64×64`从166400变166401ns。原因是将短小数deadline直接加到很大的absolute long double，丢失小数后改变ceil。现将内部时钟分为checked uint64整数原点与[0,1)小数，所有ready/target比较先做整数差；next_event也用checked整数相加。13域物理工作量、LP、Q/alpha、credit、原epsilon/预算和校准不变。公共调用仍结束在整数tick，旧Plan与snapshot v2/v3 wire不变；旧可表示的小数快照仍可恢复。
@@ -143,11 +151,13 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 当前为持续开发，不按检查点自动停止。K参考门控修正、独立反例和三组full/tail九场景诊断已完成，不重复。
 
 1. **有界生产生命周期。** 时钟原点1ns漂移已修并验证，不重复。下一片为显式opt-in单Core OS程序，旧Plan默认路径保持；复用Descriptor/六计数器Cursor、原Geometry/Counter/13域facts和公共LP，最多三个当前stage槽。先用明确小展开预算验证真实Runtime的取消、完整快照、ready/busy/工作量守恒；该受限O(events)入口只作诊断，不能默认部署到五仓或认证效率。随后实现同输出非final middle-K同步零进度窄周期：Store/输出为空、一个owner、同事实/容量；还需覆盖horizon、busy/served bulk累加和实际探测计数，其余fail closed。再考虑输出行/multiCore cohorts/WR，不照搬GMP/Fraction/fixed-phase研究。完整生命周期和开销通过后，才重跑原3%/5%并选最小有效E。
-2. **新JOINT生产接线。** domain/native-session wire、实际Sys只读sample→Domain、known capacity已完成。补known cancel、Sys已知事件采集、真实graph/ledger/lease/active-leg与回放；保留四项busy ±1e-16ns严格差异记录。使用现有native session、唯一local endpoint，不能将scalar伪装恢复；完整world前保留 `live_world_import_supported=false` 与sh30 guard。Sys export_snapshot(now)会推进/回调，只读用Runtime副本。
+2. **新JOINT生产接线。** domain/native-session wire、实际Sys只读sample→Domain、known capacity、无gate/barrier副作用的冻结known cancel已完成，不重复。下一步Sys已知事件采集、真实graph/ledger/lease/active-leg与回放，再扩有唯一lease ownership证据的取消；保留四项busy ±1e-16ns严格差异记录。使用现有native session、唯一local endpoint，不能将scalar伪装恢复；完整world前保留 `live_world_import_supported=false` 与sh30 guard。Sys export_snapshot(now)会推进/回调，只读用Runtime副本。
 3. **其余五仓业务。** FACE两仓固定E/protocol2/startup证书/source-release及原129层压力已验证；扩展其他端口/拓扑/竞争与完整GQA producer，保留KV/weights/TP/transfer/readiness及ACK/本地发送完成→容量复用顺序。不重做未改且通过部分；WS typed diagnostic共存/lease有效。
 4. **性能和校准。** 生命周期结构稳定后实测source cold/hit/update/J32/Online CPU/RSS/cache/event/LP。没有独立目标raw/heldout，不重新拟合TX8或目标效率，不将BF16/DDR结果代替INT4/HBM。reference/target参数继续冻结。
 
 ## Important Decisions
+
+- 新JOINT known cancel首片是native冻结事件能力：取消为终态阻塞，不作为自然成功传播依赖；无确定lease ownership不释放gate。保持默认旧wire，完整生产live world/sh30仍未开放。
 
 - 时钟只拆整数原点和小数，不改变服务模型或引入精确有理数；绝对时刻无关性已有真实反例和72项回归。旧wire保留，C++ Runtime布局变化要求所有使用方重编译，本检查点五仓双ABI已实做。尚未启用任何周期跳跃。
 
@@ -168,6 +178,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Files to Continue
 
+- known cancel：新JOINT `NativeProjection.cc`、对应两项native/C API C++ tests与Python `joint/{resource_projection,native_projection,test_native_coarse_projection}.py`；重放 `analysis/native-world-cancel-20261015/run_checks.sh`。实际使用的vendor clock与公共Program在途版本分开识别。
+
 - 时钟：`die/src/Execution.cc`、`include/coarse_die/Execution.hh`、`tests/runtime_clock_translation_test.cc`；实际重放 `analysis/runtime-clock-20261015/replay_pair.py`。单Core opt-in的Plan/Compiler/Mapping与Runtime分工在继续，未完成前不可发布为新默认模型。
 
 - 当前基础：`die/src/GemmOSReadiness.hh`、`tests/gemm_os_readiness_test.cc`、`tests/k_readiness_runtime_driver.cc`、`validation/{compiled,grouped}_gemm_oracle.py`。新复现 `analysis/k-readiness-20261015/run_corrected.py`，说明与证据在 `k-readiness-corrected-20261015`。归档未修probe只作历史。
@@ -184,6 +196,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
+
+- 新JOINT取消：实际canonical clock版native/window/Domain4/4 CTest、Python6/6无skip，portable脚本再跑亦通过；source/import/fork、直接Domain、同tick前缀/terminal wins和非法导入原子拒绝均覆盖。详情见native-world-cancel证据，不能外推完整Online或生产Sys live回放。
 
 - 时钟检查点：Release all build成功，33/33 CTest；72项起点平移、legacy小数和u64边界；旧header+旧库负回归确实失败。full/tail九项诊断重新通过，五仓真实双ABI全部重建，配置20+15+18+17+13=83/83、0skip；库/源码/命令身份见runtime-clock证据。未重跑全部Online、FACE压力、目标held-out或host预算，不以本轮诊断覆盖旧生产E5失败。
 

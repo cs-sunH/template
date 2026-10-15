@@ -227,6 +227,11 @@ def projection_input_to_wire(input_data: ProjectionInput) -> dict:
             "hardware_config": json.loads(_canonical_json_bytes(
                 dict(domain.hardware_config))),
         } for domain in input_data.coarse_die_domains]
+    if input_data.coarse_cancel_events:
+        wire["coarse_cancel_events"] = [{
+            "time_ns": event.time_ns,
+            "leg_id": event.leg_id,
+        } for event in input_data.coarse_cancel_events]
     return wire
 
 
@@ -618,7 +623,7 @@ class NativeProjectionLegView:
 
     __slots__ = (
         "spec", "work_id", "state", "remaining_bytes",
-        "remaining_duration", "completion", "order_key",
+        "remaining_duration", "completion", "cancelled_at", "order_key",
         "die_actual_bytes_total", "die_service_units_total")
 
     def __init__(self, wire: Mapping[str, Any], spec=None) -> None:
@@ -628,6 +633,7 @@ class NativeProjectionLegView:
         self.remaining_bytes = float(wire["remaining_bytes"])
         self.remaining_duration = float(wire["remaining_duration_ns"])
         self.completion = wire["completion_ns"]
+        self.cancelled_at = wire.get("cancelled_at_ns")
         self.order_key = tuple(wire["order_key"])
         self.die_actual_bytes_total = int(wire["die_actual_bytes_total"])
         self.die_service_units_total = float(

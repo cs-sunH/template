@@ -52,6 +52,10 @@ json capacity_event(std::uint64_t time_ns, std::size_t resource_index,
         {"absolute_physical_rate", absolute_physical_rate}};
 }
 
+json cancel_event(std::uint64_t time_ns, const std::string& leg_id) {
+    return {{"time_ns", time_ns}, {"leg_id", leg_id}};
+}
+
 json leg(const std::string& id, const std::string& kind = "compute") {
     return {{"leg_id", id}, {"kind", kind}, {"route", json::array({"hbm:0"})},
         {"bytes_amount", 0}, {"duration_ns", 0}, {"base_ns", 0},
@@ -327,6 +331,48 @@ DomainReference direct_domain(const json& wire, bool with_endpoint,
     return result;
 }
 
+struct CancelReference {
+    json progress;
+    json counters;
+    json snapshot;
+};
+
+CancelReference direct_cancel_endpoint(const json& wire,
+                                       std::uint64_t ready_ns,
+                                       std::uint64_t cancel_ns) {
+    const auto& input = wire["projection_input"];
+    const auto hardware = coarse_die::resolve_hardware(
+        input["coarse_die_domains"][0]["hardware_config"]);
+    NativeCoarseDieDomain domain("hbm:0", hardware);
+    const auto& compute = input["background_works"][0]["legs"][0];
+    std::vector<std::shared_ptr<const coarse_die::Plan>> plans;
+    for (const auto& spec : compute["die_plan"]["specs"])
+        plans.push_back(coarse_die::compile(hardware, spec));
+    domain.begin_plan_chain("comp#0", std::move(plans), {0, 1, 1, 1}, 0);
+    domain.advance_to(ready_ns);
+    const auto& endpoint_leg = input["background_works"][1]["legs"][0];
+    domain.begin_endpoint("restore#0", endpoint_leg["coarse_endpoint"],
+                          {0, 2, 1, 1}, ready_ns);
+    domain.advance_to(cancel_ns);
+    require(domain.cancel("restore#0", cancel_ns),
+        "direct canonical Domain cancels the live endpoint");
+    const auto completions = domain.take_completions();
+    require(completions.size() == 1 && completions.front().leg_id == "restore#0" &&
+            completions.front().cancelled &&
+            completions.front().finish_ns == cancel_ns,
+        "direct canonical Domain emits exactly one cancelled endpoint terminal");
+    return {domain.progress("restore#0"), domain.counters(),
+            domain.export_snapshot()};
+}
+
+double served_hbm_bytes(const json& matrix) {
+    double total = 0.0;
+    for (const auto& row : matrix)
+        for (const auto& direction : row)
+            total += direction.get<double>();
+    return total;
+}
+
 void parity(bool with_endpoint, bool chain) {
     const auto wire = envelope(with_endpoint, chain);
     const auto reference = direct(wire, with_endpoint);
@@ -555,6 +601,271 @@ void native_known_capacity_events() {
         candidate_result["background_comparisons"][0]["done_with_candidate_ns"] ==
             direct_times.first,
         "candidate overlay competes under the identical frozen capacity schedule");
+}
+
+void native_known_cancel_events() {
+    const auto hardware = coarse_die::resolve_hardware(hardware_config());
+    const auto hbm0 = hardware.rates[coarse_die::HBM0];
+
+    // Cancellation at the exact ready tick has priority over endpoint
+    // admission, while same-tick capacity changes still apply afterward.
+    auto pending_wire = envelope(true, true);
+    auto& pending_input = pending_wire["projection_input"];
+    pending_input["coarse_cancel_events"] = json::array({
+        cancel_event(50, "restore#0")});
+    pending_input["coarse_capacity_events"] = json::array({
+        capacity_event(50, coarse_die::HBM0, hbm0 * 0.5)});
+    auto dependent = leg("cancel-dependent#0", "fixed");
+    dependent["route"] = json::array();
+    dependent["duration_ns"] = 7;
+    dependent["deps"] = json::array({"restore#0"});
+    pending_input["background_works"].push_back(
+        work("cancel-dependent", dependent));
+    pending_input["focus_work_id"] = "cancel-dependent";
+    const auto pending_reference = direct_domain(pending_wire, false);
+    const auto pending_context = NativeProjectionContext::parse(pending_wire);
+    NativeProjectionWorldSession pending_world(pending_context);
+    const auto pending_result = pending_world.operation({{"operation", "run"}});
+    require(pending_result["status"] != "ok" &&
+        pending_result["work_done_at"]["comp"] == pending_reference.comp &&
+        pending_result["work_done_at"]["restore"].is_null() &&
+        pending_result["work_done_at"]["cancel-dependent"].is_null(),
+        "pending cancellation blocks its dependent without publishing success");
+    require(pending_result["legs"]["restore#0"]["state"] == "cancelled" &&
+        pending_result["legs"]["restore#0"]["cancelled_at_ns"] == 50 &&
+        pending_result["legs"]["restore#0"]["coarse_cancelled"] == false,
+        "same-tick cancel wins before ready and records an outer-only terminal");
+    const auto pending_snapshot = pending_world.operation(
+        {{"operation", "export_snapshot"}});
+    bool pending_binding_found = false;
+    for (const auto& entry : pending_snapshot["coarse_die_domains"]["hbm:0"]["entries"])
+        pending_binding_found |= entry["leg_id"] == "restore#0";
+    require(!pending_binding_found &&
+        pending_snapshot["coarse_die_domains"]["hbm:0"] ==
+            pending_reference.snapshot &&
+        pending_snapshot["state"]["cancel_events_processed"] == 1 &&
+        pending_snapshot["state"]["capacity_events_processed"] == 1,
+        "pre-issue cancellation creates no Domain binding and capacity follows it");
+    rejected_snapshot_mutation(pending_context, pending_snapshot,
+        [](json& invalid) {
+            auto& leg = invalid["state"]["legs"]["restore#0"];
+            leg["state"] = "pending";
+            leg["cancelled_at_ns"] = nullptr;
+            leg["coarse_cancelled"] = false;
+        }, "consumed cancellation cannot restore its target as pending");
+
+    // An active endpoint is cancelled only after the Runtime has served a
+    // real prefix. The duplicate frozen event is a no-op but remains in the
+    // snapshot queue until its own ordered prefix is consumed.
+    auto active_wire = envelope(true, true);
+    active_wire["projection_input"]["coarse_cancel_events"] = json::array({
+        cancel_event(100, "restore#0"),
+        cancel_event(100, "restore#0")});
+    const auto active_reference = direct_cancel_endpoint(active_wire, 50, 100);
+    const double partial_bytes = served_hbm_bytes(
+        active_reference.progress["last_progress"]["hbm_served_bytes"]);
+    require(partial_bytes > 0.0 && partial_bytes < 1048577.0,
+        "direct endpoint oracle retains a strictly partial actual-byte prefix");
+
+    const auto active_context = NativeProjectionContext::parse(active_wire);
+    NativeProjectionWorldSession active_world(active_context);
+    json active_snapshot;
+    bool first_cancel_consumed = false;
+    for (std::uint64_t attempt = 0; attempt < 2048; ++attempt) {
+        const auto before = active_world.operation(
+            {{"operation", "export_snapshot"}});
+        const auto consumed = before["state"]["events_processed"]
+            .get<std::uint64_t>();
+        (void)active_world.operation({{"operation", "run"},
+            {"horizon_ns", 100}, {"event_budget", consumed + 1}});
+        active_snapshot = active_world.operation(
+            {{"operation", "export_snapshot"}});
+        if (active_snapshot["state"]["cancel_events_processed"] == 1) {
+            first_cancel_consumed = true;
+            break;
+        }
+    }
+    require(first_cancel_consumed && active_snapshot["state"]["now_ns"] == 100,
+        "event budget can stop after exactly the first same-tick cancel prefix");
+    std::size_t pending_duplicates = 0;
+    for (const auto& event : active_snapshot["state"]["events"])
+        if (event["kind"] == 5 && event["task_id"] == "1")
+            ++pending_duplicates;
+    require(pending_duplicates == 1,
+        "the unconsumed duplicate cancellation remains queued exactly once");
+    const auto active_inspect = active_world.operation(
+        {{"operation", "inspect"}});
+    const auto& endpoint_view = active_inspect["legs"]["restore#0"];
+    require(endpoint_view["state"] == "cancelled" &&
+        endpoint_view["cancelled_at_ns"] == 100 &&
+        endpoint_view["coarse_cancelled"] == true &&
+        endpoint_view["coarse_progress"]["state"] == "cancelled" &&
+        endpoint_view["coarse_progress"]["last_progress"] ==
+            active_reference.progress["last_progress"] &&
+        served_hbm_bytes(endpoint_view["coarse_progress"]["last_progress"]
+            ["hbm_served_bytes"]) == partial_bytes,
+        "active cancellation retains canonical Domain terminal and actual service");
+    require(active_snapshot["coarse_die_domains"]["hbm:0"] ==
+            active_reference.snapshot,
+        "active native cancellation matches the independent direct Domain replay");
+
+    rejected_snapshot_mutation(active_context, active_snapshot,
+        [](json& invalid) {
+            invalid["state"].erase("cancel_events_processed");
+        }, "cancel-enabled snapshots require their consumed frozen prefix");
+    rejected_snapshot_mutation(active_context, active_snapshot,
+        [](json& invalid) {
+            invalid["state"]["cancel_events_processed"] = 0;
+        }, "cancel prefix cannot omit an already consumed request");
+    rejected_snapshot_mutation(active_context, active_snapshot,
+        [](json& invalid) {
+            invalid["state"]["cancel_events_processed"] = 2;
+        }, "cancel prefix cannot consume a queued duplicate");
+    rejected_snapshot_mutation(active_context, active_snapshot,
+        [](json& invalid) {
+            auto& events = invalid["state"]["events"];
+            events.erase(std::remove_if(events.begin(), events.end(),
+                [](const json& event) { return event["kind"] == 5; }),
+                events.end());
+        }, "snapshot cannot omit a pending frozen cancel suffix");
+    rejected_snapshot_mutation(active_context, active_snapshot,
+        [](json& invalid) {
+            invalid["state"]["legs"]["restore#0"]["cancelled_at_ns"] = 99;
+        }, "outer cancellation clock must match its consumed frozen event");
+    rejected_snapshot_mutation(active_context, active_snapshot,
+        [](json& invalid) {
+            bool changed = false;
+            for (auto& entry : invalid["coarse_die_domains"]["hbm:0"]["entries"])
+                if (entry["leg_id"] == "restore#0") {
+                    entry["cancelled"] = false;
+                    changed = true;
+                }
+            require(changed, "restore endpoint binding exists for terminal mutation");
+        }, "outer and retained Domain cancellation terminals must agree");
+    rejected_snapshot_mutation(active_context, active_snapshot,
+        [](json& invalid) {
+            json pending = nullptr;
+            for (const auto& event : invalid["state"]["events"])
+                if (event["kind"] == 5) { pending = event; break; }
+            require(!pending.is_null(), "cancel suffix exists for duplication test");
+            invalid["state"]["events"].push_back(pending);
+        }, "snapshot cannot duplicate a pending frozen cancellation event");
+
+    NativeProjectionWorldSession restored(active_context);
+    require(restored.operation({{"operation", "import_snapshot"},
+            {"snapshot", active_snapshot}}) == active_inspect,
+        "cancelled active endpoint and pending duplicate restore exactly");
+    require(active_world.operation({{"operation", "run"}}) ==
+            restored.operation({{"operation", "run"}}) &&
+        active_world.operation({{"operation", "inspect"}}) ==
+            restored.operation({{"operation", "inspect"}}) &&
+        active_world.operation({{"operation", "export_snapshot"}}) ==
+            restored.operation({{"operation", "export_snapshot"}}),
+        "source continuation and imported fork consume the duplicate and finish identically");
+
+    auto late_terminal_wire = envelope(true, true);
+    late_terminal_wire["projection_input"]["coarse_cancel_events"] = json::array({
+        cancel_event(100, "restore#0")});
+    late_terminal_wire["projection_input"]["coarse_capacity_events"] = json::array({
+        capacity_event(101, coarse_die::HBM0, hbm0 * 0.5)});
+    const auto late_terminal_context =
+        NativeProjectionContext::parse(late_terminal_wire);
+    NativeProjectionWorldSession late_terminal_world(late_terminal_context);
+    (void)late_terminal_world.operation({{"operation", "run"}});
+    const auto late_terminal_snapshot = late_terminal_world.operation(
+        {{"operation", "export_snapshot"}});
+    require(late_terminal_snapshot["state"]["now_ns"] >= 101 &&
+        late_terminal_snapshot["state"]["cancel_events_processed"] == 1,
+        "late-terminal mutation fixture has consumed cancel and advanced beyond it");
+    rejected_snapshot_mutation(late_terminal_context, late_terminal_snapshot,
+        [](json& invalid) {
+            auto& leg = invalid["state"]["legs"]["restore#0"];
+            leg["state"] = "done";
+            leg["completion_ns"] = 101;
+            leg["cancelled_at_ns"] = nullptr;
+            leg["coarse_cancelled"] = false;
+            leg["coarse_finished"] = true;
+            leg["coarse_finish_ns"] = 101;
+        }, "consumed cancellation cannot be replaced by a later success terminal");
+
+    // A true completion is settled before a cancellation request at that
+    // exact tick; its dependency is released once and no cancelled state is
+    // manufactured.
+    auto terminal_wire = envelope(false, true);
+    const auto terminal_baseline = direct_domain(terminal_wire, false);
+    terminal_wire["projection_input"]["coarse_cancel_events"] = json::array({
+        cancel_event(terminal_baseline.comp, "comp#0")});
+    terminal_wire["projection_input"]["coarse_capacity_events"] = json::array({
+        capacity_event(terminal_baseline.comp, coarse_die::HBM0, hbm0 * 0.5)});
+    auto terminal_child = leg("terminal-child#0", "fixed");
+    terminal_child["route"] = json::array();
+    terminal_child["duration_ns"] = 7;
+    terminal_child["deps"] = json::array({"comp#0"});
+    terminal_wire["projection_input"]["background_works"].push_back(
+        work("terminal-child", terminal_child));
+    terminal_wire["projection_input"]["focus_work_id"] = "terminal-child";
+    const auto terminal_reference = direct_domain(terminal_wire, false,
+        terminal_baseline.comp + 7);
+    const auto terminal_context = NativeProjectionContext::parse(terminal_wire);
+    NativeProjectionWorldSession terminal_world(terminal_context);
+    const auto terminal_result = terminal_world.operation(
+        {{"operation", "run"}});
+    const auto terminal_snapshot = terminal_world.operation(
+        {{"operation", "export_snapshot"}});
+    require(terminal_result["status"] == "ok" &&
+        terminal_result["work_done_at"]["comp"] == terminal_reference.comp &&
+        terminal_result["work_done_at"]["terminal-child"] ==
+            terminal_reference.comp + 7 &&
+        terminal_result["legs"]["comp#0"]["state"] == "done" &&
+        terminal_result["legs"]["comp#0"]["cancelled_at_ns"].is_null() &&
+        terminal_snapshot["coarse_die_domains"]["hbm:0"] ==
+            terminal_reference.snapshot &&
+        terminal_snapshot["state"]["cancel_events_processed"] == 1,
+        "same-tick Runtime terminal wins before cancel and releases dependent once");
+    NativeProjectionWorldSession terminal_restored(terminal_context);
+    require(terminal_restored.operation({{"operation", "import_snapshot"},
+            {"snapshot", terminal_snapshot}}) == terminal_result,
+        "restore accepts consumed cancel whose target naturally completed at that tick");
+}
+
+void cancel_input_validation() {
+    rejected([](json& input) {
+        input["coarse_cancel_events"] = json::array({cancel_event(1, "missing#0")});
+    }, "unknown cancellation target is rejected before world construction");
+    rejected([](json& input) {
+        input["coarse_cancel_events"] = json::array({cancel_event(0, "comp#0")});
+        input["now_ns"] = 2;
+    }, "cancellation before frozen initial clock is rejected");
+    rejected([](json& input) {
+        input["coarse_cancel_events"] = json::array({
+            cancel_event(std::uint64_t{1} << 53, "comp#0")});
+    }, "cancellation beyond exact JSON nanoseconds is rejected");
+    rejected([](json& input) {
+        input["background_works"][0]["legs"][0]["acquires"] = json::array({
+            {{"gate_id", "slot"}, {"units", 1}}});
+        input["coarse_cancel_events"] = json::array({cancel_event(0, "comp#0")});
+    }, "cancellation refuses targets with ambiguous acquired gate leases");
+    rejected([](json& input) {
+        input["background_works"][0]["legs"][0]["releases"] = json::array({
+            {{"gate_id", "slot"}, {"units", 1}}});
+        input["coarse_cancel_events"] = json::array({cancel_event(0, "comp#0")});
+    }, "cancellation refuses targets with gate release effects");
+    rejected([](json& input) {
+        input["background_works"][0]["legs"][0]["signals_barrier"] = "done";
+        input["barriers"] = json::array({{{"barrier_id", "done"},
+            {"signallers", json::array({"comp#0"})}}});
+        input["coarse_cancel_events"] = json::array({cancel_event(0, "comp#0")});
+    }, "cancellation refuses a target that would otherwise signal a barrier");
+    rejected([](json& input) {
+        input["barriers"] = json::array({{{"barrier_id", "done"},
+            {"signallers", json::array({"comp#0"})}}});
+        input["coarse_cancel_events"] = json::array({cancel_event(0, "comp#0")});
+    }, "barrier registry signallers are also protected from cancellation");
+    rejected([](json& input) {
+        auto event = cancel_event(0, "comp#0");
+        event["unexpected"] = true;
+        input["coarse_cancel_events"] = json::array({event});
+    }, "unknown cancellation-event fields are rejected");
 }
 
 void capacity_input_validation() {
@@ -1259,6 +1570,8 @@ int main() {
         parity(true, true);
         candidate_world_parity();
         native_known_capacity_events();
+        native_known_cancel_events();
+        cancel_input_validation();
         capacity_input_validation();
         capacity_budget_snapshot_prefix();
         native_gate_and_dependency_join();

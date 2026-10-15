@@ -16,7 +16,8 @@ from joint.native_projection import (
 )
 from joint.prediction_config import PredictionParams
 from joint.resource_projection import (
-    BarrierSpec, CoarseDieDomainSpec, ProjectionInput,
+    BarrierSpec, CoarseCancelEvent, CoarseDieDomainSpec, GateLease,
+    GateSpec, ProjectionInput,
     ResourceProjectionError, ResourceSpec, TaskSpec, WorkItem,
 )
 
@@ -34,12 +35,108 @@ class CoarseProjectionWireTest(unittest.TestCase):
                 "legacy#0", kind="fixed", duration_ns=1),)),))
         wire = projection_input_to_wire(legacy)
         self.assertNotIn("coarse_die_domains", wire)
+        self.assertNotIn("coarse_cancel_events", wire)
         self.assertNotIn("coarse_endpoint", wire["background_works"][0]["legs"][0])
+
+    def test_frozen_cancel_wire_and_validation(self):
+        endpoint = {
+            "endpoint_id": 17, "transaction_id": 17,
+            "owner_kind": "restore", "direction": "write",
+            "physical_bytes": 1048577, "eta_hbm": 1.0,
+            "path_class": "edge_to_hbm",
+            "route": {"internal_route": False},
+        }
+        target = WorkItem("restore", (TaskSpec(
+            "restore#0", kind="stream", route=("hbm:0",),
+            coarse_endpoint=endpoint),))
+        domain = CoarseDieDomainSpec(
+            "hbm:0", json.loads(CONFIG.read_text()))
+        event = CoarseCancelEvent(12, "restore#0")
+        data = ProjectionInput(
+            now_ns=0, resources=(ResourceSpec("hbm:0", "hbm", 1.0),),
+            background_works=(target,), focus_work_id="restore",
+            coarse_die_domains=(domain,), coarse_cancel_events=(event,))
+        wire = projection_input_to_wire(data)
+        self.assertEqual(wire["coarse_cancel_events"], [
+            {"time_ns": 12, "leg_id": "restore#0"}])
+        candidate = WorkItem("candidate", (TaskSpec(
+            "candidate#0", kind="fixed", duration_ns=1),),
+            is_candidate=True)
+        self.assertEqual(data.with_candidate((candidate,)).coarse_cancel_events,
+                         (event,))
+
+        with self.assertRaises(ResourceProjectionError):
+            ProjectionInput(
+                now_ns=0, resources=data.resources,
+                background_works=data.background_works,
+                focus_work_id="restore", coarse_die_domains=(domain,),
+                coarse_cancel_events=[event])
+        with self.assertRaises(ResourceProjectionError):
+            replace(data, coarse_cancel_events=(CoarseCancelEvent(1, "unknown"),))
+        scalar = WorkItem("scalar", (TaskSpec(
+            "scalar#0", kind="stream", route=("hbm:0",),
+            bytes_amount=1),))
+        with self.assertRaises(ResourceProjectionError):
+            replace(data, background_works=(scalar,), focus_work_id="scalar",
+                    coarse_cancel_events=(CoarseCancelEvent(1, "scalar#0"),))
+        wrong_domain = replace(target, legs=(replace(
+            target.legs[0], route=("hbm:missing",)),))
+        with self.assertRaises(ResourceProjectionError):
+            replace(data, background_works=(wrong_domain,),
+                    coarse_cancel_events=(event,))
+        gated = replace(target, legs=(replace(
+            target.legs[0], acquires=(GateLease("slot", 1),)),))
+        with self.assertRaises(ResourceProjectionError):
+            replace(data, background_works=(gated,),
+                    gates=(GateSpec("slot", "slot", 1),),
+                    coarse_cancel_events=(event,))
+        with self.assertRaises(ResourceProjectionError):
+            replace(data, barriers=(BarrierSpec("done", ("restore#0",)),),
+                    coarse_cancel_events=(event,))
 
     def test_scalar_endpoint_aliases_are_rejected(self):
         with self.assertRaises(ResourceProjectionError):
             TaskSpec("bad", route=("hbm:0",), bytes_amount=1,
                      coarse_endpoint={"physical_bytes": 1})
+
+    @unittest.skipUnless(os.environ.get("NATIVE_COARSE_PROJECTION_LIBRARY")
+                         and os.environ.get("DIE_COARSE_CABI_PATH"),
+                         "requires explicit native and coarse build outputs")
+    def test_native_world_cancellation_through_cabi(self):
+        from online.die_model_oracle import DieModelOracle
+
+        config = json.loads(CONFIG.read_text())
+        with DieModelOracle(config_json_path=str(CONFIG)) as oracle:
+            resources = oracle.hardware_summary()["derived"]["resources"]
+            raw_bns = (resources[4]["rate"] + resources[5]["rate"]) / 1e9
+        descriptor = DiePlanDescriptor(
+            specs=(TASK,), route=("hbm:0",), hardware_config=config)
+        comp = WorkItem("comp", (TaskSpec(
+            "comp#0", kind="compute", route=("hbm:0",),
+            die_plan=descriptor),))
+        data = ProjectionInput(
+            now_ns=0, resources=(ResourceSpec("hbm:0", "hbm", raw_bns),),
+            background_works=(comp,), focus_work_id="comp",
+            coarse_die_domains=(CoarseDieDomainSpec("hbm:0", config),),
+            coarse_cancel_events=(CoarseCancelEvent(0, "comp#0"),))
+        library = NativeProjectionLibrary(
+            os.environ["NATIVE_COARSE_PROJECTION_LIBRARY"])
+        world = NativeProjectionWorld(data, library=library)
+        try:
+            status = world.run()
+            inspect = world._operation({"operation": "inspect"})
+            snapshot = world.export_snapshot()
+            self.assertNotEqual(status, "ok")
+            self.assertEqual(inspect["legs"]["comp#0"]["state"], "cancelled")
+            self.assertEqual(inspect["legs"]["comp#0"]["cancelled_at_ns"], 0)
+            self.assertTrue(inspect["legs"]["comp#0"]["coarse_cancelled"])
+            self.assertIsNone(inspect["work_done_at"]["comp"])
+            self.assertEqual(snapshot["state"]["cancel_events_processed"], 1)
+            self.assertEqual(
+                inspect["legs"]["comp#0"]["coarse_progress"]["state"],
+                "cancelled")
+        finally:
+            world.close()
 
     @unittest.skipUnless(os.environ.get("NATIVE_COARSE_PROJECTION_LIBRARY")
                          and os.environ.get("DIE_COARSE_CABI_PATH"),

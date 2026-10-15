@@ -1,0 +1,57 @@
+-- {fmt} version: 11.0.2
+-- Build type: Release
+-- Build spdlog: 1.14.1
+-- Build type: Release
+-- Configuring done (0.0s)
+-- Generating done (0.2s)
+-- Build files have been written to: /workspace/template/work/build-native-cancel-v2
+[ 25%] Built target coarse_die
+[ 50%] Built target die_model
+[ 75%] Built target joint_pipeline_core
+[100%] Built target NativeCoarseDieDomainTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target NativeCoarseProjectionTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target joint_projection
+[100%] Built target NativeProjectionCApiTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target JointPipelineWindowTest
+[ 33%] Built target coarse_die
+[ 66%] Built target die_model
+[100%] Built target joint_pipeline_core
+[100%] Built target joint_projection
+[100%] Built target die_model
+[100%] Built target die_model_cabi
+[100%] Built target coarse_die
+[100%] Built target coarse_die_cabi
+Internal ctest changing into directory: /workspace/template/work/build-native-cancel-v2
+Test project /workspace/template/work/build-native-cancel-v2
+    Start 1: JointPipelineWindowTest
+1/4 Test #1: JointPipelineWindowTest ..........   Passed    0.00 sec
+    Start 2: NativeProjectionCApiTest
+2/4 Test #2: NativeProjectionCApiTest .........   Passed    0.01 sec
+    Start 3: NativeCoarseProjectionTest
+3/4 Test #3: NativeCoarseProjectionTest .......   Passed    0.97 sec
+    Start 4: NativeCoarseDieDomainTest
+4/4 Test #4: NativeCoarseDieDomainTest ........   Passed    0.04 sec
+
+100% tests passed, 0 tests failed out of 4
+
+Total Test time (real) =   1.02 sec
+test_frozen_cancel_wire_and_validation (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_frozen_cancel_wire_and_validation) ... ok
+test_legacy_wire_omits_new_fields (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_legacy_wire_omits_new_fields) ... ok
+test_native_world_cancellation_through_cabi (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_native_world_cancellation_through_cabi) ... ok
+test_native_world_snapshot_roundtrip_is_atomic_and_query_isolated (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_native_world_snapshot_roundtrip_is_atomic_and_query_isolated) ... ok
+test_real_native_and_cabi_same_plan (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_real_native_and_cabi_same_plan) ... ok
+test_scalar_endpoint_aliases_are_rejected (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_scalar_endpoint_aliases_are_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.115s
+
+OK

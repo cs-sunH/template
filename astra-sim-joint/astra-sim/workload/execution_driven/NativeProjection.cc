@@ -130,6 +130,12 @@ struct NativeCoarseCapacityEvent final {
     size_t input_order = 0;
 };
 
+struct NativeCoarseCancelEvent final {
+    uint64_t time_ns = 0;
+    std::string leg_id;
+    size_t input_order = 0;
+};
+
 struct NativeProjectionInput final {
     // Exact immutable contract for session snapshot compatibility. Mutable
     // state is restored separately; a snapshot cannot replace this graph.
@@ -151,6 +157,9 @@ struct NativeProjectionInput final {
     // Immutable known physical rate changes, shared by baseline and candidate
     // projections. Events are canonically ordered by (time, input order).
     std::vector<NativeCoarseCapacityEvent> coarse_capacity_events;
+    // Frozen native Runtime cancellation requests. Same-tick domain terminals
+    // settle first, then these events, then ready/forecast/capacity updates.
+    std::vector<NativeCoarseCancelEvent> coarse_cancel_events;
     // Shared-snapshot form: number of leading background_works entries that
     // precede the forecast works.  A per-call private overlay splices its
     // extra background works at this index so the merged work order matches
@@ -238,7 +247,7 @@ void validate_projection_input_shape(const Json& input) {
             "gates", "barriers", "efficiency", "pipelines",
             "forecast_arrival_placeholders_ns"},
            {"forecast_start_index", "defer_focus_validation", "coarse_die_domains",
-            "coarse_capacity_events"});
+            "coarse_capacity_events", "coarse_cancel_events"});
     if (number_value(input.at("now_ns"), "projection_input.now_ns") < 0.0) {
         fail("projection_input.now_ns", "must be nonnegative");
     }
@@ -251,6 +260,10 @@ void validate_projection_input_shape(const Json& input) {
     if (input.contains("coarse_capacity_events")) {
         array(input.at("coarse_capacity_events"),
               "projection_input.coarse_capacity_events");
+    }
+    if (input.contains("coarse_cancel_events")) {
+        array(input.at("coarse_cancel_events"),
+              "projection_input.coarse_cancel_events");
     }
     const auto& efficiency = input.at("efficiency");
     object(efficiency, "projection_input.efficiency", {"eta", "gamma"});
@@ -825,6 +838,60 @@ std::shared_ptr<const NativeProjectionInput> parse_projection_input(
             string_value(item.at("barrier_id"), "barrier.barrier_id"),
             parse_string_array(item.at("signallers"), "barrier.signallers")});
     }
+    if (wire.contains("coarse_cancel_events")) {
+        const auto& events = wire.at("coarse_cancel_events");
+        result->coarse_cancel_events.reserve(events.size());
+        for (size_t i = 0; i < events.size(); ++i) {
+            const auto& item = events[i];
+            const auto path = "projection_input.coarse_cancel_events[" +
+                std::to_string(i) + "]";
+            object(item, path, {"time_ns", "leg_id"});
+            const uint64_t time_ns = uint_value(item.at("time_ns"), path + ".time_ns");
+            if (time_ns > kMaxProjectionJsonNs ||
+                static_cast<double>(time_ns) < result->now_ns) {
+                fail(path + ".time_ns",
+                     "must be exact JSON nanoseconds at or after initial now_ns");
+            }
+            const auto leg_id = string_value(item.at("leg_id"), path + ".leg_id");
+            const NativeProjectionLegSpec* target = nullptr;
+            for (const auto& work : result->background_works) {
+                for (const auto& leg : work.legs) {
+                    if (leg.leg_id == leg_id) target = &leg;
+                }
+            }
+            if (target == nullptr) {
+                fail(path + ".leg_id", "unknown frozen native leg " + leg_id);
+            }
+            const bool coarse_plan = target->die_plan &&
+                target->die_plan->coarse_hardware;
+            const bool coarse_endpoint = !target->coarse_endpoint.is_null();
+            if (coarse_plan == coarse_endpoint || target->route.size() != 1 ||
+                !result->coarse_domains.count(target->route.front())) {
+                fail(path + ".leg_id",
+                     "unsupported_projection_state: cancellation requires one frozen native coarse Plan or endpoint");
+            }
+            if (!target->acquires.empty() || !target->releases.empty() ||
+                target->has_signal_barrier) {
+                fail(path + ".leg_id",
+                     "unsupported_projection_state: cancellation target has gate or barrier effects");
+            }
+            for (const auto& barrier : result->barriers) {
+                if (std::find(barrier.signallers.begin(), barrier.signallers.end(),
+                              leg_id) != barrier.signallers.end()) {
+                    fail(path + ".leg_id",
+                         "unsupported_projection_state: cancellation target signals a barrier");
+                }
+            }
+            result->coarse_cancel_events.push_back({time_ns, leg_id, i});
+        }
+        std::stable_sort(result->coarse_cancel_events.begin(),
+            result->coarse_cancel_events.end(),
+            [](const NativeCoarseCancelEvent& a,
+               const NativeCoarseCancelEvent& b) {
+                return std::tie(a.time_ns, a.input_order) <
+                       std::tie(b.time_ns, b.input_order);
+            });
+    }
     for (auto it = wire.at("efficiency").at("eta").begin();
          it != wire.at("efficiency").at("eta").end(); ++it) {
         result->eta.emplace(it.key(), number_value(it.value(), "efficiency.eta"));
@@ -930,6 +997,7 @@ NativeProjectionInput apply_projection_overlay(
     merged.forecast_arrival_placeholders_ns =
         base.forecast_arrival_placeholders_ns;
     merged.coarse_capacity_events = base.coarse_capacity_events;
+    merged.coarse_cancel_events = base.coarse_cancel_events;
     merged.forecast_start_index = base.forecast_start_index;
     merged.coarse_domains = base.coarse_domains;
 
@@ -1009,6 +1077,7 @@ constexpr int kGateWait = 2;
 constexpr int kLatency = 3;
 constexpr int kActive = 4;
 constexpr int kDone = 5;
+constexpr int kCancelled = 6;
 constexpr const char* kWorkNodePrefix = "work:";
 constexpr const char* kStatusOk = "ok";
 constexpr const char* kStatusWait = "wait_progress";
@@ -1402,6 +1471,8 @@ struct RuntimeLeg final {
     double remaining_duration = 0.0;
     bool has_completion = false;
     uint64_t completion = 0;
+    bool has_cancelled_at = false;
+    uint64_t cancelled_at = 0;
     bool timer_scheduled = false;
     bool in_active_list = false;
     std::unique_ptr<NativeDieExecution> die_execution;
@@ -1418,6 +1489,7 @@ struct RuntimeLeg final {
     std::string coarse_domain;
     coarse_die::Owner coarse_owner;
     bool coarse_finished = false;
+    bool coarse_cancelled = false;
     uint64_t coarse_finish_ns = 0;
 };
 
@@ -1531,6 +1603,11 @@ class NativeProjectionWorld final {
         for (size_t i = 0; i < input_.coarse_capacity_events.size(); ++i) {
             const auto& event = input_.coarse_capacity_events[i];
             push(static_cast<double>(event.time_ns), 4, "capacity", 4,
+                 std::to_string(i));
+        }
+        for (size_t i = 0; i < input_.coarse_cancel_events.size(); ++i) {
+            const auto& event = input_.coarse_cancel_events[i];
+            push(static_cast<double>(event.time_ns), 2, "cancel", 5,
                  std::to_string(i));
         }
     }
@@ -1782,6 +1859,8 @@ class NativeProjectionWorld final {
                 line += "job latency " + std::to_string(spec.latency_ns) + "ns";
             } else if (leg->state == kActive) {
                 line += "in service";
+            } else if (leg->state == kCancelled) {
+                line += "cancelled at " + std::to_string(leg->cancelled_at) + "ns";
             }
             lines.push_back(std::move(line));
         }
@@ -1805,8 +1884,15 @@ class NativeProjectionWorld final {
                 {"order_key", Json::array({order, leg->spec->leg_id})},
                 {"die_actual_bytes_total", leg->die_actual_bytes_total},
                 {"die_service_units_total", leg->die_service_units_total}};
+            if (!input_.coarse_cancel_events.empty()) {
+                leg_views[leg->spec->leg_id]["cancelled_at_ns"] =
+                    leg->has_cancelled_at ? Json(leg->cancelled_at) : Json(nullptr);
+                leg_views[leg->spec->leg_id]["coarse_cancelled"] =
+                    leg->coarse_cancelled;
+            }
             if (!leg->coarse_domain.empty() && leg->state != kPending &&
-                leg->state != kTimer && leg->state != kGateWait)
+                leg->state != kTimer && leg->state != kGateWait &&
+                (leg->state != kCancelled || leg->coarse_cancelled))
                 leg_views[leg->spec->leg_id]["coarse_progress"] =
                     coarse_domains_.at(leg->coarse_domain)->progress(leg->spec->leg_id);
         }
@@ -1874,6 +1960,12 @@ class NativeProjectionWorld final {
                 {"timer_scheduled", leg->timer_scheduled},
                 {"coarse_finished", leg->coarse_finished},
                 {"coarse_finish_ns", leg->coarse_finish_ns}};
+            if (!input_.coarse_cancel_events.empty()) {
+                legs[leg->spec->leg_id]["cancelled_at_ns"] =
+                    leg->has_cancelled_at ? Json(leg->cancelled_at) : Json(nullptr);
+                legs[leg->spec->leg_id]["coarse_cancelled"] =
+                    leg->coarse_cancelled;
+            }
         }
         for (const auto& item : gates_) {
             Json waiters = Json::array();
@@ -1911,6 +2003,9 @@ class NativeProjectionWorld final {
         if (!input_.coarse_capacity_events.empty())
             snapshot["state"]["capacity_events_processed"] =
                 capacity_events_processed_;
+        if (!input_.coarse_cancel_events.empty())
+            snapshot["state"]["cancel_events_processed"] =
+                cancel_events_processed_;
         return snapshot;
     }
 
@@ -1931,7 +2026,7 @@ class NativeProjectionWorld final {
             "integration_steps", "forecast_events_processed", "sequence", "event_budget_limit", "conservation_check",
             "last_step_budget_truncated", "analytic_enabled", "legs", "gates",
             "barriers", "active_leg_ids", "events"},
-            {"capacity_events_processed"});
+            {"capacity_events_processed", "cancel_events_processed"});
         if (input_.coarse_capacity_events.empty() &&
             s.contains("capacity_events_processed")) {
             fail(path, "capacity prefix is present without frozen capacity events");
@@ -1939,6 +2034,14 @@ class NativeProjectionWorld final {
         if (!input_.coarse_capacity_events.empty() &&
             !s.contains("capacity_events_processed")) {
             fail(path, "snapshot is missing its frozen capacity-event prefix");
+        }
+        if (input_.coarse_cancel_events.empty() &&
+            s.contains("cancel_events_processed")) {
+            fail(path, "cancel prefix is present without frozen cancel events");
+        }
+        if (!input_.coarse_cancel_events.empty() &&
+            !s.contains("cancel_events_processed")) {
+            fail(path, "snapshot is missing its frozen cancel-event prefix");
         }
         const auto flag = [&](const Json& value) {
             if (!value.is_boolean()) fail(path, "expected boolean");
@@ -1960,15 +2063,24 @@ class NativeProjectionWorld final {
         forecast_events_processed_ = uint_value(s.at("forecast_events_processed"), path);
         capacity_events_processed_ = s.contains("capacity_events_processed")
             ? uint_value(s.at("capacity_events_processed"), path) : 0;
+        cancel_events_processed_ = s.contains("cancel_events_processed")
+            ? uint_value(s.at("cancel_events_processed"), path) : 0;
         std::map<uint64_t, ProjectionEvent> expected_forecasts;
         std::map<uint64_t, ProjectionEvent> expected_capacity_events;
+        std::map<uint64_t, ProjectionEvent> expected_cancel_events;
         auto initial_events = events_;
         uint64_t forecast_index = 0;
         uint64_t capacity_index = 0;
+        uint64_t cancel_index = 0;
         while (!initial_events.empty()) {
             const auto event = initial_events.top();
             initial_events.pop();
             if (event.kind == 3) {
+                const int expected_priority = input_.coarse_cancel_events.empty()
+                    ? 3 : 4;
+                if (event.producer != "forecast" || event.priority != expected_priority ||
+                    !event.task_id.empty())
+                    fail(path, "frozen forecast event differs from native input");
                 if (forecast_index++ < forecast_events_processed_) {
                     if (event.time_ns > now_ns_) fail(path, "future forecast cannot already be consumed");
                 } else {
@@ -1980,7 +2092,10 @@ class NativeProjectionWorld final {
                     fail(path, "extra frozen capacity event in initial queue");
                 const auto& expected =
                     input_.coarse_capacity_events[capacity_index];
-                if (event.producer != "capacity" || event.priority != 4 ||
+                const int expected_priority = input_.coarse_cancel_events.empty()
+                    ? 4 : 5;
+                if (event.producer != "capacity" ||
+                    event.priority != expected_priority ||
                     event.task_id != std::to_string(capacity_index) ||
                     event.time_ns != static_cast<double>(expected.time_ns)) {
                     fail(path, "frozen capacity event queue differs from input order");
@@ -1992,6 +2107,23 @@ class NativeProjectionWorld final {
                     if (event.time_ns < now_ns_)
                         fail(path, "past capacity event must already be consumed");
                     expected_capacity_events.emplace(event.sequence, event);
+                }
+            } else if (event.kind == 5) {
+                if (cancel_index >= input_.coarse_cancel_events.size())
+                    fail(path, "extra frozen cancel event in initial queue");
+                const auto& expected = input_.coarse_cancel_events[cancel_index];
+                if (event.producer != "cancel" || event.priority != 2 ||
+                    event.task_id != std::to_string(cancel_index) ||
+                    event.time_ns != static_cast<double>(expected.time_ns)) {
+                    fail(path, "frozen cancel event queue differs from input order");
+                }
+                if (cancel_index++ < cancel_events_processed_) {
+                    if (event.time_ns > now_ns_)
+                        fail(path, "future cancel event cannot already be consumed");
+                } else {
+                    if (event.time_ns < now_ns_)
+                        fail(path, "past cancel event must already be consumed");
+                    expected_cancel_events.emplace(event.sequence, event);
                 }
             }
         }
@@ -2005,9 +2137,19 @@ class NativeProjectionWorld final {
                 events_processed_ - forecast_events_processed_) {
             fail(path, "invalid processed capacity-event prefix");
         }
+        if (cancel_index != input_.coarse_cancel_events.size() ||
+            cancel_events_processed_ > cancel_index ||
+            cancel_events_processed_ > events_processed_ ||
+            forecast_events_processed_ > events_processed_ -
+                capacity_events_processed_ ||
+            cancel_events_processed_ > events_processed_ -
+                forecast_events_processed_ - capacity_events_processed_) {
+            fail(path, "invalid processed cancel-event prefix");
+        }
         const uint64_t minimum_sequence = sequence_;
         const uint64_t snapshot_sequence = uint_value(s.at("sequence"), path);
-        if (!input_.coarse_capacity_events.empty() &&
+        if ((!input_.coarse_capacity_events.empty() ||
+             !input_.coarse_cancel_events.empty()) &&
             snapshot_sequence < minimum_sequence) {
             fail(path, "sequence counter precedes frozen capacity events");
         }
@@ -2062,23 +2204,44 @@ class NativeProjectionWorld final {
             }
         }
         keys_match(s.at("legs"), legs_);
+        std::map<std::string, uint64_t> first_consumed_cancel;
+        for (size_t i = 0; i < cancel_events_processed_; ++i) {
+            const auto& event = input_.coarse_cancel_events[i];
+            first_consumed_cancel.emplace(event.leg_id, event.time_ns);
+        }
         active_legs_.clear();
         active_by_resource_.clear();
         for (auto* leg : leg_order_) {
             const auto& wire = s.at("legs").at(leg->spec->leg_id);
             object(wire, path + ".leg", {"state", "remaining_duration_ns", "completion_ns",
-                "timer_scheduled", "coarse_finished", "coarse_finish_ns"});
+                "timer_scheduled", "coarse_finished", "coarse_finish_ns"},
+                input_.coarse_cancel_events.empty()
+                    ? std::set<std::string>{}
+                    : std::set<std::string>{"cancelled_at_ns", "coarse_cancelled"});
+            if (!input_.coarse_cancel_events.empty() &&
+                (!wire.contains("cancelled_at_ns") ||
+                 !wire.contains("coarse_cancelled"))) {
+                fail(path, "cancel-enabled leg snapshot is missing cancellation state");
+            }
             const auto name = string_value(wire.at("state"), path);
             leg->state = -1;
-            for (int state = kPending; state <= kDone; ++state)
+            for (int state = kPending; state <= kCancelled; ++state)
                 if (name == state_name(state)) leg->state = state;
             if (leg->state < 0) fail(path, "unknown leg state");
+            if (leg->state == kCancelled && input_.coarse_cancel_events.empty())
+                fail(path, "cancelled leg state requires a frozen cancel schedule");
             leg->remaining_duration = static_cast<double>(tick(wire.at("remaining_duration_ns")));
             leg->remaining_bytes = 0;
             leg->has_completion = !wire.at("completion_ns").is_null();
             leg->completion = leg->has_completion ? tick(wire.at("completion_ns")) : 0;
+            leg->has_cancelled_at = !input_.coarse_cancel_events.empty() &&
+                !wire.at("cancelled_at_ns").is_null();
+            leg->cancelled_at = leg->has_cancelled_at
+                ? tick(wire.at("cancelled_at_ns")) : 0;
             leg->timer_scheduled = flag(wire.at("timer_scheduled"));
             leg->coarse_finished = flag(wire.at("coarse_finished"));
+            leg->coarse_cancelled = !input_.coarse_cancel_events.empty()
+                ? flag(wire.at("coarse_cancelled")) : false;
             leg->coarse_finish_ns = tick(wire.at("coarse_finish_ns"));
             leg->in_active_list = false;
             if (leg->state == kPending && leg->timer_scheduled)
@@ -2086,10 +2249,38 @@ class NativeProjectionWorld final {
             if ((leg->state == kDone) != leg->has_completion ||
                 (leg->has_completion && leg->completion > now_ns_))
                 fail(path, "leg terminal state/clock mismatch");
+            if ((leg->state == kCancelled) != leg->has_cancelled_at ||
+                (leg->has_cancelled_at && leg->cancelled_at > now_ns_) ||
+                (leg->coarse_cancelled &&
+                 (leg->state != kCancelled || leg->coarse_domain.empty()))) {
+                fail(path, "cancelled terminal state/clock mismatch");
+            }
+            if (!input_.coarse_cancel_events.empty()) {
+                const auto found = first_consumed_cancel.find(leg->spec->leg_id);
+                if (found == first_consumed_cancel.end()) {
+                    if (leg->state == kCancelled) {
+                        fail(path,
+                             "cancelled outer terminal has no consumed frozen event");
+                    }
+                } else {
+                    const bool terminal_won = leg->state == kDone &&
+                        leg->has_completion &&
+                        leg->completion <= found->second;
+                    const bool cancellation_won = leg->state == kCancelled &&
+                        leg->has_cancelled_at &&
+                        leg->cancelled_at == found->second &&
+                        !leg->timer_scheduled;
+                    if (!terminal_won && !cancellation_won) {
+                        fail(path,
+                             "consumed cancel target must have naturally completed by its first cancel tick or be cancelled at that tick");
+                    }
+                }
+            }
             if (!leg->coarse_domain.empty()) {
                 if (leg->state == kLatency || leg->remaining_duration != 0)
                     fail(path, "typed coarse leg has legacy scalar service state");
-                const bool started = leg->state == kActive || leg->state == kDone;
+                const bool started = leg->state == kActive || leg->state == kDone ||
+                    (leg->state == kCancelled && leg->coarse_cancelled);
                 const auto& entries = snapshot.at("coarse_die_domains")
                     .at(leg->coarse_domain).at("entries");
                 const Json* binding = nullptr;
@@ -2116,18 +2307,29 @@ class NativeProjectionWorld final {
                                binding->at("endpoint") != leg->spec->coarse_endpoint) {
                         fail(path, "native leg/domain endpoint differs");
                     }
-                    if (binding->at("cancelled") != false ||
-                        binding->at("terminal") != leg->coarse_finished ||
-                        (leg->coarse_finished && binding->at("finish_ns") != leg->coarse_finish_ns))
+                    const bool binding_cancelled =
+                        binding->at("cancelled").get<bool>();
+                    const bool terminal = leg->coarse_finished ||
+                        leg->coarse_cancelled;
+                    if (binding_cancelled != leg->coarse_cancelled ||
+                        binding->at("terminal") != terminal ||
+                        (terminal && binding->at("finish_ns") != leg->coarse_finish_ns))
                         fail(path, "native leg/domain terminal mismatch");
                 }
-                if ((!started && leg->coarse_finished) ||
-                    (!leg->coarse_finished && leg->coarse_finish_ns != 0) ||
+                if ((!started && (leg->coarse_finished || leg->coarse_cancelled)) ||
+                    (!(leg->coarse_finished || leg->coarse_cancelled) &&
+                     leg->coarse_finish_ns != 0) ||
+                    (leg->coarse_finished && leg->coarse_cancelled) ||
                     (leg->state == kDone && (!leg->coarse_finished ||
-                        leg->coarse_finish_ns != leg->completion)))
+                        leg->coarse_finish_ns != leg->completion)) ||
+                    (leg->state == kCancelled && leg->coarse_cancelled &&
+                        leg->coarse_finish_ns != leg->cancelled_at) ||
+                    (leg->state == kCancelled && !leg->coarse_cancelled &&
+                        leg->coarse_finish_ns != 0))
                     fail(path, "invalid coarse completion state");
             } else {
-                if (leg->coarse_finished || leg->coarse_finish_ns ||
+                if (leg->coarse_finished || leg->coarse_cancelled ||
+                    leg->coarse_finish_ns || leg->state == kCancelled ||
                     ((leg->state == kActive || leg->state == kLatency) &&
                      leg->spec->duration_ns == 0) ||
                     leg->remaining_duration > leg->spec->duration_ns ||
@@ -2217,6 +2419,17 @@ class NativeProjectionWorld final {
         array(s.at("events"), path);
         std::set<uint64_t> event_sequences;
         std::map<std::string, unsigned> ready_events, latency_events;
+        const auto expected_priority = [&](uint64_t kind) -> uint64_t {
+            if (input_.coarse_cancel_events.empty()) return kind;
+            switch (kind) {
+                case 1: return 1;
+                case 2: return 3;
+                case 3: return 4;
+                case 4: return 5;
+                case 5: return 2;
+                default: return 0;
+            }
+        };
         for (const auto& wire : s.at("events")) {
             object(wire, path + ".event", {"time_ns", "priority", "producer", "sequence",
                 "kind", "task_id"});
@@ -2224,7 +2437,9 @@ class NativeProjectionWorld final {
             event.time_ns = static_cast<double>(tick(wire.at("time_ns")));
             const auto kind = uint_value(wire.at("kind"), path);
             const auto priority = uint_value(wire.at("priority"), path);
-            if (kind < 1 || kind > 4 || priority != kind) fail(path, "invalid event kind/priority");
+            if (kind < 1 || kind > (input_.coarse_cancel_events.empty() ? 4 : 5) ||
+                priority != expected_priority(kind))
+                fail(path, "invalid event kind/priority");
             event.kind = static_cast<int>(kind);
             event.priority = static_cast<int>(priority);
             event.producer = string_value(wire.at("producer"), path);
@@ -2237,7 +2452,8 @@ class NativeProjectionWorld final {
                 const auto expected = expected_forecasts.find(event.sequence);
                 if (event.producer != "forecast" || !event.task_id.empty() ||
                     expected == expected_forecasts.end() ||
-                    expected->second.time_ns != event.time_ns)
+                    expected->second.time_ns != event.time_ns ||
+                    expected->second.priority != event.priority)
                     fail(path, "unknown forecast placeholder");
                 expected_forecasts.erase(expected);
             } else if (kind == 4) {
@@ -2253,6 +2469,16 @@ class NativeProjectionWorld final {
                     fail(path, "unknown or duplicated pending capacity event");
                 }
                 expected_capacity_events.erase(expected);
+            } else if (kind == 5) {
+                const auto expected = expected_cancel_events.find(event.sequence);
+                if (event.producer != "cancel" ||
+                    expected == expected_cancel_events.end() ||
+                    expected->second.time_ns != event.time_ns ||
+                    expected->second.priority != event.priority ||
+                    expected->second.task_id != event.task_id) {
+                    fail(path, "unknown or duplicated pending frozen cancel event");
+                }
+                expected_cancel_events.erase(expected);
             } else {
                 if (!legs_.count(event.task_id) || event.producer != event.task_id)
                     fail(path, "unknown event task/producer");
@@ -2319,6 +2545,8 @@ class NativeProjectionWorld final {
             fail(path, "snapshot omitted an unconsumed known arrival placeholder");
         if (!expected_capacity_events.empty())
             fail(path, "snapshot omitted an unconsumed frozen capacity event");
+        if (!expected_cancel_events.empty())
+            fail(path, "snapshot omitted an unconsumed frozen cancel event");
     }
 
     void set_clock(double time_ns) {
@@ -2429,6 +2657,8 @@ class NativeProjectionWorld final {
     // Capacity events are immutable frozen-input events with the same
     // processed-prefix requirement at controlled/same-tick checkpoints.
     uint64_t capacity_events_processed_ = 0;
+    // Frozen cancellation events share capacity's processed-prefix discipline.
+    uint64_t cancel_events_processed_ = 0;
     double bytes_served_total_ = 0.0;
     std::string last_status_ = kStatusWait;
     bool conservation_check_ = true;
@@ -2497,7 +2727,9 @@ class NativeProjectionWorld final {
             if (!node_is_completed(source.first))
                 for (const auto& target : source.second) ++deps_remaining_.at(target);
         for (const auto* leg : leg_order_)
-            if ((leg->state == kPending) != (deps_remaining_.at(leg->spec->leg_id) != 0))
+            if (leg->state != kCancelled &&
+                ((leg->state == kPending) !=
+                 (deps_remaining_.at(leg->spec->leg_id) != 0)))
                 fail("world_snapshot", "native leg state contradicts graph dependencies");
     }
 
@@ -2534,11 +2766,91 @@ class NativeProjectionWorld final {
         for (auto& domain : coarse_domains_) {
             for (const auto& completion : domain.second->take_completions()) {
                 auto& leg = *legs_.at(completion.leg_id);
-                if (completion.cancelled)
-                    fail(completion.leg_id, "unexpected cancellation in fresh native projection");
-                leg.coarse_finished = true;
+                if (completion.cancelled) {
+                    const bool frozen_cancel = std::any_of(
+                        input_.coarse_cancel_events.begin(),
+                        input_.coarse_cancel_events.end(),
+                        [&](const NativeCoarseCancelEvent& event) {
+                            return event.leg_id == completion.leg_id;
+                        });
+                    if (!frozen_cancel)
+                        fail(completion.leg_id,
+                             "unsupported_projection_state: native coarse Runtime cancelled without a frozen event");
+                    if (leg.coarse_finished || leg.coarse_cancelled)
+                        fail(completion.leg_id,
+                             "duplicate native coarse terminal completion");
+                    leg.coarse_cancelled = true;
+                } else {
+                    if (leg.coarse_finished || leg.coarse_cancelled)
+                        fail(completion.leg_id,
+                             "duplicate native coarse terminal completion");
+                    leg.coarse_finished = true;
+                }
                 leg.coarse_finish_ns = completion.finish_ns;
             }
+        }
+    }
+
+    void remove_ready_event(const std::string& leg_id) {
+        std::vector<ProjectionEvent> keep;
+        while (!events_.empty()) {
+            const auto event = events_.top();
+            events_.pop();
+            if (event.kind == 2 && event.task_id == leg_id) continue;
+            keep.push_back(event);
+        }
+        for (auto& event : keep) events_.push(std::move(event));
+    }
+
+    void mark_cancelled(RuntimeLeg& leg, uint64_t time_ns) {
+        if (leg.state == kDone || leg.state == kCancelled) return;
+        if (!leg.coarse_domain.empty() && leg.coarse_cancelled &&
+            leg.coarse_finish_ns != time_ns) {
+            fail(leg.spec->leg_id,
+                 "native coarse cancellation timestamp differs from frozen event");
+        }
+        remove_ready_event(leg.spec->leg_id);
+        leg.timer_scheduled = false;
+        leg.has_cancelled_at = true;
+        leg.cancelled_at = time_ns;
+        leg.state = kCancelled;
+    }
+
+    void apply_cancel_event(size_t index, const ProjectionEvent& event) {
+        const auto& frozen = input_.coarse_cancel_events.at(index);
+        if (event.producer != "cancel" || event.priority != 2 ||
+            event.time_ns != static_cast<double>(frozen.time_ns) ||
+            event.task_id != std::to_string(index)) {
+            fail("cancel_event", "queued event differs from its frozen input");
+        }
+        auto* leg = legs_.at(frozen.leg_id).get();
+        if (leg->state == kDone || leg->state == kCancelled) return;
+        if (leg->state == kActive) {
+            if (leg->coarse_domain.empty())
+                fail(leg->spec->leg_id,
+                     "unsupported_projection_state: only native coarse legs can be cancelled");
+            const auto tick = coarse_tick(event.time_ns);
+            const bool cancelled = coarse_domains_.at(leg->coarse_domain)->cancel(
+                leg->spec->leg_id, tick);
+            collect_coarse_completions();
+            if (leg->coarse_finished) {
+                // integrate()/settle_completions() must have published a
+                // same-tick physical terminal before this queue event.
+                fail(leg->spec->leg_id,
+                     "native terminal was not settled before same-tick cancellation");
+            }
+            if (!cancelled || !leg->coarse_cancelled)
+                fail(leg->spec->leg_id,
+                     "canonical Runtime did not retain the requested cancellation");
+            mark_cancelled(*leg, leg->coarse_finish_ns);
+        } else if (leg->state == kPending || leg->state == kTimer) {
+            // A not-yet-issued native leg has no Runtime handle. Freeze its
+            // outer cancellation as a terminal blocker without fabricating a
+            // domain entry or success completion.
+            mark_cancelled(*leg, frozen.time_ns);
+        } else {
+            fail(leg->spec->leg_id,
+                 "unsupported_projection_state: cancellation target has an unsupported outer state");
         }
     }
 
@@ -2583,6 +2895,7 @@ class NativeProjectionWorld final {
             case kLatency: return "latency";
             case kActive: return "active";
             case kDone: return "done";
+            case kCancelled: return "cancelled";
             default: return "unknown";
         }
     }
@@ -2867,6 +3180,20 @@ class NativeProjectionWorld final {
 
     void push(double time_ns, int priority, std::string producer,
               int kind, std::string task_id) {
+        if (sequence_ == std::numeric_limits<uint64_t>::max())
+            fail("event_sequence", "projection event sequence overflows uint64");
+        if (!input_.coarse_cancel_events.empty()) {
+            // Only the explicit cancellation path opts into the revised
+            // same-tick order. Legacy inputs keep their original priorities.
+            switch (kind) {
+                case 1: priority = 1; break; // fixed latency settles first
+                case 5: priority = 2; break; // cancel before arrivals/readiness
+                case 2: priority = 3; break; // ready/arrival
+                case 3: priority = 4; break; // forecast placeholder
+                case 4: priority = 5; break; // physical capacity update
+                default: fail("event", "unknown native event kind");
+            }
+        }
         events_.push({time_ns, priority, std::move(producer), sequence_++, kind,
                       std::move(task_id)});
     }
@@ -2888,6 +3215,23 @@ class NativeProjectionWorld final {
         return static_cast<size_t>(index);
     }
 
+    size_t cancel_event_index(const std::string& value) const {
+        if (value.empty()) fail("cancel_event", "missing frozen event index");
+        uint64_t index = 0;
+        for (const char digit : value) {
+            if (digit < '0' || digit > '9')
+                fail("cancel_event", "invalid frozen event index");
+            const uint64_t part = static_cast<uint64_t>(digit - '0');
+            if (index > (std::numeric_limits<uint64_t>::max() - part) / 10)
+                fail("cancel_event", "frozen event index overflows");
+            index = index * 10 + part;
+        }
+        if (std::to_string(index) != value ||
+            index >= input_.coarse_cancel_events.size())
+            fail("cancel_event", "unknown frozen event index");
+        return static_cast<size_t>(index);
+    }
+
     uint64_t work_ready(const std::string& id) const {
         const auto found = work_specs_.find(id);
         return found == work_specs_.end()
@@ -2895,7 +3239,7 @@ class NativeProjectionWorld final {
     }
 
     void on_deps_satisfied(RuntimeLeg* leg) {
-        if (leg->state == kDone) return;
+        if (leg->state == kDone || leg->state == kCancelled) return;
         const double ready = static_cast<double>(leg->spec->has_ready_at
             ? leg->spec->ready_at_ns : work_ready(leg->work_id));
         if (ready > now_ns_) {
@@ -3132,7 +3476,8 @@ class NativeProjectionWorld final {
                 done.push_back(const_cast<RuntimeLeg*>(leg));
         }
         for (auto* leg : leg_order_)
-            if (leg->coarse_finished && leg->state != kDone && leg->coarse_finish_ns <= time_ns)
+            if (leg->coarse_finished && leg->state != kDone &&
+                leg->coarse_finish_ns <= time_ns)
                 done.push_back(leg);
         std::sort(done.begin(), done.end(), [](const RuntimeLeg* a, const RuntimeLeg* b) {
             const int64_t ao = a->spec->has_order ? a->spec->order : 0;
@@ -3169,6 +3514,9 @@ class NativeProjectionWorld final {
             }
             const auto event = events_.top();
             events_.pop();
+            if (events_processed_ == std::numeric_limits<uint64_t>::max())
+                fail("events_processed",
+                     "processed projection event count overflows uint64");
             ++events_processed_;
             if (event.kind == 3) ++forecast_events_processed_;
             if (event.kind == 1) {
@@ -3188,7 +3536,10 @@ class NativeProjectionWorld final {
             } else if (event.kind == 4) {
                 const size_t index = capacity_event_index(event.task_id);
                 const auto& capacity = input_.coarse_capacity_events[index];
-                if (event.producer != "capacity" || event.priority != 4 ||
+                const int expected_priority = input_.coarse_cancel_events.empty()
+                    ? 4 : 5;
+                if (event.producer != "capacity" ||
+                    event.priority != expected_priority ||
                     event.time_ns != static_cast<double>(capacity.time_ns)) {
                     fail("capacity_event", "queued event differs from its frozen input");
                 }
@@ -3199,6 +3550,15 @@ class NativeProjectionWorld final {
                 // Domain updates can expose same-tick chain terminals. Let the
                 // outer graph settle them at this tick before later time moves.
                 collect_coarse_completions();
+            } else if (event.kind == 5) {
+                const size_t index = cancel_event_index(event.task_id);
+                apply_cancel_event(index, event);
+                if (cancel_events_processed_ ==
+                    std::numeric_limits<uint64_t>::max()) {
+                    fail("cancel_events_processed",
+                         "processed cancellation-event count overflows uint64");
+                }
+                ++cancel_events_processed_;
             }
             // Forecast arrival is a disclosure-only placeholder.
         }

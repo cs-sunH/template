@@ -1,11 +1,15 @@
 #include "astra-sim/workload/execution_driven/NativeProjectionCApi.hh"
 
 #include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <limits>
+#include <stdexcept>
 #include <string>
 
 #include <json/json.hpp>
+#include "../../../../extern/die_model/coarse/include/coarse_die/Hardware.hh"
 
 namespace {
 
@@ -48,6 +52,61 @@ std::string snapshot() {
         {"prediction_config_sha256", std::string(64, 'b')}};
     return nlohmann::json{{"kernel_contract", contract},
                           {"projection_input", input}}.dump();
+}
+
+std::string coarse_cancel_snapshot() {
+    const auto source = std::filesystem::path(__FILE__);
+    const auto root = source.parent_path().parent_path().parent_path()
+        .parent_path().parent_path();
+    std::ifstream config_input(root /
+        "extern/die_model/coarse/configs/example_hardware.json");
+    if (!config_input.good()) throw std::runtime_error(
+        "tracked coarse hardware fixture exists for C ABI cancellation");
+    nlohmann::json hardware_wire;
+    config_input >> hardware_wire;
+    const auto hardware = coarse_die::resolve_hardware(hardware_wire);
+    const double raw_hbm_bns = (hardware.rates[4] + hardware.rates[5]) / 1e9;
+
+    nlohmann::json input{
+        {"now_ns", 0},
+        {"resources", nlohmann::json::array({
+            {{"key", "hbm:0"}, {"kind", "hbm"},
+             {"capacity_per_ns", raw_hbm_bns}}})},
+        {"background_works", nlohmann::json::array({
+            {{"work_id", "restore"}, {"legs", nlohmann::json::array({
+                {{"leg_id", "restore#0"}, {"kind", "stream"},
+                 {"route", nlohmann::json::array({"hbm:0"})},
+                 {"bytes_amount", 0}, {"duration_ns", 0.0},
+                 {"base_ns", 0.0}, {"group", "prefill"},
+                 {"latency_ns", 0}, {"ready_at_ns", nullptr},
+                 {"deps", nlohmann::json::array()},
+                 {"acquires", nlohmann::json::array()},
+                 {"releases", nlohmann::json::array()},
+                 {"signals_barrier", nullptr},
+                 {"remaining_bytes", nullptr},
+                 {"remaining_duration_ns", nullptr},
+                 {"in_service", false}, {"order", nullptr},
+                 {"die_plan", nullptr},
+                 {"coarse_endpoint", {
+                     {"endpoint_id", 17}, {"transaction_id", 17},
+                     {"owner_kind", "restore"}, {"direction", "write"},
+                     {"physical_bytes", 1048577}, {"eta_hbm", 1.0},
+                     {"path_class", "edge_to_hbm"},
+                     {"route", {{"internal_route", false}}}}}}})},
+             {"ready_at_ns", 0}, {"depends_on_work", nlohmann::json::array()},
+             {"is_candidate", false}, {"service_leg_ids", nullptr}}})},
+        {"focus_work_id", "restore"}, {"gates", nlohmann::json::array()},
+        {"barriers", nlohmann::json::array()},
+        {"efficiency", {{"eta", nlohmann::json::object()},
+            {"gamma", nlohmann::json::object()}}},
+        {"pipelines", nlohmann::json::array()},
+        {"forecast_arrival_placeholders_ns", nlohmann::json::array()},
+        {"coarse_die_domains", nlohmann::json::array({
+            {{"resource_key", "hbm:0"},
+             {"hardware_config", hardware_wire}}})},
+        {"coarse_cancel_events", nlohmann::json::array({
+            {{"time_ns", 0}, {"leg_id", "restore#0"}}})}};
+    return nlohmann::json{{"projection_input", input}}.dump();
 }
 
 }  // namespace
@@ -144,6 +203,45 @@ int main() {
                "standalone K restriction is explicit in native error detail");
         jproj_free_result(buffer);
         jproj_destroy(standalone_context);
+    }
+
+    // The explicit frozen cancellation path also crosses the public C ABI.
+    // Its canonical endpoint Runtime retains a cancelled terminal, while the
+    // outer projection does not publish a successful work completion.
+    void* cancel_context = nullptr;
+    const auto cancel_wire = coarse_cancel_snapshot();
+    expect(jproj_create(cancel_wire.data(), cancel_wire.size(),
+                        &cancel_context) == 0 && cancel_context != nullptr,
+           "frozen coarse cancellation input creates through C ABI");
+    if (cancel_context != nullptr) {
+        char* buffer = nullptr;
+        size_t length = 0;
+        const std::string run = R"({"operation":"run"})";
+        const int code = jproj_world_operation(cancel_context, run.data(),
+            run.size(), &buffer, &length);
+        expect(code == 0, "C ABI world consumes the frozen cancellation event");
+        if (buffer != nullptr) {
+            const auto state = nlohmann::json::parse(buffer, buffer + length);
+            expect(state.at("legs").at("restore#0").at("state") == "cancelled" &&
+                   state.at("legs").at("restore#0").at("coarse_cancelled").get<bool>(),
+                   "C ABI inspection exposes canonical endpoint cancellation");
+            expect(state.at("work_done_at").at("restore").is_null(),
+                   "C ABI cancellation never masquerades as successful work done");
+            jproj_free_result(buffer);
+        }
+        buffer = nullptr;
+        length = 0;
+        const std::string export_request = R"({"operation":"export_snapshot"})";
+        expect(jproj_world_operation(cancel_context, export_request.data(),
+            export_request.size(), &buffer, &length) == 0,
+            "C ABI exports the consumed cancellation prefix");
+        if (buffer != nullptr) {
+            const auto state = nlohmann::json::parse(buffer, buffer + length);
+            expect(state.at("state").at("cancel_events_processed").get<uint64_t>() == 1,
+                   "C ABI snapshot retains the frozen cancellation prefix");
+            jproj_free_result(buffer);
+        }
+        jproj_destroy(cancel_context);
     }
 
     // Exercise the same real PlanCache/Execution path used by ordinary DIE

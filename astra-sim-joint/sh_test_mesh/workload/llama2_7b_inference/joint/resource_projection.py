@@ -632,6 +632,22 @@ class CoarseDieDomainSpec:
 
 
 @dataclass(frozen=True)
+class CoarseCancelEvent:
+    """Frozen cancellation of one native coarse leg at an exact tick."""
+
+    time_ns: int
+    leg_id: str
+
+    def __post_init__(self) -> None:
+        if type(self.time_ns) is not int or self.time_ns < 0:
+            raise ResourceProjectionError(
+                "coarse cancel event time_ns must be an integer >= 0")
+        if not isinstance(self.leg_id, str) or not self.leg_id.strip():
+            raise ResourceProjectionError(
+                "coarse cancel event leg_id must be non-empty")
+
+
+@dataclass(frozen=True)
 class ProjectionInput:
     """冻结前推输入（背景账本 + 硬件 + 焦点；候选经 ``with_candidate`` 叠加）。
 
@@ -655,6 +671,9 @@ class ProjectionInput:
     # 末尾）。仅共享上下文序列化使用；旧全量逐候选快照不设置该字段。
     forecast_start_index: Optional[int] = None
     coarse_die_domains: Tuple[CoarseDieDomainSpec, ...] = ()
+    # Native projection applies these frozen coarse Runtime cancels after
+    # same-tick physical completion and before ready/arrival/capacity events.
+    coarse_cancel_events: Tuple[CoarseCancelEvent, ...] = ()
 
     def __post_init__(self) -> None:
         if (isinstance(self.now_ns, bool)
@@ -726,6 +745,41 @@ class ProjectionInput:
             if (type(tick) is not int or tick < self.now_ns):
                 raise ResourceProjectionError(
                     "forecast arrival placeholders must be integer >= now_ns")
+        legs_by_id = {}
+        duplicate_leg_ids = set()
+        for work in self.background_works:
+            for task in work.legs:
+                if task.leg_id in legs_by_id:
+                    duplicate_leg_ids.add(task.leg_id)
+                else:
+                    legs_by_id[task.leg_id] = task
+        if not isinstance(self.coarse_cancel_events, tuple):
+            raise ResourceProjectionError(
+                "coarse_cancel_events must be a frozen tuple")
+        for index, event in enumerate(self.coarse_cancel_events):
+            if not isinstance(event, CoarseCancelEvent):
+                raise ResourceProjectionError(
+                    f"coarse_cancel_events[{index}] must be CoarseCancelEvent")
+            if event.time_ns < self.now_ns:
+                raise ResourceProjectionError(
+                    f"coarse_cancel_events[{index}].time_ns must be >= now_ns")
+            target = legs_by_id.get(event.leg_id)
+            if target is None:
+                raise ResourceProjectionError(
+                    f"coarse cancel event targets unknown leg {event.leg_id!r}")
+            if event.leg_id in duplicate_leg_ids:
+                raise ResourceProjectionError(
+                    f"coarse cancel event target {event.leg_id!r} is ambiguous")
+            if ((target.die_plan is None) ==
+                    (target.coarse_endpoint is None)
+                    or len(target.route) != 1
+                    or target.route[0] not in domain_keys):
+                raise ResourceProjectionError(
+                    f"coarse cancel event target {event.leg_id!r} is not one frozen native coarse domain leg")
+            if (target.acquires or target.releases or target.signals_barrier
+                    or event.leg_id in signaller_ids):
+                raise ResourceProjectionError(
+                    f"coarse cancel target {event.leg_id!r} has unsupported gate/barrier effects")
 
     def with_candidate(
         self, candidates: Sequence[WorkItem],
@@ -759,6 +813,7 @@ class ProjectionInput:
             forecast_arrival_placeholders_ns=(
                 self.forecast_arrival_placeholders_ns),
             coarse_die_domains=self.coarse_die_domains,
+            coarse_cancel_events=self.coarse_cancel_events,
         )
 
 

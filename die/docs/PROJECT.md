@@ -20,6 +20,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 当前代码与运行方式
 
+- 2026-10-15新JOINT known cancel：冻结可选coarse_cancel_events复用Domain/Runtime，same-tick终态优先、pending取消不造handle、partial served保留、重复事件幂等；不传播success/依赖，不猜测gate/barrier lease释放。snapshot消费前缀、双向终态绑定和原子非法拒绝通过；真实clock版native/window/Domain4/4+Python6/6无skip，portable重放通过。旧wire/完整liveworld与sh30 guard保留，生产Sys采集/graph/lease回放仍待接；公共Program开发不混入该检查点。证据native-world-cancel-20261015。
+
 - 2026-10-15时钟检查点：真实middle-K两活动发现大绝对起点使ceil漂移1ns；内部改为checked整数原点+[0,1)小数，next_event整数相加，服务/LP/credit/校准不变，旧Plan及snapshot v2/v3 wire保留。72项跨起点/partial import/cancel/capacity严格比较、legacy小数/u64边界、完整33/33 CTest、full/tail九诊断及五仓双ABI/config83/83（0skip）通过。canonical24 digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`。尚无周期skip或生产E5新证书；下一步显式opt-in有界单Core OS生命周期与新JOINT known cancel。详见runtime-clock-20261015分析/证据；保持持续开发。
 
 - 2026-10-15本轮恢复持续开发：main d115117→`codex/die-k-readiness-20261015`。已修oracle/诊断final-only输出门，独立Python/C++可达反例精确15s；新六计数器Cursor与真实13域Runtime显式槽位逐步一致，三组full/tail九场景grouped通过，定向CTest3/3（含Python13项）。新内部基础尚未进入生产Plan/Runtime生命周期，O(events)诊断不作E5/E8/效率认证。canonical24 digest dd62e6787557ff2f764fc5be8f38865a2c15916c20f1a9fc95a28ebcd4fb7005；五仓check/独立configure5/5，原生产timing/TX8未改。下一步生产有界生命周期与新JOINT剩余接线；旧停止/交接段落是历史，当前不按阶段停工。证据见HANDOFF及k-readiness-corrected-20261015。
