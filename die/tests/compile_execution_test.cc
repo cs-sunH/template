@@ -5,11 +5,18 @@
 #include <array>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <set>
 #include <string>
+#include <vector>
 
 using namespace coarse_die;
 using namespace coarse_die_test;
+
+namespace coarse_die::detail {
+std::vector<std::shared_ptr<Plan>> enumerate_mappings(
+    const Hardware&, const nlohmann::json&);
+}
 
 namespace {
 
@@ -135,7 +142,7 @@ void compile_gemm_int4_packing_hash_and_work_contract() {
   require(overflow, "products outside uint64 outputs must be rejected with overflow");
 }
 
-void both_gemm_dataflows_are_reachable_and_audited() {
+void gemm_dataflow_candidates_are_reachable_and_audited() {
   const auto hw = example_hardware();
   const std::array<std::array<std::uint64_t, 3>, 4> shapes{{
       {{64, 4096, 1024}},
@@ -143,25 +150,58 @@ void both_gemm_dataflows_are_reachable_and_audited() {
       {{1024, 1024, 1024}},
       {{8192, 64, 1024}},
   }};
-  std::set<std::string> selected;
+  std::set<std::string> candidate_flows;
+  bool checked_os_runtime = false;
+  bool checked_wr_runtime = false;
   for (const auto& shape : shapes) {
     const auto plan = compile(hw, gemm_task(shape[0], shape[1], shape[2]));
     const std::string dataflow = plan->summary.at("dataflow_id").get<std::string>();
-    require(dataflow.find("output_stationary") != std::string::npos ||
-                dataflow.find("weight_resident") != std::string::npos,
+    require(dataflow == "output_stationary_v2" ||
+                dataflow == "weight_resident_v2",
             "GEMM identifies the selected OS/WR schedule");
     require(u64_field(plan->summary, "output_round_count") > 0 &&
                 u64_field(plan->summary, "consumption_wave_count") > 0,
             "each selected dataflow exposes real output and consumption counts");
-    selected.insert(dataflow);
+
+    const auto candidates = detail::enumerate_mappings(hw, plan->task);
+    require(!candidates.empty() &&
+                plan->summary.at("candidate_count") == candidates.size(),
+            "compiler reports every mapping in the public candidate set");
+    bool selected_candidate_present = false;
+    for (const auto& candidate : candidates) {
+      const std::string candidate_flow =
+          candidate->summary.at("dataflow_id").get<std::string>();
+      require(candidate_flow == "output_stationary_v2" ||
+                  candidate_flow == "weight_resident_v2",
+              "bounded GEMM candidate enumeration exposes a known dataflow");
+      candidate_flows.insert(candidate_flow);
+
+      const bool os = candidate_flow == "output_stationary_v2";
+      bool& runtime_checked = os ? checked_os_runtime : checked_wr_runtime;
+      if (!runtime_checked) {
+        const auto latency = detail::estimate_latency_ns(hw, candidate);
+        require(latency > 0,
+                "a real OS/WR candidate completes through the Runtime estimator");
+        runtime_checked = true;
+      }
+
+      bool matches_selected = candidate_flow == dataflow;
+      for (const char* key : {"template_id", "tm", "tn", "tk"}) {
+        matches_selected = matches_selected &&
+            candidate->summary.at(key) == plan->summary.at(key);
+      }
+      selected_candidate_present = selected_candidate_present || matches_selected;
+    }
+    require(selected_candidate_present,
+            "selected mapping is present in the complete candidate enumeration");
+    require(detail::estimate_latency_ns(hw, plan) ==
+                u64_field(plan->summary, "estimated_latency_ns"),
+            "selected shape-specific Plan retains its actual Runtime latency");
   }
-  bool saw_os = false, saw_wr = false;
-  for (const auto& value : selected) {
-    saw_os = saw_os || value.find("output_stationary") != std::string::npos;
-    saw_wr = saw_wr || value.find("weight_resident") != std::string::npos;
-  }
-  require(saw_os && saw_wr,
-          "shape sensitivity must exercise both OS and WR selection paths");
+  require(candidate_flows.find("output_stationary_v2") != candidate_flows.end() &&
+              candidate_flows.find("weight_resident_v2") != candidate_flows.end() &&
+              checked_os_runtime && checked_wr_runtime,
+          "shape set retains both OS and WR candidate families even when one wins every shape");
 }
 
 void ffn_recomputation_and_sram_capacity_are_explicit() {
@@ -247,10 +287,10 @@ void attention_gqa_causal_absolute_spans_and_compact_runs() {
 void test_compile_execution() {
   compile_gemm_int4_packing_hash_and_work_contract();
   public_cabi_matches_cpp_plan_and_keeps_batch_siblings();
-  both_gemm_dataflows_are_reachable_and_audited();
+  gemm_dataflow_candidates_are_reachable_and_audited();
   ffn_recomputation_and_sram_capacity_are_explicit();
   attention_gqa_causal_absolute_spans_and_compact_runs();
-  std::cout << "GEMM_INT4_odd=checked, OS_WR=both, FFN_recompute=checked, "
+  std::cout << "GEMM_INT4_odd=checked, OS_WR=candidates, FFN_recompute=checked, "
                "attention_GQA_causal=checked, same_input_hash=stable\n";
 }
 }  // namespace

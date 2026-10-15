@@ -216,6 +216,87 @@ std::size_t one_entry_bytes(const Hardware& hardware, const json& task) {
   return response.at("cache_accounted_bytes").get<std::size_t>();
 }
 
+void raw_batch_memo_hit_invalidation_and_failed_siblings() {
+  const Hardware hardware = example_hardware();
+  const json first_task = gemm_task(17, 5, 3);
+  const json inserted_task = gemm_task(19, 5, 3);
+  const json invalid{{"op_kind", "cache_response_test_unsupported"}};
+  CModel model(hardware);
+  PlanHandles handles;
+
+  // A failed sibling keeps this request out of the raw memo while still
+  // compiling and retaining the successful task's Plan.
+  const auto primed = estimate_batch(
+      model.get(), json::array({first_task, invalid}));
+  require(primed.at("results").at(0).is_object() &&
+              primed.at("errors").at(0).is_null() &&
+              primed.at("results").at(1).is_null() &&
+              !primed.at("errors").at(1).is_null() &&
+              primed.at("cache_entries") == 1,
+          "a failed sibling leaves its successful Plan cached");
+  const std::size_t plan_only_bytes =
+      primed.at("cache_accounted_bytes").get<std::size_t>();
+
+  const auto first = compile_batch(model.get(), json::array({first_task}));
+  handles.track(first);
+  const std::size_t memo_bytes =
+      first.at("cache_accounted_bytes").get<std::size_t>();
+  require(first.at("results").at(0).is_object() &&
+              first.at("errors").at(0).is_null() &&
+              first.at("cache_entries") == 1 && memo_bytes > plan_only_bytes,
+          "an all-success raw batch retains its memo inside cache accounting");
+
+  const auto memo_hit = compile_batch(model.get(), json::array({first_task}));
+  handles.track(memo_hit);
+  require(memo_hit.at("cache_accounted_bytes") == memo_bytes &&
+              memo_hit.at("results").at(0).at("plan_hash") ==
+                  first.at("results").at(0).at("plan_hash") &&
+              memo_hit.at("results").at(0).at("summary") ==
+                  first.at("results").at(0).at("summary") &&
+              memo_hit.at("results").at(0).at("plan_handle") !=
+                  first.at("results").at(0).at("plan_handle"),
+          "an exact raw memo hit preserves the row and allocates a fresh Plan handle");
+
+  // Inserting a new map entry invalidates pointers held by the previous memo.
+  // The failing sibling then prevents this mixed request from installing a
+  // replacement memo of its own.
+  const auto inserted = compile_batch(
+      model.get(), json::array({inserted_task, invalid}));
+  handles.track(inserted);
+  const std::size_t inserted_plan_bytes = one_entry_bytes(hardware, inserted_task);
+  const std::size_t two_plan_bytes = plan_only_bytes + inserted_plan_bytes;
+  require(inserted.at("results").at(0).is_object() &&
+              inserted.at("errors").at(0).is_null() &&
+              inserted.at("results").at(1).is_null() &&
+              !inserted.at("errors").at(1).is_null() &&
+              inserted.at("cache_entries") == 2 &&
+              inserted.at("cache_accounted_bytes") == two_plan_bytes,
+          "a miss clears the old memo before insertion and a failed batch retains no new memo");
+
+  const auto failed_repeat = compile_batch(
+      model.get(), json::array({inserted_task, invalid}));
+  handles.track(failed_repeat);
+  require(failed_repeat.at("cache_entries") == 2 &&
+              failed_repeat.at("cache_accounted_bytes") == two_plan_bytes &&
+              failed_repeat.at("results").at(0).at("plan_hash") ==
+                  inserted.at("results").at(0).at("plan_hash") &&
+              failed_repeat.at("results").at(0).at("plan_handle") !=
+                  inserted.at("results").at(0).at("plan_handle"),
+          "repeating a failed-sibling batch neither memoizes it nor reuses its handle");
+
+  // Re-requesting the original successful batch installs its memo again after
+  // the intervening map insertion invalidated it.
+  const auto restored = compile_batch(model.get(), json::array({first_task}));
+  handles.track(restored);
+  require(restored.at("cache_accounted_bytes") == two_plan_bytes +
+              (memo_bytes - plan_only_bytes) &&
+              restored.at("results").at(0).at("plan_handle") !=
+                  first.at("results").at(0).at("plan_handle"),
+          "a successful batch can be memoized again after cache insertion");
+  require(handles.size() == 5,
+          "each successful memo, insert, and hit result owns an independent handle");
+}
+
 void submit_and_cancel_plan(DieHandle model, DieHandle plan) {
   DieHandle runtime = 0;
   require(die_coarse_create_runtime_v2(model, &runtime) == DIE_OK,
@@ -336,6 +417,7 @@ void body() {
   require(die_coarse_abi_version() == 2,
           "response writer optimization preserves C ABI version 2");
   estimate_prefill_mixed_rows_and_fractional_marker();
+  raw_batch_memo_hit_invalidation_and_failed_siblings();
   cache_capacity_lru_accounting_and_evicted_batch_rows();
 }
 

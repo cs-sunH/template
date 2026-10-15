@@ -79,27 +79,35 @@ std::uint64_t summary_u64(const Plan& plan, const char* key) {
 }
 
 std::uint64_t enumerated_max(const Hardware& hardware, const json& task,
-                             std::uint64_t& count) {
+                             std::uint64_t& count,
+                             bool& has_materialized_candidate) {
   const auto normalized = compile_workspace_envelope(hardware, task).normalized_task;
   const auto candidates = detail::enumerate_mappings_for_compile(hardware, normalized);
   require(!candidates.empty(), "fixture has compiler mapping candidates");
   count = static_cast<std::uint64_t>(candidates.size());
   std::uint64_t maximum = 0;
-  for (const auto& candidate : candidates)
-    maximum = std::max(maximum, workspace(*candidate));
+  for (const auto& candidate : candidates) {
+    const auto candidate_workspace = workspace(*candidate);
+    maximum = std::max(maximum, candidate_workspace);
+    has_materialized_candidate = has_materialized_candidate ||
+        candidate_workspace > 0;
+  }
   return maximum;
 }
 
 void compare_with_actual_mapping_candidates(const Hardware& hardware,
-                                            const json& task,
-                                            bool expect_unselected_peak) {
+                                            const json& task) {
   const auto envelope = compile_workspace_envelope(hardware, task);
   std::uint64_t candidate_count = 0;
-  const auto actual_max = enumerated_max(hardware, task, candidate_count);
+  bool has_materialized_candidate = false;
+  const auto actual_max = enumerated_max(
+      hardware, task, candidate_count, has_materialized_candidate);
   const auto selected = compile(hardware, task);
   const auto selected_workspace = workspace(*selected);
   require(envelope.candidate_count == candidate_count && candidate_count > 1,
           "envelope counts every actual mapping candidate");
+  require(has_materialized_candidate,
+          "auto candidate set retains its materialized mapping family");
   require(envelope.max_hbm_workspace_peak_bytes == actual_max,
           "envelope peak equals the maximum exact workspace in the actual mapping vector");
   if (envelope.op_kind == "attention_region")
@@ -110,9 +118,11 @@ void compare_with_actual_mapping_candidates(const Hardware& hardware,
             "materialized BF16 SwiGLU fixture has an exact 16,384-byte maximum");
   require(envelope.max_hbm_workspace_peak_bytes >= selected_workspace,
           "selected Plan workspace is covered by the all-template envelope");
-  if (expect_unselected_peak)
-    require(envelope.max_hbm_workspace_peak_bytes > selected_workspace,
-            "unselected materialized template can exceed the selected Plan");
+  auto fused_task = task;
+  fused_task["fusion_policy"] = "fused";
+  const auto forced_fused = compile(hardware, fused_task);
+  require(actual_max > workspace(*forced_fused),
+          "all-template envelope includes the materialized lifetime beyond a valid forced-fused Plan");
   require(envelope.normalized_task == selected->task &&
               envelope.hardware_fingerprint == hardware.fingerprint &&
               envelope.normalized_task_fingerprint ==
@@ -510,8 +520,8 @@ void cabi_contract(const Hardware& hardware) {
 
 void body() {
   const Hardware hardware = example_hardware();
-  compare_with_actual_mapping_candidates(hardware, attention_task(), true);
-  compare_with_actual_mapping_candidates(hardware, ffn_task(), true);
+  compare_with_actual_mapping_candidates(hardware, attention_task());
+  compare_with_actual_mapping_candidates(hardware, ffn_task());
   candidate_independent_capacity_bound();
   repeated_attention_workspace_uses_sequential_peak();
   aliases_and_schema_equivalence(hardware);

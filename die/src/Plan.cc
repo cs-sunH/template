@@ -247,49 +247,49 @@ void validate_plan(const Plan& plan) {
   std::set<std::uint64_t> ids;
   for (std::size_t ei = 0; ei < plan.epochs.size(); ++ei) {
     const Epoch& epoch = plan.epochs[ei];
-    const std::string path = "plan.epochs[" + std::to_string(ei) + "]";
-    if (epoch.name.empty()) throw std::invalid_argument(path + ".name: empty");
+    const auto path = [ei] { return "plan.epochs[" + std::to_string(ei) + "]"; };
+    if (epoch.name.empty()) throw std::invalid_argument(path() + ".name: empty");
     if (epoch.activities.size() > 3) {
-      throw std::invalid_argument(path + ".activities: exceeds three activities");
+      throw std::invalid_argument(path() + ".activities: exceeds three activities");
     }
     if (epoch.repeat_count == 0) {
-      throw std::invalid_argument(path + ".repeat_count: must be >= 1");
+      throw std::invalid_argument(path() + ".repeat_count: must be >= 1");
     }
     for (std::size_t c = 0; c < 2; ++c) {
       if (!std::isfinite(epoch.credit_initial[c]) ||
           !std::isfinite(epoch.credit_capacity[c]) ||
           epoch.credit_initial[c] < 0.0 ||
           epoch.credit_capacity[c] < epoch.credit_initial[c]) {
-        throw std::invalid_argument(path + ": invalid finite-buffer credit");
+        throw std::invalid_argument(path() + ": invalid finite-buffer credit");
       }
     }
     for (std::size_t ai = 0; ai < epoch.activities.size(); ++ai) {
       const Activity& activity = epoch.activities[ai];
-      const std::string ap = path + ".activities[" + std::to_string(ai) + "]";
+      const auto ap = [&path,ai] { return path() + ".activities[" + std::to_string(ai) + "]"; };
       if (!ids.insert(activity.id).second) {
-        throw std::invalid_argument(ap + ".id: duplicate activity id");
+        throw std::invalid_argument(ap() + ".id: duplicate activity id");
       }
       if (!std::isfinite(activity.vec_eqops_fraction) ||
           activity.vec_eqops_fraction < 0.0 || activity.vec_eqops_fraction >= 1.0 ||
           (activity.vec_eqops == std::numeric_limits<std::uint64_t>::max() &&
            activity.vec_eqops_fraction != 0.0)) {
-        throw std::invalid_argument(ap + ".vec_eqops_fraction: expected a remainder in [0,1) within uint64 work range");
+        throw std::invalid_argument(ap() + ".vec_eqops_fraction: expected a remainder in [0,1) within uint64 work range");
       }
       (void)planned_vec_eqops(activity);
       for (std::size_t r = 0; r < resource_count; ++r) {
         if (!std::isfinite(activity.work[r]) || activity.work[r] < 0.0) {
-          throw std::invalid_argument(ap + ".work: expected finite non-negative values");
+          throw std::invalid_argument(ap() + ".work: expected finite non-negative values");
         }
       }
       if (!std::isfinite(activity.canonical_q) || activity.canonical_q <= 0.0) {
-        throw std::invalid_argument(ap + ".canonical_q: expected finite positive value");
+        throw std::invalid_argument(ap() + ".canonical_q: expected finite positive value");
       }
       if (!std::isfinite(activity.private_time_s) || activity.private_time_s < 0.0) {
-        throw std::invalid_argument(ap + ".private_time_s: expected finite non-negative value");
+        throw std::invalid_argument(ap() + ".private_time_s: expected finite non-negative value");
       }
       for (double delta : activity.credit_delta) {
         if (!std::isfinite(delta)) {
-          throw std::invalid_argument(ap + ".credit_delta: expected finite values");
+          throw std::invalid_argument(ap() + ".credit_delta: expected finite values");
         }
       }
       detail::validate_credit_curve(activity);

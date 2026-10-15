@@ -82,6 +82,11 @@ void verify() {
   require(terminal_result["executions"][0]["activities"][0]["done"]==true &&
           terminal_result["executions"][0]["activities"][0]["progress"]==1.0,
           "sub-binary64 terminal progress closes when whole-epoch credit is valid");
+  terminal_activities[0]["progress"]=std::nextafter(1.0,0.0);
+  terminal_activities[0]["curve_progress_exact"]="9.999999999999998889777e-01";
+  auto adjacent_resumed=Runtime::import_snapshot(hw,terminal_snapshot);
+  require(adjacent_resumed->export_snapshot()["executions"][0]["activities"][0]["done"]==true,
+          "one-ulp terminal residual closes before snapped zero credit can block it");
 
   Epoch coupled_epoch;coupled_epoch.name="terminal_roundoff_credit_guard";
   coupled_epoch.credit_capacity={{6,1}};
@@ -152,7 +157,7 @@ void verify() {
   nlohmann::json high_boundary_snapshot;
   for(unsigned guard=0;guard<20;++guard) {
     const auto checkpoint=tangent.export_snapshot();
-    const double credit=checkpoint.at("executions").at(0).at("credit").at(0).get<double>();
+    const double credit=checkpoint.at("executions").at(0).at("credit").at(1).get<double>();
     if(credit>=1.0-2.0e-10) { high_boundary_snapshot=checkpoint;break; }
     const auto next=tangent.next_event();
     require(next.has_value(),"large-credit tangent has a finite boundary event");

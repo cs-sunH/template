@@ -200,16 +200,24 @@ void legacy_trace_fields_share_a_canonical_entry() {
   const Hardware hardware = example_hardware();
   CModel model(hardware);
   PlanHandles handles;
-  const auto response = compile_batch(
-      model.get(), json::array({legacy_norm_task("request-a"),
-                                legacy_norm_task("request-b")}));
-  handles.track(response);
-  require(response.at("results").at(0).at("plan_hash") ==
-              response.at("results").at(1).at("plan_hash") &&
-              response.at("cache_entries") == 1 && handles.size() == 2 &&
-              response.at("results").at(0).at("plan_handle") !=
-                  response.at("results").at(1).at("plan_handle"),
-          "legacy span request_id is trace-only while each result handle stays fresh");
+  const auto first = compile_batch(
+      model.get(), json::array({legacy_norm_task("request-a")}));
+  handles.track(first);
+  const auto second = compile_batch(
+      model.get(), json::array({legacy_norm_task("request-b")}));
+  handles.track(second);
+  require(first.at("results").at(0).at("plan_hash") ==
+              second.at("results").at(0).at("plan_hash") &&
+              first.at("cache_entries") == 1 &&
+              second.at("cache_entries") == 1 && handles.size() == 2 &&
+              first.at("results").at(0).at("plan_handle") !=
+                  second.at("results").at(0).at("plan_handle"),
+          "separate legacy request_id wires share a canonical Plan and fresh handles");
+  require(first.at("results").at(0).at("summary") ==
+                  second.at("results").at(0).at("summary") &&
+              first.at("cache_accounted_bytes") ==
+                  second.at("cache_accounted_bytes"),
+          "replacing the legacy raw memo preserves its footprint for equal-length trace IDs");
   require(handles.release_all() == DIE_OK,
           "legacy canonical-hit handles release normally");
 }

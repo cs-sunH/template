@@ -321,6 +321,31 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
     CModel model(config);
     const std::string canonical_request = batch_text(task);
     const std::string alias_request = batch_text(alias);
+    Json plan_only_cache;
+    {
+      // A failed sibling prevents raw-batch memo installation while still
+      // retaining the canonical Plan, giving this fixture a Plan-only byte
+      // baseline for the later memo-accounting checks.
+      CModel footprint_model(config);
+      const Json invalid{{"op_kind", "benchmark_unsupported_sibling"}};
+      const std::string footprint_request =
+          Json{{"specs", Json::array({task, invalid})}}.dump();
+      const Json footprint = take_result(
+          die_coarse_estimate_batch_v2(footprint_model.handle,
+                                       footprint_request.c_str()),
+          "Plan-only cache footprint probe");
+      require(footprint.at("results").at(0).is_object() &&
+                  footprint.at("errors").at(0).is_null() &&
+                  footprint.at("results").at(1).is_null() &&
+                  !footprint.at("errors").at(1).is_null() &&
+                  footprint.at("cache_entries") == 1,
+              name + " Plan-only footprint probe did not isolate its bad sibling");
+      plan_only_cache = cache_stats(footprint);
+    }
+    const std::size_t plan_only_bytes =
+        plan_only_cache.at("accounted_bytes").get<std::size_t>();
+    constexpr std::size_t cache_byte_limit = 64u * 1024u * 1024u;
+
     const auto warm_compile = take_result(
         die_coarse_compile_batch_v2(model.handle, canonical_request.c_str()),
         "compile_batch warmup");
@@ -328,6 +353,14 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
     const std::string expected_hash = canonical_row.at("plan_hash").get<std::string>();
     release_row_plan(canonical_row, "compile_batch warmup");
     const Json initial_cache = cache_stats(warm_compile);
+    const std::size_t canonical_bytes =
+        initial_cache.at("accounted_bytes").get<std::size_t>();
+    const bool canonical_memo_accounted =
+        initial_cache.at("entries") == 1 && canonical_bytes > plan_only_bytes &&
+        canonical_bytes <= cache_byte_limit;
+    if (!canonical_memo_accounted)
+      fail_record(failures, name,
+                  "canonical raw memo was not counted within the 64 MiB cache bound");
 
     const auto warm_cost = take_result(
         die_coarse_estimate_cost_batch_v2(model.handle,
@@ -347,15 +380,15 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
     const bool alias_same_hash = alias_row.at("plan_hash") == expected_hash;
     release_row_plan(alias_row, "semantic alias warmup");
     const Json alias_cache = cache_stats(warm_alias);
+    const std::size_t alias_bytes =
+        alias_cache.at("accounted_bytes").get<std::size_t>();
     const bool alias_one_entry =
         initial_cache.at("entries") == 1 &&
         alias_cache.at("entries") == initial_cache.at("entries") &&
-        alias_cache.at("accounted_bytes") ==
-            initial_cache.at("accounted_bytes") &&
-        initial_cache.at("accounted_bytes").get<std::size_t>() > 0;
+        alias_bytes >= plan_only_bytes && alias_bytes <= cache_byte_limit;
     if (!alias_same_hash || !alias_one_entry)
       fail_record(failures, name,
-                  "semantic alias did not reuse the canonical compile cache entry");
+                  "semantic alias did not reuse one bounded canonical Plan entry");
 
     // One full estimate preflight is excluded; timed calls below still invoke
     // estimate_alone and construct its complete diagnostic report.
@@ -405,10 +438,12 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
           const bool same_hash = row.at("plan_hash") == expected_hash;
           release_row_plan(row, "hot semantic alias");
           const Json stats = cache_stats(response);
-          require(same_hash && stats.at("entries") == initial_cache.at("entries") &&
+          require(same_hash && stats.at("entries") == alias_cache.at("entries") &&
                       stats.at("accounted_bytes") ==
-                          initial_cache.at("accounted_bytes"),
-                  name + " semantic alias changed cache identity or accounting");
+                          alias_cache.at("accounted_bytes") &&
+                      stats.at("accounted_bytes").get<std::size_t>() <=
+                          cache_byte_limit,
+                  name + " exact semantic alias memo changed its bounded footprint");
         });
     result["metrics"]["cabi_hot_semantic_alias_compile_batch"] = hot_alias;
 
@@ -436,17 +471,21 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
                     "final cache diagnostics"));
     const bool final_cache_stable =
         final_cache.at("entries") == initial_cache.at("entries") &&
-        final_cache.at("accounted_bytes") == initial_cache.at("accounted_bytes");
+        final_cache.at("accounted_bytes") == initial_cache.at("accounted_bytes") &&
+        final_cache.at("accounted_bytes").get<std::size_t>() > plan_only_bytes &&
+        final_cache.at("accounted_bytes").get<std::size_t>() <= cache_byte_limit;
     if (!final_cache_stable)
       fail_record(failures, name,
                   "hot query samples changed the canonical cache entry count or bytes");
     result["plan_hash"] = expected_hash;
     result["selected_cost_ns"] = expected_cost;
-    result["cache"] = {{"after_canonical_warmup", initial_cache},
-                        {"after_semantic_alias", alias_cache},
+    result["cache"] = {{"plan_only_baseline", plan_only_cache},
+                        {"after_canonical_memo", initial_cache},
+                        {"after_semantic_alias_memo", alias_cache},
                         {"after_all_samples", final_cache},
                         {"alias_same_plan_hash", alias_same_hash},
-                        {"alias_reused_single_entry", alias_one_entry}};
+                        {"canonical_memo_accounted_and_bounded", canonical_memo_accounted},
+                        {"alias_reused_single_entry_and_bounded", alias_one_entry}};
     bool metric_gates_passed = true;
     for (const char* metric : {"cpp_cold_compile_uncached",
                                "cabi_hot_compile_batch",
@@ -460,14 +499,15 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
       }
     }
     if (!metric_gates_passed || !cpp_hash_stable || !alias_same_hash ||
-        !alias_one_entry || !final_cache_stable)
+        !canonical_memo_accounted || !alias_one_entry || !final_cache_stable)
       result["status"] = "failed";
     result["coverage"] = {
         {"cpp_samples_are_uncached_compile_calls", cpp_hash_stable},
         {"compile_batch_handle_released_outside_timing", true},
         {"cost_api_returns_no_plan_handle", true},
         {"semantic_alias_same_plan_hash", alias_same_hash},
-        {"semantic_alias_cache_entries_and_bytes_stable", alias_one_entry},
+        {"canonical_memo_counted_and_bounded", canonical_memo_accounted},
+        {"semantic_alias_plan_shared_and_bytes_bounded", alias_one_entry},
         {"final_cache_entries_and_bytes_stable", final_cache_stable},
         {"full_estimate_cost_matches_cost_only", true},
         {"samples_per_metric", count}};

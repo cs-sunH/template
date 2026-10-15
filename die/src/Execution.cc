@@ -325,10 +325,12 @@ void validate_plan(const Hardware& hardware, const Plan& plan,
         }
         if (work > 0.0) {
           any_work = true;
-          if (!resource_enabled(hardware, resource)) {
-            throw std::invalid_argument("invalid_hardware: activity uses a disabled resource");
-          }
+          // The Runtime constructor has already validated this immutable
+          // hardware: a positive rate implies an enabled resource. Inspect
+          // JSON only on the rejection path instead of once per activity.
           if (hardware.rates[resource] <= 0.0) {
+            if (!resource_enabled(hardware, resource))
+              throw std::invalid_argument("invalid_hardware: activity uses a disabled resource");
             throw std::invalid_argument("invalid_hardware: active work requires positive resource capacity");
           }
         }
@@ -1002,19 +1004,42 @@ void Runtime::settle() {
       }
       const Epoch& epoch = execution.plan->epochs[execution.epoch];
       execution.credit_capacity = epoch.credit_capacity;
-      // A curved activity can land within less than half a binary64 ulp of
-      // progress 1 when an unrelated event is the one that split integration.
+      // Curved progress can retain a tiny terminal residual after the
+      // finite-credit calculation has snapped its remaining units to zero.
       // Close only such terminal roundoff, and only when the resulting whole
       // epoch credit remains inside the existing finite-buffer tolerance.
       // At most three activities can share an epoch, so check every subset
       // of eligible terminal activities and prefer the largest safe closure.
       std::vector<LiveActivity*> terminal_roundoff;
       for (LiveActivity& live : execution.activities) {
-        if (live.epoch_index == execution.epoch && !live.done &&
-            !live.definition.credit_curve.empty() && live.progress < 1.0L &&
-            static_cast<double>(live.progress) == 1.0) {
-          terminal_roundoff.push_back(&live);
+        if (live.epoch_index != execution.epoch || live.done ||
+            live.definition.credit_curve.empty() || live.progress >= 1.0L)
+          continue;
+        const double projected = static_cast<double>(live.progress);
+        bool snapped_residual = live.progress >= 1.0L-kProgressTolerance;
+        if (snapped_residual && projected != 1.0) {
+          // Only extend closure within the existing progress tolerance when
+          // every remaining contribution is erased by the existing credit
+          // tolerance. Large opposite contributions must not disappear just
+          // because their net endpoint happens to cancel.
+          const auto contribution = accumulated_credit(live);
+          const auto slope = curve_derivative(live);
+          bool credit_blocked = false;
+          for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+            const long double tolerance = static_cast<long double>(kCreditTolerance) *
+                std::max(1.0L, static_cast<long double>(epoch.credit_capacity[buffer]));
+            if (std::abs(static_cast<long double>(live.definition.credit_delta[buffer]) -
+                         contribution[buffer]) > tolerance)
+              snapped_residual = false;
+            credit_blocked = credit_blocked ||
+                (execution.credit[buffer] <= tolerance && slope[buffer] < 0.0) ||
+                (execution.credit[buffer] >= epoch.credit_capacity[buffer]-tolerance &&
+                 slope[buffer] > 0.0);
+          }
+          snapped_residual = snapped_residual && credit_blocked;
         }
+        if (projected == 1.0 || snapped_residual)
+          terminal_roundoff.push_back(&live);
       }
       const auto endpoint_credit_is_valid = [&](std::size_t mask) {
         std::array<long double, 2> projected{{epoch.credit_initial[0],
@@ -1215,7 +1240,10 @@ void Runtime::allocate() {
       for (std::size_t i = 0; i < lhs.end - lhs.begin; ++i) {
         const auto& a = refs[lhs.begin + i].live->definition;
         const auto& b = refs[rhs.begin + i].live->definition;
-        if (a.id != b.id || a.role != b.role || a.work != b.work ||
+        // Activity IDs are tracing/tie-break labels, not service constraints.
+        // Symmetric owner blocks can contain distinct endpoint IDs and still
+        // have the same unique max-min rate vector under owner permutation.
+        if (a.role != b.role || a.work != b.work ||
             a.canonical_q != b.canonical_q ||
             a.private_time_s != b.private_time_s ||
             a.credit_delta != b.credit_delta ||
@@ -1364,6 +1392,8 @@ void Runtime::allocate() {
   std::vector<detail::PackingRow> packing;
   packing.reserve(base.size());
   bool nonnegative=true;
+  const bool curved_allocation=std::any_of(refs.begin(),refs.end(),[](const Ref& ref){
+      return !ref.live->definition.credit_curve.empty();});
   for(const auto& row:base) {
     if(std::any_of(row.a.begin(),row.a.end(),[](double x){return x<0;})) { nonnegative=false;break; }
     packing.push_back({row.a,row.b});
@@ -1372,7 +1402,8 @@ void Runtime::allocate() {
     std::vector<std::string> owners;std::vector<double> quantities, rates, shares;
     owners.reserve(count);quantities.reserve(count);
     for(const auto& ref:refs) { owners.push_back(ref.owner_key);quantities.push_back(ref.q); }
-    if(detail::allocate_packing(packing,owners,quantities,rates,shares)) {
+    if(detail::allocate_packing(packing,owners,quantities,rates,shares,
+                                curved_allocation)) {
       last_arbitration_.path=ArbitrationDiagnostics::Path::Packing;
       last_arbitration_.constraint_rows=base.size();
       for(std::size_t i=0;i<count;++i)publish(refs[i],rates[i],shares[i]);
@@ -1620,27 +1651,26 @@ void Runtime::allocate() {
       publish(refs[i], std::max(0.0, solved[i] * variable_scale[i]),
               refs[i].alpha);
     }
-    // A binary64 LP rate can round a homogeneous tangent inequality upward
+    // A binary64 LP rate can round a physical or tangent inequality upward
     // by an ulp. Long analytic intervals must not integrate that infeasible
-    // direction. Certify signed boundary rows in extended precision and
+    // direction. Certify all service rows in extended precision and
     // round the positive contributor downward; never enlarge buffer epsilon.
-    if(std::any_of(refs.begin(),refs.end(),[](const Ref& ref){
-        return !ref.live->definition.credit_curve.empty();})) {
+    if(curved_allocation) {
       bool certified=false;
       for(std::size_t pass=0;pass<=count;++pass) {
         bool changed=false;
         for(const auto& row:base) {
-          if(row.b!=0 || !std::any_of(row.a.begin(),row.a.end(),[](double a){return a<0;}))continue;
           long double used=0,largest=0;std::size_t chosen=count;
           for(std::size_t i=0;i<count;++i) {
             const long double contribution=static_cast<long double>(row.a[i])*refs[i].live->rate;
             used+=contribution;
             if(row.a[i]>0 && contribution>largest) {largest=contribution;chosen=i;}
           }
-          if(used<=0)continue;
-          if(chosen==count || used>1e-8L*std::max(1.0L,largest))
+          const long double excess=used-static_cast<long double>(row.b);
+          if(excess<=0)continue;
+          if(chosen==count || excess>1e-8L*std::max(1.0L,largest))
             failure("curved tangent rate is not feasible within LP precision");
-          const long double bound=static_cast<long double>(refs[chosen].live->rate)-used/row.a[chosen];
+          const long double bound=static_cast<long double>(refs[chosen].live->rate)-excess/row.a[chosen];
           if(!(bound>0))failure("curved tangent rate has no positive rounded solution");
           double rounded=static_cast<double>(bound);
           if(static_cast<long double>(rounded)>bound)rounded=std::nextafter(rounded,0.0);
@@ -2872,7 +2902,12 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     if (!same_or_one_ulp(saved.rate, saved.activity->rate) ||
         !same_or_one_ulp(saved.alpha, saved.activity->alpha)) {
       throw std::invalid_argument(
-          "invalid_snapshot: published activity allocation differs from canonical LP");
+          "invalid_snapshot: published activity allocation differs from canonical LP: id="+
+          std::to_string(saved.activity->definition.id)+" saved_rate="+
+          long_double_text(saved.rate)+" rebuilt_rate="+
+          long_double_text(saved.activity->rate)+" saved_alpha="+
+          long_double_text(saved.alpha)+" rebuilt_alpha="+
+          long_double_text(saved.activity->alpha));
     }
     saved.activity->rate = saved.rate;
     saved.activity->alpha = saved.alpha;

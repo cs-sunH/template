@@ -465,10 +465,12 @@ void compile_candidate_trials_match_sealed_gemm_ranking() {
   require(compiled->summary.at("estimated_latency_ns") ==
               sealed_latencies[ranked.front().index],
           "compile publishes the same Runtime latency used to rank sealed candidates");
-  require(compiled->fingerprint ==
-              "1bf9ea72a8fcad7149ed2ad50c6dba5e0a1abade8b4cf10366c3cbcddbfcd096" &&
-              plan_to_json(*compiled).at("fingerprint") == compiled->fingerprint,
-          "compile fully seals the winner with the existing canonical plan hash");
+  const auto serialized_winner = plan_to_json(*compiled);
+  require(serialized_winner.at("schema") == "coarse_die_plan_v4" &&
+              compiled->summary.at("service_model_revision") ==
+                  "analytical_cumulative_os_v3" &&
+              serialized_winner.at("fingerprint") == compiled->fingerprint,
+          "compile seals the ranked winner with its canonical Plan v4 service-model identity");
 
   auto unsealed = std::make_shared<Plan>(*candidates.front());
   unsealed->fingerprint.clear();

@@ -1,0 +1,18 @@
+{
+  "identity": {
+    "driver_binary_sha256": "a4c0d8d20bb5012e8b256ad012081f246ba0cefaa745264a83768b3e8786745e",
+    "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+    "oracle_source_sha256": "124f94a2576ca9906244b9b3555eb10a044744f8724d9c47138722684686ee11",
+    "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+    "compiled_oracle_reference_sha256": "097af90a71971a14c5792a55239644f37e60679d834ae137fa1cfdbaf6a14f2d"
+  },
+  "identity_after": {
+    "driver_binary_sha256": "a4c0d8d20bb5012e8b256ad012081f246ba0cefaa745264a83768b3e8786745e",
+    "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+    "oracle_source_sha256": "124f94a2576ca9906244b9b3555eb10a044744f8724d9c47138722684686ee11",
+    "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+    "compiled_oracle_reference_sha256": "097af90a71971a14c5792a55239644f37e60679d834ae137fa1cfdbaf6a14f2d"
+  },
+  "driver_return_code": 0,
+  "raw_validation": "validated actual compiled OS Runtime raw"
+}

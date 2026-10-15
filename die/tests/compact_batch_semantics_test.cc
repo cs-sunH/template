@@ -184,7 +184,7 @@ void row_and_score_transforms_count_batch_once() {
   }
 }
 
-void batch_does_not_change_single_request_capacity_or_legacy_hashes() {
+void batch_does_not_change_single_request_capacity_or_stable_hashes() {
   const Hardware hw = example_hardware();
   const auto one = compile(hw, attention_task(
       json::array({compact_span(1)}), true, "fused"));
@@ -235,9 +235,16 @@ void batch_does_not_change_single_request_capacity_or_legacy_hashes() {
                           {"output", "bf16"}}},
       {"execution_profile", "int4_matrix_vec_fp32_assumed_v1"},
       {"layer_instances", 1}, {"weight_passes", 1}};
-  require(compile(hw, default_gemm)->fingerprint ==
-              "bdede6257f71948842252eb43a47686d0a2e40923b7d58230e2cb71ff89143fb",
-          "default non-span Plan identity is unchanged");
+  const auto gemm = compile(hw, default_gemm);
+  const auto repeated_gemm = compile(hw, default_gemm);
+  const auto serialized_gemm = plan_to_json(*gemm);
+  require(serialized_gemm.at("schema") == "coarse_die_plan_v4" &&
+              gemm->summary.at("service_model_revision") ==
+                  "analytical_cumulative_os_v3" &&
+              gemm->summary.at("dataflow_id") == "output_stationary_v2" &&
+              serialized_gemm.at("fingerprint") == gemm->fingerprint &&
+              repeated_gemm->fingerprint == gemm->fingerprint,
+          "default OS GEMM uses the canonical Plan v4 cumulative-service identity");
 }
 
 void compact_count_and_position_overflows_are_rejected() {
@@ -276,7 +283,7 @@ void rejected(const Hardware& hw, const json& task, const std::string& fragment)
 void test_compact_batch_semantics() {
   attention_matches_discrete_requests_and_runtime();
   row_and_score_transforms_count_batch_once();
-  batch_does_not_change_single_request_capacity_or_legacy_hashes();
+  batch_does_not_change_single_request_capacity_or_stable_hashes();
   compact_count_and_position_overflows_are_rejected();
   std::cout << "compact batch: discrete counts, Runtime, workspace, capacity, hashes, overflow\n";
 }

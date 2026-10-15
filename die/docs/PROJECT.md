@@ -33,6 +33,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 当前代码与运行方式
 
+- 2026-10-15当前恢复检查点从main `ec07f90`继续：修复曲线终态credit/物理舍入快照、旧计划整数tick、memo/空查询回归，公共Release及41/41 CTest通过；六shape v3 axis仅1过、五shape busy失败（tail独占误差6.9163%），30样本速度仍failed。新route helper仅partial一阶矩未接Mapping；WR/其他模板、二阶/odd-row及五仓新发布仍待完成。证据 `analytical-runtime-recovery-20261015`；工程NOT ACCEPTED，当前持续开发，历史停止记录不适用。
+
 - 2026-10-15最新源码交接基于main `1f7a242`、分支`codex/die-analytical-curves-20261015`。本轮不是仅文档任务；新累计曲线源码直接入库，五仓vendor仍旧canonical24，未publisher。请从HANDOFF最新Next Step接续，不以本文下方历史完成状态认定新源已验收。
 
 - 2026-10-15本次文档更新基于最新main `5e2fb0a10e34563e08e798217670592606eaae8d`，保留c13e9a7、b22e065、0f56921及后续归档/删除。仅更新Markdown，canonical24 digest、生产代码、ABI/配置和历史测试证据不变；不重新声称运行代码测试。新任务按上方解析路线和HANDOFF Next Step继续。

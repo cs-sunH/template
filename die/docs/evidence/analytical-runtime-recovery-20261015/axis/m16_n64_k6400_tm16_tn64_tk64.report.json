@@ -1,0 +1,1596 @@
+{
+  "acceptance_limits": {
+    "concurrent_finish_relative_error": 0.05,
+    "hbm_busy_relative_error": 0.05,
+    "shared_hbm_busy_relative_error": 0.05,
+    "standalone_finish_relative_error": 0.03
+  },
+  "available_granularity_levels": {
+    "comparison_status": "failed",
+    "minimum_certified_framework": null,
+    "observed": [
+      {
+        "description_budget": 5,
+        "description_count": 4,
+        "model": "analytical_cumulative_os_v3",
+        "observed_epoch_count": 3,
+        "status": "within_declared_budget"
+      }
+    ],
+    "source": "actual compiled Plan service_model_provenance.service_curves",
+    "status": "fixture_comparison_only"
+  },
+  "comparisons": {
+    "standalone": {
+      "absolute_errors_and_shared_reference": {
+        "actual_shared_hbm_duration_s": 0.0,
+        "finish_time_s_by_request": {
+          "solo": 6.631945409507622e-10
+        },
+        "hbm_busy_s": 0.06091163319006926,
+        "reference_shared_hbm_duration_s": 0.0,
+        "relative_checks_status": "failed",
+        "shared_hbm_busy_s": 0.0
+      },
+      "actual_runtime": {
+        "accounting_history_complete": true,
+        "allocation_updates": 6,
+        "compute_busy_s": 0.08284370733680538,
+        "finish_s_by_request": {
+          "solo": 0.083089468
+        },
+        "hbm_busy_s": 0.08143259319006928,
+        "hbm_shared_s": 0.0,
+        "internal_events": 8,
+        "row_busy_s": [
+          0.08143259319006928,
+          0.08143259319006928
+        ],
+        "row_shared_s": [
+          0.0,
+          0.0
+        ],
+        "serialized_hbm_served_bytes_counter_decimal": [
+          [
+            "1024000",
+            "2048"
+          ],
+          [
+            "1024000",
+            "2048"
+          ]
+        ],
+        "served_by_category_serialized_decimal_counters": {
+          "comm_recv": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comm_send": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "comp": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                1024000.0,
+                2048.0
+              ],
+              [
+                1024000.0,
+                2048.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "1024000",
+                "2048"
+              ],
+              [
+                "1024000",
+                "2048"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 13107200.0,
+            "vec_eqops_exact_decimal": "13107200"
+          },
+          "die": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "pool": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          },
+          "restore": {
+            "hbm_served_bytes_by_row_direction": [
+              [
+                0.0,
+                0.0
+              ],
+              [
+                0.0,
+                0.0
+              ]
+            ],
+            "hbm_served_bytes_by_row_direction_exact": [
+              [
+                "0",
+                "0"
+              ],
+              [
+                "0",
+                "0"
+              ]
+            ],
+            "int4_ops": 0.0,
+            "int4_ops_exact_decimal": "0",
+            "vec_eqops": 0.0,
+            "vec_eqops_exact_decimal": "0"
+          }
+        }
+      },
+      "checks": {
+        "completion_time": true,
+        "hbm_busy_time": false,
+        "shared_hbm_busy_time": true
+      },
+      "independent_discrete_oracle": {
+        "allocation_policy": "owner_grouped_q_alpha",
+        "buffer_slots": {
+          "input": 2,
+          "output": 2
+        },
+        "canonical_quantity": "load/store=physical HBM payload; compute=LOCAL payload, even though LOCAL capacity is nonbinding",
+        "compute_busy_s": 0.08284370733680545,
+        "compute_shared_s": 0.0,
+        "dependency_rules": {
+          "compute_requires_completed_load": true,
+          "nonfinal_k_store_bytes": 0,
+          "output_slot_lifetime": "reserved at final-K compute start; freed only after copyout completes",
+          "store_only_after_each_output_true_final_k": true
+        },
+        "discrete_wave_work_ledger": {
+          "final_k_wave_count_per_request": 1,
+          "hbm_read_bytes_by_row_per_request": [
+            1024000,
+            1024000
+          ],
+          "hbm_write_bytes_by_row_per_request": [
+            2048,
+            2048
+          ],
+          "vec_equivalent_ops_per_request": 13107200,
+          "wave_count_per_request": 100
+        },
+        "event_count": 202,
+        "finish_s_by_request": {
+          "comp0": 0.08308946733680546
+        },
+        "hbm_busy_s": 0.020520960000000022,
+        "hbm_shared_s": 0.0,
+        "readiness_semantics_revision": "final_k_output_reservation_v2",
+        "row_busy_s": [
+          0.020520960000000022,
+          0.020520960000000022
+        ],
+        "row_shared_s": [
+          0.0,
+          0.0
+        ],
+        "served_work_by_resource": {
+          "COMPUTE_GATE": 0.08284370733680545,
+          "HBM0": 1026048.0,
+          "HBM1": 1026048.0,
+          "HOP": 0.0,
+          "INJECT0": 0.0,
+          "INJECT1": 0.0,
+          "LOCAL": 0.0,
+          "SRAM_READ": 0.0,
+          "SRAM_WRITE": 0.0,
+          "XNEG": 0.0,
+          "XPOS": 0.0,
+          "YNEG": 0.0,
+          "YPOS": 0.0
+        },
+        "stage_completions": {
+          "compute": 100,
+          "load": 100,
+          "store": 1
+        }
+      },
+      "limits": {
+        "completion": 0.03,
+        "hbm_busy": 0.05,
+        "shared_hbm_busy": null
+      },
+      "phase_offset_s": 0.0,
+      "relative_errors": {
+        "finish_by_request": {
+          "solo": 7.981692050840629e-09
+        },
+        "hbm_busy": 2.9682643107373727,
+        "row_busy_by_hbm_row": [
+          2.9682643107373727,
+          2.9682643107373727
+        ],
+        "row_shared_by_hbm_row": [
+          0.0,
+          0.0
+        ],
+        "shared_hbm_busy": 0.0
+      },
+      "runtime_cumulative_serialization_reconciliation": {
+        "accounting_history_complete": true,
+        "available": true,
+        "counter_arithmetic": "serialized_cumulative_long_double_decimal",
+        "hbm_bytes_by_row_direction": [
+          [
+            {
+              "absolute_delta": "0",
+              "actual_serialized_decimal": "1024000",
+              "expected_integer": 1024000,
+              "relative_delta": "0",
+              "signed_delta": "0",
+              "strict_integer_equality": true,
+              "within_relative_tolerance": true
+            },
+            {
+              "absolute_delta": "0",
+              "actual_serialized_decimal": "2048",
+              "expected_integer": 2048,
+              "relative_delta": "0",
+              "signed_delta": "0",
+              "strict_integer_equality": true,
+              "within_relative_tolerance": true
+            }
+          ],
+          [
+            {
+              "absolute_delta": "0",
+              "actual_serialized_decimal": "1024000",
+              "expected_integer": 1024000,
+              "relative_delta": "0",
+              "signed_delta": "0",
+              "strict_integer_equality": true,
+              "within_relative_tolerance": true
+            },
+            {
+              "absolute_delta": "0",
+              "actual_serialized_decimal": "2048",
+              "expected_integer": 2048,
+              "relative_delta": "0",
+              "signed_delta": "0",
+              "strict_integer_equality": true,
+              "within_relative_tolerance": true
+            }
+          ]
+        ],
+        "planned_expected_arithmetic": "independent_integer_wave_ledger",
+        "relative_tolerance": "1E-9",
+        "status": "within_relative_tolerance",
+        "strict_integer_equality": true,
+        "vec_equivalent_ops": {
+          "absolute_delta": "0",
+          "actual_serialized_decimal": "13107200",
+          "expected_integer": 13107200,
+          "relative_delta": "0",
+          "signed_delta": "0",
+          "strict_integer_equality": true,
+          "within_relative_tolerance": true
+        },
+        "within_relative_tolerance": true
+      },
+      "status": "failed"
+    },
+    "two_comp": [
+      {
+        "absolute_errors_and_shared_reference": {
+          "actual_shared_hbm_duration_s": 0.16286518638013855,
+          "finish_time_s_by_request": {
+            "comp0": 3.2638908242788034e-10,
+            "comp1": 3.2638908242788034e-10
+          },
+          "hbm_busy_s": 0.12182326638013852,
+          "reference_shared_hbm_duration_s": 0.041041920000000044,
+          "relative_checks_status": "failed",
+          "shared_hbm_busy_s": 0.12182326638013852
+        },
+        "actual_runtime": {
+          "accounting_history_complete": true,
+          "allocation_updates": 7,
+          "compute_busy_s": 0.16568741467361076,
+          "finish_s_by_request": {
+            "comp0": 0.166178935,
+            "comp1": 0.166178935
+          },
+          "hbm_busy_s": 0.16286518638013855,
+          "hbm_shared_s": 0.16286518638013855,
+          "internal_events": 11,
+          "row_busy_s": [
+            0.16286518638013855,
+            0.16286518638013855
+          ],
+          "row_shared_s": [
+            0.16286518638013855,
+            0.16286518638013855
+          ],
+          "serialized_hbm_served_bytes_counter_decimal": [
+            [
+              "2048000",
+              "4096"
+            ],
+            [
+              "2048000",
+              "4096"
+            ]
+          ],
+          "served_by_category_serialized_decimal_counters": {
+            "comm_recv": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            },
+            "comm_send": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            },
+            "comp": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  2048000.0,
+                  4096.0
+                ],
+                [
+                  2048000.0,
+                  4096.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "2048000",
+                  "4096"
+                ],
+                [
+                  "2048000",
+                  "4096"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 26214400.0,
+              "vec_eqops_exact_decimal": "26214399.999999999998181011"
+            },
+            "die": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            },
+            "pool": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            },
+            "restore": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            }
+          }
+        },
+        "checks": {
+          "completion_time": true,
+          "hbm_busy_time": false,
+          "shared_hbm_busy_time": false
+        },
+        "independent_discrete_oracle": {
+          "allocation_policy": "owner_grouped_q_alpha",
+          "buffer_slots": {
+            "input": 2,
+            "output": 2
+          },
+          "canonical_quantity": "load/store=physical HBM payload; compute=LOCAL payload, even though LOCAL capacity is nonbinding",
+          "compute_busy_s": 0.1656874146736109,
+          "compute_shared_s": 0.1656874146736109,
+          "dependency_rules": {
+            "compute_requires_completed_load": true,
+            "nonfinal_k_store_bytes": 0,
+            "output_slot_lifetime": "reserved at final-K compute start; freed only after copyout completes",
+            "store_only_after_each_output_true_final_k": true
+          },
+          "discrete_wave_work_ledger": {
+            "final_k_wave_count_per_request": 1,
+            "hbm_read_bytes_by_row_per_request": [
+              1024000,
+              1024000
+            ],
+            "hbm_write_bytes_by_row_per_request": [
+              2048,
+              2048
+            ],
+            "vec_equivalent_ops_per_request": 13107200,
+            "wave_count_per_request": 100
+          },
+          "event_count": 404,
+          "finish_s_by_request": {
+            "comp0": 0.16617893467361092,
+            "comp1": 0.16617893467361092
+          },
+          "hbm_busy_s": 0.041041920000000044,
+          "hbm_shared_s": 0.041041920000000044,
+          "readiness_semantics_revision": "final_k_output_reservation_v2",
+          "row_busy_s": [
+            0.041041920000000044,
+            0.041041920000000044
+          ],
+          "row_shared_s": [
+            0.041041920000000044,
+            0.041041920000000044
+          ],
+          "served_work_by_resource": {
+            "COMPUTE_GATE": 0.16568741467361106,
+            "HBM0": 2052096.0,
+            "HBM1": 2052096.0,
+            "HOP": 0.0,
+            "INJECT0": 0.0,
+            "INJECT1": 0.0,
+            "LOCAL": 0.0,
+            "SRAM_READ": 0.0,
+            "SRAM_WRITE": 0.0,
+            "XNEG": 0.0,
+            "XPOS": 0.0,
+            "YNEG": 0.0,
+            "YPOS": 0.0
+          },
+          "stage_completions": {
+            "compute": 200,
+            "load": 200,
+            "store": 2
+          }
+        },
+        "limits": {
+          "completion": 0.05,
+          "hbm_busy": 0.05,
+          "shared_hbm_busy": 0.05
+        },
+        "phase_offset_s": 0.0,
+        "relative_errors": {
+          "finish_by_request": {
+            "comp0": 1.964082168831659e-09,
+            "comp1": 1.964082168831659e-09
+          },
+          "hbm_busy": 2.9682643107373727,
+          "row_busy_by_hbm_row": [
+            2.9682643107373727,
+            2.9682643107373727
+          ],
+          "row_shared_by_hbm_row": [
+            2.9682643107373727,
+            2.9682643107373727
+          ],
+          "shared_hbm_busy": 2.9682643107373727
+        },
+        "runtime_cumulative_serialization_reconciliation": {
+          "accounting_history_complete": true,
+          "available": true,
+          "counter_arithmetic": "serialized_cumulative_long_double_decimal",
+          "hbm_bytes_by_row_direction": [
+            [
+              {
+                "absolute_delta": "0",
+                "actual_serialized_decimal": "2048000",
+                "expected_integer": 2048000,
+                "relative_delta": "0",
+                "signed_delta": "0",
+                "strict_integer_equality": true,
+                "within_relative_tolerance": true
+              },
+              {
+                "absolute_delta": "0",
+                "actual_serialized_decimal": "4096",
+                "expected_integer": 4096,
+                "relative_delta": "0",
+                "signed_delta": "0",
+                "strict_integer_equality": true,
+                "within_relative_tolerance": true
+              }
+            ],
+            [
+              {
+                "absolute_delta": "0",
+                "actual_serialized_decimal": "2048000",
+                "expected_integer": 2048000,
+                "relative_delta": "0",
+                "signed_delta": "0",
+                "strict_integer_equality": true,
+                "within_relative_tolerance": true
+              },
+              {
+                "absolute_delta": "0",
+                "actual_serialized_decimal": "4096",
+                "expected_integer": 4096,
+                "relative_delta": "0",
+                "signed_delta": "0",
+                "strict_integer_equality": true,
+                "within_relative_tolerance": true
+              }
+            ]
+          ],
+          "planned_expected_arithmetic": "independent_integer_wave_ledger",
+          "relative_tolerance": "1E-9",
+          "status": "within_relative_tolerance",
+          "strict_integer_equality": false,
+          "vec_equivalent_ops": {
+            "absolute_delta": "1.818989E-12",
+            "actual_serialized_decimal": "26214399.999999999998181011",
+            "expected_integer": 26214400,
+            "relative_delta": "6.938892364501953125E-20",
+            "signed_delta": "-1.818989E-12",
+            "strict_integer_equality": false,
+            "within_relative_tolerance": true
+          },
+          "within_relative_tolerance": true
+        },
+        "status": "failed"
+      },
+      {
+        "absolute_errors_and_shared_reference": {
+          "actual_shared_hbm_duration_s": 0.06256562195857206,
+          "finish_time_s_by_request": {
+            "comp0": 0.0006650568140782881,
+            "comp1": 3.2638930447248526e-10
+          },
+          "hbm_busy_s": 0.12323438052687466,
+          "reference_shared_hbm_duration_s": 0.0003538873861738818,
+          "relative_checks_status": "failed",
+          "shared_hbm_busy_s": 0.062211734572398175
+        },
+        "actual_runtime": {
+          "accounting_history_complete": true,
+          "allocation_updates": 12,
+          "compute_busy_s": 0.16568741467361076,
+          "finish_s_by_request": {
+            "comp0": 0.115192476,
+            "comp1": 0.165933175
+          },
+          "hbm_busy_s": 0.16427630052687467,
+          "hbm_shared_s": 0.06256562195857206,
+          "internal_events": 16,
+          "row_busy_s": [
+            0.16427630052687467,
+            0.16427630052687467
+          ],
+          "row_shared_s": [
+            0.06256562195857206,
+            0.06256562195857206
+          ],
+          "serialized_hbm_served_bytes_counter_decimal": [
+            [
+              "2048000.000000000000227374",
+              "4096"
+            ],
+            [
+              "2048000.000000000000227374",
+              "4096"
+            ]
+          ],
+          "served_by_category_serialized_decimal_counters": {
+            "comm_recv": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            },
+            "comm_send": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            },
+            "comp": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  2048000.0,
+                  4096.0
+                ],
+                [
+                  2048000.0,
+                  4096.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "2048000.000000000000227374",
+                  "4096"
+                ],
+                [
+                  "2048000.000000000000227374",
+                  "4096"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 26214400.0,
+              "vec_eqops_exact_decimal": "26214400.000000000003637979"
+            },
+            "die": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            },
+            "pool": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            },
+            "restore": {
+              "hbm_served_bytes_by_row_direction": [
+                [
+                  0.0,
+                  0.0
+                ],
+                [
+                  0.0,
+                  0.0
+                ]
+              ],
+              "hbm_served_bytes_by_row_direction_exact": [
+                [
+                  "0",
+                  "0"
+                ],
+                [
+                  "0",
+                  "0"
+                ]
+              ],
+              "int4_ops": 0.0,
+              "int4_ops_exact_decimal": "0",
+              "vec_eqops": 0.0,
+              "vec_eqops_exact_decimal": "0"
+            }
+          }
+        },
+        "checks": {
+          "completion_time": true,
+          "hbm_busy_time": false,
+          "shared_hbm_busy_time": false
+        },
+        "independent_discrete_oracle": {
+          "allocation_policy": "owner_grouped_q_alpha",
+          "buffer_slots": {
+            "input": 2,
+            "output": 2
+          },
+          "canonical_quantity": "load/store=physical HBM payload; compute=LOCAL payload, even though LOCAL capacity is nonbinding",
+          "compute_busy_s": 0.16568741467361067,
+          "compute_shared_s": 0.06552643948074478,
+          "dependency_rules": {
+            "compute_requires_completed_load": true,
+            "nonfinal_k_store_bytes": 0,
+            "output_slot_lifetime": "reserved at final-K compute start; freed only after copyout completes",
+            "store_only_after_each_output_true_final_k": true
+          },
+          "discrete_wave_work_ledger": {
+            "final_k_wave_count_per_request": 1,
+            "hbm_read_bytes_by_row_per_request": [
+              1024000,
+              1024000
+            ],
+            "hbm_write_bytes_by_row_per_request": [
+              2048,
+              2048
+            ],
+            "vec_equivalent_ops_per_request": 13107200,
+            "wave_count_per_request": 100
+          },
+          "event_count": 404,
+          "finish_s_by_request": {
+            "comp0": 0.11585753281407829,
+            "comp1": 0.16593317467361068
+          },
+          "hbm_busy_s": 0.04104192000000001,
+          "hbm_shared_s": 0.0003538873861738818,
+          "readiness_semantics_revision": "final_k_output_reservation_v2",
+          "row_busy_s": [
+            0.04104192000000001,
+            0.04104192000000001
+          ],
+          "row_shared_s": [
+            0.0003538873861738818,
+            0.0003538873861738818
+          ],
+          "served_work_by_resource": {
+            "COMPUTE_GATE": 0.1656874146736111,
+            "HBM0": 2052096.0,
+            "HBM1": 2052096.0,
+            "HOP": 0.0,
+            "INJECT0": 0.0,
+            "INJECT1": 0.0,
+            "LOCAL": 0.0,
+            "SRAM_READ": 0.0,
+            "SRAM_WRITE": 0.0,
+            "XNEG": 0.0,
+            "XPOS": 0.0,
+            "YNEG": 0.0,
+            "YPOS": 0.0
+          },
+          "stage_completions": {
+            "compute": 200,
+            "load": 200,
+            "store": 2
+          }
+        },
+        "limits": {
+          "completion": 0.05,
+          "hbm_busy": 0.05,
+          "shared_hbm_busy": 0.05
+        },
+        "phase_offset_s": 0.05,
+        "relative_errors": {
+          "finish_by_request": {
+            "comp0": 0.005740298433124191,
+            "comp1": 1.966992466180983e-09
+          },
+          "hbm_busy": 3.002646575181537,
+          "row_busy_by_hbm_row": [
+            3.002646575181537,
+            3.002646575181537
+          ],
+          "row_shared_by_hbm_row": [
+            175.79528687080858,
+            175.79528687080858
+          ],
+          "shared_hbm_busy": 175.79528687080858
+        },
+        "runtime_cumulative_serialization_reconciliation": {
+          "accounting_history_complete": true,
+          "available": true,
+          "counter_arithmetic": "serialized_cumulative_long_double_decimal",
+          "hbm_bytes_by_row_direction": [
+            [
+              {
+                "absolute_delta": "2.27374E-13",
+                "actual_serialized_decimal": "2048000.000000000000227374",
+                "expected_integer": 2048000,
+                "relative_delta": "1.110224609375E-19",
+                "signed_delta": "2.27374E-13",
+                "strict_integer_equality": false,
+                "within_relative_tolerance": true
+              },
+              {
+                "absolute_delta": "0",
+                "actual_serialized_decimal": "4096",
+                "expected_integer": 4096,
+                "relative_delta": "0",
+                "signed_delta": "0",
+                "strict_integer_equality": true,
+                "within_relative_tolerance": true
+              }
+            ],
+            [
+              {
+                "absolute_delta": "2.27374E-13",
+                "actual_serialized_decimal": "2048000.000000000000227374",
+                "expected_integer": 2048000,
+                "relative_delta": "1.110224609375E-19",
+                "signed_delta": "2.27374E-13",
+                "strict_integer_equality": false,
+                "within_relative_tolerance": true
+              },
+              {
+                "absolute_delta": "0",
+                "actual_serialized_decimal": "4096",
+                "expected_integer": 4096,
+                "relative_delta": "0",
+                "signed_delta": "0",
+                "strict_integer_equality": true,
+                "within_relative_tolerance": true
+              }
+            ]
+          ],
+          "planned_expected_arithmetic": "independent_integer_wave_ledger",
+          "relative_tolerance": "1E-9",
+          "status": "within_relative_tolerance",
+          "strict_integer_equality": false,
+          "vec_equivalent_ops": {
+            "absolute_delta": "3.637979E-12",
+            "actual_serialized_decimal": "26214400.000000000003637979",
+            "expected_integer": 26214400,
+            "relative_delta": "1.3877788543701171875E-19",
+            "signed_delta": "3.637979E-12",
+            "strict_integer_equality": false,
+            "within_relative_tolerance": true
+          },
+          "within_relative_tolerance": true
+        },
+        "status": "failed"
+      }
+    ]
+  },
+  "compiled_plan": {
+    "E": 3,
+    "candidate_count": null,
+    "compiler_path": "coarse_die::compile() or detail::enumerate_mappings()",
+    "credit_curve_coverage": {
+      "activities_with_piecewise_curve": 4,
+      "actual_plan_epoch_count": 3,
+      "reconstructed_description_count": 4,
+      "reconstructed_epoch_description_counts": [
+        1,
+        2,
+        1
+      ],
+      "serialized_curve_points": 8,
+      "serialized_internal_curve_breakpoints": 0
+    },
+    "dataflow_id": "output_stationary_v2",
+    "description_count": 4,
+    "fingerprint": "d6455eacc5824a4a144ff0dced488115253d66560a6c6304bf58c2a648bdf68c",
+    "mapping_selection": {
+      "enumerated_os_candidate_count": 4,
+      "requested_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "source": "actual_detail::enumerate_mappings_candidate"
+    },
+    "selected_template": "gemm_output_stationary_v2",
+    "service_model_provenance": {
+      "actual_plan_description_count": 4,
+      "actual_plan_epoch_count": 3,
+      "issues": [],
+      "observed_frameworks": [
+        {
+          "description_budget": 5,
+          "description_count": 4,
+          "epoch_count": 3,
+          "input_unit": "one_output_tile_K_consumption",
+          "model": "analytical_cumulative_os_v3",
+          "output_unit": "one_output_tile",
+          "source_epoch_begin": 0,
+          "status": "within_declared_budget"
+        }
+      ],
+      "source": "compiled Plan summary.service_curves and Activity.credit_curve",
+      "status": "identified"
+    },
+    "summary": {
+      "active_cores": 1,
+      "activity_units": "physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal",
+      "consumption_wave_count": 100,
+      "conversion_elements": 0,
+      "dataflow_id": "output_stationary_v2",
+      "executed_int4_ops": 0,
+      "executed_matrix_ops": 13107200,
+      "executed_score_slots": 0,
+      "granularity_validation": "not_run",
+      "hbm_read_bytes_total": 2048000,
+      "hbm_workspace_peak_bytes": 0,
+      "hbm_write_bytes_total": 4096,
+      "int4_input_bytes": 0,
+      "kind": "gemm",
+      "local_bus_bytes": 2863104,
+      "logical_tensor_bytes": 2052096,
+      "mapping_assumptions": [
+        "engineering_assumption",
+        "bounded_tile_candidates",
+        "exact_per_tile_INT4_tail_packing",
+        "analytical_cumulative_os_v3_fixed_bounded_description_budget"
+      ],
+      "output_round_count": 1,
+      "physical_transfer_bytes": 2052096,
+      "probability_bytes": 0,
+      "recompute_matrix_ops": 0,
+      "recomputed_matrix_ops": 0,
+      "routing_evidence": {
+        "profile": "distributed_ideal_v2",
+        "status": "engineering_assumption"
+      },
+      "score_bytes": 0,
+      "service_curves": [
+        {
+          "description_budget": 5,
+          "description_count": 4,
+          "epoch_begin": 0,
+          "epoch_count": 3,
+          "final_drain_units": 1,
+          "final_output_release": "compute_terminal_before_final_drain",
+          "first_load_units": 1,
+          "first_output_compute_progress": 1.0,
+          "first_output_compute_work_s": 0.08284370733680538,
+          "first_output_epoch": 1,
+          "first_output_input_bytes": 2048000,
+          "first_output_input_units": 100,
+          "first_output_release": "first_cohort_compute_terminal",
+          "input_capacity_units": 2,
+          "input_unit": "one_output_tile_K_consumption",
+          "input_units": 100,
+          "model": "analytical_cumulative_os_v3",
+          "output_capacity_units": 2,
+          "output_unit": "one_output_tile",
+          "output_units": 1,
+          "readiness_approximation": "aggregate_piecewise_affine_not_discrete_tile_readiness"
+        }
+      ],
+      "service_description_count": 4,
+      "service_model_revision": "analytical_cumulative_os_v3",
+      "source_matrix_ops": 13107200,
+      "source_vec_ops": 0,
+      "sram_capacity_bytes_per_core": 262144,
+      "sram_peak_bytes_per_core": 53248,
+      "sram_read_bytes": 2457600,
+      "sram_write_bytes": 2457600,
+      "template_id": "gemm_output_stationary_v2",
+      "tf": 0,
+      "th": 0,
+      "tk": 64,
+      "tm": 16,
+      "tn": 64,
+      "valid_score_pairs": 0,
+      "vec_equivalent_ops": 13107200,
+      "wave_count": 100
+    },
+    "tiles": {
+      "tk": 64,
+      "tm": 16,
+      "tn": 64
+    }
+  },
+  "compiled_plan_ledger": {
+    "checks": {
+      "compiled_activity_hbm_bytes": true,
+      "nonbinding_resources": true,
+      "plan_activity_int4_ops": true,
+      "plan_activity_vec_equivalent_ops": true,
+      "plan_resource_COMPUTE_GATE": true,
+      "plan_resource_HBM0": true,
+      "plan_resource_HBM1": true,
+      "plan_resource_LOCAL": true,
+      "plan_resource_SRAM_READ": true,
+      "plan_resource_SRAM_WRITE": true,
+      "sram_capacity_feasible": true,
+      "summary_conversion_elements": true,
+      "summary_executed_int4_ops": true,
+      "summary_executed_matrix_ops": true,
+      "summary_hbm_read_bytes": true,
+      "summary_hbm_write_bytes": true,
+      "summary_int4_input_bytes": true,
+      "summary_local_bus_bytes": true,
+      "summary_logical_tensor_bytes": true,
+      "summary_source_matrix_ops": true,
+      "summary_sram_peak": true,
+      "summary_sram_read_bytes": true,
+      "summary_sram_write_bytes": true,
+      "summary_vec_equivalent_ops": true
+    },
+    "compiled_activity_int4_ops": 0,
+    "compiled_activity_role_work": {
+      "compute": {
+        "COMPUTE_GATE": 0.08284370733680538,
+        "HBM0": 0.0,
+        "HBM1": 0.0,
+        "HOP": 0.0,
+        "INJECT0": 0.0,
+        "INJECT1": 0.0,
+        "LOCAL": 2863104.0,
+        "SRAM_READ": 2453504.0,
+        "SRAM_WRITE": 409600.0,
+        "XNEG": 0.0,
+        "XPOS": 0.0,
+        "YNEG": 0.0,
+        "YPOS": 0.0
+      },
+      "load": {
+        "COMPUTE_GATE": 0.0,
+        "HBM0": 1024000.0,
+        "HBM1": 1024000.0,
+        "HOP": 0.0,
+        "INJECT0": 0.0,
+        "INJECT1": 0.0,
+        "LOCAL": 0.0,
+        "SRAM_READ": 0.0,
+        "SRAM_WRITE": 2048000.0,
+        "XNEG": 0.0,
+        "XPOS": 0.0,
+        "YNEG": 0.0,
+        "YPOS": 0.0
+      },
+      "store": {
+        "COMPUTE_GATE": 0.0,
+        "HBM0": 2048.0,
+        "HBM1": 2048.0,
+        "HOP": 0.0,
+        "INJECT0": 0.0,
+        "INJECT1": 0.0,
+        "LOCAL": 0.0,
+        "SRAM_READ": 4096.0,
+        "SRAM_WRITE": 0.0,
+        "XNEG": 0.0,
+        "XPOS": 0.0,
+        "YNEG": 0.0,
+        "YPOS": 0.0
+      }
+    },
+    "compiled_activity_vec_equivalent_ops": 13107200,
+    "compiled_hbm_payload_by_row_direction": [
+      [
+        1024000,
+        2048
+      ],
+      [
+        1024000,
+        2048
+      ]
+    ],
+    "plan_resource_relative_errors": {
+      "COMPUTE_GATE": 0.0,
+      "HBM0": 0.0,
+      "HBM1": 0.0,
+      "LOCAL": 0.0,
+      "SRAM_READ": 0.0,
+      "SRAM_WRITE": 0.0
+    },
+    "repeat_count_treatment": "summed each activity once; repeat_count is audit metadata",
+    "resources": [
+      {
+        "capacity_per_s": 1.0,
+        "classification": "oracle_modeled",
+        "compiled_activity_total_work": 0.08284370733680538,
+        "enabled": true,
+        "independently_derived_work": 0.08284370733680538,
+        "minimum_service_s": 0.08284370733680538,
+        "nonbinding_proved_by_fixture_capacity": false,
+        "resource": "COMPUTE_GATE",
+        "resource_id": 0
+      },
+      {
+        "capacity_per_s": 1e+30,
+        "classification": "explicit_nonbinding_capacity",
+        "compiled_activity_total_work": 2457600.0,
+        "enabled": true,
+        "independently_derived_work": 2457600,
+        "minimum_service_s": 2.4576e-24,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "SRAM_READ",
+        "resource_id": 1
+      },
+      {
+        "capacity_per_s": 1e+30,
+        "classification": "explicit_nonbinding_capacity",
+        "compiled_activity_total_work": 2457600.0,
+        "enabled": true,
+        "independently_derived_work": 2457600,
+        "minimum_service_s": 2.4576e-24,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "SRAM_WRITE",
+        "resource_id": 2
+      },
+      {
+        "capacity_per_s": 1e+30,
+        "classification": "explicit_nonbinding_capacity",
+        "compiled_activity_total_work": 2863104.0,
+        "enabled": true,
+        "independently_derived_work": 2863104,
+        "minimum_service_s": 2.863104e-24,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "LOCAL",
+        "resource_id": 3
+      },
+      {
+        "capacity_per_s": 50000000.0,
+        "classification": "oracle_modeled",
+        "compiled_activity_total_work": 1026048.0,
+        "enabled": true,
+        "independently_derived_work": 1026048.0,
+        "minimum_service_s": 0.02052096,
+        "nonbinding_proved_by_fixture_capacity": false,
+        "resource": "HBM0",
+        "resource_id": 4
+      },
+      {
+        "capacity_per_s": 50000000.0,
+        "classification": "oracle_modeled",
+        "compiled_activity_total_work": 1026048.0,
+        "enabled": true,
+        "independently_derived_work": 1026048.0,
+        "minimum_service_s": 0.02052096,
+        "nonbinding_proved_by_fixture_capacity": false,
+        "resource": "HBM1",
+        "resource_id": 5
+      },
+      {
+        "capacity_per_s": 0.0,
+        "classification": "disabled_and_zero_work",
+        "compiled_activity_total_work": 0.0,
+        "enabled": false,
+        "independently_derived_work": null,
+        "minimum_service_s": null,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "INJECT0",
+        "resource_id": 6
+      },
+      {
+        "capacity_per_s": 0.0,
+        "classification": "disabled_and_zero_work",
+        "compiled_activity_total_work": 0.0,
+        "enabled": false,
+        "independently_derived_work": null,
+        "minimum_service_s": null,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "INJECT1",
+        "resource_id": 7
+      },
+      {
+        "capacity_per_s": 0.0,
+        "classification": "disabled_and_zero_work",
+        "compiled_activity_total_work": 0.0,
+        "enabled": false,
+        "independently_derived_work": null,
+        "minimum_service_s": null,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "XPOS",
+        "resource_id": 8
+      },
+      {
+        "capacity_per_s": 0.0,
+        "classification": "disabled_and_zero_work",
+        "compiled_activity_total_work": 0.0,
+        "enabled": false,
+        "independently_derived_work": null,
+        "minimum_service_s": null,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "XNEG",
+        "resource_id": 9
+      },
+      {
+        "capacity_per_s": 0.0,
+        "classification": "disabled_and_zero_work",
+        "compiled_activity_total_work": 0.0,
+        "enabled": false,
+        "independently_derived_work": null,
+        "minimum_service_s": null,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "YPOS",
+        "resource_id": 10
+      },
+      {
+        "capacity_per_s": 0.0,
+        "classification": "disabled_and_zero_work",
+        "compiled_activity_total_work": 0.0,
+        "enabled": false,
+        "independently_derived_work": null,
+        "minimum_service_s": null,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "YNEG",
+        "resource_id": 11
+      },
+      {
+        "capacity_per_s": 0.0,
+        "classification": "disabled_and_zero_work",
+        "compiled_activity_total_work": 0.0,
+        "enabled": false,
+        "independently_derived_work": null,
+        "minimum_service_s": null,
+        "nonbinding_proved_by_fixture_capacity": true,
+        "resource": "HOP",
+        "resource_id": 12
+      }
+    ],
+    "status": "passed"
+  },
+  "entry_parameters": {
+    "actual_driver_binary": "/workspace/template/work/build-die/coarse_compiled_gemm_oracle_driver",
+    "driver": "work/build-die/coarse_compiled_gemm_oracle_driver",
+    "driver_arguments": [
+      "--m",
+      "16",
+      "--n",
+      "64",
+      "--k",
+      "6400",
+      "--tm",
+      "16",
+      "--tn",
+      "64",
+      "--tk",
+      "64"
+    ],
+    "driver_identity": {
+      "compiled_oracle_reference_sha256": "097af90a71971a14c5792a55239644f37e60679d834ae137fa1cfdbaf6a14f2d",
+      "driver_binary_sha256": "a4c0d8d20bb5012e8b256ad012081f246ba0cefaa745264a83768b3e8786745e",
+      "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+      "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+      "oracle_source_sha256": "124f94a2576ca9906244b9b3555eb10a044744f8724d9c47138722684686ee11"
+    },
+    "oracle_arguments": [
+      "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+      "/workspace/template/die/validation/analytical_service_oracle.py",
+      "--raw",
+      "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.raw.json",
+      "--output",
+      "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.report.json"
+    ],
+    "raw_driver_source": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.raw.json",
+    "raw_input": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.raw.json",
+    "raw_json": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.raw.json",
+    "raw_output": null,
+    "raw_reuse_source": null,
+    "report_output": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.report.json",
+    "requested_shape": {
+      "k": 6400,
+      "m": 16,
+      "n": 64
+    },
+    "requested_tiles": {
+      "tk": 64,
+      "tm": 16,
+      "tn": 64
+    }
+  },
+  "fixture_coverage": {
+    "core_count": 1,
+    "coverage_limits": [
+      "single complete 1x1 Core only",
+      "one GEMM shape and selected mapping per report",
+      "FP32 storage and fp32_vec_matrix_assumed_v1 only",
+      "other hardware domains use explicit finite nonbinding fixture capacities"
+    ],
+    "dataflow": "output_stationary_v2",
+    "hardware_scope": "synthetic model-to-model capacities; no silicon evidence",
+    "profile": "fp32_vec_matrix_assumed_v1; FP32 weights/activations/output",
+    "reference": "existing grouped owner Q/alpha discrete wave oracle",
+    "reference_geometry_adapter": "shared discrete geometry helper with legacy E5 guard disabled explicitly; framework metadata validated independently from the actual Plan",
+    "shape": {
+      "k": 6400,
+      "m": 16,
+      "n": 64
+    }
+  },
+  "fixture_kind": "synthetic_model_to_model",
+  "independent_expected_work": {
+    "accumulator_read_bytes": 405504,
+    "accumulator_write_bytes": 409600,
+    "compute_work_s": 0.08284370733680538,
+    "consumption_wave_count": 100,
+    "conversion_elements": 0,
+    "executed_int4_ops": 0,
+    "has_k_tail": false,
+    "hbm_eta": 1.0,
+    "hbm_read_by_row": [
+      1024000,
+      1024000
+    ],
+    "hbm_read_bytes": 2048000,
+    "hbm_write_by_row": [
+      2048,
+      2048
+    ],
+    "hbm_write_bytes": 4096,
+    "int4_input_bytes": 0,
+    "k_tile_extent_classes_by_wave": {
+      "64": 100
+    },
+    "local_bus_bytes": 2863104,
+    "logical_tensor_bytes": 2052096,
+    "output_round_count": 1,
+    "output_tile_classes_m_by_n": {
+      "16x64": 1
+    },
+    "rho_sram_capacity_bytes_per_core": 235929.6,
+    "selected_tiles": {
+      "Tk": 100,
+      "Tm": 1,
+      "Tn": 1,
+      "tk": 64,
+      "tm": 16,
+      "tn": 64
+    },
+    "shape": {
+      "k": 6400,
+      "m": 16,
+      "n": 64
+    },
+    "sram_capacity_bytes_per_core": 262144,
+    "sram_peak_bytes_per_core": 53248,
+    "sram_read_bytes": 2457600,
+    "sram_write_bytes": 2457600,
+    "true_output_tiles": 1,
+    "vec_equivalent_ops": 13107200,
+    "waves_with_store": 1
+  },
+  "measurement_source": "compiled_plan_and_actual_cpp_runtime",
+  "notes": [
+    "Only actual driver Runtime scenarios are compared; the Python side enumerates the small reference waves.",
+    "No new E-level certification or minimum-granularity claim is made.",
+    "A failed precision comparison is a valid tool result and returns CLI status 1."
+  ],
+  "oracle": "grouped_gemm_oracle.independent_discrete_k_consumption_waves",
+  "scenario_coverage": {
+    "actual_concurrent_scenarios_observed": 2,
+    "concurrent_completion_and_shared_busy_compared": true,
+    "standalone_scenario_observed": true
+  },
+  "schema_version": 1,
+  "status": "failed",
+  "status_reason": "work reconciliation or at least one measured scenario failed its frozen limit",
+  "status_scope": "one_actual_compiled_plan_and_cpp_runtime_fixture"
+}

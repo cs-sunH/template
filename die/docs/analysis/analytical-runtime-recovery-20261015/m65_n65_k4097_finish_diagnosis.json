@@ -1,0 +1,129 @@
+{
+  "kind": "read_only_model_to_model_diagnostic",
+  "production_precision_certificate": false,
+  "case": {
+    "shape_m_n_k": [65, 65, 4097],
+    "tiles_tm_tn_tk": [16, 64, 64],
+    "core_grid": [1, 1],
+    "output_tile_classes_m_by_n_count": {
+      "16x64": 4,
+      "16x1": 4,
+      "1x64": 1,
+      "1x1": 1
+    },
+    "k_extent_classes_by_consumption_count": {
+      "64": 640,
+      "1": 10
+    }
+  },
+  "finish": {
+    "actual_s": 0.219017413,
+    "reference_s": 0.2352908651817765,
+    "actual_minus_reference_s": -0.016273452181776504,
+    "absolute_relative_error": 0.06916312781290626,
+    "direction": "actual_underestimates_reference"
+  },
+  "work_and_schedule_evidence": {
+    "plan_compute_gate_work_s": 0.21881257268544269,
+    "independent_compute_work_s": 0.218812572685443,
+    "actual_runtime_compute_busy_s": 0.2188125726854427,
+    "actual_finish_minus_compute_busy_s": 0.0002048403145573,
+    "actual_noncompute_residual_matches_first_load_plus_terminal_store": true,
+    "oracle_trace_compute_interval_sum_s": 0.21881257268544296,
+    "oracle_first_compute_start_s": 0.0002048,
+    "oracle_idle_between_compute_intervals_s": 0.016273452496333524,
+    "oracle_last_store_after_compute_s": 4.000000000670134e-08,
+    "plan_first_output_compute_s": 0.05303291702482682,
+    "plan_remaining_compute_s": 0.16577965566061587,
+    "plan_cumulative_service_credit_delta_input_output": [-585, 8],
+    "plan_cumulative_service_load_credit": 585,
+    "plan_cumulative_service_curve_points": 2,
+    "sram_read_write_local_capacity_per_s": 1e30,
+    "sram_local_private_bound_effect": "nonbinding in this fixture"
+  },
+  "per_full_k_consumption_class_facts": {
+    "formula_fp32_vec": {
+      "load_s": "max(HBM0_read_bytes/rate0, HBM1_read_bytes/rate1)",
+      "compute_s": "2*m*n*tk/(P_vec_per_core*eta_vec)"
+    },
+    "fixture_rates": {
+      "hbm_row_rate_bytes_per_s": 50000000,
+      "p_vec_per_core_ops_per_s": 7910800000,
+      "eta_vec": 0.02
+    },
+    "classes": [
+      {
+        "m_n": [16, 64],
+        "read_bytes_by_hbm_row": [10240, 10240],
+        "load_s": 0.0002048,
+        "matrix_compute_s": 0.0008284370733680538,
+        "readiness": "compute-bound; load is covered"
+      },
+      {
+        "m_n": [16, 1],
+        "read_bytes_by_hbm_row": [2176, 2176],
+        "load_s": 4.352e-05,
+        "matrix_compute_s": 1.2944329271375841e-05,
+        "readiness": "load-bound; per-wave dependency bubbles"
+      },
+      {
+        "m_n": [1, 64],
+        "read_bytes_by_hbm_row": [8320, 8320],
+        "load_s": 0.0001664,
+        "matrix_compute_s": 5.1777317085503364e-05,
+        "readiness": "load-bound; per-wave dependency bubbles"
+      },
+      {
+        "m_n": [1, 1],
+        "read_bytes_by_hbm_row": [256, 256],
+        "load_s": 5.12e-06,
+        "matrix_compute_s": 8.090205794609901e-07,
+        "readiness": "load-bound; per-wave dependency bubbles"
+      }
+    ],
+    "k_tail_note": "K extent 1 scales both matrix work and input bytes by 1/64 for each fixed MxN class; it does not create the observed load/compute bottleneck switch. M/N tail classes do."
+  },
+  "oracle_compute_idle_by_output_tile_q_s": {
+    "q0_16x64": 0.0,
+    "q1_16x1": 0.001938450154041,
+    "q2_16x64": 0.0,
+    "q3_16x1": 0.001938450154041,
+    "q4_16x64": 0.0,
+    "q5_16x1": 0.001938450154041,
+    "q6_16x64": 0.0,
+    "q7_16x1": 0.001938450154041,
+    "q8_1x64": 0.007221229801517,
+    "q9_1x1": 0.000271996213785
+  },
+  "diagnosis": {
+    "confirmed": "heterogeneous output-tile class work is aggregated into one cumulative readiness row; aggregate load progress replenishes input credit across classes and hides narrow/tail-class K-load stalls",
+    "not_cause_in_this_fixture": [
+      "missing or mismatched work totals",
+      "seal_activity SRAM/LOCAL private-time max, since those capacities are nonbinding",
+      "K-tail alone"
+    ],
+    "source_locations": [
+      "die/src/Mapping.cc:917-938 (first cohort isolated, remainder compute aggregated)",
+      "die/src/Mapping.cc:944-976 (one linear credit_curve segment per aggregate activity; cumulative epoch credits)",
+      "die/src/Mapping.cc:727-751 (private_time max over compute/SRAM/LOCAL)",
+      "die/src/GemmTailBudget.hh:159-190,292-332 (bounded output tile classes and total compute seconds)",
+      "die/validation/compiled_gemm_oracle.py:158-186,461-501 (offline per-wave work and load-before-compute readiness)",
+      "die/validation/grouped_gemm_oracle.py:107-125 (grouped reference allocator)"
+    ]
+  },
+  "analytic_direction_only": {
+    "candidate_bound": "For a serial load-to-compute chain with independent load/compute engines, completion is bounded below by max over contiguous cut points of (load-prefix service + compute-suffix service). A bounded homogeneous segment can be summarized by its signed service difference and endpoint extrema.",
+    "limitations": [
+      "No production representation or exactness claim is established.",
+      "Row-major M/N-tail classes can interleave; merging all equal classes loses ordering.",
+      "Multi-core dynamic allocation, output-slot backpressure, stores, and multiple HBM rows need separate treatment.",
+      "Fixed 5/8/16 descriptions may expose a lower bound, but no error guarantee or feasible encoding was verified."
+    ]
+  },
+  "evidence_files": [
+    "work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.raw.json",
+    "work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.report.json",
+    "work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.driver.stdout.txt"
+  ],
+  "offline_method": "Read actual compiled raw/report and run the existing grouped discrete oracle with lifecycle capture for this 650-wave case only; no production source, formal test, or certification changed."
+}

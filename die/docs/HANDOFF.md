@@ -4,6 +4,16 @@
 
 ## Current Status
 
+### 当前：解析 Runtime 恢复与真实精度/速度失败（持续开发）
+
+本任务从干净旧检出快进到最新main `ec07f90ebabe6a0b97d458c01a3391377fc54aec`，工作分支 `codex/die-analytical-continue-20261015`。已核实包含K门控c13e9a7、clock b22e065、JOINT取消0f56921、Program归档及旧JOINT删除，未覆盖/回滚其它提交。当前用户授权持续源码开发，历史停止/仅文档范围均不适用。
+
+上一轮三项失败已修：有限credit归零后的微小终态残余闭合；曲线LP物理/PRIVATE/signed行舍入认证与快照；CAPI真实批次成功数/64MiB边界及memo回归。旧无曲线nearest舍入保留15s/100s整数终态，endpoint trace ID不阻止物理对称owner合并。空batch不建memo；Plan错误路径按需生成。更新新v4测试预期，但旧无曲线hash、所有精度/速度门槛和busy定义不变。source/ELF及真实失败/通过日志在 `analysis/analytical-runtime-recovery-20261015/` /对应evidence。
+
+一致Release构建及公共CTest **41/41通过，18.80s**，包含独立Fraction LP、clock、K reference、curve快照/credit/取消、cache/LRU/memo及部分route计数。六shape的v3实际Runtime axis（solo/sync/50ms，共18场景）已跑：只有16×64×64通过，其余五shape busy失败；65×65×4097 solo低估6.9163%也未过3%。30样本速度报告仍failed：常规128³冷编译、部分hot alias和OS bulk J8/J32超预算；所有raw保留，不挑最好一次当证书。**工程NOT ACCEPTED，5/8/16仍无共同通过证书。**
+
+新 `GemmOSRouteCounter.hh` 是未接Mapping的partial first-moments基础：固定AP/floor_sum，独立枚举通过；二阶HOP与odd-row服务子集守恒未完成，不能宣称路由已修。WR/向量/Attention/FFN全模板曲线仍未完成。五仓仍旧canonical24 `23160c…7e9b`、未publisher；TX8/reference和目标先验逐字节未改、target raw=not_available，不声称重校准。当前继续小变量公平快路、尾shape解析表示及剩余五仓工作；不是停止交接。
+
 ### 最新：解析累计服务曲线源码检查点及停止交接
 
 本轮先核实干净工作区，0f56921 fast-forward 到最新main 1f7a242（包含3c8face归档、5e2fb0a删除、最新解析建模条款），未覆盖/丢弃外部提交。10月15日再次fetch，远端main仍为1f7a242。未恢复任何归档Program或旧JOINT。用户在开发途中要求迅速交接；本轮在现有最小边界修复/缓存任务收束后停止，不启动五仓发布/大规模验证。
@@ -206,6 +216,17 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Next Step
 
+### 当前唯一接续（覆盖后面历史检查点）
+
+1. 以本次41/41一致源码为功能基线；实际driver axis/benchmark仍failed，范围/SHA见 `evidence/analytical-runtime-recovery-20261015/verification.json`。不要重复已改正的K参考门控、clock或JOINT已知取消验证。
+2. 小变量signed pair-ratio快路在独立手算/Fraction LP、严格物理/PRIVATE/credit认证与legacy/snapshot回归通过后接入。不能改公平/Q/alpha或用公共均分近似。当前常规128³冷编译及部分J≤32更新仍未达预算，继续优化，不以总时间除更新数。
+3. 尾shape65×65×4097的实际独占低估6.9163%须以真实有限class就绪工作解析诊断；原busy在另外五shape也失败。检查有依据的5/8/16固定描述，原3%/5%及busy定义不变；未共同满足标failed/tradeoff_unresolved。不逐K/周期恢复，不拟合曲线贴参考。
+4. WR、向量、Attention、FFN累计单位/首输出/静态峰值与固定复杂度，及OS route完整二阶矩、odd-row子服务段一致性仍待完成。partial helper未接生产。
+5. 公共源稳定后再用现有runner publisher五仓、双ABI/83配置/两FACE新旧符号/业务与固定图CPU≤10%。当前vendor旧canonical24未同步新源，不能声称五仓通过。只使用活动JOINT，live/sh30保护保持。
+6. TX8/reference与目标先验冻结；独立目标raw缺失，不能声称重校准。有意义检查点正常同步GitHub，继续自主开发。
+
+下方为历史接续记录，冲突时以上为准。
+
 ### 最新唯一接续顺序（覆盖下方历史条目）
 
 1. 首先阅读本检查点README、verification.json与最终handoff构建/测试日志；重新核实main和源。若最终定向仍失败，优先修`service_curve_runtime_test`的published-rate/credit tangent恢复、`os_service_scaling_test`的终态credit闭合或CAPI memo回归；不要先publisher或恢复Program。
@@ -291,6 +312,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
+
+- 当前恢复检查点：Release all build成功，公共CTest41/41（18.80s）；v3 axis六shape中1过5失败，30样本benchmark failed。全部source/ELF及raw见 `evidence/analytical-runtime-recovery-20261015/verification.json`。没有五仓新源publisher/83配置/新Online或目标校准结果。
 
 ### 本轮最终记录（不得外推）
 

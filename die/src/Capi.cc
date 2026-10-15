@@ -222,7 +222,10 @@ const Model::BatchMemo* matching_batch_memo(const Model& model,const char* input
 }
 void install_batch_memo(Model& model,const char* input,
                         const std::vector<std::string>& keys) {
-    if(!input || keys.size()>kBatchMemoMaxRows) return;
+    // Empty batches are lightweight cache diagnostics. Retaining a raw memo
+    // for them adds no reusable Plan and would mutate an otherwise empty
+    // cache merely by inspecting it.
+    if(!input || keys.empty() || keys.size()>kBatchMemoMaxRows) return;
     const std::size_t raw_size=std::char_traits<char>::length(input);
     if(raw_size>kBatchMemoMaxRawBytes) return;
 

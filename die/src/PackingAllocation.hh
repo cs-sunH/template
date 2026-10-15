@@ -23,7 +23,8 @@ inline bool allocate_packing(const std::vector<PackingRow>& rows,
                              const std::vector<std::string>& owners,
                              const std::vector<double>& canonical_q,
                              std::vector<double>& rates,
-                             std::vector<double>& alpha) {
+                             std::vector<double>& alpha,
+                             bool conservative_rounding = true) {
   try {
     const std::size_t count = owners.size();
     if (count != canonical_q.size() || count > 96 || rows.size() > 128) return false;
@@ -159,17 +160,23 @@ inline bool allocate_packing(const std::vector<PackingRow>& rows,
       const double share = static_cast<double>(wide_alpha[i]);
       if (!std::isfinite(rate) || rate < 0.0 || (wide_rates[i] > 0.0L && rate == 0.0) ||
           !std::isfinite(share) || share <= 0.0 || share > 1.0) return false;
-      result_rates[i] = static_cast<Wide>(rate)>wide_rates[i] ? std::nextafter(rate,0.0) : rate;
+      result_rates[i] = conservative_rounding && static_cast<Wide>(rate)>wide_rates[i]
+          ? std::nextafter(rate,0.0) : rate;
       result_alpha[i] = share;
     }
 
-    // Round each positive scalar downward once, preserving equal-rate ties.
-    // If the original packing rows still cannot be certified, use the LP.
+    // Curved intervals need one-sided feasible rates. Legacy Plans retain
+    // nearest rounding, as in the original simplex, for their integer ticks.
+    // Its certification allows only the binary64 representation error of
+    // each nonnegative product, far below the existing simplex epsilon.
     for (const PackingRow& row : rows) {
       Wide used=0;
       for(std::size_t i=0;i<count;++i)
         used+=static_cast<Wide>(row.a[i])*result_rates[i];
-      if(!std::isfinite(used)||used>static_cast<Wide>(row.b))return false;
+      const Wide tolerance = conservative_rounding ? 0.0L :
+          static_cast<Wide>(std::numeric_limits<double>::epsilon()) *
+          std::max(std::abs(used),static_cast<Wide>(row.b));
+      if(!std::isfinite(used)||used>static_cast<Wide>(row.b)+tolerance)return false;
     }
     rates.swap(result_rates);alpha.swap(result_alpha);
     return true;
