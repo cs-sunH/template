@@ -20,7 +20,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
-2026-10-16当前源码检查点：在已合入eba两cohort预取/独立尾Compute基础上，Compiler只写胜者诊断/保持相等最小者，Runtime减少空ready和重复owner扫描分配；模型/公平/ABI/候选/validation未变。Release45/45（19.85s），新库26case完整raw与eba逐字节一致、8个真实公开任务与冻结eba完整结果逐字段全等。最新30样本cold128³1.712469ms、hot4.247—4.867μs、J1/J8/J32更新14.021/25.568/38.317μs本次所测通过；所有先前尾部失败保留，不称稳定全负载验收。原17case仍27完成+busy失败，新增9case/27场景全10%只限单Core两cohort，R>1 ready仍not_available。XLSX仅条件参考/缺运行硬件参数，已用新CABI核Residual工作量4,194,304eq-op与25,165,824B，未冒称同硬件延迟校准。TX8/目标先验冻结，target raw缺失。正式五仓未publisher/CPU未测；见HANDOFF和allocation-overhead-20261016。当前持续开发，工程NOT ACCEPTED。
+2026-10-16当前源码检查点：在已合入a3编译/仲裁轻量去重基础上，修复原elementwise bulk按全Core总槽位约束导致繁忙Core越界的问题。新编译v4用解析max-Core输入两槽/可见输出一槽+隐藏Last保留槽，无新状态/事件/物理工作或公平变化；旧Plan/快照/五仓vendor不自动修复，R>1时序仍not_available。公开2 Core/1792 BF16暂停反例从2.4块降至2块，独立槽位枚举1,176,240项零违规，Release45/45（18.99s）。当前42case账本通过，但长16/48完成+busy全部failed、原17/51仍27failed，两cohort9/27全10%仅限已测范围。最新30样本cold128³2.153300ms、attention alias24.917μs、OS J32 83.834μs failed；J1/J8 17.095/33.770μs和hot cost4.126—6.880μs。全部历史/当前失败保留，不挑最佳一次。XLSX可比硬件延迟及target实测缺失，参考/先验冻结；正式五仓未publisher/CPU未测。详见HANDOFF和elementwise-prefix-drain-20261016。当前持续开发，工程NOT ACCEPTED。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
 

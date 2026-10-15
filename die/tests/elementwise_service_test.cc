@@ -231,6 +231,49 @@ void independent_two_cohort_compute_drain() {
 
 }
 
+void per_core_credit_capacities_under_pause() {
+  struct Case {u64 cores,blocks,repeats;};
+  for(const auto c:std::array<Case,4>{{{2,7,1},{2,5,3},{8,31,1},{8,17,2}}}) {
+    const auto hw=hardware(c.cores);const auto p=compile(hw,task(c.blocks*256,"residual","bf16",c.repeats));
+    Runtime runtime(hw);const auto h=runtime.submit(p,owner(1,1,1),0);
+    unsigned steps=0;
+    while(runtime.query_progress(h).at("epoch_index").get<u64>()<2) {
+      require(++steps<20,"prefix has a fixed event bound");runtime.advance_to(*runtime.next_event());
+    }
+    runtime.update_capacity(COMPUTE_GATE,0,runtime.now_ns());
+    runtime.advance_to(runtime.now_ns()+1000000);
+    const auto q=runtime.query_progress(h);long double load=0,compute=0,store=0;
+    for(const auto& a:q.at("activities"))if(a.at("epoch_index")==2) {
+      if(a.at("role")=="load")load=a.at("progress").get<long double>();
+      if(a.at("role")=="compute")compute=a.at("progress").get<long double>();
+      if(a.at("role")=="store")store=a.at("progress").get<long double>();
+    }
+    const u64 active=std::min(c.cores,c.blocks),last=c.blocks%active ? c.blocks%active : active;
+    // Independent small RR enumeration counts actual full blocks on each
+    // Core. Pausing compute lets Load and Store approach both FIFO bounds.
+    std::vector<u64> blocks_per_core(active,0);
+    for(u64 execution=0;execution<c.repeats;++execution)
+      for(u64 b=0;b<c.blocks;++b)++blocks_per_core[b%active];
+    for(u64 core=0;core<active;++core) {
+      const auto n=blocks_per_core[core];const u64 final_on_core=core<last;
+      const long double input=(n-1)*(load-compute);
+      const long double visible_output=1+(n-1-final_on_core)*compute-(n-final_on_core)*store;
+      const long double output=visible_output+final_on_core*compute;
+      require(input>=-1e-10L && input<=2+1e-10L,
+          "every Core must retain its own two input slots during a compute pause");
+      require(visible_output>=-1e-10L && output<=2+1e-10L,
+          "no Core may store unproduced output or exceed its two output slots");
+    }
+    auto fork=Runtime::import_snapshot(hw,runtime.export_snapshot());
+    require(fork->query_progress(h)==q,"paused physical buffer state must survive snapshot/import");
+    runtime.update_capacity(COMPUTE_GATE,hw.rates[COMPUTE_GATE],runtime.now_ns());
+    fork->update_capacity(COMPUTE_GATE,hw.rates[COMPUTE_GATE],fork->now_ns());
+    bounded_drain(runtime);bounded_drain(*fork);
+    require(runtime.query_progress(h)==fork->query_progress(h),
+        "paused buffer continuation must keep the same physical work and finish");
+  }
+}
+
 void snapshots_and_scaling() {
   const auto hw=hardware(2);u64 largest=0;
   for(u64 repeats:{1,1024,1000000}) {
@@ -260,7 +303,7 @@ void snapshots_and_scaling() {
   require(r.query_progress(h)==fork->query_progress(h),"capacity/cancel preserves restored partial work");
 }
 void verify(){
-  independent_enumeration();physical_ledger_and_prefix();capacity_and_private();byte_weighted_routes();independent_two_cohort_compute_drain();snapshots_and_scaling();
+  independent_enumeration();physical_ledger_and_prefix();capacity_and_private();byte_weighted_routes();independent_two_cohort_compute_drain();per_core_credit_capacities_under_pause();snapshots_and_scaling();
   std::ostringstream value;value<<std::setprecision(std::numeric_limits<long double>::max_digits10)<<max_service_residual;
   std::cout<<json{{"integer_plan_conservation","passed"},{"runtime_service_numeric_reconciliation","passed"},
       {"runtime_service_exact_integer_equality",max_service_residual==0},

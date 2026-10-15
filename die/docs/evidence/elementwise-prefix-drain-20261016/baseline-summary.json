@@ -1,0 +1,119 @@
+{
+  "scenario_statuses": {
+    "failed": 48
+  },
+  "cases": [
+    {
+      "case": "residual-e1025-i1-balanced-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.12487806126829241,
+      "solo_compute_busy_error": 0.9990243902439023
+    },
+    {
+      "case": "residual-e1025-i1-compute-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.022877335366874207,
+      "solo_compute_busy_error": 2.7728497005272207e-16
+    },
+    {
+      "case": "residual-e1025-i1-local-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 1.2487644735096438e-08,
+      "solo_compute_busy_error": 1.733031062829513e-16
+    },
+    {
+      "case": "residual-e1025-i1-memory-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.0012487929756096118,
+      "solo_compute_busy_error": 174.17658536585367
+    },
+    {
+      "case": "residual-e4097-i1-balanced-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.031242375591896087,
+      "solo_compute_busy_error": 0.9997559189650966
+    },
+    {
+      "case": "residual-e4097-i1-compute-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.005931569628433155,
+      "solo_compute_busy_error": 1.387440050300415e-16
+    },
+    {
+      "case": "residual-e4097-i1-local-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 3.1242269508471148e-09,
+      "solo_compute_busy_error": 3.4686001257510373e-16
+    },
+    {
+      "case": "residual-e4097-i1-memory-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.0003124268489147575,
+      "solo_compute_busy_error": 192.78960214791306
+    },
+    {
+      "case": "residual-e513-i1-balanced-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.24951267056530219,
+      "solo_compute_busy_error": 0.9980506822612086
+    },
+    {
+      "case": "residual-e513-i1-compute-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.043671220876975045,
+      "solo_compute_busy_error": 1.38507355898655e-16
+    },
+    {
+      "case": "residual-e513-i1-local-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 2.495062706224466e-08,
+      "solo_compute_busy_error": 0.0
+    },
+    {
+      "case": "residual-e513-i1-memory-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.002495126705653093,
+      "solo_compute_busy_error": 149.401559454191
+    },
+    {
+      "case": "residual-e768-i1-balanced-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.16666666666666669,
+      "solo_compute_busy_error": 0.6666666666666669
+    },
+    {
+      "case": "residual-e768-i1-compute-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 1.7347234759768068e-16,
+      "solo_compute_busy_error": 1.850371707708594e-16
+    },
+    {
+      "case": "residual-e768-i1-local-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.0,
+      "solo_compute_busy_error": 0.0
+    },
+    {
+      "case": "residual-e768-i1-memory-bf16-fp32",
+      "ledger": "passed",
+      "solo_status": "failed",
+      "solo_completion_error": 0.0016666666666665987,
+      "solo_compute_busy_error": 132.66666666666663
+    }
+  ]
+}
