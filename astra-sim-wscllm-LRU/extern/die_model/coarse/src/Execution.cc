@@ -959,13 +959,13 @@ std::uint64_t Runtime::submit_endpoint(const nlohmann::json& endpoint_json,
 void Runtime::settle() {
   for (auto& [handle, execution] : executions_) {
     (void)handle;
-    if (execution.terminal || exact_ns_ + kTimeEpsilonNs < execution.ready_ns) continue;
+    if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
     std::size_t guard = 0;
     while (!execution.terminal && guard++ <= execution.plan->epochs.size() + execution.activities.size() + 1) {
       if (execution.epoch >= execution.plan->epochs.size()) {
         execution.terminal = true;
         execution.cancelled = false;
-        execution.finish_ns = static_cast<std::uint64_t>(std::ceil(exact_ns_ - kTimeEpsilonNs));
+        execution.finish_ns = ceil_exact_time();
         for (LiveActivity& live : execution.activities) live.rate = 0.0;
         break;
       }
@@ -1055,7 +1055,7 @@ void Runtime::allocate() {
   std::map<std::string, long double> owner_q;
   for (auto& [handle, execution] : executions_) {
     (void)handle;
-    if (execution.terminal || exact_ns_ + kTimeEpsilonNs < execution.ready_ns) continue;
+    if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
     for (LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done) continue;
       bool has_service = false;
@@ -1511,6 +1511,20 @@ void Runtime::allocate() {
 
 void Runtime::integrate(long double delta_ns) {
   if (delta_ns <= 0.0L) return;
+  const long double whole = std::floor(delta_ns);
+  if (!std::isfinite(whole) || whole < 0.0L || whole >= std::ldexp(1.0L, 64))
+    throw std::overflow_error("overflow: integrated time exceeds uint64 nanoseconds");
+  const auto integer_delta = static_cast<std::uint64_t>(whole);
+  const long double fractional = exact_ns_ + (delta_ns - whole);
+  const auto carry = static_cast<std::uint64_t>(std::floor(fractional));
+  if (integer_delta > std::numeric_limits<std::uint64_t>::max() - exact_origin_ns_ ||
+      carry > std::numeric_limits<std::uint64_t>::max() - exact_origin_ns_ - integer_delta)
+    throw std::overflow_error("overflow: integrated time exceeds uint64 nanoseconds");
+  const auto next_origin = exact_origin_ns_ + integer_delta + carry;
+  const long double next_fraction = fractional - carry;
+  if (next_origin == std::numeric_limits<std::uint64_t>::max() &&
+      next_fraction > kTimeEpsilonNs)
+    throw std::overflow_error("overflow: fractional event exceeds uint64 nanoseconds");
   const long double seconds = delta_ns / kNsPerSecond;
   std::array<std::set<std::string>, 2> row_owners;
   bool compute_busy = false;
@@ -1520,7 +1534,7 @@ void Runtime::integrate(long double delta_ns) {
 
   for (auto& [handle, execution] : executions_) {
     (void)handle;
-    if (execution.terminal || exact_ns_ + kTimeEpsilonNs < execution.ready_ns) continue;
+    if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
     ServedCounters& categorized = served_by_category_[
         static_cast<std::size_t>(execution.served_category)];
     for (LiveActivity& live : execution.activities) {
@@ -1581,8 +1595,29 @@ void Runtime::integrate(long double delta_ns) {
     }
   }
   if (any_row_shared) hbm_shared_ns_ += delta_ns;
-  exact_ns_ += delta_ns;
-  now_ns_ = static_cast<std::uint64_t>(std::ceil(exact_ns_ - kTimeEpsilonNs));
+  exact_origin_ns_ = next_origin;
+  exact_ns_ = next_fraction;
+  now_ns_ = ceil_exact_time();
+}
+
+long double Runtime::time_until(std::uint64_t absolute_ns) const {
+  const long double integer_delta = absolute_ns >= exact_origin_ns_
+      ? static_cast<long double>(absolute_ns - exact_origin_ns_)
+      : -static_cast<long double>(exact_origin_ns_ - absolute_ns);
+  return integer_delta - exact_ns_;
+}
+
+std::uint64_t Runtime::ceil_exact_time() const {
+  if (exact_ns_ <= kTimeEpsilonNs) return exact_origin_ns_;
+  if (exact_origin_ns_ == std::numeric_limits<std::uint64_t>::max())
+    throw std::overflow_error("overflow: fractional event exceeds uint64 nanoseconds");
+  return exact_origin_ns_ + 1;
+}
+
+void Runtime::set_exact_time(std::uint64_t absolute_ns) {
+  exact_origin_ns_ = absolute_ns;
+  exact_ns_ = 0.0L;
+  now_ns_ = absolute_ns;
 }
 
 void recompute_credit(Execution& execution) {
@@ -1613,16 +1648,15 @@ void recompute_credit(Execution& execution) {
 
 void Runtime::advance_to(std::uint64_t absolute_ns) {
   if (absolute_ns < now_ns_) throw std::invalid_argument("invalid_time: advance_to moved backwards");
-  if (absolute_ns == now_ns_ &&
-      exact_ns_ + kTimeEpsilonNs >= static_cast<long double>(absolute_ns)) return;
+  if (absolute_ns == now_ns_ && time_until(absolute_ns) <= kTimeEpsilonNs) return;
   std::uint64_t events = 0;
-  while (exact_ns_ + kTimeEpsilonNs < static_cast<long double>(absolute_ns)) {
+  while (time_until(absolute_ns) > kTimeEpsilonNs) {
     long double next_delta = std::numeric_limits<long double>::infinity();
     for (const auto& [handle, execution] : executions_) {
       (void)handle;
       if (execution.terminal) continue;
-      if (exact_ns_ + kTimeEpsilonNs < execution.ready_ns) {
-        next_delta = std::min(next_delta, static_cast<long double>(execution.ready_ns) - exact_ns_);
+      if (time_until(execution.ready_ns) > kTimeEpsilonNs) {
+        next_delta = std::min(next_delta, time_until(execution.ready_ns));
         continue;
       }
       for (const LiveActivity& live : execution.activities) {
@@ -1651,7 +1685,7 @@ void Runtime::advance_to(std::uint64_t absolute_ns) {
       }
     }
 
-    const long double remaining_to_target = static_cast<long double>(absolute_ns) - exact_ns_;
+    const long double remaining_to_target = time_until(absolute_ns);
     if (!std::isfinite(next_delta) || next_delta > remaining_to_target + kTimeEpsilonNs) {
       struct SavedActivityState {
         std::size_t epoch = 0;
@@ -1667,8 +1701,7 @@ void Runtime::advance_to(std::uint64_t absolute_ns) {
         before_settle.emplace(handle, std::move(state));
       }
       integrate(remaining_to_target);
-      exact_ns_ = static_cast<long double>(absolute_ns);
-      now_ns_ = absolute_ns;
+      set_exact_time(absolute_ns);
       settle();
       bool membership_changed = false;
       for (const auto& [handle, execution] : executions_) {
@@ -1702,8 +1735,7 @@ void Runtime::advance_to(std::uint64_t absolute_ns) {
     settle();
     allocate();
   }
-  exact_ns_ = static_cast<long double>(absolute_ns);
-  now_ns_ = absolute_ns;
+  set_exact_time(absolute_ns);
 }
 
 void Runtime::cancel(std::uint64_t handle, std::uint64_t now_ns) {
@@ -1745,8 +1777,8 @@ std::optional<std::uint64_t> Runtime::next_event() const {
   for (const auto& [handle, execution] : executions_) {
     (void)handle;
     if (execution.terminal) continue;
-    if (exact_ns_ + kTimeEpsilonNs < execution.ready_ns) {
-      delta = std::min(delta, static_cast<long double>(execution.ready_ns) - exact_ns_);
+    if (time_until(execution.ready_ns) > kTimeEpsilonNs) {
+      delta = std::min(delta, time_until(execution.ready_ns));
       continue;
     }
     for (const LiveActivity& live : execution.activities) {
@@ -1775,11 +1807,13 @@ std::optional<std::uint64_t> Runtime::next_event() const {
   if (!std::isfinite(delta)) return std::nullopt;
   long double rounded = std::ceil(delta - kTimeEpsilonNs);
   if (rounded < 1.0L) rounded = 1.0L;
-  const long double absolute = static_cast<long double>(now_ns_) + rounded;
-  if (absolute > static_cast<long double>(std::numeric_limits<std::uint64_t>::max())) {
+  if (rounded >= std::ldexp(1.0L, 64))
+    throw std::overflow_error("overflow: next event exceeds uint64 nanoseconds");
+  const auto integer_delta = static_cast<std::uint64_t>(rounded);
+  if (integer_delta > std::numeric_limits<std::uint64_t>::max() - now_ns_) {
     throw std::overflow_error("overflow: next event exceeds uint64 nanoseconds");
   }
-  return static_cast<std::uint64_t>(absolute);
+  return now_ns_ + integer_delta;
 }
 
 nlohmann::json Runtime::query_progress(std::uint64_t handle) const {
@@ -1813,7 +1847,7 @@ nlohmann::json Runtime::query_progress(std::uint64_t handle) const {
     if (live.done) state = "done";
     else if (execution.cancelled) state = "cancelled";
     else if (execution.terminal) state = "not_run";
-    else if (live.epoch_index > execution.epoch || exact_ns_ < execution.ready_ns) state = "blocked";
+    else if (live.epoch_index > execution.epoch || time_until(execution.ready_ns) > 0.0L) state = "blocked";
     else if (live.epoch_index < execution.epoch) state = "done";
     else if (live.rate > 0.0) state = "running";
     else state = "blocked";
@@ -1848,7 +1882,7 @@ nlohmann::json Runtime::query_progress(std::uint64_t handle) const {
   }
   const std::string state = execution.cancelled ? "cancelled"
                            : execution.terminal ? "finished"
-                           : exact_ns_ < execution.ready_ns ? "queued"
+                           : time_until(execution.ready_ns) > 0.0L ? "queued"
                                                            : "running";
   const std::uint64_t elapsed = execution.terminal
       ? execution.finish_ns - execution.issue_ns
@@ -1920,7 +1954,7 @@ nlohmann::json Runtime::counters() const {
   std::size_t active_activities = 0;
   for (const auto& [handle, execution] : executions_) {
     (void)handle;
-    if (execution.terminal || exact_ns_ < execution.ready_ns) continue;
+    if (execution.terminal || time_until(execution.ready_ns) > 0.0L) continue;
     bool owner_active = false;
     bool owner_hbm = false;
     for (const LiveActivity& live : execution.activities) {
@@ -2073,7 +2107,9 @@ nlohmann::json Runtime::export_snapshot() const {
           {"snapshot_version", 3},
           {"hardware_fingerprint", hardware_->fingerprint},
           {"now_ns", now_ns_},
-          {"exact_ns", long_double_text(exact_ns_)},
+          // Public calls end at an exact integer tick. Legacy fractional v2/v3
+          // imports retain the precision their original absolute scalar had.
+          {"exact_ns", long_double_text(static_cast<long double>(exact_origin_ns_) + exact_ns_)},
           {"next_handle", next_handle_},
           {"runtime_generation", generation_},
           {"allocation_updates", allocation_updates_},
@@ -2133,9 +2169,14 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     }
     return parsed;
   };
-  runtime->exact_ns_ = parse_long_double(snapshot.at("exact_ns"), "exact_ns");
-  if (runtime->exact_ns_ > static_cast<long double>(runtime->now_ns_) + kTimeEpsilonNs ||
-      std::ceil(runtime->exact_ns_ - kTimeEpsilonNs) != static_cast<long double>(runtime->now_ns_)) {
+  const long double legacy_exact = parse_long_double(snapshot.at("exact_ns"), "exact_ns");
+  if (legacy_exact >= std::ldexp(1.0L, 64))
+    throw std::invalid_argument("invalid_snapshot: exact_ns exceeds uint64 nanoseconds");
+  const long double whole_exact = std::floor(legacy_exact);
+  runtime->exact_origin_ns_ = static_cast<std::uint64_t>(whole_exact);
+  runtime->exact_ns_ = legacy_exact - whole_exact;
+  if (runtime->time_until(runtime->now_ns_) < -kTimeEpsilonNs ||
+      runtime->ceil_exact_time() != runtime->now_ns_) {
     throw std::invalid_argument("invalid_snapshot: exact_ns is inconsistent with public now_ns");
   }
   runtime->next_handle_ = parse_u64(snapshot.at("next_handle"), "snapshot.next_handle");

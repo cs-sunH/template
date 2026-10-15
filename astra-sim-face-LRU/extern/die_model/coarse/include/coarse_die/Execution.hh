@@ -107,6 +107,13 @@ class Runtime {
     void settle();
     void allocate();
     void integrate(long double delta_ns);
-    long double exact_ns_=0;
+    // Keep absolute integer time separate from sub-nanosecond integration.
+    // Adding a short deadline to a large absolute long double can otherwise
+    // erase its fractional part and change the public ceil by one ns.
+    std::uint64_t exact_origin_ns_=0;
+    long double exact_ns_=0;  // fractional ns in [0,1)
+    long double time_until(std::uint64_t absolute_ns) const;
+    std::uint64_t ceil_exact_time() const;
+    void set_exact_time(std::uint64_t absolute_ns);
 };
 }

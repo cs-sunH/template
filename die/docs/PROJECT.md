@@ -20,6 +20,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 当前代码与运行方式
 
+- 2026-10-15时钟检查点：真实middle-K两活动发现大绝对起点使ceil漂移1ns；内部改为checked整数原点+[0,1)小数，next_event整数相加，服务/LP/credit/校准不变，旧Plan及snapshot v2/v3 wire保留。72项跨起点/partial import/cancel/capacity严格比较、legacy小数/u64边界、完整33/33 CTest、full/tail九诊断及五仓双ABI/config83/83（0skip）通过。canonical24 digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`。尚无周期skip或生产E5新证书；下一步显式opt-in有界单Core OS生命周期与新JOINT known cancel。详见runtime-clock-20261015分析/证据；保持持续开发。
+
 - 2026-10-15本轮恢复持续开发：main d115117→`codex/die-k-readiness-20261015`。已修oracle/诊断final-only输出门，独立Python/C++可达反例精确15s；新六计数器Cursor与真实13域Runtime显式槽位逐步一致，三组full/tail九场景grouped通过，定向CTest3/3（含Python13项）。新内部基础尚未进入生产Plan/Runtime生命周期，O(events)诊断不作E5/E8/效率认证。canonical24 digest dd62e6787557ff2f764fc5be8f38865a2c15916c20f1a9fc95a28ebcd4fb7005；五仓check/独立configure5/5，原生产timing/TX8未改。下一步生产有界生命周期与新JOINT剩余接线；旧停止/交接段落是历史，当前不按阶段停工。证据见HANDOFF及k-readiness-corrected-20261015。
 
 - 2026-10-15最终用户交接：停止新任务，归档单Core K就绪部分诊断/原始结果/旧设计草案/周期成果盘点和replay入口。只有M80/N128/K4096三场景grouped输出passed；诊断与参考共用过严的非final输出槽门，尚未修正/量化影响，不能当生产E5/效率证书。生产源码e73a378不变、整体NOT ACCEPTED。下一账号先修验证门控反例，再K tail/有界生产路径，随后JOINT/五仓剩余项；详情以HANDOFF最新最终交接为准。完成main同步后本Session立即停止。

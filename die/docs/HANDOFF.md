@@ -4,6 +4,14 @@
 
 ## Current Status
 
+### 绝对时钟平移修复（2026-10-15）
+
+在准备窄 middle-K 周期验证时，实际Runtime暴露相同两活动从不同绝对时刻开始会相差1ns的问题：`16×1×64`周期从43521变43520ns，`1×64×64`从166400变166401ns。原因是将短小数deadline直接加到很大的absolute long double，丢失小数后改变ceil。现将内部时钟分为checked uint64整数原点与[0,1)小数，所有ready/target比较先做整数差；next_event也用checked整数相加。13域物理工作量、LP、Q/alpha、credit、原epsilon/预算和校准不变。公共调用仍结束在整数tick，旧Plan与snapshot v2/v3 wire不变；旧可表示的小数快照仍可恢复。
+
+四种真实per-K facts、六种起点（包括2^53-1、2^63和UINT64尾部）、三种模式（32周期、partial import+cancel、partial import+capacity）共72项严格比较通过；相对终态、busy/served精确字符串和计数均与0起点一致，source/import完整快照继续全等。新测试在ABI一致的旧header+旧库上失败，已保留日志。另测小数legacy wire和uint64溢出只读拒绝/末tick取消。完整Release all build与33/33 CTest、修复后九项full/tail诊断、五仓双ABI及配置83/83（0skip）通过。canonical24 digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`，五份coarse SO SHA `bf56b1c1b7afd3c91a8cace974db19249d3e82567c3c770eda0e623e741cfddc`一致。仅活动新JOINT参与，旧仓未改。
+
+实际middle-pair study四类×五起点×32周期，修复后同类跨起点的完整相对记录严格一致；同一运行内不同周期的busy差分仍有累计浮点减法尾差，未宣称bulk累加或周期跳跃已解决。测试平台为GCC14.2/x87 long double（64位有效二进制位），不外推其他long-double格式。证据及可移植重放在 `analysis/runtime-clock-20261015/` 与同名evidence。尚无生产K生命周期/跳周期、E5新认证、目标校准或完整Online重跑。正在实现显式opt-in有界单Core OS程序，以及新JOINT known cancel；未完成代码不计本检查点成果。普通git同步main后继续开发。
+
 ### 本轮持续开发：K readiness 修正检查点（2026-10-15）
 
 已从干净旧工作区 fast-forward 最新 main `d1151179d2a3c3246e0b7a896db9e3dacef52885`，创建 `codex/die-k-readiness-20261015`。Python/C++ 诊断仅 final-K Compute 预约输出槽；两套独立从空状态的反例均得 nonfinal@5s、final wait@6s、Store release/final start@7s、finish15s。原错误同域小夹具没有达到output满，失败记录保留。旧raw逐字节不动；旧K4096重评 comparisons 原有字段全等（仅新增revision元数据）。参考语义 `final_k_output_reservation_v2`，grouped oracle v3，诊断不再冒用E5/minimum-E标签。
@@ -134,12 +142,14 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 当前为持续开发，不按检查点自动停止。K参考门控修正、独立反例和三组full/tail九场景诊断已完成，不重复。
 
-1. **有界生产生命周期。** 复用新Descriptor/六计数器Cursor、原Geometry/Counter/13域facts。先单Core OS，证明同输出非final middle-K的同步零进度两活动窄周期：Store/输出为空、仅一个owner两活动、同事实/容量。实际Runtime见证后还须覆盖跳跃horizon的deadline/整数ns舍入、busy/served累加；一次见证不能当一般long-double平移证明。其余情形fail closed；再考虑输出行/multiCore cohorts/WR。不要部署O(R×Tk)诊断或照搬GMP/Fraction/fixed-phase研究。生产schema/旧Plan兼容、取消/完整快照/ready/busy/守恒/实际开销通过后，才重跑生产原3%/5%并选择最小有效E。
+1. **有界生产生命周期。** 时钟原点1ns漂移已修并验证，不重复。下一片为显式opt-in单Core OS程序，旧Plan默认路径保持；复用Descriptor/六计数器Cursor、原Geometry/Counter/13域facts和公共LP，最多三个当前stage槽。先用明确小展开预算验证真实Runtime的取消、完整快照、ready/busy/工作量守恒；该受限O(events)入口只作诊断，不能默认部署到五仓或认证效率。随后实现同输出非final middle-K同步零进度窄周期：Store/输出为空、一个owner、同事实/容量；还需覆盖horizon、busy/served bulk累加和实际探测计数，其余fail closed。再考虑输出行/multiCore cohorts/WR，不照搬GMP/Fraction/fixed-phase研究。完整生命周期和开销通过后，才重跑原3%/5%并选最小有效E。
 2. **新JOINT生产接线。** domain/native-session wire、实际Sys只读sample→Domain、known capacity已完成。补known cancel、Sys已知事件采集、真实graph/ledger/lease/active-leg与回放；保留四项busy ±1e-16ns严格差异记录。使用现有native session、唯一local endpoint，不能将scalar伪装恢复；完整world前保留 `live_world_import_supported=false` 与sh30 guard。Sys export_snapshot(now)会推进/回调，只读用Runtime副本。
 3. **其余五仓业务。** FACE两仓固定E/protocol2/startup证书/source-release及原129层压力已验证；扩展其他端口/拓扑/竞争与完整GQA producer，保留KV/weights/TP/transfer/readiness及ACK/本地发送完成→容量复用顺序。不重做未改且通过部分；WS typed diagnostic共存/lease有效。
 4. **性能和校准。** 生命周期结构稳定后实测source cold/hit/update/J32/Online CPU/RSS/cache/event/LP。没有独立目标raw/heldout，不重新拟合TX8或目标效率，不将BF16/DDR结果代替INT4/HBM。reference/target参数继续冻结。
 
 ## Important Decisions
+
+- 时钟只拆整数原点和小数，不改变服务模型或引入精确有理数；绝对时刻无关性已有真实反例和72项回归。旧wire保留，C++ Runtime布局变化要求所有使用方重编译，本检查点五仓双ABI已实做。尚未启用任何周期跳跃。
 
 - 本轮Descriptor/Cursor是内部基础，六计数器只表达严格序的离散就绪；没有新增生产Plan schema、signed-credit服务行或压缩。规范发布现在canonical24，未执行的生产/业务测试不因新摘要升级。最新诊断参考已修final-only输出门；历史raw/报告不重写。
 
@@ -158,6 +168,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Files to Continue
 
+- 时钟：`die/src/Execution.cc`、`include/coarse_die/Execution.hh`、`tests/runtime_clock_translation_test.cc`；实际重放 `analysis/runtime-clock-20261015/replay_pair.py`。单Core opt-in的Plan/Compiler/Mapping与Runtime分工在继续，未完成前不可发布为新默认模型。
+
 - 当前基础：`die/src/GemmOSReadiness.hh`、`tests/gemm_os_readiness_test.cc`、`tests/k_readiness_runtime_driver.cc`、`validation/{compiled,grouped}_gemm_oracle.py`。新复现 `analysis/k-readiness-20261015/run_corrected.py`，说明与证据在 `k-readiness-corrected-20261015`。归档未修probe只作历史。
 
 - 最新部分成果：`die/docs/analysis/k-readiness-20261015/{README.md,replay.py,k-readiness-proposal-original.md,periodic-k-readiness-inventory.md}`，原始源码/日志/JSON与summary/identity/checksums在同名evidence目录。无需依赖旧账号work/路径；replay复制原源码并替换绝对include，固定单形状，交接时仅做语法/帮助检查，未宣称新入口全重放。
@@ -172,6 +184,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
+
+- 时钟检查点：Release all build成功，33/33 CTest；72项起点平移、legacy小数和u64边界；旧header+旧库负回归确实失败。full/tail九项诊断重新通过，五仓真实双ABI全部重建，配置20+15+18+17+13=83/83、0skip；库/源码/命令身份见runtime-clock证据。未重跑全部Online、FACE压力、目标held-out或host预算，不以本轮诊断覆盖旧生产E5失败。
 
 - 本轮修正/紧凑基础：定向CTest3/3（含13 Python项）、C++精确15s可达反例、三shape九场景grouped全部passed；对应完整raw/计数序列化严格差值在新evidence。五份canonical24 check/独立tests-OFF configure5/5；未重跑public30/five83/完整Online，不由诊断外推生产E5或效率。
 
@@ -196,11 +210,11 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 工程验收缺口：sh30/完整native live world、network/pool/ledger/cancel回放，E5精度/最小有效E，其他容量/拓扑/端口竞争压力、完整GQA/FACE future/source-release全业务验收、成本余项和host预算。目标测量not_available。以上不应由merge、fixture或条件reference数字冒充通过。
 
-最新生产 e73a378 及先前源码检查点已进入 main 并实核。本次K诊断部分成果已归档；本交接提交须正常同步main并实核后才算代码可接棒。工程NOT ACCEPTED与代码接棒安全分开，不能隐瞒未通过项。
+生产 e73a378、K诊断修正c13e9a7及先前源码检查点均已进入main并实核。本次时钟修复按普通git同步main并实核；精确SHA由包含本文的Git提交确定。工程NOT ACCEPTED与代码检查点安全分开，不能隐瞒未通过项。
 
 ## Handoff Notes
 
-当前用户要求持续自主开发，仅在明确停止/关键必需决策/客观阻塞时结束。上一轮停止指令及其canonical23说明属于历史；本轮canonical24新增未启用内部基础，未改生产timing/校准。所有新诊断成功/失败与源码身份随证据保存。没有修改old、覆盖其他人提交或丢弃有效修改。
+当前用户要求持续自主开发，仅在明确停止/关键必需决策/客观阻塞时结束。上一轮停止指令属于历史；本轮canonical24含未启用内部基础及绝对时钟修复，校准冻结。所有新诊断成功/失败与源码身份随证据保存。没有修改old、覆盖其他人提交或丢弃有效修改。
 
 实际工具来自 `/workspace/cloud-setup/activate.sh`：CMake3.31.10/GCC14.2/protoc3.21.12/Python3.12 protobuf6.33.5，无PROTOBUF_FROM_SOURCE。work内依赖、build、ELF、stage不跨账号交付；复现入口明确需要重建。`work/build-joint` 的CMake源是 `work/joint-reproduction/aggregate`，不要在旧cache换源重配；新账号优先新目录。公共库入口 `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release`；K replay入口见新README。其他真实业务入口/日志在各analysis/evidence，未改且通过的结果直接复用。
 
