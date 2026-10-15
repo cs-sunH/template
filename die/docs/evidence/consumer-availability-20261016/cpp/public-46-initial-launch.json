@@ -1,0 +1,13 @@
+{
+  "status": "not_run",
+  "command": [
+    "ctest",
+    "--test-dir",
+    "work/build-die-continue",
+    "--output-on-failure"
+  ],
+  "launch_error": "FileNotFoundError: ctest was not on PATH because activate.sh was not sourced",
+  "ctest_executed": false,
+  "recorded_after_launch_failure": true,
+  "fix": "activate the configured toolchain; recorder now retains OSError failures"
+}

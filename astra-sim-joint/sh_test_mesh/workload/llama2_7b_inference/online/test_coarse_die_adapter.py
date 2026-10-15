@@ -229,7 +229,8 @@ class _FakeCoarseLibrary:
         }
         self.result_json = {
             "results": [
-                {"estimated_latency_ns": 1234, "plan_hash": "abc"},
+                {"estimated_latency_ns": 1234, "plan_hash": "abc",
+                 "status": "ok_assumed"},
                 None,
             ],
             "errors": [None, {"reason": "unsupported_dtype"}],
@@ -265,6 +266,78 @@ class _FakeCoarseLibrary:
 
 
 class CoarseOracleTests(unittest.TestCase):
+    def _oracle(self, rows, errors=None, *, coarse=True):
+        fake = _FakeCoarseLibrary()
+        fake.result_json = {
+            "results": rows, "errors": errors or [None] * len(rows)}
+        fake.die_estimate_batch = fake.die_coarse_estimate_batch_v2
+        fake.die_free_result = fake.die_coarse_free_result_v2
+        fake.die_destroy_model = fake.die_coarse_destroy_model_v2
+        oracle = oracle_module.DieModelOracle.__new__(oracle_module.DieModelOracle)
+        oracle._lib = fake
+        oracle._model = 17
+        oracle._closed = False
+        oracle._hardware_summary = None
+        oracle.coarse = coarse
+        oracle.last_errors = []
+        oracle.estimate_timing = {
+            "batch_calls": 0, "specs_total": 0, "wall_ns_total": 0}
+        self.addCleanup(oracle.close)
+        return oracle, fake
+
+    @staticmethod
+    def _row(status="ok_assumed"):
+        return {"estimated_latency_ns": 1234, "plan_hash": "abc",
+                "status": status, "heldout_status": "not_available",
+                "calibration_status": "assumed"}
+
+    def test_unavailable_body_preserves_available_siblings_and_errors(self):
+        good = self._row()
+        oracle, fake = self._oracle(
+            [good, self._row("not_available"), None, good],
+            [None, None, {"reason": "unsupported_dtype"}, None])
+        result = oracle.estimate([{"op_kind": "norm"}] * 4)
+        self.assertEqual(result, [good, None, None, good])
+        self.assertEqual(oracle.last_errors[0], None)
+        self.assertIn("not_available", oracle.last_errors[1])
+        self.assertEqual(oracle.last_errors[2:], ["unsupported_dtype", None])
+        self.assertEqual(len(fake.freed), 1)
+
+    def test_unavailable_body_is_rejected_before_latency_validation(self):
+        row = self._row("not_available")
+        row["estimated_latency_ns"] = "diagnostic body only"
+        oracle, fake = self._oracle([row])
+        self.assertEqual(oracle.estimate([{}]), [None])
+        self.assertIn("not_available", oracle.last_errors[0])
+        self.assertEqual(len(fake.freed), 1)
+
+    def test_coarse_top_level_status_must_be_a_string(self):
+        for status in (None, True, 7, [], {}):
+            with self.subTest(status=status):
+                oracle, fake = self._oracle([self._row(status)])
+                with self.assertRaisesRegex(RuntimeError, "status"):
+                    oracle.estimate([{}])
+                self.assertEqual(len(fake.freed), 1)
+        row = self._row()
+        del row["status"]
+        oracle, fake = self._oracle([row])
+        with self.assertRaisesRegex(RuntimeError, "status"):
+            oracle.estimate([{}])
+        self.assertEqual(len(fake.freed), 1)
+
+    def test_estimate_one_rejects_unavailable_body(self):
+        oracle, _ = self._oracle([self._row("not_available")])
+        with self.assertRaisesRegex(RuntimeError, "rejected.*not_available"):
+            oracle.estimate_one({"op_kind": "norm"})
+
+    def test_legacy_cost_result_keeps_existing_status_semantics(self):
+        row = {key: 0 for key in oracle_module.COST_RESULT_FIELDS}
+        row["status"] = "not_available"
+        oracle, fake = self._oracle([row], coarse=False)
+        self.assertEqual(oracle.estimate([{}]), [row])
+        self.assertEqual(oracle.last_errors, [None])
+        self.assertEqual(len(fake.freed), 1)
+
     def test_coarse_v2_abi_is_selected_and_legacy_execution_is_blocked(self) -> None:
         fake = _FakeCoarseLibrary()
         with tempfile.TemporaryDirectory() as tmp:

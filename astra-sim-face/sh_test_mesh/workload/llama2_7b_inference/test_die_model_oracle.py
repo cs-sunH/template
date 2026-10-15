@@ -23,6 +23,7 @@ backend=die 的生产路径上对缺库 fail-closed,与测试跳过语义不同�
 
 from __future__ import annotations
 
+import ctypes
 import json
 import os
 import sys
@@ -236,6 +237,145 @@ class DieModelOracleTests(_TempConfigMixin, unittest.TestCase):
             DieModelOracle(config_json_path=str(broken))
 
 
+class CoarseAvailabilityTests(unittest.TestCase):
+    """Exercise new statuses without requiring a newer native SDK."""
+
+    def _oracle(self, rows, errors=None, *, coarse=True, supports_cost=True):
+        payload = {"results": rows, "errors": errors or [None] * len(rows)}
+        buffer = ctypes.create_string_buffer(json.dumps(payload).encode("utf-8"))
+        library = mock.Mock()
+        library._result_buffer = buffer  # Keep the simulated C allocation alive.
+        pointer = ctypes.addressof(buffer)
+        library.die_coarse_estimate_batch_v2.return_value = pointer
+        library.die_coarse_estimate_cost_batch_v2.return_value = pointer
+        library.die_estimate_batch.return_value = pointer
+        oracle = DieModelOracle.__new__(DieModelOracle)
+        oracle._lib = library
+        oracle._model = 17
+        oracle._closed = False
+        oracle._hardware_summary = {"derived": {"test": 1}}
+        oracle.coarse = coarse
+        oracle.supports_estimate_cost = supports_cost
+        oracle.last_errors = []
+        self.addCleanup(oracle.close)
+        return oracle, library
+
+    @staticmethod
+    def _row(status="ok_assumed"):
+        return {
+            "estimated_latency_ns": 1234,
+            "plan_hash": "selected-plan",
+            "status": status,
+            "calibration_status": "assumed",
+            "heldout_status": "not_available",
+        }
+
+    def test_cost_full_and_optional_fallback_keep_available_siblings(self):
+        for mode in ("full", "cost", "full_fallback"):
+            with self.subTest(mode=mode):
+                good = self._row()
+                unavailable = self._row("not_available")
+                unavailable["prediction_scope"] = "body_timing_only"
+                oracle, library = self._oracle(
+                    [good, unavailable, None, good],
+                    [None, None, {"reason": "unsupported_dtype"}, None],
+                    supports_cost=mode != "full_fallback")
+                query = oracle.estimate if mode == "full" else oracle.estimate_cost
+                result = query([{"op_kind": "norm"}] * 4)
+                self.assertEqual(len(result), 4)
+                self.assertEqual(result[0]["estimated_latency_ns"], 1234)
+                self.assertEqual(result[0], result[3])
+                self.assertIsNone(result[1])
+                self.assertIsNone(result[2])
+                self.assertIn("not_available", oracle.last_errors[1])
+                self.assertEqual(oracle.last_errors[2], "unsupported_dtype")
+                self.assertIsNone(oracle.last_errors[0])
+                self.assertIsNone(oracle.last_errors[3])
+                library.die_coarse_free_result_v2.assert_called_once()
+                self.assertEqual(library.die_coarse_estimate_cost_batch_v2.call_count,
+                                 int(mode == "cost"))
+                self.assertEqual(library.die_coarse_estimate_batch_v2.call_count,
+                                 int(mode != "cost"))
+
+    def test_unavailable_body_is_rejected_before_latency_conversion(self):
+        for cost_only in (False, True):
+            with self.subTest(cost_only=cost_only):
+                row = self._row("not_available")
+                row["estimated_latency_ns"] = "diagnostic body only"
+                oracle, library = self._oracle([row])
+                query = oracle.estimate_cost if cost_only else oracle.estimate
+                self.assertEqual(query([{}]), [None])
+                self.assertIn("not_available", oracle.last_errors[0])
+                library.die_coarse_free_result_v2.assert_called_once()
+
+    def test_coarse_top_level_status_must_be_a_string(self):
+        for mode in ("full", "cost", "full_fallback"):
+            for status in (None, True, 7, [], {}):
+                with self.subTest(mode=mode, status=status):
+                    row = self._row(status)
+                    oracle, library = self._oracle(
+                        [row], supports_cost=mode != "full_fallback")
+                    query = oracle.estimate if mode == "full" else oracle.estimate_cost
+                    with self.assertRaisesRegex(RuntimeError, "status"):
+                        query([{}])
+                    library.die_coarse_free_result_v2.assert_called_once()
+            with self.subTest(mode=mode, status="missing"):
+                row = self._row()
+                del row["status"]
+                oracle, library = self._oracle(
+                    [row], supports_cost=mode != "full_fallback")
+                query = oracle.estimate if mode == "full" else oracle.estimate_cost
+                with self.assertRaisesRegex(RuntimeError, "status"):
+                    query([{}])
+                library.die_coarse_free_result_v2.assert_called_once()
+
+    def test_estimate_one_rejects_unavailable_body(self):
+        oracle, _ = self._oracle([self._row("not_available")])
+        with self.assertRaisesRegex(RuntimeError, "rejected.*not_available"):
+            oracle.estimate_one({"op_kind": "norm"})
+
+    def test_legacy_cost_result_keeps_existing_status_semantics(self):
+        row = {key: 0 for key in COST_RESULT_FIELDS}
+        row["status"] = "not_available"
+        oracle, library = self._oracle([row], coarse=False)
+        self.assertEqual(oracle.estimate_cost([{}]), [row])
+        self.assertEqual(oracle.last_errors, [None])
+        library.die_free_result.assert_called_once()
+        library.die_coarse_free_result_v2.assert_not_called()
+
+    def test_face_scorer_rejects_none_without_cost_fallback(self):
+        import face_scheduler as scheduler
+        model = scheduler.FaceModel(1, 8, 16, 4, 32, 2, "gelu")
+        hardware = scheduler.FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 0, 0)
+        arguments = dict(instance_size=2, p_chunk=8, d_batch=1, d_token=257)
+        specs, _ = scheduler.build_die_estimate_specs(
+            model, config_hash="test", **arguments)
+        for mode in ("full", "cost"):
+            with self.subTest(mode=mode):
+                oracle, library = self._oracle(
+                    [self._row("not_available")] * len(specs),
+                    supports_cost=mode == "cost")
+                with self.assertRaisesRegex(RuntimeError, "rejected.*not_available"):
+                    scheduler.estimate_iteration_time_ns(
+                        hardware, model, cost_oracle=oracle, **arguments)
+                self.assertEqual(library.die_coarse_estimate_batch_v2.call_count,
+                                 int(mode == "full"))
+                self.assertEqual(library.die_coarse_estimate_cost_batch_v2.call_count,
+                                 int(mode == "cost"))
+
+    def test_face_scorer_propagates_oracle_exception(self):
+        import face_scheduler as scheduler
+        oracle, library = self._oracle([])
+        with mock.patch.object(oracle, "estimate_cost",
+                               side_effect=RuntimeError("batch transport failed")):
+            with self.assertRaisesRegex(RuntimeError, "batch transport failed"):
+                scheduler.estimate_iteration_time_ns(
+                    scheduler.FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 0, 0),
+                    scheduler.FaceModel(1, 8, 16, 4, 32, 2, "gelu"),
+                    cost_oracle=oracle, instance_size=2, p_chunk=8,
+                    d_batch=1, d_token=257)
+        library.die_coarse_estimate_batch_v2.assert_not_called()
+        library.die_estimate_batch.assert_not_called()
 @unittest.skipUnless(
     os.environ.get(COARSE_CABI_LIBRARY_ENV),
     "coarse DIE ABI not supplied; set DIE_COARSE_CABI_PATH")

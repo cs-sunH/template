@@ -1,0 +1,233 @@
+Start testing: Oct 15 22:35 UTC
+----------------------------------------------------------
+1/35 Testing: JointPipelineWindowTest
+1/35 Test: JointPipelineWindowTest
+Command: "/workspace/template/work/consumer-availability/old-astra-sim-joint-build/bin/JointPipelineWindowTest"
+Directory: /workspace/template/work/consumer-availability/old-astra-sim-joint-build/AstraSim
+"JointPipelineWindowTest" start time: Oct 15 22:35 UTC
+Output:
+----------------------------------------------------------
+[pipeline_window_test] PASS
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"JointPipelineWindowTest" end time: Oct 15 22:35 UTC
+"JointPipelineWindowTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/35 Testing: NativeProjectionCApiTest
+2/35 Test: NativeProjectionCApiTest
+Command: "/workspace/template/work/consumer-availability/old-astra-sim-joint-build/bin/NativeProjectionCApiTest"
+Directory: /workspace/template/work/consumer-availability/old-astra-sim-joint-build/AstraSim
+"NativeProjectionCApiTest" start time: Oct 15 22:35 UTC
+Output:
+----------------------------------------------------------
+[native_projection_c_api_test] PASS
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"NativeProjectionCApiTest" end time: Oct 15 22:35 UTC
+"NativeProjectionCApiTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/35 Testing: NativeCoarseProjectionTest
+3/35 Test: NativeCoarseProjectionTest
+Command: "/workspace/template/work/consumer-availability/old-astra-sim-joint-build/bin/NativeCoarseProjectionTest"
+Directory: /workspace/template/work/consumer-availability/old-astra-sim-joint-build/AstraSim
+"NativeCoarseProjectionTest" start time: Oct 15 22:35 UTC
+Output:
+----------------------------------------------------------
+NativeCoarseProjectionTest ALL PASS
+<end of output>
+Test time =   2.81 sec
+----------------------------------------------------------
+Test Passed.
+"NativeCoarseProjectionTest" end time: Oct 15 22:35 UTC
+"NativeCoarseProjectionTest" time elapsed: 00:00:02
+----------------------------------------------------------
+
+4/35 Testing: NativeCoarseDieDomainTest
+4/35 Test: NativeCoarseDieDomainTest
+Command: "/workspace/template/work/consumer-availability/old-astra-sim-joint-build/bin/NativeCoarseDieDomainTest"
+Directory: /workspace/template/work/consumer-availability/old-astra-sim-joint-build/AstraSim
+"NativeCoarseDieDomainTest" start time: Oct 15 22:35 UTC
+Output:
+----------------------------------------------------------
+PASS native_coarse_die_domain_test
+<end of output>
+Test time =   0.14 sec
+----------------------------------------------------------
+Test Passed.
+"NativeCoarseDieDomainTest" end time: Oct 15 22:35 UTC
+"NativeCoarseDieDomainTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+29/35 Testing: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+29/35 Test: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+Command: "/workspace/template/work/consumer-availability/old-astra-sim-joint-build/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+Directory: /workspace/template/work/consumer-availability/old-astra-sim-joint-build/frontend
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" start time: Oct 15 22:35 UTC
+Output:
+----------------------------------------------------------
+A: GPU comp slot occupied at issue                                       -> PASS
+A: node terminal fires exactly once                                      -> PASS
+A: span >= isolated estimate + one-shot latency                          -> PASS
+A: span == oracle machine elapsed + exactly one 100 ns local_mem_latency charge -> PASS
+A: tics_gpu_ops equals the wall span                                     -> PASS
+A: GPU comp slot released after Done                                     -> PASS
+A: adapter drains after Done                                             -> PASS
+F: online DIE terminal fires once with frozen K=8                        -> PASS
+F: K=8 does not change the exact mixed-plan runtime                      -> PASS
+F: adapter reports the Workload-frozen K=8 contract                      -> PASS
+F: completed online DIE execution is accounted                           -> PASS
+F: ineligible mixed plan honestly stays exact at K=8                     -> PASS
+B: node terminal fires exactly once                                      -> PASS
+B: span == oracle machine elapsed exactly (latency 0 -> no latency charge) -> PASS
+C: adapter reports an active execution mid-flight                        -> PASS
+C: GPU comp slot still occupied mid-flight                               -> PASS
+C: node terminal fires exactly once under contention                     -> PASS
+C: span >= isolated estimate + latency (equal share can only delay)      -> PASS
+C: adapter drains after Done under contention                            -> PASS
+C: die side-band records service AND actual bytes (separate columns)     -> PASS
+D: marker without the HBM model completes on the 1 ns event (legacy micro-job) -> PASS
+E: big node still in flight after partial pumping                        -> PASS
+E: resetting Sys with a live DieExecution
+E: draining stale outer alarms
+E: stale alarms drained
+E: teardown fires no completion for the in-flight node (exactly-zero terminals) -> PASS
+[die_execution_lifecycle_test] ALL PASS
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" end time: Oct 15 22:35 UTC
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+32/35 Testing: AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest
+32/35 Test: AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest
+Command: "/workspace/template/work/consumer-availability/old-astra-sim-joint-build/frontend/AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest"
+Directory: /workspace/template/work/consumer-availability/old-astra-sim-joint-build/frontend
+"AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest" start time: Oct 15 22:35 UTC
+Output:
+----------------------------------------------------------
+Q: availability fixture has a dependency-free typed COMP                       PASS
+Q: legal R1 prepare preserves the task and positive workspace                  PASS
+Q: each unavailable marker has a valid canonical Plan/hash                     PASS
+Q: submit rejects the exact unavailable marker without clock/service/callback changes PASS
+Q: manual unavailable Prepared Plan is rejected before workspace mutation      PASS
+Q: valid R1 Prepared Plan still acquires its canonical lease                   PASS
+Q: validation rejects before take/occupy and preserves the caller's live lease PASS
+Q: caller explicitly releases the preserved lease exactly once                 PASS
+Q: actual Workload preflight fixture owns a canonical token                    PASS
+Q: actual Workload issue rejects manual bypass before graph/GPU/runtime changes PASS
+Q: rejected predictions leave no deferred completion on teardown               PASS
+Q: availability fixture has a dependency-free typed COMP                       PASS
+Q: legal R1 prepare preserves the task and positive workspace                  PASS
+Q: each unavailable marker has a valid canonical Plan/hash                     PASS
+Q: submit rejects the exact unavailable marker without clock/service/callback changes PASS
+Q: manual unavailable Prepared Plan is rejected before workspace mutation      PASS
+Q: valid R1 Prepared Plan still acquires its canonical lease                   PASS
+Q: validation rejects before take/occupy and preserves the caller's live lease PASS
+Q: caller explicitly releases the preserved lease exactly once                 PASS
+Q: actual Workload preflight fixture owns a canonical token                    PASS
+Q: actual Workload issue rejects manual bypass before graph/GPU/runtime changes PASS
+Q: rejected predictions leave no deferred completion on teardown               PASS
+coarse profile creates one independent rank Runtime and ledger                 PASS
+typed attention Plan has an explicit workspace peak                            PASS
+workspace lease is acquired against the installed scalar capacity              PASS
+a competing ready Plan stays free and unoccupied while capacity is held        PASS
+explicit cancellation/release returns the exact byte hold                      PASS
+the same typed Plan acquires workspace before COMP issue                       PASS
+local-HBM registry exposes its real Runtime endpoint handle                    PASS
+Plan and registered local-HBM endpoint share the Runtime                       PASS
+Sys-tick sampler returns a complete local snapshot                             PASS
+the sample is bound to the scheduled active Sys tick                           PASS
+the snapshot discloses its local-only and callback-free boundary               PASS
+COMP/endpoint catalogs reject copied identity tampering without changing live state PASS
+sample copy integrates positive actual HBM service                             PASS
+the long endpoint remains live in the partial sample                           PASS
+sampling advances only its Runtime copy to the Sys tick                        PASS
+Workload returns the joined Runtime/owner sample                               PASS
+Workload sample identifies its rank-local owner-only scope                     PASS
+Workload aggregation preserves the exact underlying Runtime sample             PASS
+owner catalogs bind exactly one COMP and one local transfer endpoint           PASS
+COMP catalog retains the actual node, request, stage and exact Plan lease      PASS
+workspace sample conserves the live lease against its capacity snapshot        PASS
+local HBM catalog retains its real rank, node, kind and callback sink          PASS
+endpoint catalog preserves the complete Runtime endpoint request               PASS
+endpoint owner and callback terminal metadata match the raw Runtime binding    PASS
+sampled raw Runtime v3 snapshot imports and re-exports exactly                 PASS
+wrong-tick sample rejection leaves Runtime, lease, cache and queue unchanged   PASS
+valid sampling leaves live progress, accounting, lease, cache and queue unchanged PASS
+sampling preserves the active COMP lease and pending transfer callback         PASS
+partial sampling never invokes a real endpoint completion callback             PASS
+normal typed Plan completion releases its one workspace lease                  PASS
+long endpoint remains active after the COMP lease releases                     PASS
+shared Runtime drains endpoint and emits exactly one COMP terminal             PASS
+queue-drained Workload sample has no live callbacks or workspace holds         PASS
+negative workspace case has a live ready NodeView                              PASS
+negative workspace case prepares a nonzero canonical peak                      PASS
+negative workspace case acquires its deliberately adversarial lease            PASS
+adversarial lease matches the expected rank/node/generation identity           PASS
+authoritative ledger can issue the same visible lease identity                 PASS
+foreign token collides on every public LeaseKey field                          PASS
+same-rank foreign-ledger lease is rejected before COMP issue                   PASS
+invalid prepared workspace leaves the COMP in the ready set                    PASS
+preflight rejection leaves the source NodeStore payload untouched              PASS
+invalid workspace fails before Runtime submission, COMP occupancy or terminal  PASS
+by-value lease destruction releases the exact authoritative or foreign hold    PASS
+negative workspace case has a live ready NodeView                              PASS
+negative workspace case prepares a nonzero canonical peak                      PASS
+negative workspace case acquires its deliberately adversarial lease            PASS
+adversarial lease matches the expected rank/node/generation identity           PASS
+authoritative lease with noncanonical bytes is rejected before COMP issue      PASS
+invalid prepared workspace leaves the COMP in the ready set                    PASS
+preflight rejection leaves the source NodeStore payload untouched              PASS
+invalid workspace fails before Runtime submission, COMP occupancy or terminal  PASS
+by-value lease destruction releases the exact authoritative or foreign hold    PASS
+negative workspace case has a live ready NodeView                              PASS
+negative workspace case prepares a nonzero canonical peak                      PASS
+negative workspace case acquires its deliberately adversarial lease            PASS
+adversarial lease matches the expected rank/node/generation identity           PASS
+prepared workspace bytes differing from the Plan peak are rejected before COMP issue PASS
+invalid prepared workspace leaves the COMP in the ready set                    PASS
+preflight rejection leaves the source NodeStore payload untouched              PASS
+invalid workspace fails before Runtime submission, COMP occupancy or terminal  PASS
+by-value lease destruction releases the exact authoritative or foreign hold    PASS
+negative workspace case has a live ready NodeView                              PASS
+negative workspace case prepares a nonzero canonical peak                      PASS
+negative workspace case acquires its deliberately adversarial lease            PASS
+adversarial lease matches the expected rank/node/generation identity           PASS
+stale typed task payload is rejected before COMP issue                         PASS
+invalid prepared workspace leaves the COMP in the ready set                    PASS
+preflight rejection leaves the source NodeStore payload untouched              PASS
+invalid workspace fails before Runtime submission, COMP occupancy or terminal  PASS
+by-value lease destruction releases the exact authoritative or foreign hold    PASS
+tiny endpoint has one finite native terminal boundary                          PASS
+reference Runtime confirms the scheduled endpoint tick is terminal             PASS
+live and isolated endpoint runs use the same native handle sequence            PASS
+same-tick terminal sampler runs before the live Runtime callback               PASS
+Workload aggregation fails closed for a direct endpoint without an owner registry PASS
+sample copy reaches terminal and retains its completion binding                PASS
+live handle and callback remain pending while sample copy is terminal          PASS
+terminal local sample retains the endpoint's served bytes                      PASS
+terminal sampled raw Runtime v3 snapshot imports with its handle intact        PASS
+wrong-tick rejection does not mutate the live terminal binding or queue        PASS
+terminal sampling itself leaves all live endpoint state unchanged              PASS
+the real queue dispatches exactly one terminal and retires its handle          PASS
+cancellation fixture starts with a live Plan and lease                         PASS
+adapter cancellation destroys Runtime execution and releases lease             PASS
+cancellation never synthesizes an outer COMP completion                        PASS
+[coarse_workspace_runtime_test] ALL PASS
+<end of output>
+Test time =   0.10 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest" end time: Oct 15 22:35 UTC
+"AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 15 22:35 UTC

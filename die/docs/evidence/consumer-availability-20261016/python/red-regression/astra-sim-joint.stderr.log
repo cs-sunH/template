@@ -1,0 +1,24 @@
+test_coarse_die_adapter (unittest.loader._FailedTest.test_coarse_die_adapter) ... ERROR
+
+======================================================================
+ERROR: test_coarse_die_adapter (unittest.loader._FailedTest.test_coarse_die_adapter)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_coarse_die_adapter
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/consumer-availability/python/red-regression/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 28, in <module>
+    from graph_batch_builder import OnlineTraceBuilder  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/consumer-availability/python/red-regression/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py", line 78, in <module>
+    from generate_face_trace import (  # noqa: E402
+  File "/workspace/template/work/consumer-availability/python/red-regression/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py", line 40, in <module>
+    from config_resolver import (  # noqa: E402
+ModuleNotFoundError: No module named 'config_resolver'
+
+
+----------------------------------------------------------------------
+Ran 1 test in 0.000s
+
+FAILED (errors=1)

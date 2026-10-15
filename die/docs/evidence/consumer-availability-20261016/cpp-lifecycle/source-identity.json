@@ -1,0 +1,55 @@
+{
+  "base_commit": "9bb8c0ac74ad3b78edb0004d7ebbc61f00942dda",
+  "tests": {
+    "astra-sim-face/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc": {
+      "sha256": "8d99314d12d2a9ca29dc2cd4be7e0cabf85945a6e11a5e122bcf39b8feb4e215",
+      "status": "not_run",
+      "target": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+    },
+    "astra-sim-face-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc": {
+      "sha256": "7fef989cccb8173b4805744bd874bbcb5fbe373fe4ae702afef6681ce3e2c88a",
+      "status": "not_run",
+      "target": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+    },
+    "astra-sim-wscllm/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc": {
+      "sha256": "8131c97ece53476cbb395921d2269aa1c065a51d4923af5955476e8db2d91012",
+      "status": "not_run",
+      "target": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+    },
+    "astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc": {
+      "sha256": "02a4fc7b31cb06df1be6b4f5b7b87bee79d19095a3a2cd54b8089451c844d03f",
+      "status": "not_run",
+      "target": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+    },
+    "astra-sim-joint/astra-sim/workload/execution_driven/tests/coarse_workspace_runtime_test.cc": {
+      "sha256": "a29478f371faf5bfad2e126b68fee55359d739f20272c393d0e3b23bf3ade615",
+      "status": "not_run",
+      "target": "AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest"
+    }
+  },
+  "observed_consumer_source_sha256": {
+    "astra-sim-face/astra-sim/workload/CoarseDieRuntime.cc": "ea87ae5ff403cd2e4dadfede30a841f4a35afb77e4c75bb96319d5a2be50c630",
+    "astra-sim-face/astra-sim/workload/DieModelAdapter.cc": "bc12b2c22079b33a0e8914e01e6dfdaaf3c6e65002d10837d87fae0f91537d16",
+    "astra-sim-face/astra-sim/workload/CoarseDiePrediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "astra-sim-face/extern/die_model/coarse/RELEASE.json": "e51eba85f286d6f31c42b4e1768a4980f61ac551921bf15ed2210c70e8c2c3a5",
+    "astra-sim-face-LRU/astra-sim/workload/CoarseDieRuntime.cc": "ea87ae5ff403cd2e4dadfede30a841f4a35afb77e4c75bb96319d5a2be50c630",
+    "astra-sim-face-LRU/astra-sim/workload/DieModelAdapter.cc": "de7501a1e9fc8cda50a2a3de05cca6c5101e6a0b8ca45bf61096de7202d3e807",
+    "astra-sim-face-LRU/astra-sim/workload/CoarseDiePrediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "astra-sim-face-LRU/extern/die_model/coarse/RELEASE.json": "e51eba85f286d6f31c42b4e1768a4980f61ac551921bf15ed2210c70e8c2c3a5",
+    "astra-sim-wscllm/astra-sim/workload/CoarseDieRuntime.cc": "6ed976b80d1c68dc218c503e4309634e692b02f5816212a70ffd139ff4c06844",
+    "astra-sim-wscllm/astra-sim/workload/DieModelAdapter.cc": "782c0066aaca23fd9642dae1b425c0c674a30b58c5a241b0dc00540b776cc626",
+    "astra-sim-wscllm/astra-sim/workload/CoarseDiePrediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "astra-sim-wscllm/extern/die_model/coarse/RELEASE.json": "e51eba85f286d6f31c42b4e1768a4980f61ac551921bf15ed2210c70e8c2c3a5",
+    "astra-sim-wscllm-LRU/astra-sim/workload/CoarseDieRuntime.cc": "14163da8a1c2bd61309b4009232599c002ab9f805bddf6dd1e95670a6798f729",
+    "astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc": "c085df4852a46a0ccab426ce7d6ae314b04be28b66f2ac1eeef16bfd8daddf8e",
+    "astra-sim-wscllm-LRU/astra-sim/workload/CoarseDiePrediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "astra-sim-wscllm-LRU/extern/die_model/coarse/RELEASE.json": "e51eba85f286d6f31c42b4e1768a4980f61ac551921bf15ed2210c70e8c2c3a5",
+    "astra-sim-joint/astra-sim/workload/CoarseDieRuntime.cc": "c1ea3c35a3fcc8abcfaff301dcfee9217025c47fcecf5acba62816b72e5cccfa",
+    "astra-sim-joint/astra-sim/workload/DieModelAdapter.cc": "d9049c0b8dcd3419e52753a35b23f0ec7d5b0582323bdc37b4bd75155cc29081",
+    "astra-sim-joint/astra-sim/workload/CoarseDiePrediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "astra-sim-joint/extern/die_model/coarse/RELEASE.json": "e51eba85f286d6f31c42b4e1768a4980f61ac551921bf15ed2210c70e8c2c3a5"
+  },
+  "test_status": "not_run",
+  "static_verification": "git diff --check passed",
+  "scope": "test source only; parent owns production edits, builds, execution and publication"
+}

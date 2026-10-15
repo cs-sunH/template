@@ -1,0 +1,29 @@
+{
+  "mode": "green",
+  "command": [
+    "/workspace/cloud-setup/venv/bin/python",
+    "/workspace/template/work/consumer-availability/cli/green-final-seven/die/tests/estimate_cli_test.py",
+    "--library",
+    "/workspace/template/work/build-die-continue/lib/libcoarse_die_cabi.so",
+    "-v"
+  ],
+  "cwd": "/workspace/template",
+  "started_unix": 1792104042.2954936,
+  "library": "/workspace/template/work/build-die-continue/lib/libcoarse_die_cabi.so",
+  "library_sha256": "38cba336f98c9c2f920326b0e0a11b9a7628123248b131add4c417dba2aa5d2d",
+  "runner_sha256": "19ecd157faf658611fa888a210273c2b4fe85b7616f62df02cefae3572b53af8",
+  "source_sha256": {
+    "configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+    "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+    "configs/core64.json": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+    "configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+    "configs/example_hardware.json": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+    "configs/example_hardware_explicit.json": "b95f9263807b3d8087892531bdfdfc946bfa8adca1093ed5dcd177e7e524692c",
+    "configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+    "tests/estimate_cli_test.py": "21c31bec6916b404db968217fc0fc233a1c2aab2aa6cff7d59a02938a4b2e3fd",
+    "tools/estimate.py": "4728d1a40c6263ac43eb094bb90a495a7c71eb3544b236b7de988e94889e4596"
+  },
+  "return_code": 0,
+  "finished_unix": 1792104042.9876878,
+  "log_sha256": "f8a894bb4afc92c57f0b288bf70af5387347f6b1d4e157a506832ed2bbc46901"
+}

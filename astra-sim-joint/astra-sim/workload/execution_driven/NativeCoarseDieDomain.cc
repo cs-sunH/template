@@ -1,4 +1,5 @@
 #include "NativeCoarseDieDomain.hh"
+#include "astra-sim/workload/CoarseDiePrediction.hh"
 
 #include <algorithm>
 #include <cmath>
@@ -243,6 +244,7 @@ void NativeCoarseDieDomain::begin_plan_chain(
     if (!plan) {
       throw std::invalid_argument("invalid_plan_chain: null Plan");
     }
+    coarse_die::require_complete_prediction(*plan);
     if (plan->hardware_fingerprint != hardware_->fingerprint) {
       throw std::invalid_argument(
           "incompatible_fingerprint: Plan hardware fingerprint mismatch");
@@ -855,6 +857,7 @@ NativeCoarseDieDomain::import_snapshot(
           throw std::invalid_argument(
               "invalid_snapshot: Plan is noncanonical or incompatible with Hardware");
         }
+        coarse_die::require_complete_prediction(*plan);
         // Runtime::submit is the public hardware-specific structural and
         // resource validator. It does not run latency formulas or mutate the
         // imported Runtime.
@@ -1403,6 +1406,7 @@ NativeCoarseDieDomain::import_local_sample(
       throw std::invalid_argument(
           "invalid_local_sample: Runtime Plan is not canonical for this Hardware");
     }
+    coarse_die::require_complete_prediction(*plan);
     const bool endpoint_plan =
         plan->task.is_object() &&
         plan->task.value("schema", std::string()) ==

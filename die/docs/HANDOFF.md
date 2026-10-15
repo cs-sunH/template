@@ -1,10 +1,21 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前已普通push/fetch/ls-remote实核HEAD与main均为 `41254718c03433c0786aad9f5de9b259f3738fdb`，这是已合入的R1长曲线检查点。包含本页的Git提交是双raw请求LRU memo优化检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch/ls-remote实核HEAD、main及工作分支均为 `9bb8c0ac74ad3b78edb0004d7ebbc61f00942dda`。包含本页的Git提交为不可用预测消费者边界检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
 
 ## Current Status
 
-### 当前有效检查点：双raw请求memo与交替查询性能
+### 当前有效检查点：不可用预测的消费者边界与真实五仓旧SDK兼容
+
+- 公共新增无状态 `Prediction.hh::require_complete_prediction`，检查Plan summary顶层prediction_status/alone_estimate_status；not_available明确拒绝，非string报错，旧Plan缺字段继续兼容，nested target/heldout缺测不误拒绝。公共compile/Runtime/CABI保留body诊断，物理模型/ABI/校准不变。
+- 五仓有逐byte相同的离线兼容头，支持原canonical24。Runtime冷/热compile和submit先检查，再缓存/LRU/时钟/服务；Adapter prepare/acquire/validate先检查，再workspace/执行；JOINT native全部future Plan在advance前检查，snapshot/local sample导入及NativeProjection直编译同样封口。原provider/live/sh30 guard保留。
+- 三Python oracle在full、两FACE cost/optional full fallback先检查顶层status，不可用行保原位置None+last_errors；合法/原生错误兄弟和free保持，scorer既有拒绝沿用。focused21/21、相关FACE70/FACE-LRU63/JOINT15共 **148/148无skip**。同一真实新CABI对R3 residual和原样实际FACE R4 FFN（2layer×2passes）有numeric not_available，Git9bb消费者真实red失败、当前真实green全过，不只mock。
+- 公共CLI原来不可用行仍整体ok_assumed/exit0，现保留body并报partial_error/非零；ABI操作成功的status_code0不伪改，CLI error.reason说明不可用。相同7项真实red失败/green7通过（包括无native error的单R3 exit1，R1 exit0）；首次6项red保留。
+- 最终公共一致Release **47/47通过，53.59s**（并行功能构建环境，不作速度证书）。此前46/46为18.38s；两者公共静态库/CABI byte-identical，die/src全部与Git9bb相同，沿9bb/412精度/速度证据及全部历史失败，不虚报重测。CLI/公共helper新测试均绑定实际源/ELF。
+- 正式旧SDK五仓重建双ABI与消费者，**10/10 CTest通过**：四仓lifecycle各1、JOINT legacy lifecycle/coarse workspace/native/window共6。手工合法hash不可用Plan被拒绝、Sys17/Runtime0及graph/GPU/callback/lease不变，const-ref lease由调用者持有，转移lease正确RAII释放；公共诊断Runtime接受同Plan。FACE-LRU prepared Workload seam为private，实际测试public adapter issue，其余四仓测public Workload；真实新SDK ready-scan另测。初版lookup接口/该private seam编译失败完整保留，未为测试扩大生产API；old-three初轮总体exit1仍保留，后者单独重跑成功。summary核被测源SHA仍吻合，正式5×24文件原manifest全部真吻合。
+- 隔离新SDK32文件digest **eb0472bf…e55a** 在CLI测试注册前冻结，生产源/公共头一致，SDK testsOFF，CMake仅少CLI Python注册。截至本检查点FACE双ABI+consumer构建成功、config **18/18无skip**、真实R3 prepare/ready-scan probe通过且保持cache/graph/tick/lease/terminal不变；标准lifecycle在**原样实际R4 FFN因prediction_not_available failed**，不是业务通过。首config发现路径错误Ran0/exit5保留。其余四仓隔离构建当时进行中，尚不能认定通过；活动raw不能当完整证据提交。
+- 完整源/命令/库/CPU/原始失败、冻结matrix和复现见 `analysis/consumer-availability-20261016/README.md` 与同名evidence；当前可复核总表 `checkpoint-summary-final.json`。正式vendor仍23160c…7e9b未publisher，五仓CPU/完整业务not_run；长R1 busy及R>1非服务窗口未验收、TX8/目标先验冻结、target raw缺失。只同步已验证的消费者安全检查点，继续隔离验证和模型开发。
+
+### 已合入9bb8c0a：双raw请求memo与交替查询性能
 
 - 仅生产Capi.cc改动：最近两份已验证raw batch固定array/LRU保留，canonical/alias交替不再反复JSON规范化。每份仍≤64KiB/256行，空/失败/未缓存Plan不建memo；Plan+memo≤4096、字节全计入64MiB。新候选先完整分配/node核验/plan-only容量预检，仅淘汰memo，不逐出Plan；cache结构变更前清空两份指针，命中LRU splice/交换安全，fresh handle及错误隔离不变。只读审查无阻塞。
 - 同一新增交替基准旧412真实GEMM1/128³与attention P95 27.300/29.193/32.148μs failed；旧新回归在单memo生产真实failed。最终双份精确计账、20次交替/LRU/失败兄弟/插入清空/handle生存通过；原真实64MiB Plan pool边界增加64KiB padded memo不可容纳时保留小memo/Plan，原4096输入/淘汰行等测试保留。
@@ -319,12 +330,12 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本页的main/HEAD，读batch-memo README/summary/identity。45/45功能18.71s，双raw memo/交替查询已完成，本次所测预算通过；模型沿412静态库完全相同，不重复硬件移除、槽位、九描述曲线及缓存已完成项。
-2. 当前调查五仓生产消费者对status=not_available的处理。R>1仍有body numeric值，只能诊断，不能当完整延迟执行；只读追踪公共薄适配/实际调用链后，必要时最小共享修复并隔离SDK验证。正式旧vendor不受新模型修复，尚未publisher；不得无验证同步公共版本到五仓。
-3. 按真实依赖继续R>1非服务窗口与WR/Norm/softmax/Attention/FFN、OS二阶/odd-row。长16/48完成全10%但仍24busy failed/首输出1项11.379%未接受；原17仍27联合失败。新的5/8/16表示保持每Core槽位/守恒/公平及真实first终态，不改busy、不恢复逐wave/K/repeat或周期，不前置总R×wait。
-4. 模型稳定后重建五仓双ABI/配置/业务及CPU预算才正式publisher。JOINT旧before-guard SDK不冒充新源，provider/live/sh30保护保留；旧Plan/快照不自动升级。热路径只在有实测/模型或消费者变更时复验，不反复抽样挑最佳；历史失败仍有效。
-5. XLSX13组去重/条件参考和公开Residual工作量核对已完成，缺当前Runtime同合同TX8硬件入口；target raw/heldout仍not_available，不造profile/重拟目标效率。参考/目标先验冻结。
-6. 保留有效部分与全部失败/原始证据；有意义检查点安全提交同步GitHub，持续自主开发。
+1. fetch核实包含本页的main/HEAD，读consumer-availability README/checkpoint-summary-final/冻结matrix。公共47、Python148和旧SDK五仓10项已完成；显式硬件移除、每Core槽位、九描述曲线、双raw memo均已合入，不重复。
+2. 继续当前冻结新SDK的其余四仓consumer/两ABI构建和真实测试，逐仓运行run_repeated_prepare_probe与run_config_checks；FACE18配置/R3拒绝probe通过，原样R4业务failed。原始freeze32文件eb0472bf在CLI测试注册前，当前root47的生产库与该预览FACE CABI byte-identical；后续如更新隔离CMake注册，保留前后身份和原始失败，不把digest混称同一版本。不得恢复被保护的业务或把layers/passes减为1。
+3. R>1非服务窗口/物化barrier已由真实FACE R4发射任务暴露为正式接入前依赖。按解析累计曲线/5、8、16预算继续公共模型；不前置R×wait，不逐K/tile/wave/repeat回放、周期/Program。不能仅删除status或消费者guard取得业务成功。WR/Norm/softmax/Attention/FFN、OS二阶/odd-row按真实收益和依赖推进。
+4. 长16/48完成全10%但24busy failed/首输出1项11.379%未接受，原17仍27联合失败；保留计量/每Core硬容量/公平及真实first终态，不放宽busy/速度定义。9bb生产模型/CABI未因消费者修复变化，复用其绑定证据；只有新增模型/热路径变更或未解决具体concern才重测，不反复抽样挑最好一次。
+5. 模型稳定后才正式publisher；再做五仓完整业务、双ABI/配置与端到端CPU预算。旧SDK通过不冒充新SDK通过，R3拒绝通过不冒充R3支持；JOINT provider/live/sh30仍受保护。target raw/heldout与当前Runtime同合同TX8硬件入口仍缺，不造profile或重拟目标效率。
+6. 有意义检查点保存全部有效源/日志，安全提交并核实GitHub；持续自主开发，不按提交或阶段停止。
 
 下方为历史接续记录，冲突时以上为准。
 
@@ -384,9 +395,9 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Files to Continue
 
-最新入口：`src/{Hardware,Execution,RatioAllocation,Mapping}.cc/.hh`、`tests/{hardware_input,ratio_allocator,service_curve_runtime}_test.cc`、两FACE的`online/die_model_oracle.py`及`test_die_model_oracle.py`。复现/失败/身份集中于`analysis/explicit-input-integration-20261015/`及对应evidence；硬件/指标原始axis见hardware-input证据。work/构建产物和第三方依赖不跨账号，必须重建。
+最新入口：公共 `include/coarse_die/Prediction.hh`、`tools/estimate.py`、prediction_availability/estimate_cli tests；五仓workload的CoarseDiePrediction/CoarseDieRuntime/DieModelAdapter、JOINT execution_driven的NativeCoarseDieDomain/NativeProjection及相关测试；三个Python die_model_oracle。当前复现/状态/失败见 `analysis/consumer-availability-20261016/` 与同名evidence；模型沿 `src/Mapping.cc`、RegionDelay/ElementwiseGeometry和412/9bb绑定证据继续。work内冻结树/ELF与依赖不跨账号，必须按freeze及脚本重建。
 
-### 本轮直接入口
+### 历史解析曲线检查点直接入口（按当时范围）
 
 - `src/{Mapping,Execution,Plan,Compiler,Capi}.cc`；`src/{CompilerInternal,PackingAllocation}.hh`；`include/coarse_die/{Plan,Execution,Capi,Memory}`。
 - `tests/{service_curve_runtime,service_curve_schema,os_service_curve,os_service_scaling,capi_cost_query,packing_allocator}_test.cc`、`tests/capi_cache_response_test.cc`与`service_curve_benchmark.cc`。
@@ -416,7 +427,9 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Tests
 
-当前：allocation-overhead Release45/45（19.85s）；新库26case完整raw与eba最终prefetch逐字节一致、8个公开任务完整结果与冻结eba逐字段全等。最新30样本常规预算本次通过，历史尾部失败保留；原精度27场景仍failed，五仓业务/CPU与目标校准未验收。XLSX Residual shape工作量由新公共CABI实核，不是同硬件延迟校准。详见最新analysis/evidence，旧结果按各自源码范围复用。
+当前消费者检查点：公共Release47/47（53.59s，并行功能构建），旧SDK五仓10/10 CTest、三个Python相关套件148/148无skip、CLI同7项red失败/green7通过、真实新CABI三Python消费者red失败/green通过。隔离新SDK FACE config18/18、实际R3拒绝probe通过，标准真实R4业务failed；其余四仓预览当时仍进行。完整raw/源/ELF/冻结matrix见consumer-availability，不能把旧SDK功能或拒绝通过外推新SDK业务。无新模型/速度校准，公共生产源与Git9bb相同、静态/CABI与公共46一致；沿9bb最新30样本及历史所有失败，412精度缺口保持。五仓CPU和target测量未验收。
+
+以下为历史测试记录，冲突时以上方最新检查点为准。
 
 本次最终：公共42/42（22.34s）、隔离双ABI五仓、配置83/83、FACE133/133与152/152均已执行通过，范围与源码版本见本页最上方及explicit-input-integration证据。新native仅构建，Online链接failed；新native/Python/Online/E2E预算及最终行省略性能均not_run。收到停止指令后未新增测试。
 
@@ -471,7 +484,7 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Blocking Issues
 
-当前有效：R>1固定region延迟/物化窗口not_available，R1两cohort已改进但更多批次及其它模板busy/精度缺口未修完，eba J8仲裁P95 50.435μs failed历史保留，最新本次速度通过但未稳定/全负载验收，所有历史性能尾部失败保留；正式五仓未发布/最终源业务及CPU预算未验收，目标raw缺失。R1启动已修，vector已实现，protobuf环境已修，最终性能已测；下面旧“未启动/缺路径/未计时”是历史，不再执行为当前待办。
+当前有效：R>1固定region延迟/物化窗口not_available，真实FACE R4在隔离新SDK被拒绝，正式五仓发布受此阻塞；消费者guard现已落实并通过旧SDK边界回归，不能删除guard或减layers取得成功。长R1完成已改善但24busy failed/首输出一项11.379%未接受、原17仍27联合failed，其它模板未全部升级。当前公共生产CABI仍9bb，沿其性能及所有历史尾部失败；未做新消费者CPU/完整五仓业务验收，target raw仍缺。五仓原SDK兼容已10项通过，新SDK其余四仓预览在进行；下方旧“guard未落实/向量未启动/protobuf缺路径”等不再作为当前待办。
 
 以下为历史限制，冲突时以上方最新检查点为准。
 

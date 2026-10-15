@@ -345,7 +345,7 @@ class DieModelOracle:
 
     def estimate(self, spec_dicts: Sequence[dict]) -> list[Optional[dict]]:
         """批量孤立估值:一次 die_estimate_batch,逐条返回 CostResult
-        dict;坏 spec 位置返回 None 并把错误文本记入 self.last_errors
+        dict;坏 spec 或不可用预测位置返回 None 并把错误文本记入 self.last_errors
         (好 spec 不受坏 spec 影响;A3 ABI 语义)。批量级失败抛
         RuntimeError(经 die_last_error 取回)。"""
         model = self._require_model()
@@ -382,7 +382,7 @@ class DieModelOracle:
              error.get("reason") if isinstance(error, dict) else None)
             for error in errors]
         typed: list[Optional[dict]] = []
-        for result in results:
+        for index, result in enumerate(results):
             if result is None:
                 typed.append(None)
             else:
@@ -390,6 +390,17 @@ class DieModelOracle:
                     raise RuntimeError(
                         "die_estimate_batch result entries must be objects")
                 if self.coarse:
+                    status = result.get("status")
+                    if not isinstance(status, str):
+                        raise RuntimeError(
+                            "coarse_die_v2 estimate is missing a valid "
+                            "top-level status string")
+                    if status == "not_available":
+                        self.last_errors[index] = (
+                            "coarse_die_v2 prediction status=not_available: "
+                            "body latency is not a complete prediction")
+                        typed.append(None)
+                        continue
                     latency = result.get("estimated_latency_ns")
                     if (isinstance(latency, bool)
                             or not isinstance(latency, int) or latency < 0):

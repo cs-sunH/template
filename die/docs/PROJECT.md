@@ -20,7 +20,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
-2026-10-16当前源码检查点：在已合入412固定九描述R1长曲线基础上，CABI保留最近两份已验证raw请求LRU memo，计入原64MiB/4096总项上限，失败兄弟/结构变更/新handle语义完整保留；大候选不适合时不淘汰Plan/小memo。最终Release45/45（18.71s），真实8任务完整public对象与改前全等，模型静态库byte-identical；不重复无影响精度oracle。交替GEMM1/128³/attention P95从27.300/29.193/32.148μs降至2.534/2.904/2.193μs，最新30样本全部所测预算通过：cold128³1.903321ms、hot cost4.517—8.173μs、OS J1/J8/J32 15.213/24.296/39.779μs；全部历史尾部失败保留。模型仍长16/48完成全10%但24busy failed、首输出一项11.379%未接受，原17仍27联合failed，R>1时序not_available。旧Plan/快照不自动升级；TX8/目标先验冻结、target数据缺失，正式五仓未publisher/CPU未测。下一步核查not_available消费者与隔离集成，详见HANDOFF和batch-memo-20261016。持续自主开发，工程NOT ACCEPTED。
+2026-10-16当前源码检查点：公共无状态Prediction policy和五仓离线兼容头阻止numeric not_available body进入真实compile/cache/submit、workspace admission与JOINT native恢复/投影；公共Runtime/CABI保留诊断。三Python oracle及CLI同样处理不可用：None+逐行错误或非零退出，合法/原生错误兄弟、旧SDK缺字段和nested缺测兼容。公共Release47/47（53.59s，并行功能环境）、旧SDK五仓10/10 CTest、Python148/148无skip、CLI同7项真实red失败/green通过；真实新CABI三消费者red/green已证，不只mock。正式vendor24仍23160c…7e9b未publisher；隔离32文件eb0472bf在CLI测试注册前冻结，FACE config18/18及真实R3拒绝probe通过，原样实际R4 FFN标准业务failed，其余四仓预览当时进行。die/src全同Git9bb、公共46/47静态/CABI及预览FACE CABI byte-identical，沿9bb缓存速度/412模型精度证据和全部历史失败，不冒充新CPU或模型测量。长R1完成改善但24busy failed、一项首输出11.379%未接受；R>1非服务窗口、其他模板及五仓真实业务/CPU待解。TX8/目标先验冻结、独立target数据缺失；下一步继续隔离验证和公共模型，详见HANDOFF及consumer-availability。工程NOT ACCEPTED，持续自主开发。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
 

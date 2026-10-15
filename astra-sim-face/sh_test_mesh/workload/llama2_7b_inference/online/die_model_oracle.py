@@ -371,25 +371,34 @@ class DieModelOracle:
              error.get("reason") if isinstance(error, dict) else None)
             for error in errors]
         typed: list[Optional[dict]] = []
-        for result in results:
+        for index, result in enumerate(results):
             if result is None:
                 typed.append(None)
             else:
-                if cost_only:
+                if self.coarse:
                     if not isinstance(result, dict):
                         raise RuntimeError(
-                            "coarse_die_v2 cost estimate returned a "
-                            "non-object result")
+                            "coarse_die_v2 estimate returned a non-object result")
+                    status = result.get("status")
+                    if not isinstance(status, str):
+                        raise RuntimeError(
+                            "coarse_die_v2 estimate is missing a valid "
+                            "top-level status string")
+                    if status == "not_available":
+                        self.last_errors[index] = (
+                            "coarse_die_v2 prediction status=not_available: "
+                            "body latency is not a complete prediction")
+                        typed.append(None)
+                        continue
+                if cost_only:
                     latency_ns = result.get("estimated_latency_ns")
                     plan_hash = result.get("plan_hash")
-                    status = result.get("status")
                     if (isinstance(latency_ns, bool) or
                             not isinstance(latency_ns, int) or latency_ns < 0 or
-                            not isinstance(plan_hash, str) or
-                            not isinstance(status, str)):
+                            not isinstance(plan_hash, str)):
                         raise RuntimeError(
                             "coarse_die_v2 cost estimate is missing or has an "
-                            "invalid estimated_latency_ns/plan_hash/status")
+                            "invalid estimated_latency_ns/plan_hash")
                     # The cost endpoint deliberately returns no legacy timing
                     # breakdown; FACE consumes only the selected cost and
                     # seconds remain a direct unit conversion of that cost.
@@ -419,7 +428,7 @@ class DieModelOracle:
         return typed
 
     def estimate(self, spec_dicts: Sequence[dict]) -> list[Optional[dict]]:
-        """批量孤立估值,返回完整 CostResult;坏 spec 位置为 None 并
+        """批量孤立估值,返回完整 CostResult;坏 spec 或不可用预测位置为 None 并
         把错误文本记入 last_errors。批量级失败抛 RuntimeError。"""
         return self._estimate(spec_dicts, cost_only=False)
 

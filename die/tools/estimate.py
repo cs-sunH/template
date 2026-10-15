@@ -120,11 +120,22 @@ def render_result(payload: Any, task_count: int) -> tuple[dict[str, Any], bool]:
                 items.append({"index": index, "status": "error", "result": result,
                               "error": {"reason": "missing result for successful item"}})
             else:
+                prediction_status = result.get("status")
+                prediction_error = None
+                if not isinstance(prediction_status, str):
+                    any_error = True
+                    prediction_status = "error"
+                    prediction_error = {"reason": "invalid_prediction_status",
+                                        "message": "estimate result requires a top-level status string"}
+                elif prediction_status == "not_available":
+                    any_error = True
+                    prediction_error = {"reason": "prediction_not_available",
+                                        "message": "body timing is not a complete latency prediction"}
                 items.append({"index": index,
-                              "status": result.get("status", "ok_assumed"),
+                              "status": prediction_status,
                               "status_code": 0,
                               "result": result,
-                              "error": None})
+                              "error": prediction_error})
         else:
             any_error = True
             status_code = error.get("status_code") if isinstance(error, dict) else None

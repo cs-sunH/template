@@ -1,0 +1,18 @@
+Internal ctest changing into directory: /workspace/template/work/consumer-availability/old-astra-sim-joint-build
+Test project /workspace/template/work/consumer-availability/old-astra-sim-joint-build
+    Start  1: JointPipelineWindowTest
+1/6 Test  #1: JointPipelineWindowTest ...........................................   Passed    0.01 sec
+    Start  2: NativeProjectionCApiTest
+2/6 Test  #2: NativeProjectionCApiTest ..........................................   Passed    0.04 sec
+    Start  3: NativeCoarseProjectionTest
+3/6 Test  #3: NativeCoarseProjectionTest ........................................   Passed    2.81 sec
+    Start  4: NativeCoarseDieDomainTest
+4/6 Test  #4: NativeCoarseDieDomainTest .........................................   Passed    0.14 sec
+    Start 29: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+5/6 Test #29: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ....   Passed    0.06 sec
+    Start 32: AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest
+6/6 Test #32: AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest ...   Passed    0.10 sec
+
+100% tests passed, 0 tests failed out of 6
+
+Total Test time (real) =   3.16 sec

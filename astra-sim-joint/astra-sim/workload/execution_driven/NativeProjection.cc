@@ -7,6 +7,7 @@ Native exact-projection input contract and world implementation.
 #include "astra-sim/workload/execution_driven/PipelineKernelContract.hh"
 #include "astra-sim/workload/execution_driven/PipelineKernel.hh"
 #include "astra-sim/workload/execution_driven/NativeCoarseDieDomain.hh"
+#include "astra-sim/workload/CoarseDiePrediction.hh"
 #include "DieModel.hh"
 
 #include <algorithm>
@@ -564,7 +565,9 @@ std::shared_ptr<const NativeProjectionDiePlan> parse_die_plan(
         for (const auto& spec : wire.at("specs")) {
             if (!spec.is_object() || spec.value("schema", std::string()) != "coarse_die_task_v2")
                 fail(path + ".specs", "coarse hardware requires typed coarse_die_task_v2 inputs");
-            result->coarse_plans.push_back(coarse_die::compile(*result->coarse_hardware, spec));
+            auto plan=coarse_die::compile(*result->coarse_hardware, spec);
+            coarse_die::require_complete_prediction(*plan);
+            result->coarse_plans.push_back(std::move(plan));
         }
         if (result->coarse_plans.empty()) fail(path + ".specs", "production coarse plan requires at least one task");
         return result;

@@ -1,6 +1,6 @@
 # Coarse Die v2
 
-> Development checkpoint: read [docs/HANDOFF.md](docs/HANDOFF.md) for the source identity and actual tests. Hardware-input migration is in progress; complete accuracy, speed and five-repository integration remain unaccepted.
+> Development checkpoint: read [docs/HANDOFF.md](docs/HANDOFF.md) for the source identity and actual tests. Explicit single-Die hardware inputs are implemented; model accuracy, sustained speed and five-repository workload integration remain unaccepted.
 
 `die/` is the canonical source for a coarse architectural model of one Die: a source-derived hardware resolver, a task-to-plan compiler, a shared service runtime, and a C ABI. Results describe a versioned set of engineering assumptions. They are not target-device measurements or a claim of silicon prediction accuracy.
 
@@ -44,6 +44,20 @@ ctest --test-dir build/coarse_die_v2 --output-on-failure
 
 The C ABI shared object is written to `build/coarse_die_v2/lib/libcoarse_die_cabi.so`. `estimate.py` calls the public `create_model_v2` and `estimate_batch_v2` APIs, prints one status-bearing item per task to stdout, and returns nonzero if any item fails. The same standard-library `ctypes` entry point accepts a single task object or a `{"specs":[...]}` task file; `--output PATH` writes JSON to a file. For the detailed config/task schema and lifecycle contract, see [docs/implementation.md](docs/implementation.md).
 
+A top-level estimate status of `not_available` means its numeric body timing is
+diagnostic and cannot be used as a complete latency prediction. The CLI retains
+that body, reports an item error and exits nonzero; `status_code: 0` still denotes
+a successful underlying ABI call. Nested target-calibration/heldout availability
+does not determine whether the model prediction is available. Repeated regions
+with unmodeled nonservice windows currently use this status.
+
+C++ production consumers call `coarse_die::require_complete_prediction(*plan)`
+from `coarse_die/Prediction.hh` before acquiring resources or submitting a Plan.
+The public compiler and Runtime retain body execution for diagnostics. The five
+adapters enforce availability at their compilation/admission/submission and
+supported restore boundaries; their old SDK compatibility is tested separately
+from isolated new-SDK integration.
+
 To rebuild the XLSX XML audit independently of the C++ library:
 
 ```bash
@@ -61,7 +75,7 @@ python3 die/tools/sync_repositories.py
 python3 die/tools/sync_repositories.py --check
 ```
 
-The first command vendors the same `die/CMakeLists.txt`, `include/`, `src/`, and `configs/` snapshot into each repository's `extern/die_model/coarse/`; the second checks file and release-manifest hashes. It leaves each existing `extern/die_model` compatibility implementation in place. Configure and build each repository with its own existing CMake entry point; the joint example is:
+The first command vendors the same `die/CMakeLists.txt`, `include/`, `src/`, and `configs/` snapshot into each repository's `extern/die_model/coarse/`; the second checks file and release-manifest hashes. It leaves each existing `extern/die_model` compatibility implementation in place. Formal vendors are currently pinned to canonical24; new-source checks use isolated preview trees until the model and integration gates pass. Configure and build each repository with its own existing CMake entry point; the joint example is:
 
 ```bash
 cmake -S astra-sim-joint/build/astra_analytical \
@@ -82,12 +96,12 @@ Apply the same configure/build/test sequence to `astra-sim-wscllm`, `astra-sim-w
 |---|---|
 | Workbook cached source/formula reconciliation | `passed` for the independent Python audit; source values are not raw measurement evidence |
 | TX8 13-group/Attention/FFN reconstruction | `passed` as conditional source-formula reproduction; not performance accuracy |
-| Public Release build, CTest and Plan compatibility | `passed`: 30/30 tests; 62/62 prior Plan hashes and complete summaries unchanged at the capacity-bound checkpoint |
+| Public Release build, CTest and Plan compatibility | Current availability/CLI and shared-model checks are recorded in HANDOFF; historical 30/30 and 62/62 exact Plan comparisons apply to their capacity-bound source checkpoint |
 | Capacity-only compiler bound and LRU admission | `passed` for the finite request-aggregated manifest fixtures; both actual Online runs finished, with all 480/560 typed Plans below their immutable rank bounds |
 | Runtime, endpoints and snapshot semantics | Focused public and adapter tests pass; these do not establish production timing accuracy or every business path |
 | Five-repository v2 adapter integration | `in_progress`; canonical publication and per-variant ABI/config checks are recorded separately from workload/runtime integration |
-| Production timing granularity | Historical 3%/5% reports are retained; reevaluation under the current 10%/20% policy is pending, and existing large busy errors still exceed 20% |
+| Production timing granularity | Synthetic single-Core comparisons have been reevaluated under 10%/20%; long R1 completion improved, while busy and other covered cases still fail. These comparisons are not hardware calibration |
 | Independent target-hardware held-out validation | `not_available`; no eligible target timing samples are present |
 | New active joint | Additive coarse adapter/runtime work uses `astra-sim-joint`; `astra-sim-joint_old` was removed and must not be restored. Current verification scope is in HANDOFF. |
 
-The engineering project remains incomplete. Follow the design §1.4 formula-first principle: auxiliary details that are not directly tied to hardware design or software task inputs use simple mathematical formulas where sufficient. Necessary parameter coverage, readiness and shared-resource constraints remain required. Current evidence and reproduction instructions are in [docs/evidence/lru-future-workspace-20261014](docs/evidence/lru-future-workspace-20261014/README.md).
+The engineering project remains incomplete. Follow the design §1.4 formula-first principle: auxiliary details that are not directly tied to hardware design or software task inputs use simple mathematical formulas where sufficient. Necessary parameter coverage, readiness and shared-resource constraints remain required. Current source-bound evidence and reproduction entries are in [docs/HANDOFF.md](docs/HANDOFF.md), including [consumer availability](docs/analysis/consumer-availability-20261016/README.md) and the retained model/performance failures.

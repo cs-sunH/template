@@ -1,0 +1,122 @@
+test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) ... 
+  test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status=None) ... FAIL
+  test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status=True) ... FAIL
+  test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status=7) ... FAIL
+  test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status=[]) ... FAIL
+  test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status={}) ... FAIL
+test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) ... FAIL
+test_coarse_v2_abi_is_selected_and_legacy_execution_is_blocked (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_v2_abi_is_selected_and_legacy_execution_is_blocked) ... ok
+test_config_schema_must_select_v2_abi (online.test_coarse_die_adapter.CoarseOracleTests.test_config_schema_must_select_v2_abi) ... ok
+test_estimate_one_rejects_unavailable_body (online.test_coarse_die_adapter.CoarseOracleTests.test_estimate_one_rejects_unavailable_body) ... FAIL
+test_legacy_cost_result_keeps_existing_status_semantics (online.test_coarse_die_adapter.CoarseOracleTests.test_legacy_cost_result_keeps_existing_status_semantics) ... ok
+test_unavailable_body_is_rejected_before_latency_validation (online.test_coarse_die_adapter.CoarseOracleTests.test_unavailable_body_is_rejected_before_latency_validation) ... ERROR
+test_unavailable_body_preserves_available_siblings_and_errors (online.test_coarse_die_adapter.CoarseOracleTests.test_unavailable_body_preserves_available_siblings_and_errors) ... FAIL
+
+======================================================================
+ERROR: test_unavailable_body_is_rejected_before_latency_validation (online.test_coarse_die_adapter.CoarseOracleTests.test_unavailable_body_is_rejected_before_latency_validation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 310, in test_unavailable_body_is_rejected_before_latency_validation
+    self.assertEqual(oracle.estimate([{}]), [None])
+                     ^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py", line 396, in estimate
+    raise RuntimeError(
+RuntimeError: coarse_die_v2 result is missing a valid estimated_latency_ns
+
+======================================================================
+FAIL: test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status=None)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 318, in test_coarse_top_level_status_must_be_a_string
+    with self.assertRaisesRegex(RuntimeError, "status"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status=True)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 318, in test_coarse_top_level_status_must_be_a_string
+    with self.assertRaisesRegex(RuntimeError, "status"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status=7)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 318, in test_coarse_top_level_status_must_be_a_string
+    with self.assertRaisesRegex(RuntimeError, "status"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status=[])
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 318, in test_coarse_top_level_status_must_be_a_string
+    with self.assertRaisesRegex(RuntimeError, "status"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) (status={})
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 318, in test_coarse_top_level_status_must_be_a_string
+    with self.assertRaisesRegex(RuntimeError, "status"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 324, in test_coarse_top_level_status_must_be_a_string
+    with self.assertRaisesRegex(RuntimeError, "status"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_estimate_one_rejects_unavailable_body (online.test_coarse_die_adapter.CoarseOracleTests.test_estimate_one_rejects_unavailable_body)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 330, in test_estimate_one_rejects_unavailable_body
+    with self.assertRaisesRegex(RuntimeError, "rejected.*not_available"):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: RuntimeError not raised
+
+======================================================================
+FAIL: test_unavailable_body_preserves_available_siblings_and_errors (online.test_coarse_die_adapter.CoarseOracleTests.test_unavailable_body_preserves_available_siblings_and_errors)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/workspace/template/work/consumer-availability/python/red-regression-complete/astra-sim-joint/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py", line 300, in test_unavailable_body_preserves_available_siblings_and_errors
+    self.assertEqual(result, [good, None, None, good])
+AssertionError: Lists differ: [{'es[135 chars]d'}, {'estimated_latency_ns': 1234, 'plan_hash[250 chars]ed'}] != [{'es[135 chars]d'}, None, None, {'estimated_latency_ns': 1234[109 chars]ed'}]
+
+First differing element 1:
+{'estimated_latency_ns': 1234, 'plan_hash[99 chars]med'}
+None
+
+  [{'calibration_status': 'assumed',
+    'estimated_latency_ns': 1234,
+    'heldout_status': 'not_available',
+    'plan_hash': 'abc',
+    'status': 'ok_assumed'},
++  None,
+-  {'calibration_status': 'assumed',
+-   'estimated_latency_ns': 1234,
+-   'heldout_status': 'not_available',
+-   'plan_hash': 'abc',
+-   'status': 'not_available'},
+   None,
+   {'calibration_status': 'assumed',
+    'estimated_latency_ns': 1234,
+    'heldout_status': 'not_available',
+    'plan_hash': 'abc',
+    'status': 'ok_assumed'}]
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.006s
+
+FAILED (failures=8, errors=1)

@@ -1060,8 +1060,50 @@ void local_sample_import_rejects_binding_and_identity_tampering() {
 
 }  // namespace
 
+// A complete first Plan must not hide an unavailable later Plan. Importing a
+// diagnostic Runtime/sample must also respect the production consumer boundary.
+void unavailable_prediction_rejects_fresh_and_restored_execution() {
+  const auto hardware=canonical_test_hardware();
+  const auto expect_unavailable=[](auto&& operation,const char* message) {
+    bool rejected=false;
+    try {operation();}catch(const std::exception& e) {
+      rejected=std::string(e.what()).find("prediction_not_available")!=std::string::npos;
+    }
+    require(rejected,message);
+  };
+  for(const char* field:{"prediction_status","alone_estimate_status"}) {
+    const auto first=hbm_plan(hardware,110,1000000,"available");
+    auto body=std::make_shared<Plan>(*hbm_plan(hardware,111,1000000,"body"));
+    body->summary[field]="not_available";body->fingerprint.clear();
+    body->fingerprint=coarse_die::plan_to_json(*body).at("fingerprint").get<std::string>();
+    NativeCoarseDieDomain domain("hbm:0",hardware);
+    domain.begin_plan_chain("blocker",{first},test_owner(110),0);
+    const auto before=domain.export_snapshot();
+    expect_unavailable([&]{domain.begin_plan_chain("incomplete",{first,body},test_owner(111),5);},
+        "an unavailable later Plan must reject the whole chain before live advance");
+    require(domain.export_snapshot()==before,"failed prediction leaves clock, work and bindings unchanged");
+
+    NativeCoarseDieDomain source("hbm:0",hardware);
+    source.begin_plan_chain("restore",{first,first},test_owner(112),0);
+    auto snapshot=source.export_snapshot();
+    snapshot["entries"][0]["plans"][1]=coarse_die::plan_to_json(*body);
+    const auto wire_before=snapshot;
+    expect_unavailable([&]{(void)import_domain(snapshot,hardware);},
+        "snapshot restore must check future Plans as well as the active Plan");
+    require(snapshot==wire_before,"failed prediction import leaves the source snapshot intact");
+
+    coarse_die::Runtime diagnostics(hardware);
+    const auto handle=diagnostics.submit(body,test_owner(113),0);
+    const auto sample=local_sample(hardware,diagnostics.export_snapshot(),0);
+    expect_unavailable([&]{(void)NativeCoarseDieDomain::import_local_sample(
+        "hbm:0",std::make_shared<const Hardware>(hardware),0,sample,{{handle,"body"}});},
+        "body-only public diagnostics must not become a production local-sample completion");
+  }
+}
+
 int main() {
   try {
+    unavailable_prediction_rejects_fresh_and_restored_execution();
     chain_successor_starts_at_prior_terminal_tick();
     cancellation_keeps_served_work_and_emits_one_terminal();
     invalid_later_plan_is_rejected_before_domain_advance();

@@ -4,6 +4,7 @@ LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
 #include "astra-sim/workload/DieModelAdapter.hh"
+#include "astra-sim/workload/CoarseDiePrediction.hh"
 
 #include <algorithm>
 #include <chrono>
@@ -184,6 +185,7 @@ DieModelAdapter::PreparedCoarsePlan DieModelAdapter::prepare_coarse_plan(
     if (!plan) {
         throw std::runtime_error("coarse_die_v2 compiler returned a null Plan");
     }
+    coarse_die::require_complete_prediction(*plan);
     const uint64_t workspace_bytes =
         coarse_die::hbm_workspace_peak_bytes(*plan);
     return PreparedCoarsePlan{std::move(plan), workspace_bytes,
@@ -199,6 +201,7 @@ WorkspaceAdmission::AcquireResult DieModelAdapter::try_acquire_workspace(
         throw std::runtime_error(
             "workspace acquisition requires a prepared coarse Plan");
     }
+    coarse_die::require_complete_prediction(*prepared.plan);
     const uint64_t canonical_workspace_bytes =
         coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
     if (sys_->workspace_admission->rank() != sys_->id ||
@@ -230,6 +233,7 @@ void DieModelAdapter::validate_prepared_coarse_plan(
         throw std::runtime_error(
             "prepared coarse issue requires a typed GPU COMP node");
     }
+    coarse_die::require_complete_prediction(*prepared.plan);
     const uint64_t canonical_workspace_bytes =
         coarse_die::hbm_workspace_peak_bytes(*prepared.plan);
     if (sys_->workspace_admission->rank() != sys_->id ||

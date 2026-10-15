@@ -1,4 +1,5 @@
 #include "astra-sim/workload/CoarseDieRuntime.hh"
+#include "astra-sim/workload/CoarseDiePrediction.hh"
 
 #include <stdexcept>
 #include <utility>
@@ -50,12 +51,14 @@ std::shared_ptr<const coarse_die::Plan> CoarseDieRuntime::compile(
         hardware_.fingerprint + "\n" + task.dump());
     const auto found = plans_.find(key);
     if (found != plans_.end()) {
+        coarse_die::require_complete_prediction(*found->second.plan);
         plan_lru_.splice(plan_lru_.begin(), plan_lru_,
                          found->second.lru_position);
         found->second.lru_position = plan_lru_.begin();
         return found->second.plan;
     }
     auto plan = coarse_die::compile(hardware_, task);
+    coarse_die::require_complete_prediction(*plan);
     // Conservative retained-allocation accounting (container capacity and
     // allocator allowance), explicitly distinct from host allocator RSS.
     const std::size_t accounted_bytes =
@@ -98,6 +101,7 @@ uint64_t CoarseDieRuntime::submit_plan(
         throw std::runtime_error(
             "coarse die submit_plan requires a plan and completion callback");
     }
+    coarse_die::require_complete_prediction(*plan);
     const uint64_t now = Sys::boostedTick();
     const uint64_t handle = runtime_.submit(std::move(plan), owner, now);
     if (!completion_.emplace(handle, std::move(completion)).second) {

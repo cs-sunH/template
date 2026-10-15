@@ -1,0 +1,57 @@
+{
+  "mode": "old",
+  "freeze": "/workspace/template/work/consumer-availability/new-sdk-9bb-availability/stage-identity.json",
+  "runs": {
+    "astra-sim-face-LRU": {
+      "configure": {
+        "command": [
+          "cmake",
+          "-S",
+          "/workspace/template/die/docs/analysis/native-local-projection-20261014/online-reproduction/aggregate",
+          "-B",
+          "/workspace/template/work/consumer-availability/old-astra-sim-face-LRU-build",
+          "-DREPOSITORY_ROOT=/workspace/template",
+          "-DASTRA_SIM_ROOT=/workspace/template/astra-sim-face-LRU",
+          "-DCMAKE_BUILD_TYPE=Release",
+          "-DBUILDTARGET=congestion_aware",
+          "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+          "-DCOARSE_DIE_BUILD_TESTS=OFF",
+          "-DCOARSE_DIE_JSON_INCLUDE=/workspace/template/astra-sim-face-LRU/extern/helper",
+          "-DProtobuf_INCLUDE_DIR=/workspace/cloud-setup/sysroot/usr/include",
+          "-DProtobuf_LIBRARY=/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotobuf.so",
+          "-DProtobuf_PROTOC_EXECUTABLE=/workspace/cloud-setup/sysroot/usr/bin/protoc",
+          "-DProtobuf_PROTOC_LIBRARY=/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotoc.so.32"
+        ],
+        "return_code": 0,
+        "identity": "/workspace/template/die/docs/evidence/consumer-availability-20261016/old-lru-public-seam/astra-sim-face-LRU-configure-identity.json"
+      },
+      "build": {
+        "command": [
+          "cmake",
+          "--build",
+          "/workspace/template/work/consumer-availability/old-astra-sim-face-LRU-build",
+          "--parallel",
+          "1",
+          "--target",
+          "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+          "die_model_cabi",
+          "coarse_die_cabi"
+        ],
+        "return_code": 0,
+        "identity": "/workspace/template/die/docs/evidence/consumer-availability-20261016/old-lru-public-seam/astra-sim-face-LRU-build-identity.json"
+      },
+      "ctest": {
+        "command": [
+          "ctest",
+          "--test-dir",
+          "/workspace/template/work/consumer-availability/old-astra-sim-face-LRU-build",
+          "--output-on-failure",
+          "-R",
+          "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest)$"
+        ],
+        "return_code": 0,
+        "identity": "/workspace/template/die/docs/evidence/consumer-availability-20261016/old-lru-public-seam/astra-sim-face-LRU-ctest-identity.json"
+      }
+    }
+  }
+}

@@ -1,0 +1,14 @@
+[
+  {
+    "variant": "astra-sim-face",
+    "exit_code": 1
+  },
+  {
+    "variant": "astra-sim-face-LRU",
+    "exit_code": 1
+  },
+  {
+    "variant": "astra-sim-joint",
+    "exit_code": 1
+  }
+]

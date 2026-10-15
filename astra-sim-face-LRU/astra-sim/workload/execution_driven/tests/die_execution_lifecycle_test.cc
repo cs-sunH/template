@@ -342,6 +342,184 @@ void teardown_hbm_model_event(void* data) {
     context->fired = true;
 }
 
+void test_incomplete_coarse_prediction_boundaries(
+    const std::string& config_dir, const std::string& system_file) {
+    for (const char* field : {"prediction_status", "alone_estimate_status"}) {
+        Fixture fixture = make_fixture(config_dir, system_file);
+        Workload& workload = *fixture.sys->workload;
+        auto& adapter = *workload.die_model_adapter();
+        auto& bridge = *fixture.sys->coarse_die_runtime;
+        auto& ledger = *fixture.sys->workspace_admission;
+        // Make the Sys clock newer than the untouched Runtime clock. A
+        // rejected submit must not silently settle the Runtime to this tick.
+        const uint64_t arrival = fixture.event_queue->get_current_time() + 17;
+        fixture.event_queue->schedule_event(arrival, [](void*) {}, nullptr);
+        while (fixture.event_queue->get_current_time() < arrival) {
+            fixture.event_queue->proceed();
+        }
+        const nlohmann::json task{
+            {"schema", "coarse_die_task_v2"}, {"op_kind", "ffn_region"},
+            {"phase", "prefill"},
+            {"tensor_shapes", {{"m", 64}, {"hidden", 128}, {"ffn", 256},
+                               {"mlp_variant", "swiglu"}}},
+            {"fusion_policy", "materialized"}, {"storage_dtype", "bf16"},
+            {"layer_instances", 1}, {"weight_passes", 1}};
+        OnlineNode comp;
+        comp.global_id = 950; comp.rank = 0; comp.generation = 7;
+        comp.kind = NodeKind::Compute; comp.node_type = 4;
+        comp.name = "incomplete_coarse_prediction";
+        comp.request_id = "availability"; comp.stage = "prefill";
+        comp.compute.op_role = OpRole::Compute;
+        comp.compute.die_task_json =
+            std::make_shared<const nlohmann::json>(task);
+        fixture.source->store().add_node(comp);
+        const auto* stored = fixture.source->lookup_ptr(comp.global_id);
+        expect_true(stored != nullptr,
+                    "Q: availability fixture has a dependency-free typed COMP");
+        if (stored == nullptr) continue;
+
+        // This is a legal R1 task on both the old SDK and a new SDK. Do not
+        // reduce production layer counts to conceal unsupported R>1 timing.
+        const auto prepared = adapter.prepare_coarse_plan(*stored);
+        const uint64_t peak = prepared.workspace_bytes;
+        expect_true(peak > 0 && prepared.task != nullptr &&
+                        *prepared.task == task,
+                    "Q: legal R1 prepare preserves the task and positive workspace");
+        if (peak == 0) continue;
+        auto unavailable = std::make_shared<coarse_die::Plan>(*prepared.plan);
+        unavailable->summary["prediction_status"] = "ok_assumed";
+        unavailable->summary["alone_estimate_status"] = "ok_assumed";
+        unavailable->summary[field] = "not_available";
+        unavailable->fingerprint.clear();
+        unavailable->fingerprint = coarse_die::plan_to_json(*unavailable)
+                                        .at("fingerprint").get<std::string>();
+        auto bypass = prepared;
+        bypass.plan = unavailable;
+
+        // Prove the only defect is prediction completeness. The public
+        // diagnostic Runtime must still accept this canonical Plan.
+        coarse_die::Runtime diagnostic(bridge.hardware());
+        const coarse_die::Owner owner{1, comp.global_id, 7, 1};
+        const uint64_t diagnostic_handle =
+            diagnostic.submit(unavailable, owner, 0);
+        expect_true(diagnostic_handle != 0 &&
+                        coarse_die::plan_from_json(
+                            coarse_die::plan_to_json(*unavailable))->fingerprint ==
+                            unavailable->fingerprint,
+                    "Q: each unavailable marker has a valid canonical Plan/hash");
+        const WorkspaceCapacityRank capacity{
+            fixture.sys->id, ledger.workspace_revision(), peak + 4096, 0, 0, 0};
+        ledger.validate_capacity_snapshot(capacity);
+        ledger.install_capacity_snapshot_unchecked(capacity);
+        const auto runtime_before = bridge.counters();
+        const uint64_t sys_tick_before = Sys::boostedTick();
+        const auto terminals_before = g_terminal_fires;
+        const auto terminal_status_before = g_terminal_status;
+        std::vector<uint64_t> free_before;
+        fixture.source->store().fill_free_node_snapshot(free_before);
+        uint64_t callbacks = 0;
+        const auto unchanged_execution = [&]() {
+            std::vector<uint64_t> free_after;
+            fixture.source->store().fill_free_node_snapshot(free_after);
+            return bridge.counters() == runtime_before &&
+                Sys::boostedTick() == sys_tick_before &&
+                !bridge.has_active_executions() &&
+                !adapter.has_active_die_executions() &&
+                callbacks == 0 && g_terminal_fires == terminals_before &&
+                g_terminal_status == terminal_status_before &&
+                free_after == free_before &&
+                workload.hw_resource->num_in_flight_gpu_comp_ops == 0;
+        };
+        const auto availability_error = [&](const std::exception& error) {
+            const std::string reason = error.what();
+            return reason.find("prediction_not_available:") != std::string::npos &&
+                reason.find(field) != std::string::npos;
+        };
+
+        bool submit_rejected = false;
+        uint64_t unexpected_handle = 0;
+        try {
+            unexpected_handle = bridge.submit_plan(
+                unavailable, owner,
+                [&](uint64_t, const nlohmann::json&) { ++callbacks; });
+        } catch (const std::exception& error) {
+            submit_rejected = availability_error(error);
+        }
+        expect_true(submit_rejected && unchanged_execution() &&
+                        runtime_before.at("now_ns").get<uint64_t>() < sys_tick_before,
+                    "Q: submit rejects the exact unavailable marker without clock/service/callback changes");
+        if (unexpected_handle != 0) {
+            bridge.cancel(unexpected_handle, Sys::boostedTick(), false);
+        }
+
+        const uint64_t revision_before_acquire = ledger.workspace_revision();
+        bool acquire_rejected = false;
+        try {
+            auto accidental = adapter.try_acquire_workspace(bypass);
+            if (accidental.lease.active()) accidental.lease.release();
+        } catch (const std::exception& error) {
+            acquire_rejected = availability_error(error);
+        }
+        expect_true(acquire_rejected && unchanged_execution() &&
+                        ledger.active_lease_count() == 0 &&
+                        ledger.active_workspace_bytes() == 0 &&
+                        ledger.workspace_revision() == revision_before_acquire,
+                    "Q: manual unavailable Prepared Plan is rejected before workspace mutation");
+
+        // A pre-existing valid token belongs to the caller. The const-ref
+        // validator may reject the Plan but must leave that token untouched.
+        const WorkspaceCapacityRank refreshed{
+            fixture.sys->id, ledger.workspace_revision(), peak + 4096, 0, 0, 0};
+        ledger.validate_capacity_snapshot(refreshed);
+        ledger.install_capacity_snapshot_unchecked(refreshed);
+        auto held = adapter.try_acquire_workspace(prepared);
+        expect_true(held.status == WorkspaceAdmission::AcquireStatus::Acquired,
+                    "Q: valid R1 Prepared Plan still acquires its canonical lease");
+        if (held.status != WorkspaceAdmission::AcquireStatus::Acquired) continue;
+        const uint64_t held_revision = ledger.workspace_revision();
+        bool validation_rejected = false;
+        try {
+            adapter.validate_prepared_coarse_plan(*stored, bypass, held.lease);
+        } catch (const std::exception& error) {
+            validation_rejected = availability_error(error);
+        }
+        expect_true(validation_rejected && unchanged_execution() &&
+                        held.lease.active() && ledger.owns_lease(held.lease, peak) &&
+                        ledger.active_lease_count() == 1 &&
+                        ledger.active_workspace_bytes() == peak &&
+                        ledger.workspace_revision() == held_revision,
+                    "Q: validation rejects before take/occupy and preserves the caller's live lease");
+        held.lease.release();
+        expect_true(ledger.active_lease_count() == 0 &&
+                        ledger.active_workspace_bytes() == 0,
+                    "Q: caller explicitly releases the preserved lease exactly once");
+
+        const WorkspaceCapacityRank issue_capacity{
+            fixture.sys->id, ledger.workspace_revision(), peak + 4096, 0, 0, 0};
+        ledger.validate_capacity_snapshot(issue_capacity);
+        ledger.install_capacity_snapshot_unchecked(issue_capacity);
+        auto issued = adapter.try_acquire_workspace(prepared);
+        expect_true(issued.status == WorkspaceAdmission::AcquireStatus::Acquired,
+                    "Q: actual adapter issue fixture owns a canonical token");
+        bool issue_rejected = false;
+        if (issued.status == WorkspaceAdmission::AcquireStatus::Acquired) {
+            try {
+                adapter.issue_prepared_coarse_plan(*stored, bypass,
+                                               std::move(issued.lease));
+            } catch (const std::exception& error) {
+                issue_rejected = availability_error(error);
+            }
+        }
+        expect_true(issue_rejected && unchanged_execution() &&
+                        ledger.active_lease_count() == 0 &&
+                        ledger.active_workspace_bytes() == 0,
+                    "Q: actual adapter issue rejects manual bypass before graph/GPU/runtime changes");
+        fixture.sys.reset();
+        drain_queue(fixture.event_queue);
+        expect_true(callbacks == 0 && g_terminal_fires == terminals_before,
+                    "Q: rejected predictions leave no deferred completion on teardown");
+    }
+}
 }  // namespace
 
 int main() {
@@ -1016,6 +1194,8 @@ int main() {
                     "I: teardown fires no completion for the in-flight "
                     "node (exactly-zero terminals)");
     }
+
+    test_incomplete_coarse_prediction_boundaries(config_dir, "coarse_system_latency.json");
 
     std::error_code ec;
     std::filesystem::remove_all(config_dir, ec);

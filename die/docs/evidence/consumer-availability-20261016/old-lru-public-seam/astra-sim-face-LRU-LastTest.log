@@ -1,0 +1,83 @@
+Start testing: Oct 15 22:33 UTC
+----------------------------------------------------------
+18/19 Testing: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+18/19 Test: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+Command: "/workspace/template/work/consumer-availability/old-astra-sim-face-LRU-build/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+Directory: /workspace/template/work/consumer-availability/old-astra-sim-face-LRU-build/frontend
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" start time: Oct 15 22:33 UTC
+Output:
+----------------------------------------------------------
+J: fixture retains the actual emitted FACE FFN task and source provenance -> PASS
+J: real v2 parser preserves raw FFN JSON and diagnostic DieSpec          -> PASS
+J: insufficient KV headroom keeps FFN dependency-free                    -> PASS
+J: blocked FFN does not occupy a GPU slot                                -> PASS
+J: blocked FFN does not acquire a workspace lease                        -> PASS
+J: one released KV byte changes the rank capacity view                   -> PASS
+J: capacity retry acquires the canonical 256 B Plan lease                -> PASS
+J: finish releases the FFN lease exactly once                            -> PASS
+J: second FFN issue owns an independent cancellation lease               -> PASS
+J: cancel returns the FFN lease once and terminalizes as skipped         -> PASS
+A: GPU comp slot occupied at issue                                       -> PASS
+A: node terminal fires exactly once                                      -> PASS
+A: span >= isolated estimate + one-shot latency                          -> PASS
+A: span == oracle machine elapsed + exactly one 100 ns local_mem_latency charge -> PASS
+A: tics_gpu_ops equals the wall span                                     -> PASS
+A: GPU comp slot released after Done                                     -> PASS
+A: adapter drains after Done                                             -> PASS
+B: node terminal fires exactly once                                      -> PASS
+B: span == oracle machine elapsed exactly (latency 0 -> no latency charge) -> PASS
+C: adapter reports an active execution mid-flight                        -> PASS
+C: GPU comp slot still occupied mid-flight                               -> PASS
+C: node terminal fires exactly once under contention                     -> PASS
+C: span >= isolated estimate + latency (equal share can only delay)      -> PASS
+C: adapter drains after Done under contention                            -> PASS
+C: die side-band records service AND actual bytes (separate columns)     -> PASS
+D: marker without the HBM model completes on the 1 ns event (legacy micro-job) -> PASS
+F: ordinary scalar COMP remains forbidden with coarse DIE                -> PASS
+F: normal gates submit one delayed DIE byte and a COMM endpoint to shared Runtime -> PASS
+F: marker and COMM complete once; 1-byte compatibility count stays separate from COMM -> PASS
+F: completed marker/COMM teardown publishes no duplicate terminals       -> PASS
+G: live getter sees a strict prefix without moving Runtime, slot, or terminal state -> PASS
+G: cancellation closes the same physical prefix once and suppresses graph completion -> PASS
+G: cancelled marker teardown publishes no terminal                       -> PASS
+H: marker is pending before explicit HBM teardown                        -> PASS
+H: HBM teardown cancels and retires the marker without callback          -> PASS
+H: retired delayed marker alarm cannot terminalize later                 -> PASS
+M: partial teardown retains sampled DIE bytes and suppresses the marker callback -> PASS
+M: partial marker teardown remains silent after stale alarms drain       -> PASS
+N: teardown retains both finished marker bytes without dispatching either ready callback -> PASS
+N: terminal-tick marker teardown stays silent after stale alarms drain   -> PASS
+I: big node still in flight after partial pumping                        -> PASS
+I: teardown fires no completion for the in-flight node (exactly-zero terminals) -> PASS
+Q: availability fixture has a dependency-free typed COMP                 -> PASS
+Q: legal R1 prepare preserves the task and positive workspace            -> PASS
+Q: each unavailable marker has a valid canonical Plan/hash               -> PASS
+Q: submit rejects the exact unavailable marker without clock/service/callback changes -> PASS
+Q: manual unavailable Prepared Plan is rejected before workspace mutation -> PASS
+Q: valid R1 Prepared Plan still acquires its canonical lease             -> PASS
+Q: validation rejects before take/occupy and preserves the caller's live lease -> PASS
+Q: caller explicitly releases the preserved lease exactly once           -> PASS
+Q: actual adapter issue fixture owns a canonical token                   -> PASS
+Q: actual adapter issue rejects manual bypass before graph/GPU/runtime changes -> PASS
+Q: rejected predictions leave no deferred completion on teardown         -> PASS
+Q: availability fixture has a dependency-free typed COMP                 -> PASS
+Q: legal R1 prepare preserves the task and positive workspace            -> PASS
+Q: each unavailable marker has a valid canonical Plan/hash               -> PASS
+Q: submit rejects the exact unavailable marker without clock/service/callback changes -> PASS
+Q: manual unavailable Prepared Plan is rejected before workspace mutation -> PASS
+Q: valid R1 Prepared Plan still acquires its canonical lease             -> PASS
+Q: validation rejects before take/occupy and preserves the caller's live lease -> PASS
+Q: caller explicitly releases the preserved lease exactly once           -> PASS
+Q: actual adapter issue fixture owns a canonical token                   -> PASS
+Q: actual adapter issue rejects manual bypass before graph/GPU/runtime changes -> PASS
+Q: rejected predictions leave no deferred completion on teardown         -> PASS
+[die_execution_lifecycle_test] ALL PASS
+<end of output>
+Test time =   0.12 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" end time: Oct 15 22:33 UTC
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 15 22:33 UTC

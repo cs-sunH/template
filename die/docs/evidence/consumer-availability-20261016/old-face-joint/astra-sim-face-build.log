@@ -1,0 +1,25 @@
+[  4%] Built target coarse_die
+[ 28%] Built target yaml-cpp
+[ 28%] Built target fmt
+[ 32%] Built target die_model
+[ 36%] Built target spdlog
+[ 44%] Built target Analytical_Congestion_Aware
+[ 88%] Built target AstraSim
+[ 92%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/CompletionObserver.cc.o
+[ 92%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc.o
+[ 92%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/DecisionBridge.cc.o
+[ 92%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/DecisionMailbox.cc.o
+[ 92%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/GraphBatchCommitter.cc.o
+[ 92%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/NodeStore.cc.o
+[ 92%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/OnlineCli.cc.o
+[ 96%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/ParsedGraphBatch.cc.o
+[ 96%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/RequestIngress.cc.o
+[ 96%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/ServiceCoordinator.cc.o
+[ 96%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/WatchRegistry.cc.o
+[ 96%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-face/astra-sim/workload/execution_driven/WindowedTraceReader.cc.o
+[ 96%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[100%] Built target die_model
+[100%] Built target die_model_cabi
+[100%] Built target coarse_die
+[100%] Built target coarse_die_cabi

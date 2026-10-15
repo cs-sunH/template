@@ -1,0 +1,12 @@
+test_coarse_top_level_status_must_be_a_string (test_die_model_oracle.CoarseAvailabilityTests.test_coarse_top_level_status_must_be_a_string) ... ok
+test_cost_full_and_optional_fallback_keep_available_siblings (test_die_model_oracle.CoarseAvailabilityTests.test_cost_full_and_optional_fallback_keep_available_siblings) ... ok
+test_estimate_one_rejects_unavailable_body (test_die_model_oracle.CoarseAvailabilityTests.test_estimate_one_rejects_unavailable_body) ... ok
+test_face_scorer_propagates_oracle_exception (test_die_model_oracle.CoarseAvailabilityTests.test_face_scorer_propagates_oracle_exception) ... ok
+test_face_scorer_rejects_none_without_cost_fallback (test_die_model_oracle.CoarseAvailabilityTests.test_face_scorer_rejects_none_without_cost_fallback) ... ok
+test_legacy_cost_result_keeps_existing_status_semantics (test_die_model_oracle.CoarseAvailabilityTests.test_legacy_cost_result_keeps_existing_status_semantics) ... ok
+test_unavailable_body_is_rejected_before_latency_conversion (test_die_model_oracle.CoarseAvailabilityTests.test_unavailable_body_is_rejected_before_latency_conversion) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.071s
+
+OK
