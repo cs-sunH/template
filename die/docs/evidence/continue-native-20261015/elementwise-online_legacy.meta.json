@@ -1,0 +1,33 @@
+{
+  "phase": "online_legacy",
+  "command": [
+    "bash",
+    "/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/die/docs/analysis/native-local-projection-20261014/online-reproduction/run_tiny_online.sh",
+    "legacy"
+  ],
+  "environment": {
+    "PROTOBUF_FROM_SOURCE": "unset",
+    "LD_LIBRARY_PATH": "/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu:/workspace/template/work/native-dependency-check/elementwise-preview/build/lib:/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu",
+    "NATIVE_COARSE_PROJECTION_LIBRARY": "/workspace/template/work/native-dependency-check/elementwise-preview/build/lib/libjoint_projection.so",
+    "DIE_COARSE_CABI_PATH": "/workspace/template/work/native-dependency-check/elementwise-preview/build/lib/libcoarse_die_cabi.so",
+    "DIE_MODEL_CABI_PATH": "/workspace/template/work/native-dependency-check/elementwise-preview/build/lib/libdie_model_cabi.so",
+    "PYTHONPATH": "/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint:/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint/sh_test_mesh:/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "JOINT_REPRO_REPO_ROOT": "/workspace/template",
+    "ASTRA_SIM_ROOT": "/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint",
+    "BUILD_DIR": "/workspace/template/work/native-dependency-check/elementwise-preview/build",
+    "JOINT_REPRO_WORKDIR": "/workspace/template/work/native-dependency-check/elementwise-preview/online"
+  },
+  "cwd": "/workspace/template",
+  "started_utc": "2026-10-15T14:42:05.613816+00:00",
+  "finished_utc": "2026-10-15T14:42:06.653512+00:00",
+  "wall_seconds": 1.0397270470000421,
+  "exit_code": 0,
+  "joint_source_commit": "5c2de289bc5744e5c252d782901cdba8b6f62459",
+  "sdk_source_digest": "56e684c09eca0d6d3aa2677f03775219d05611c536b6546de741bd8f24e0f948",
+  "log": "/workspace/template/die/docs/evidence/continue-native-20261015/elementwise-online_legacy.log",
+  "log_sha256": "7a4a42f12049afbb796eb0b71e14d4d9c149380a5595a9a3ffbccdd9963d6b87",
+  "scope": "isolated preview only; no official vendor publish",
+  "source_revision_scope": "before-credit-endpoint-guard",
+  "latest_public_source_certified": false
+}

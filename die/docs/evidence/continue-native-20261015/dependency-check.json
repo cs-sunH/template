@@ -1,0 +1,142 @@
+{
+  "checked_utc": "2026-10-15T14:27:54.202841+00:00",
+  "repository_head": "5c2de289bc5744e5c252d782901cdba8b6f62459",
+  "dependencies": {
+    "/workspace/cloud-setup/sysroot/usr/bin/protoc": {
+      "exists": true,
+      "realpath": "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+      "sha256": "7730414b191c9363340457770c330a7cc00dbba4b6f4130b1293369b3454c27f"
+    },
+    "/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotobuf.so": {
+      "exists": true,
+      "realpath": "/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotobuf.so.32.0.12",
+      "sha256": "993fe6c3aa495bf8efac8a0b73f14a1a12a4d028816eb4f55c704ddbf1403e3a"
+    },
+    "/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotoc.so.32": {
+      "exists": true,
+      "realpath": "/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotoc.so.32.0.12",
+      "sha256": "a6487dc4c0e14d8c5f15cfa459eba66f4253c9fe5574307eee057de9cd10154e"
+    },
+    "/workspace/cloud-setup/sysroot/usr/include/google/protobuf/stubs/common.h": {
+      "exists": true,
+      "realpath": "/workspace/cloud-setup/sysroot/usr/include/google/protobuf/stubs/common.h",
+      "sha256": "0d67264d1da8cf32ba1a8fa2b86bb1d483d88388c0599766ab338add777b24f8"
+    },
+    "/workspace/template/work/native-dependency-check/probe/et_def.proto": {
+      "exists": true,
+      "realpath": "/workspace/template/work/native-dependency-check/probe/et_def.proto",
+      "sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890"
+    }
+  },
+  "legacy_failure": "missing stale work/protobuf-root libprotobuf.so path; not a source compile failure",
+  "no_network_install_needed": true,
+  "scope": "dependency smoke only; no current SDK/public model integration claim",
+  "commands": [
+    {
+      "command": [
+        "protoc",
+        "--version"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.004265831000111575,
+      "log": "dependency-00.log"
+    },
+    {
+      "command": [
+        "python3",
+        "-c",
+        "import google.protobuf; print(google.protobuf.__version__)"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.011012195000034808,
+      "log": "dependency-01.log"
+    },
+    {
+      "command": [
+        "ldd",
+        "/workspace/cloud-setup/sysroot/usr/bin/protoc"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.00475364199996875,
+      "log": "dependency-02.log"
+    },
+    {
+      "command": [
+        "ldd",
+        "/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotobuf.so"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.004410774999996647,
+      "log": "dependency-03.log"
+    },
+    {
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/native-dependency-check/probe",
+        "-B",
+        "/workspace/template/work/native-dependency-check/probe-build",
+        "-DProtobuf_INCLUDE_DIR=/workspace/cloud-setup/sysroot/usr/include",
+        "-DProtobuf_LIBRARY=/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotobuf.so",
+        "-DProtobuf_PROTOC_EXECUTABLE=/workspace/cloud-setup/sysroot/usr/bin/protoc",
+        "-DProtobuf_PROTOC_LIBRARY=/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotoc.so.32",
+        "-DCMAKE_BUILD_TYPE=Debug"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.39916230699998323,
+      "log": "dependency-04.log"
+    },
+    {
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/native-dependency-check/probe-build",
+        "--target",
+        "protobuf_smoke",
+        "-j1"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 3.077416367000069,
+      "log": "dependency-05.log"
+    },
+    {
+      "command": [
+        "/workspace/template/work/native-dependency-check/probe-build/protobuf_smoke"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.002770512999973107,
+      "log": "dependency-06.log"
+    },
+    {
+      "command": [
+        "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+        "--proto_path=/workspace/template/work/native-dependency-check/probe",
+        "--python_out=/workspace/template/work/native-dependency-check/probe-build",
+        "/workspace/template/work/native-dependency-check/probe/et_def.proto"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.00411496399999578,
+      "log": "dependency-07.log"
+    },
+    {
+      "command": [
+        "python3",
+        "-c",
+        "import sys; sys.path.insert(0,sys.argv[1]); import et_def_pb2; x=et_def_pb2.Node(id=42,name=\"schema-smoke\",data_deps=[7]); y=et_def_pb2.Node.FromString(x.SerializeToString()); assert x==y; print(\"protobuf Python schema roundtrip passed\")",
+        "/workspace/template/work/native-dependency-check/probe-build"
+      ],
+      "exit_code": 0,
+      "wall_seconds": 0.04274085500003366,
+      "log": "dependency-08.log"
+    }
+  ],
+  "status": "passed",
+  "resolved.txt": {
+    "sha256": "4cbb961a835444ca387796ffc8e2a7d1924720b665c25b6232e346b8adf004fa",
+    "content": "Protobuf_VERSION=3.21.12\nProtobuf_INCLUDE_DIR=/workspace/cloud-setup/sysroot/usr/include\nProtobuf_LIBRARIES=/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu/libprotobuf.so\nPROTOC_PATH=/workspace/cloud-setup/sysroot/usr/bin/protoc\nPROTOBUF_PATH=PROTOBUF_PATH-NOTFOUND\n"
+  },
+  "protobuf_smoke": {
+    "sha256": "844def4ef287663e92c32679a93e8ea704c290ffa594c4b8e1464417c33c37c9",
+    "content": null
+  }
+}

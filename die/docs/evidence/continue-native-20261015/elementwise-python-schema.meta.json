@@ -1,0 +1,35 @@
+{
+  "phase": "python-schema",
+  "command": [
+    "protoc",
+    "--proto_path=/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint/extern/graph_frontend/chakra/schema/protobuf",
+    "--python_out=/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint/extern/graph_frontend/chakra/schema/protobuf",
+    "/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint/extern/graph_frontend/chakra/schema/protobuf/et_def.proto"
+  ],
+  "environment": {
+    "PROTOBUF_FROM_SOURCE": "unset",
+    "LD_LIBRARY_PATH": "/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu:/workspace/template/work/native-dependency-check/elementwise-preview/build/lib:${LD_LIBRARY_PATH:-}",
+    "NATIVE_COARSE_PROJECTION_LIBRARY": "/workspace/template/work/native-dependency-check/elementwise-preview/build/lib/libjoint_projection.so",
+    "DIE_COARSE_CABI_PATH": "/workspace/template/work/native-dependency-check/elementwise-preview/build/lib/libcoarse_die_cabi.so",
+    "DIE_MODEL_CABI_PATH": "/workspace/template/work/native-dependency-check/elementwise-preview/build/lib/libdie_model_cabi.so",
+    "PYTHONPATH": "/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "JOINT_REPRO_REPO_ROOT": "/workspace/template",
+    "ASTRA_SIM_ROOT": "/workspace/template/work/native-dependency-check/elementwise-preview/stage-root/astra-sim-joint",
+    "BUILD_DIR": "/workspace/template/work/native-dependency-check/elementwise-preview/build",
+    "JOINT_REPRO_WORKDIR": "/workspace/template/work/native-dependency-check/elementwise-preview/online"
+  },
+  "cwd": "/workspace/template",
+  "started_utc": "2026-10-15T14:31:48.730221+00:00",
+  "finished_utc": "2026-10-15T14:31:48.737083+00:00",
+  "wall_seconds": 0.006861643999968692,
+  "exit_code": 0,
+  "joint_source_commit": "5c2de289bc5744e5c252d782901cdba8b6f62459",
+  "sdk_source_digest": "56e684c09eca0d6d3aa2677f03775219d05611c536b6546de741bd8f24e0f948",
+  "log": "/workspace/template/die/docs/evidence/continue-native-20261015/elementwise-python-schema.log",
+  "log_sha256": "e2440163c8467caadb7e9951aff2f442efe6e7adbd9545ab7a675611f92f1955",
+  "scope": "isolated preview only; no official vendor publish",
+  "source_revision_scope": "before-credit-endpoint-guard",
+  "latest_public_source_certified": false,
+  "environment_representation": "recorded expansion template; command inherited cloud-setup activation"
+}

@@ -1,8 +1,22 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-15。本Session已按用户指令停止开发并快速交接。工作分支 `codex/die-analytical-continue-20261015`；交接整理前HEAD及fetch实核的远端main均为 `718818ba55217a520606c90f00b3c6eb3b6302cc`，工作区干净，无未提交生产源码或子代理草稿。最终交接提交以包含本页更新的Git提交及最终远端查询为准，正常快进同步，不force。工程 **NOT ACCEPTED**，与交接是否成功分开。
+记录日期：2026-10-15（用户时区Asia/Shanghai）。当前用户授权持续自主开发，历史停止指令不适用。干净旧分支从b7925e2安全快进至远端main `5c2de289bc5744e5c252d782901cdba8b6f62459`，工作分支 `codex/die-explicit-continue-20261015`。本检查点提交以包含本页的Git提交为准，普通push/fetch实核；未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
 
 ## Current Status
+
+### 当前有效检查点：逐元素曲线、真实失败与继续开发
+
+- 显式硬件输入/删除硬件搜索、最新10%/有据20%规则已由35f4580、89c2499合入；本次确认后跳过。最新基线5c2de28含718818b，无不明工作区改动。只改die/，保留全部旧证据、Program归档和JOINT_old删除。
+- standalone residual/SwiGLU/GELU新增解析256元素full/tail计数，每invocation独立INT4打包与RR映射；真实首cohort Load/Compute、余量L/C/S、最终排空。输入/输出块credit分离，单inv单cohort单槽，其他固定双槽+FP32工作块；少1B容量拒绝。per-Core PRIVATE保留full/tail的SRAM/LOCAL最长服务，不伪增compute ops。各端点double精确表达完整检查，超大uint64奇数端点漏检已修。
+- 多Core真实字节路由用固定最多三组（uniform周期/full前缀/tail点），独立方向/HOP枚举验证。旧错误2核residual257 Load XPOS/XNEG64.5/64.5B现1/128B，Store32.25/32.25B现64/0.5B。HBM每inv从row0重启条带、streams在block内拼接为显式假设，不是实测地址。旧OS路由限制未借此冒称修好。
+- 一致Release和公共CTest **43/43通过，21.77s**。独立full/tail枚举、字节/ops/credit整数守恒、所有端点溢出、单/双槽容量、每核PRIVATE、加权路由、snapshot/容量/取消及Core/block/repeat放大通过，repeat到1e6最大11内部事件。Runtime服务浮点reconciliation最大字节残差1.77635683940025046468e-15，**非严格整数全等**。所有初始测试fixture错误/失败保留。
+- 独立离线oracle自检9/9；17/17真实driver、51场景、17/17总量及各HBM行payload守恒通过。精度仍 **failed**：严格inv barrier下完成27场景≤10%、9场景10%—20%未接受、15场景>20%；busy也失败。代表例residual256×4完成90ms/120ms，25%；INT4 1元素×3为33.33%；257单inv compute busy约99.61%。solo首输出max0.25ns，但offset最大2.500001ms/8.33334%，不能称并发ns精确。无barrier参考为另一语义，不代替真实barrier证书。Norm/softmax/RoPE/FFN/WR其余升级未完成。
+- 性能实测完整保留：冻结5c2de28的30样本OS J32 P95 **102.121μs failed**，另一次诊断128³冷P95 4.079208ms也保留。新向量路由前与最终源各30样本；最终本次所测通过：128³冷1.806529ms，residual/SwiGLU冷0.241186/0.317219ms，hot4.086—5.999μs，OS J1/J8/J32更新31.146/24.556/34.641μs。source/ELF/CPU状态绑定，计时无并行构建。不能挑最好一次当稳定全负载证书或声称无关OS因向量修改变快；五仓E2E CPU预算not_run。
+- 发现新参数响应缺口：launch/setup从0改1,000,000ns，真实CABI residual257/norm257仍81/75ns；new_plan固定launch_ns=0。原始响应probe保存，按根设计§8.1/9.2每真实region实例启动/首访setup修，不机械对FFN四子kernel×4，不用eta或假COMPUTE_GATE补偿。
+- JOINT旧protobuf阻碍已修环境路径。隔离 **before-credit-endpoint-guard** SDK30文件digest `56e684c09eca0d6d3aa2677f03775219d05611c536b6546de741bd8f24e0f948`（后续credit/route修复前）真实native4/4、Python6/6、config13/13、adapter/workspace45/45通过、0skip。Online及ledger真实构建成功；legacy tiny C++/Python exit0、1请求/192成功节点；coarse-intended C++134/Python1在原provider guard拒绝，**非coarse Online通过**。不把该冻结SDK认证当最新公共源或五仓发布。正式vendor仍旧canonical24 `23160c…7e9b`，未publisher，live/sh30保护保留。
+- 详细源码决策/复现：`analysis/elementwise-service-20261015/README.md`、oracle-README、`evidence/elementwise-service-20261015/`；旧/最终raw、失败、自检及source identity齐备。性能基线与依赖/隔离结果分别在continue-performance/continue-native-20261015。TX8条件参考和目标工程先验未重拟，target raw/heldout仍not_available，未称硬件校准。
+
+以下为历史状态；与上方冲突时以上方为准，历史停止指令不延续。
 
 ### 本Session最终交接（优先于下方历史状态）
 
@@ -238,11 +252,12 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch最新main，先核对本页交接提交与718818b祖先关系；阅读`analysis/explicit-input-integration-20261015/README.md`和verification。功能基线42/42已通过，不重做未修改的K参考、clock或JOINT known cancel审计。硬件输入及10%/20%设计已落地，禁止恢复硬件搜索/旧Program。
-2. 优先修逐元素向量：`Mapping.cc::add_vector`约1303、standalone分发约2127及`finalize_summary`。现有257元素按frames均分会缩小真实首块，INT4静态峰值按比例估计且普通分支缺容量拒绝。先仅residual/mlp_activation，闭式256元素full/tail块、每invocation独立打包、真实首cohort/稳态/排空、分离input/output块credit及精确双输入/待写输出/FP32工作块峰值；先5必要8/16并统一描述预算。Norm/softmax需要整行归约依赖，不能混称已覆盖。尚无实现；先新增定向守恒/首输出/SRAM/放大不增事件测试。
-3. 当前allocator最终源718818b对应的速度not_run；用`coarse_service_curve_benchmark --samples 30 --output work/...json`在无并行构建时测并绑源/ELF，保留所有失败。冷编译profile显示28候选，WR Runtime trial占较多；别以放宽门槛或逐K回放求通过。所有完成时间现已≤10%，不为6.9163%尾shape继续增复杂度；busy>20%继续failed/tradeoff_unresolved。
-4. 五仓后续见`analysis/explicit-input-integration-20261015/e2e-budget-plan.md`。先修native配置中的真实protobuf库路径，接续已构建4 native target的相关验证；五仓发布前绑定当前源（隔离证据仅89），再publisher/check。83配置/FACE133+152只代表该冻结版本/修复，不能代替当前完整业务。三profile固定dispatch流的完整replay入口尚不存在；tiny只作smoke，JOINT coarse仍有provider/sh30/live guard，不能用于有效预算或直接删guard。
-5. WR/Attention/FFN其余模板及OS路由二阶/odd-row限制继续按解析计数与固定曲线推进；有独立可识别新数据才粗校准，不拟合oracle时间。阶段完成再同步main。当前Session交接后停止；新任务恢复自主开发，历史“仅文档”限制不延续。
+1. 核实包含本检查点的远端main与实际分支/HEAD，读取elementwise-service README、oracle与各source identity。当前43/43为功能基线；硬件搜索移除已完成，不重复恢复/改写。正常同步检查点后继续，不按阶段停止。
+2. 优先修已实测launch/setup无消费者：根设计§8.1/9.2为每真实region实例（不是内部tile、不是FFN四子kernel自动×4）。保留外部ready、纯等待不占13共享域/Q、首访只收费一次、取消/容量/snapshot及整数时间溢出；repeat计账/固定复杂度一起处理，不能总delay盲目前置或逐repeat事件。缺口probe可直接复现，先不拟合eta。
+3. 继续逐元素预取/尾块与多inv物化依赖固定曲线表示。当前6描述/8预算有精度failed，不能以守恒/单次speed pass宣称工程验收；全部51场景raw/原busy定义保留，10%—20%尚未自动接受。不得逐K/wave/周期恢复，或自由拟合曲线贴时间。
+4. 最终源速度本次pass但冻结基线尾部failed仍有效；只有真实变更或明确未解问题才再测，保存全部样本与身份。热点仍为软件候选构造/真实Runtime试跑、owner仲裁，不删合法软件映射求速度。新模型变更时同时测复杂度、精度、速度。
+5. 公共源稳定后更新隔离SDK身份，继续当前JOINT已解决依赖的native/真实coarse接入。before-guard SDK的4+6+13+45及legacy tiny不是最新source/五仓证书。正式publisher前重建双ABI/配置/实际消费者；三profile固定流replay尚未实现、真实sh30外部CSV缺失、coarse provider/live guard保留。E2E预算不能以tiny或CABI替代。
+6. WR/Norm/softmax/Attention/FFN其余曲线、OS二阶及odd-row服务分组限制继续按真实依赖推进；有独立可识别新数据才重校准。TX8/reference与目标先验冻结，target raw缺失就not_available。保存源码/raw和有意义GitHub检查点，继续自主开发。
 
 下方为历史接续记录，冲突时以上为准。
 

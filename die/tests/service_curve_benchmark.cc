@@ -311,10 +311,11 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
         metric_report(cpp_samples, kCompileGateNs, "fixed_2ms_compile_gate");
     result["metrics"]["cpp_cold_compile_uncached"]["same_plan_hash_each_call"] =
         cpp_hash_stable;
-    result["metrics"]["cpp_cold_compile_uncached"]["acceptance_applies"] =
-        task.value("op_kind",std::string())=="gemm";
+    const auto op=task.value("op_kind",std::string());
+    const bool regular=op=="gemm"||op=="residual"||op=="mlp_activation";
+    result["metrics"]["cpp_cold_compile_uncached"]["acceptance_applies"] = regular;
     result["metrics"]["cpp_cold_compile_uncached"]["scope"] =
-        task.value("op_kind",std::string())=="gemm" ? "regular_compile" : "composite_kernel_reported_separately_per_design_13";
+        regular ? "regular_compile" : "composite_kernel_reported_separately_per_design_13";
     if (!cpp_hash_stable)
       fail_record(failures, name, "uncached C++ compile changed Plan hash");
 
@@ -927,13 +928,16 @@ int main(int argc, char** argv) {
     const std::vector<std::pair<std::string, Json>> query_fixtures = {
         {"gemm_1x128x128", gemm_task(1, 128, 128, profile)},
         {"gemm_128x128x128", gemm_task(128, 128, 128, profile)},
+        {"residual_257", {{"op_kind","residual"},{"tensor_shapes",{{"m",1},{"hidden",257}}},
+            {"storage_dtype","int4"},{"execution_profile",profile}}},
+        {"swiglu_16x4097", {{"op_kind","mlp_activation"},{"tensor_shapes",{{"m",16},{"ffn",4097}}},
+            {"storage_dtype","bf16"},{"execution_profile",profile}}},
         {"example_attention", attention}};
 
     Json query_results = Json::array();
     for (const auto& [name, task] : query_fixtures) {
-      const Json alias = name == "example_attention"
-          ? semantic_trace_alias(task)
-          : gemm_semantic_alias(task, profile);
+      const Json alias = task.value("op_kind",std::string())=="gemm"
+          ? gemm_semantic_alias(task, profile) : semantic_trace_alias(task);
       query_results.push_back(compile_query_fixture(
           hardware, config, task, alias, name, args.samples, failures));
       report["query_fixtures"] = query_results;

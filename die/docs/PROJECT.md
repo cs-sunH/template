@@ -20,6 +20,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
+2026-10-15当前源码检查点：standalone residual/SwiGLU/GELU已加入256元素full/tail解析曲线、精确打包/槽位/credit检查、每核PRIVATE和字节加权前缀/尾点路由；公共Release43/43通过。17组独立oracle/51场景守恒通过但严格invocation barrier及busy仍failed，不称精度验收；最终30样本常规cold/hot/J32本次通过，冻结基线J32尾部失败保留。实测launch/setup参数尚未影响延迟，优先修每真实region实例的ready/首次HBM消费者。JOINT依赖路径已修，旧冻结SDK隔离native/legacy tiny通过但coarse Online仍按provider guard拒绝；正式五仓未publisher。源码/失败/速度和复现见HANDOFF及analysis/evidence的elementwise-service、continue-performance、continue-native-20261015。TX8与目标先验未重拟，target raw仍not_available；当前持续开发，工程NOT ACCEPTED。
+
 ## 当前强制建模路线（2026-10-15，用户确认）
 
 **解析工作量 + 固定数量的分段累计服务曲线 + 稳定区间直接积分**。完整合同见根设计§1.5、§8.2.1、§13及AGENTS。以下替代历史“恢复Program→逐K生命周期→周期证明”的接续建议：

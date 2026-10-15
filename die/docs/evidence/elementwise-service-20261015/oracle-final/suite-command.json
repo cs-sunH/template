@@ -1,0 +1,12 @@
+{
+  "argv": [
+    "python3",
+    "-B",
+    "die/validation/elementwise_service_oracle.py",
+    "--driver",
+    "work/elementwise_oracle_driver",
+    "--output",
+    "work/elementwise-oracle-final"
+  ],
+  "returncode": 0
+}

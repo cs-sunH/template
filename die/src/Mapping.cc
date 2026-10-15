@@ -3,6 +3,7 @@
 #include "EquivalentWork.hh"
 #include "GemmOSGeometry.hh"
 #include "GemmOSResourceFacts.hh"
+#include "ElementwiseGeometry.hh"
 
 #include <algorithm>
 #include <array>
@@ -442,6 +443,7 @@ u128 attention_slots(const std::vector<Span>& spans, u64 tq, u64 tk) {
 
 struct AxisDist {
   u64 nx = 1, ny = 1, active = 1;
+  bool point = false;
   long double ex = 0, ex2 = 0, ey = 0, ey2 = 0;
   long double xleft = 0, xright = 0, ylow = 0, yhigh = 0;
 };
@@ -470,6 +472,7 @@ AxisDist destination(u64 count, u64 nx, u64 ny) {
 }
 
 long double point_abs_axis(const AxisDist& d, u64 point, bool xaxis) {
+  if(d.point) return std::abs((xaxis ? d.ex : d.ey)-point);
   const u64 nx = d.nx;
   if (xaxis) {
     const u64 rows = d.active / nx, rem = d.active % nx;
@@ -576,6 +579,8 @@ struct Flow {
   u128 int4 = 0;
   EqWork vec;
   long double compute_s = 0;
+  // Additional per-Core serial service bound, distinct from COMPUTE_GATE.
+  long double private_s = 0;
   std::array<long double, 2> credit{};
 };
 
@@ -640,10 +645,9 @@ std::pair<long double,long double> route_moments(const Topology& topo,
   return {meanx, meany};
 }
 
-void route_bytes(Flow& flow, const Hardware& hw, const Topology& topo,
-                 u64 row, u64 nbytes, u64 active_cores, bool writing) {
+void route_bytes_to(Flow& flow, const Hardware& hw, const Topology& topo,
+                 u64 row, u64 nbytes, const AxisDist& d, bool writing) {
   if (!nbytes) return;
-  const AxisDist d = destination(active_cores, topo.nx, topo.ny);
   const u64 cx = topo.nx / 2, cy = topo.ny / 2;
   long double source_x_left = 0.5L, source_y_low = 0.5L, meanx = 0, meany = 0;
   if (topo.profile == "edge_single_word_v2") {
@@ -685,6 +689,12 @@ void route_bytes(Flow& flow, const Hardware& hw, const Topology& topo,
     const auto& desc = hw.derived.at("resources").at(resource);
     if (desc.at("enabled").get<bool>()) flow.work[resource] += nbytes;
   }
+}
+
+void route_bytes(Flow& flow, const Hardware& hw, const Topology& topo,
+                 u64 row, u64 nbytes, u64 active_cores, bool writing) {
+  route_bytes_to(flow,hw,topo,row,nbytes,
+      destination(active_cores,topo.nx,topo.ny),writing);
 }
 
 void add_hbm(Flow& flow, const Hardware& hw, const Topology& topo,
@@ -740,7 +750,7 @@ void seal_activity(Activity& a, Flow& f, const Hardware& hw, u64 active) {
       (static_cast<double>(active) / std::max<u64>(1, du(hw,"die","core_count",1))) : 0;
   const double sw_one_core = active ? hw.rates[SRAM_WRITE] *
       (static_cast<double>(active) / std::max<u64>(1, du(hw,"die","core_count",1))) : 0;
-  long double private_time = a.private_time_s;
+  long double private_time = std::max<long double>(a.private_time_s,f.private_s);
   if (local_one_core > 0) private_time = std::max(private_time, f.work[LOCAL] / local_one_core);
   if (sr_one_core > 0) private_time = std::max(private_time, f.work[SRAM_READ] / sr_one_core);
   if (sw_one_core > 0) private_time = std::max(private_time, f.work[SRAM_WRITE] / sw_one_core);
@@ -760,7 +770,7 @@ Flow add_flow(const Flow& a, const Flow& b) {
   for (std::size_t i=0;i<resource_count;++i) r.work[i]=a.work[i]+b.work[i];
   for (std::size_t row=0;row<2;++row) for(std::size_t dir=0;dir<2;++dir)
     r.hbm[row][dir]=add128(a.hbm[row][dir],b.hbm[row][dir],"activity byte split");
-  r.int4=add128(a.int4,b.int4,"activity op split");r.vec=add128(a.vec,b.vec,"activity op split");r.compute_s=a.compute_s+b.compute_s;
+  r.int4=add128(a.int4,b.int4,"activity op split");r.vec=add128(a.vec,b.vec,"activity op split");r.compute_s=a.compute_s+b.compute_s;r.private_s=a.private_s+b.private_s;
   return r;
 }
 
@@ -768,7 +778,7 @@ Flow scale_flow(const Flow& a,u64 count) {
   Flow r;
   for(std::size_t i=0;i<resource_count;++i) r.work[i]=a.work[i]*count;
   for(std::size_t row=0;row<2;++row)for(std::size_t dir=0;dir<2;++dir)r.hbm[row][dir]=mul128(a.hbm[row][dir],count,"repeated activity bytes");
-  r.int4=mul128(a.int4,count,"repeated INT4 ops");r.vec=a.vec.multiply(count);r.compute_s=a.compute_s*count;
+  r.int4=mul128(a.int4,count,"repeated INT4 ops");r.vec=a.vec.multiply(count);r.compute_s=a.compute_s*count;r.private_s=a.private_s*count;
   return r;
 }
 
@@ -778,11 +788,11 @@ std::pair<Flow,Flow> divide_flow(const Flow& a,u64 count) {
   for(std::size_t i=0;i<resource_count;++i) base.work[i]=a.work[i]/count;
   for(std::size_t row=0;row<2;++row)for(std::size_t dir=0;dir<2;++dir)base.hbm[row][dir]=a.hbm[row][dir]/count;
   const auto vec_split=a.vec.divide(count);
-  base.int4=a.int4/count;base.vec=vec_split.first;base.compute_s=a.compute_s/count;
+  base.int4=a.int4/count;base.vec=vec_split.first;base.compute_s=a.compute_s/count;base.private_s=a.private_s/count;
   Flow remainder;
   for(std::size_t i=0;i<resource_count;++i) remainder.work[i]=a.work[i]-base.work[i]*count;
   for(std::size_t row=0;row<2;++row)for(std::size_t dir=0;dir<2;++dir)remainder.hbm[row][dir]=a.hbm[row][dir]-base.hbm[row][dir]*count;
-  remainder.int4=a.int4-base.int4*count;remainder.vec=vec_split.second;remainder.compute_s=a.compute_s-base.compute_s*count;
+  remainder.int4=a.int4-base.int4*count;remainder.vec=vec_split.second;remainder.compute_s=a.compute_s-base.compute_s*count;remainder.private_s=a.private_s-base.private_s*count;
   return {base,remainder};
 }
 
@@ -832,6 +842,9 @@ void append_epoch(Plan& plan,const Hardware& hw,Flow load,Flow compute,Flow stor
 // profile; only readiness units change. This is not a per-wave interpreter.
 Flow subtract_io_flow(const Flow& total, const Flow& part) {
   Flow rest;
+  if(part.private_s>total.private_s)
+    fail("mapping_invariant: IO prefix exceeds PRIVATE service");
+  rest.private_s=total.private_s-part.private_s;
   if (total.int4 || part.int4 || total.vec.as_long_double() || part.vec.as_long_double() ||
       total.compute_s || part.compute_s)
     fail("mapping_invariant: IO partition contains computation");
@@ -856,10 +869,11 @@ Flow subtract_compute_flow(const Flow& total,const Flow& prefix) {
     if(value<0) fail("mapping_invariant: compute prefix exceeds resource total");
     rest.work[r]=value;
   }
-  if(prefix.int4>total.int4 || prefix.compute_s>total.compute_s)
+  if(prefix.int4>total.int4 || prefix.compute_s>total.compute_s || prefix.private_s>total.private_s)
     fail("mapping_invariant: compute prefix exceeds total work");
   rest.int4=total.int4-prefix.int4;
   rest.compute_s=total.compute_s-prefix.compute_s;
+  rest.private_s=total.private_s-prefix.private_s;
   auto whole=total.vec.whole();
   long double fraction=total.vec.fraction()-prefix.vec.fraction();
   if(whole<prefix.vec.whole()) fail("mapping_invariant: Vec prefix exceeds total");
@@ -1285,9 +1299,15 @@ void finalize_summary(Plan& p, const Metrics& m, const Hardware& hw) {
   p.summary["mapping_assumptions"] = m.assumptions;
   p.summary["activity_units"] = "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]";
   if (p.summary.contains("service_curves")) {
-    p.summary["service_model_revision"]="analytical_cumulative_os_v3";
+    const auto& curves=p.summary.at("service_curves");
+    std::string revision=curves.at(0).at("model").get<std::string>();
+    for(const auto& curve:curves)
+      if(curve.at("model")!=revision) revision="analytical_cumulative_mixed_v1";
+    p.summary["service_model_revision"]=revision;
     p.summary["service_description_count"]=service_description_count(p);
-    p.summary["activity_units"]="physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal";
+    p.summary["activity_units"]=revision=="analytical_cumulative_os_v3"
+        ? "physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal"
+        : "physical work/bytes/ops are epoch totals; each service_curves entry defines separate input/output credit units; credit_curve overrides affine delta*p; final output released only at compute terminal";
   }
   p.summary["routing_evidence"] = {{"profile", gets(hw.input.at("performance_profile"),"timing_topology_profile")}, {"status","engineering_assumption"}};
 }
@@ -1345,6 +1365,189 @@ void add_vector(Plan& plan, Metrics& m, const Hardware& hw,
   m.output_rounds = add128(m.output_rounds,rounds,"vector rounds");
   const u64 waves=rounds;
   m.waves = add128(m.waves,waves,"vector waves"); m.active_cores=active; m.template_id=label;
+}
+
+// Elementwise kernels have no row reduction or K accumulation. Keep real
+// full/tail blocks and per-invocation packing; never split 257 as 128+129.
+void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
+    const Topology& topo, u64 count, u64 executions, u64 input_streams,
+    u64 ops_per_element, const std::string& ad, const std::string& od,
+    const std::string& label) {
+  const elementwise_geometry::Geometry g(count,executions,du(hw,"die","core_count"));
+  const auto input_bytes=[&](u64 n) {
+    return mul128(bytes(n,ad),input_streams,"elementwise input streams");
+  };
+  const u128 in=mul128(input_bytes(count),executions,"elementwise input bytes");
+  const u128 out=mul128(bytes(count,od),executions,"elementwise output bytes");
+  const u128 ops=mul128(g.total_elements,ops_per_element,"elementwise operations");
+  const u64 max_tile=std::min<u64>(count,256);
+  // This template allocates two raw input and two pending-output slots per
+  // Core plus one FP32 working block. Slot bytes use actual storage packing,
+  // independently for each input tensor, including an odd INT4 tail.
+  const u64 slots=g.total_rounds==1 ? 1 : 2;
+  const u128 peak=add128(add128(mul128(slots,input_bytes(max_tile),"elementwise input slots"),
+      mul128(slots,bytes(max_tile,od),"elementwise output slots"),"elementwise slots"),
+      mul128(max_tile,4,"elementwise FP32 work block"),"elementwise SRAM peak");
+  if(static_cast<long double>(as_u64(peak,"elementwise SRAM peak"))>
+      perf(hw,"rho_sram",0.9)*dd(hw,"core","sram_bytes_per_core"))
+    fail("unsupported_workspace: elementwise double buffers exceed per-Core SRAM");
+  for(const auto units:{g.total_blocks,g.first_blocks,g.last_blocks,
+                        g.total_blocks-g.first_blocks,g.total_blocks-g.last_blocks,
+                        g.total_blocks==g.first_blocks ? u64{0} :
+                            g.total_blocks-g.first_blocks-g.last_blocks})
+    if(static_cast<long double>(static_cast<double>(units))!=static_cast<long double>(units))
+      fail("overflow: elementwise cumulative credit endpoint is not exactly representable");
+
+  const bool tail_only_last=g.tail && g.last_blocks==1;
+  const u128 full_rounds=mul128(g.rounds-(tail_only_last ? 1 : 0),executions,"elementwise full cohorts");
+  const u128 tail_rounds=tail_only_last ? executions : 0;
+  const auto serial_bytes=[&](const std::string& dt) {
+    return add128(mul128(bytes(256,dt),full_rounds,"elementwise full service"),
+        mul128(bytes(g.tail,dt),tail_rounds,"elementwise tail service"),"elementwise serial bytes");
+  };
+  const auto private_bytes_time=[&](u128 n,std::size_t resource) {
+    const long double rate=hw.rates[resource]/static_cast<long double>(du(hw,"die","core_count"));
+    if(!(rate>0)) fail("invalid_hardware: elementwise per-Core service rate is zero");
+    return static_cast<long double>(as_u64(n,"elementwise serial service bytes"))/rate;
+  };
+  const auto io_for=[&](u64 full,u64 tail,u64 repeats,bool writing,u128 serial) {
+    Flow f;
+    // Byte-weighted RR destinations are a complete prefix repeated uniformly,
+    // a remaining full-block prefix, and at most one tail point. Three groups
+    // suffice regardless of Core/block/repeat count, including second moments
+    // for uniform-source hops and exact point distances for explicit ingress.
+    const auto group=[&](u128 n,const AxisDist& d) {
+      const u64 total=as_u64(n,"elementwise IO group");
+      const std::array<u64,2> rows{{total/2+total%2,total/2}};
+      for(std::size_t row=0;row<2;++row) {
+        const auto value=rows[row];
+        f.hbm[row][writing ? 1 : 0]=add128(f.hbm[row][writing ? 1 : 0],value,"elementwise HBM row");
+        f.work[row==0 ? HBM0 : HBM1]+=static_cast<long double>(value)/eta(hw,"eta_hbm_vector");
+        route_bytes_to(f,hw,topo,row,value,d,writing);
+      }
+      add_bytes_work(f,writing ? SRAM_READ : SRAM_WRITE,n,"elementwise IO SRAM");
+    };
+    const auto block_bytes=[&](u64 n){return writing ? bytes(n,od) : input_bytes(n);};
+    const u64 cycles=full/g.active,remaining=full%g.active;
+    if(cycles) group(mul128(block_bytes(256),mul128(cycles,g.active,"elementwise uniform blocks"),
+        "elementwise uniform bytes"),destination(g.active,topo.nx,topo.ny));
+    if(remaining) group(mul128(block_bytes(256),remaining,"elementwise full prefix bytes"),
+        destination(remaining,topo.nx,topo.ny));
+    if(tail) {
+      AxisDist d=destination(1,topo.nx,topo.ny);d.point=true;
+      d.ex=remaining%topo.nx;d.ey=remaining/topo.nx;
+      d.ex2=d.ex*d.ex;d.ey2=d.ey*d.ey;
+      d.xright=d.ex>=topo.nx/2;d.xleft=1-d.xright;
+      d.yhigh=d.ey>=topo.ny/2;d.ylow=1-d.yhigh;
+      group(block_bytes(tail),d);
+    }
+    // Each invocation's storage allocation restarts the documented row stripe.
+    f=scale_flow(f,repeats);
+    f.private_s=private_bytes_time(serial,writing ? SRAM_READ : SRAM_WRITE);
+    return f;
+  };
+  const auto tile_private=[&](u64 n) {
+    const u128 read=input_bytes(n),write=bytes(n,od);
+    return std::max({static_cast<long double>(compute_time(hw,0,mul128(n,ops_per_element,
+        "elementwise block operations"),1)),private_bytes_time(read,SRAM_READ),
+        private_bytes_time(write,SRAM_WRITE),
+        private_bytes_time(add128(read,write,"elementwise block LOCAL"),LOCAL)});
+  };
+  const auto compute_for=[&](u128 read,u128 write,u64 elements,u64 serial_elements,
+      u128 full,u128 tail) {
+    Flow f;
+    add_bytes_work(f,SRAM_READ,read,"elementwise Compute SRAM reads");
+    add_bytes_work(f,SRAM_WRITE,write,"elementwise Compute SRAM writes");
+    add_bytes_work(f,LOCAL,add128(read,write,"elementwise LOCAL"),"elementwise LOCAL");
+    f.vec=mul128(elements,ops_per_element,"elementwise Compute operations");
+    // Cohorts run serially; each cohort's longest real block defines its
+    // compute gate. Totals/A would undercharge a partial cohort.
+    f.compute_s=compute_time(hw,0,mul128(serial_elements,ops_per_element,
+        "elementwise serial operations"),1);
+    f.private_s=full*tile_private(256)+tail*tile_private(g.tail);
+    return f;
+  };
+  const bool single=g.total_blocks==g.first_blocks;
+  const u64 first_max=g.full_blocks ? 256 : g.tail;
+  Flow load=io_for(g.full_blocks,g.tail,executions,false,
+      mul128(serial_bytes(ad),input_streams,"elementwise input service"));
+  Flow store=io_for(g.full_blocks,g.tail,executions,true,serial_bytes(od));
+  Flow compute=compute_for(in,out,g.total_elements,g.serial_elements,full_rounds,tail_rounds);
+  Flow first_load=io_for(std::min(g.full_blocks,g.first_blocks),
+      g.first_blocks>g.full_blocks ? g.tail : 0,1,false,input_bytes(first_max));
+  Flow first_compute=single ? compute : compute_for(input_bytes(g.first_elements),
+      bytes(g.first_elements,od),g.first_elements,first_max,g.full_blocks ? 1 : 0,g.full_blocks ? 0 : 1);
+  Flow final_store=single ? store : io_for(g.last_blocks-(g.tail!=0),g.tail,1,true,
+      bytes(tail_only_last ? g.tail : 256,od));
+  const auto begin=plan.epochs.size(), description_begin=service_description_count(plan);
+  const auto append=[&](const char* suffix,Flow l,Flow c,Flow s,
+      std::array<double,2> initial,u64 active) {
+    Epoch e; e.name=label+suffix; e.credit_initial=initial;
+    e.credit_capacity={{static_cast<double>(slots)*g.active,static_cast<double>(slots)*g.active}};
+    for(auto item:{std::pair<Role,Flow*>{Role::Load,&l},{Role::Compute,&c},{Role::Store,&s}}) {
+      Activity a; a.role=item.first; a.id=plan.epochs.size()*3+e.activities.size()+1;
+      seal_activity(a,*item.second,hw,active);
+      a.credit_curve={{0,{{0,0}}},{1,a.credit_delta}};
+      if(std::any_of(a.work.begin(),a.work.end(),[](double v){return v>0;}))
+        e.activities.push_back(std::move(a));
+    }
+    plan.epochs.push_back(std::move(e));
+  };
+  first_load.credit={{static_cast<long double>(g.first_blocks),0}};
+  append("_load_first",first_load,{}, {},{{0,0}},g.active);
+  first_compute.credit={{-static_cast<long double>(g.first_blocks),0}};
+  append("_first_output_work",{},first_compute,{},
+      {{static_cast<double>(g.first_blocks),0}},g.active);
+  if(!single) {
+    Flow remaining_load=subtract_io_flow(load,first_load);
+    Flow remaining_compute=subtract_compute_flow(compute,first_compute);
+    Flow early_store=subtract_io_flow(store,final_store);
+    remaining_load.credit={{static_cast<long double>(g.total_blocks-g.first_blocks),0}};
+    remaining_compute.credit={{-static_cast<long double>(g.total_blocks-g.first_blocks),
+        static_cast<long double>(g.total_blocks-g.first_blocks-g.last_blocks)}};
+    early_store.credit={{0,-static_cast<long double>(g.total_blocks-g.last_blocks)}};
+    append("_cumulative_service",remaining_load,remaining_compute,early_store,
+        {{0,static_cast<double>(g.first_blocks)}},g.active);
+  }
+  final_store.credit={{0,-static_cast<long double>(g.last_blocks)}};
+  append("_store_last",{}, {},final_store,{{0,static_cast<double>(g.last_blocks)}},g.last_blocks);
+  const auto descriptions=service_description_count(plan)-description_begin;
+  if(descriptions>8)fail("mapping_invariant: elementwise description budget exceeded");
+  plan.summary["service_curves"].push_back({
+      {"model","analytical_cumulative_elementwise_v1"},{"epoch_begin",begin},
+      {"epoch_count",plan.epochs.size()-begin},{"description_count",descriptions},
+      {"description_budget",descriptions<=5 ? 5 : 8},
+      {"input_unit","one_elementwise_input_block_all_streams"},
+      {"output_unit","one_elementwise_output_block"},
+      {"input_units",g.total_blocks},{"output_units",g.total_blocks},
+      {"block_elements",256},{"blocks_per_invocation",g.blocks},
+      {"full_blocks_per_invocation",g.full_blocks},{"tail_elements",g.tail},
+      {"executions",executions},{"input_streams",input_streams},
+      {"first_load_units",g.first_blocks},{"first_load_elements",g.first_elements},
+      {"first_output_input_bytes",as_u64(input_bytes(g.first_elements),"elementwise first input")},
+      {"first_output_compute_work_s",as_double(first_compute.compute_s,"elementwise first work")},
+      {"first_output_release","first_cohort_compute_terminal"},{"first_output_epoch",begin+1},
+      {"final_drain_units",g.last_blocks},
+      {"input_capacity_units",slots*g.active},{"output_capacity_units",slots*g.active},
+      {"allocated_input_slots_per_core",slots},{"allocated_output_slots_per_core",slots},
+      {"sram_allocation","fixed_max_block_slots_plus_one_fp32_work_block"},
+      {"mapping","invocation_local_round_robin_256_element_blocks"},
+      {"routing","byte_weighted_full_prefix_and_tail_point_v1"},
+      {"hbm_row_striping","input_streams_concatenated_per_block_invocation_restarts_row0"},
+      {"readiness_approximation","aggregate_bulk_affine_including_invocation_boundaries"}});
+  m.logical=add128(m.logical,add128(in,out,"elementwise logical bytes"),"logical bytes");
+  m.hbm_read=add128(m.hbm_read,in,"elementwise reads");
+  m.hbm_write=add128(m.hbm_write,out,"elementwise writes");
+  m.source_vops=add128(m.source_vops,ops,"elementwise math");
+  m.vecops=add128(m.vecops,ops,"elementwise Vec work");
+  m.sram_read=add128(m.sram_read,add128(in,out,"elementwise SRAM"),"SRAM read");
+  m.sram_write=add128(m.sram_write,add128(in,out,"elementwise SRAM"),"SRAM write");
+  m.local=add128(m.local,add128(in,out,"elementwise LOCAL"),"LOCAL");
+  m.sram_peak=std::max(m.sram_peak,peak);
+  m.output_rounds=add128(m.output_rounds,g.total_rounds,"elementwise rounds");
+  m.waves=add128(m.waves,g.total_rounds,"elementwise waves");
+  m.active_cores=g.active; m.template_id=label;
+  m.assumptions.push_back("fixed_256_elementwise_blocks_exact_storage_packing_v1");
 }
 
 std::vector<std::shared_ptr<Plan>> enumerate_gemm(const Hardware& hw,
@@ -2119,12 +2322,18 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
       return plans;
     }
     const u128 executions=mul128(layers,passes,"vector executions");
-    const bool score_transform=op=="scale_mask"||op=="softmax";
-    const u128 inb=mul128(bytes(count,score_transform?"fp32":ad),executions,"vector input bytes");
-    const u128 outb=mul128(bytes(count,score_transform?"fp32":od),executions,"vector output bytes");
-    count=mul128(count,executions,"layer vector elements"); eq=mul128(eq,executions,"layer vector operations");
-    extra=mul128(extra,executions,"vector extra input bytes");
-    add_vector(*p,m,hardware,topo,count,eq,inb,outb,active,op+"_vec_v2",extra);
+    if(op=="residual"||op=="mlp_activation") {
+      add_elementwise(*p,m,hardware,topo,as_u64(count,"elementwise elements per invocation"),
+          as_u64(executions,"elementwise executions"),extra ? 2 : 1,
+          as_u64(eq/count,"elementwise ops per element"),ad,od,op+"_vec_v3");
+    } else {
+      const bool score_transform=op=="scale_mask"||op=="softmax";
+      const u128 inb=mul128(bytes(count,score_transform?"fp32":ad),executions,"vector input bytes");
+      const u128 outb=mul128(bytes(count,score_transform?"fp32":od),executions,"vector output bytes");
+      count=mul128(count,executions,"layer vector elements"); eq=mul128(eq,executions,"layer vector operations");
+      extra=mul128(extra,executions,"vector extra input bytes");
+      add_vector(*p,m,hardware,topo,count,eq,inb,outb,active,op+"_vec_v2",extra);
+    }
   } else if (op=="mlp_up" || op=="mlp_down" || op=="o_proj" || op=="logits") {
     u64 N=H,K=H;
     if(op=="mlp_up"){

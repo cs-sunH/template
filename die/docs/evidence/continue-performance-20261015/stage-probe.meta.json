@@ -1,0 +1,40 @@
+{
+  "source_commit": "5c2de289bc5744e5c252d782901cdba8b6f62459",
+  "source_identity": "baseline-source-identity.json",
+  "file_sha256": {
+    "work/performance-baseline/stage_probe": "d713ae4894b2ad640957ab132504edf8d4a4f63ee7a0fa5dae8c0f49e91a2119",
+    "work/performance-baseline/stage_probe.cc": "4e1ae5ec202cd75fe894663376610bb025b3f4c0675ac205d8b9e3aa06f455b2",
+    "work/performance-baseline/build/libcoarse_die.a": "4ecc27aceb6aa5f4f5dface3f9c80e1fd9a963d3300cf48a56e7f704b705c0af",
+    "work/performance-baseline/build/compile_commands.json": "f6e5b3d4b1ea7144a6b415defa0e36a1c15818106a286c8cc1cfff9122a3b22c"
+  },
+  "build_command": [
+    "c++",
+    "-std=c++17",
+    "-O3",
+    "-DNDEBUG",
+    "-I",
+    "work/performance-baseline/source/die/include",
+    "-I",
+    "work/performance-baseline/source/die/src",
+    "-I",
+    "work/performance-baseline/source/astra-sim-wscllm/extern/helper",
+    "work/performance-baseline/stage_probe.cc",
+    "work/performance-baseline/build/libcoarse_die.a",
+    "-o",
+    "work/performance-baseline/stage_probe"
+  ],
+  "run_command": [
+    "work/performance-baseline/stage_probe",
+    "work/performance-baseline/source/die/configs/example_hardware.json",
+    "die/docs/evidence/continue-performance-20261015/stage-probe.json"
+  ],
+  "build_exit_code": 0,
+  "run_exit_code": 0,
+  "concurrent_builds": "none observed by ps immediately before run; parent confirmed editing only, no build/tests",
+  "instrumentation": "external read-only driver linked to frozen Release static library; no modified production source",
+  "limits": [
+    "phase measurements reuse normalized/candidate/winner objects and are not additive CPU attribution",
+    "diagnostic public compile timings do not replace the original baseline benchmark acceptance result",
+    "no profiler instruction/call-count attribution was collected; perf/valgrind unavailable"
+  ]
+}
