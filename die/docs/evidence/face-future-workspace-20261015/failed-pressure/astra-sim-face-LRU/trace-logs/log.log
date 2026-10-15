@@ -1,0 +1,51 @@
+[2026-10-15 03:15:51.061] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-15 03:15:51.061] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-15 03:15:51.061] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-15 03:15:51.061] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-15 03:15:51.061] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-15 03:15:51.061] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-15 03:15:51.061] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 6 index in ring: 0 offset: 1 total nodes in ring: 6
+[2026-10-15 03:15:51.061] [system::topology::RingTopology] [info] ring of node 0, id: 0 dimension: local total nodes in ring: 9 index in ring: 0 offset: 6 total nodes in ring: 9
+[2026-10-15 03:15:51.509] [workload] [debug] issue,sys->id=20, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 20, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 20, dimension: vertical total nodes in ring: 3 index in ring: 0 total nodes in ring 3
+[2026-10-15 03:15:51.509] [workload] [debug] issue,sys->id=21, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 21, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 21, dimension: vertical total nodes in ring: 3 index in ring: 0 total nodes in ring 3
+[2026-10-15 03:15:51.509] [workload] [debug] issue,sys->id=26, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 26, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 26, dimension: vertical total nodes in ring: 3 index in ring: 1 total nodes in ring 3
+[2026-10-15 03:15:51.509] [workload] [debug] issue,sys->id=27, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 27, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 27, dimension: vertical total nodes in ring: 3 index in ring: 1 total nodes in ring 3
+[2026-10-15 03:15:51.509] [workload] [debug] issue,sys->id=32, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 32, dimension: horizontal total nodes in ring: 2 index in ring: 0 total nodes in ring 2
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 32, dimension: vertical total nodes in ring: 3 index in ring: 2 total nodes in ring 3
+[2026-10-15 03:15:51.509] [workload] [debug] issue,sys->id=33, tick=1, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 33, dimension: horizontal total nodes in ring: 2 index in ring: 1 total nodes in ring 2
+[2026-10-15 03:15:51.509] [system::topology::RingTopology] [info] custom ring, id: 33, dimension: vertical total nodes in ring: 3 index in ring: 2 total nodes in ring 3
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=20, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=21, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=26, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=27, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=32, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=33, tick=4437, node->id=1, node->name=q0000_capacity_session_0_turn0_capacity_request_0_0_history_tp_ready_barrier, node->type=7
+[2026-10-15 03:15:51.510] [workload] [debug] issue,sys->id=20, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] issue,sys->id=21, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] issue,sys->id=26, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] issue,sys->id=27, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] issue,sys->id=32, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] issue,sys->id=33, tick=4437, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=20, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=21, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=26, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.510] [workload] [debug] callback,sys->id=27, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.511] [workload] [debug] callback,sys->id=32, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.511] [workload] [debug] callback,sys->id=33, tick=4538, node->id=2, node->name=batch_train_i0_1_pstart_capacity_request_0_0, node->type=4
+[2026-10-15 03:15:51.511] [workload] [debug] issue,sys->id=20, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:15:51.512] [workload] [debug] issue,sys->id=21, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:15:51.512] [workload] [debug] issue,sys->id=26, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:15:51.513] [workload] [debug] issue,sys->id=27, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:15:51.513] [workload] [debug] issue,sys->id=32, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:15:51.514] [workload] [debug] issue,sys->id=33, tick=4538, node->id=3, node->name=batch_train_i0_1_all_layers_attention_input_layernorm, node->type=4
+[2026-10-15 03:15:51.520] [workload] [debug] callback,sys->id=20, tick

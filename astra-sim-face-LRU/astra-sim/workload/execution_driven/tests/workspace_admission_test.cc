@@ -189,12 +189,121 @@ void test_foreign_full_key_collision_and_zero_byte_lease() {
            "zero-byte lease releases exactly once and advances its revision");
 }
 
+void test_prospective_workspace_fit_margin() {
+    WorkspaceAdmission ledger(0);
+    auto bounded = snapshot(0);
+    bounded.has_prospective_workspace = true;
+    bounded.prospective_workspace_bytes = 600;
+    expect(ledger.capacity_snapshot_changes(bounded),
+           "the first prospective bound is an installed snapshot change");
+    ledger.install_capacity_snapshot_unchecked(bounded);
+    expect(!ledger.capacity_snapshot_changes(bounded),
+           "install preserves the initial prospective bound");
+    expect(ledger.active_workspace_bytes() == 0 &&
+               ledger.workspace_revision() == 0 &&
+               ledger.active_lease_count() == 0,
+           "prospective margin is not a fabricated active lease");
+
+    bool over_bound_rejected = false;
+    try {
+        (void)ledger.try_acquire(30, 0, 601);
+    } catch (const std::runtime_error&) {
+        over_bound_rejected = true;
+    }
+    expect(over_bound_rejected && ledger.active_workspace_bytes() == 0 &&
+               ledger.workspace_revision() == 0 &&
+               ledger.active_lease_count() == 0,
+           "a Plan over E is rejected before lease or revision mutation");
+
+    auto exact = ledger.try_acquire(31, 0, 600);
+    expect(exact.status == WorkspaceAdmission::AcquireStatus::Acquired &&
+               exact.lease.key().lease_id == 1 &&
+               ledger.active_workspace_bytes() == 600,
+           "the Plan exactly at E fits the exact remaining capacity");
+    auto active_view = bounded;
+    active_view.workspace_revision = ledger.workspace_revision();
+    ledger.validate_capacity_snapshot(active_view);
+    expect(ledger.active_workspace_bytes() == 600,
+           "capacity uses max(active lease, future margin), not their sum");
+    exact.lease.release();
+
+    auto changed = bounded;
+    changed.workspace_revision = ledger.workspace_revision();
+    changed.prospective_workspace_bytes = 599;
+    bool changed_rejected = false;
+    try {
+        (void)ledger.capacity_snapshot_changes(changed);
+    } catch (const std::runtime_error&) {
+        changed_rejected = true;
+    }
+    auto removed = bounded;
+    removed.workspace_revision = ledger.workspace_revision();
+    removed.has_prospective_workspace = false;
+    removed.prospective_workspace_bytes = 0;
+    bool removed_rejected = false;
+    try {
+        (void)ledger.capacity_snapshot_changes(removed);
+    } catch (const std::runtime_error&) {
+        removed_rejected = true;
+    }
+    expect(changed_rejected && removed_rejected,
+           "both prospective bound value and presence are immutable");
+
+    auto too_large = snapshot(0);
+    too_large.has_prospective_workspace = true;
+    too_large.prospective_workspace_bytes = 601;
+    WorkspaceAdmission invalid(0);
+    bool exact_fit_enforced = false;
+    try {
+        invalid.validate_capacity_snapshot(too_large);
+    } catch (const std::runtime_error&) {
+        exact_fit_enforced = true;
+    }
+    expect(exact_fit_enforced && !invalid.has_capacity_snapshot() &&
+               invalid.workspace_revision() == 0,
+           "base plus E must fit exactly without overflowing capacity");
+
+    auto malformed = snapshot(0);
+    malformed.prospective_workspace_bytes = 1;
+    bool unmarked_rejected = false;
+    try {
+        invalid.validate_capacity_snapshot(malformed);
+    } catch (const std::runtime_error&) {
+        unmarked_rejected = true;
+    }
+    expect(unmarked_rejected,
+           "a nonzero margin cannot be carried without explicit presence");
+
+    WorkspaceAdmission explicit_zero(0);
+    auto zero_bound = snapshot(0);
+    zero_bound.has_prospective_workspace = true;
+    explicit_zero.install_capacity_snapshot_unchecked(zero_bound);
+    bool explicit_zero_rejected = false;
+    try {
+        (void)explicit_zero.try_acquire(40, 0, 1);
+    } catch (const std::runtime_error&) {
+        explicit_zero_rejected = true;
+    }
+    expect(explicit_zero_rejected &&
+               explicit_zero.active_lease_count() == 0 &&
+               explicit_zero.workspace_revision() == 0,
+           "explicit E=0 is a real bound, distinct from no bound");
+
+    WorkspaceAdmission no_bound(0);
+    no_bound.install_capacity_snapshot_unchecked(snapshot(0));
+    auto unbounded = no_bound.try_acquire(41, 0, 1);
+    expect(unbounded.status == WorkspaceAdmission::AcquireStatus::Acquired,
+           "an active-only snapshot keeps the legacy admission path");
+    unbounded.lease.release();
+}
+
 }  // namespace
 
 int main() {
     test_snapshot_and_checked_admission();
     test_raii_move_identity_and_invalid_snapshot();
     test_foreign_full_key_collision_and_zero_byte_lease();
+    test_prospective_workspace_fit_margin();
     if (!g_ok) return 1;
     std::puts("[workspace_admission_test] ALL PASS");
     return 0;

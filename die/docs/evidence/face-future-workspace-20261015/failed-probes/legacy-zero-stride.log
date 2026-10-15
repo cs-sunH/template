@@ -1,0 +1,1 @@
+online_service: fatal: WorkspaceEnvelopeError: die_coarse_workspace_capacity_bound_v2 failed: {"field_path":"die_op_spec.spans[1].run.kv_stride","reason":"die_op_spec.spans[1].run.kv_stride: must be >= 1","schema_version":2,"status_code":1}

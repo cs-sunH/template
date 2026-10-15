@@ -1,0 +1,35 @@
+{
+  "scheduling-policy": "LIFO",
+  "endpoint-delay": 10,
+  "active-chunks-per-dimension": 1,
+  "preferred-dataset-splits": 6,
+  "all-reduce-implementation": [
+    "ring",
+    "ring"
+  ],
+  "all-gather-implementation": [
+    "ring",
+    "ring"
+  ],
+  "reduce-scatter-implementation": [
+    "ring",
+    "ring"
+  ],
+  "all-to-all-implementation": [
+    "ring",
+    "ring"
+  ],
+  "collective-optimization": "localBWAware",
+  "compute-cost-model": "die",
+  "die-model-profile": "coarse_die_v2",
+  "hbm-bandwidth-contention": 1,
+  "hbm-kv-restore-bandwidth-sharing": 1,
+  "replay-only": 0,
+  "track-local-mem": 0,
+  "trace-enabled": 0,
+  "local-mem-bw": 4710.4,
+  "local-mem-latency": 100,
+  "remote-mem-bw": 512.0,
+  "remote-mem-latency": 100,
+  "die-model-config": "/workspace/template/work/face-future-online-20261015/stage/face-lru/sh_test_mesh/generated/runtime_config/face_case5_coarse_die_v2__coarse-die-144000000000-bytes__edge_remote_memory_pool/resolved_die_model.json"
+}

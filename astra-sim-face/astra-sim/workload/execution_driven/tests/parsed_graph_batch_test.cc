@@ -319,10 +319,115 @@ void test_workspace_v2_snapshot_rules() {
                parsed.workspace_capacity_snapshot[0].workspace_revision == 3 &&
                parsed.workspace_capacity_snapshot[0].capacity_bytes == 1024 &&
                parsed.workspace_capacity_snapshot[1].rank == 1 &&
-               parsed.workspace_capacity_snapshot[1].resident_kv_bytes == 512,
+               parsed.workspace_capacity_snapshot[1].resident_kv_bytes == 512 &&
+               !parsed.workspace_capacity_snapshot[0].has_prospective_workspace &&
+               parsed.workspace_capacity_snapshot[0]
+                       .prospective_workspace_bytes == 0,
            "v2 response parses the complete rank capacity table");
 
-    auto malformed = response;
+    nlohmann::json malformed = response;
+    auto v1_with_margin = response;
+    v1_with_margin["workspace_capacity_snapshot"]["ranks"][0]
+                   ["prospective_workspace_bytes"] = 0;
+    expect_v2_parse_error(v1_with_margin, request_state,
+                          "nested protocol 1 rejects prospective fields",
+                          "unknown field \"prospective_workspace_bytes\"");
+
+    auto prospective = response;
+    prospective["workspace_capacity_snapshot"]["protocol_version"] = 2;
+    prospective["workspace_capacity_snapshot"]["ranks"][0]
+                ["prospective_workspace_bytes"] = 800;
+    prospective["workspace_capacity_snapshot"]["ranks"][1]
+                ["prospective_workspace_bytes"] = 1152;
+    ParsedGraphBatch parsed_prospective;
+    try {
+        parsed_prospective =
+            parse_graph_batch(prospective, 2, 2, request_state);
+    } catch (const std::exception& exc) {
+        std::fprintf(stderr,
+                     "[parsed_graph_batch_test] valid prospective snapshot "
+                     "rejected: %s\n",
+                     exc.what());
+        g_ok = false;
+    }
+    expect(parsed_prospective.workspace_capacity_snapshot.size() == 2 &&
+               parsed_prospective.workspace_capacity_snapshot[0]
+                   .has_prospective_workspace &&
+               parsed_prospective.workspace_capacity_snapshot[0]
+                       .prospective_workspace_bytes == 800 &&
+               parsed_prospective.workspace_capacity_snapshot[1]
+                   .has_prospective_workspace &&
+               parsed_prospective.workspace_capacity_snapshot[1]
+                       .prospective_workspace_bytes == 1152,
+           "nested protocol 2 maps an exact-fit E for every rank");
+
+    auto explicit_zero = prospective;
+    explicit_zero["workspace_capacity_snapshot"]["ranks"][0]
+                  ["prospective_workspace_bytes"] = 0;
+    explicit_zero["workspace_capacity_snapshot"]["ranks"][1]
+                  ["prospective_workspace_bytes"] = 0;
+    const ParsedGraphBatch parsed_zero = parse_graph_batch(
+        explicit_zero, 2, 2, request_state);
+    expect(parsed_zero.workspace_capacity_snapshot[0]
+                   .has_prospective_workspace &&
+               parsed_zero.workspace_capacity_snapshot[0]
+                       .prospective_workspace_bytes == 0,
+           "nested protocol 2 preserves explicit E=0 separately from v1 none");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][1].erase(
+        "prospective_workspace_bytes");
+    expect_v2_parse_error(malformed, request_state,
+                          "protocol 2 requires the field on every rank",
+                          "missing field \"prospective_workspace_bytes\"");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = 800.0;
+    expect_v2_parse_error(malformed, request_state,
+                          "prospective bytes reject floating point values",
+                          "is not an integer");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = true;
+    expect_v2_parse_error(malformed, request_state,
+                          "prospective bytes reject bool values",
+                          "is not an integer");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = -1;
+    expect_v2_parse_error(malformed, request_state,
+                          "prospective bytes reject negative values",
+                          "is negative");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = 801;
+    expect_v2_parse_error(malformed, request_state,
+                          "base plus prospective margin must fit",
+                          "prospective workspace plus base-used bytes");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]["extra"] = 1;
+    expect_v2_parse_error(malformed, request_state,
+                          "protocol 2 remains a strict rank shape", "extra");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["workspace_revision"] = 4;
+    expect_v2_parse_error(malformed, request_state,
+                          "protocol 2 revision echoes request view",
+                          "does not echo request view");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["protocol_version"] = 3;
+    expect_v2_parse_error(malformed, request_state,
+                          "unknown capacity protocol is rejected",
+                          "protocol_version mismatch");
+
+    malformed = response;
     malformed.erase("batch_id");
     expect_v2_parse_error(malformed, request_state,
                           "v2 requires an explicit batch_id", "batch_id");

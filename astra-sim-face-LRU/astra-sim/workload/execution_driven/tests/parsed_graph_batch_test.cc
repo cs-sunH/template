@@ -97,9 +97,9 @@ void expect_parse_error(const nlohmann::json& resp, const char* what,
 void expect_v2_parse_error(
     const nlohmann::json& resp,
     const std::vector<WorkspaceRankState>& workspace_state,
-    const char* what, const char* needle = nullptr) {
+    const char* what, const char* needle = nullptr, int num_ranks = 1) {
     try {
-        (void)parse_graph_batch(resp, 1, 2, workspace_state);
+        (void)parse_graph_batch(resp, num_ranks, 2, workspace_state);
         std::fprintf(stderr,
                      "[parsed_graph_batch_test] unexpected v2 parse PASS: "
                      "%s\n",
@@ -305,7 +305,12 @@ void test_workspace_v2_batch_identity() {
     const ParsedGraphBatch parsed = parse_graph_batch(response, 1, 2,
                                                       request_state);
     expect(parsed.schema_version == 2 && parsed.has_batch_id &&
-               parsed.batch_id == 1 && parsed.source_delivery_sequence == 1,
+               parsed.batch_id == 1 && parsed.source_delivery_sequence == 1 &&
+               parsed.has_workspace_capacity_snapshot &&
+               !parsed.workspace_capacity_snapshot[0]
+                    .has_prospective_workspace &&
+               parsed.workspace_capacity_snapshot[0]
+                       .prospective_workspace_bytes == 0,
            "v2 requires and preserves the canonical batch identity");
 
     auto malformed = response;
@@ -318,6 +323,116 @@ void test_workspace_v2_batch_identity() {
     expect_v2_parse_error(malformed, request_state,
                           "v2 batch_id equals source sequence",
                           "does not match source_delivery_sequence");
+
+    malformed = response;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = 0;
+    expect_v2_parse_error(malformed, request_state,
+                          "nested protocol 1 rejects prospective fields",
+                          "unknown field \"prospective_workspace_bytes\"");
+
+    const std::vector<WorkspaceRankState> full_request_state{
+        {0, 3, 128}, {1, 8, 0}};
+    auto prospective = response;
+    prospective["workspace_capacity_snapshot"]["protocol_version"] = 2;
+    prospective["workspace_capacity_snapshot"]["ranks"][0]
+                ["prospective_workspace_bytes"] = 800;
+    prospective["workspace_capacity_snapshot"]["ranks"].push_back(
+        {{"rank", 1},
+         {"workspace_revision", 8},
+         {"capacity_bytes", 2048},
+         {"model_weight_bytes", 256},
+         {"resident_kv_bytes", 512},
+         {"reserved_request_bytes", 128},
+         {"prospective_workspace_bytes", 1152}});
+    ParsedGraphBatch parsed_prospective;
+    try {
+        parsed_prospective = parse_graph_batch(
+            prospective, 2, 2, full_request_state);
+    } catch (const std::exception& exc) {
+        std::fprintf(stderr,
+                     "[parsed_graph_batch_test] valid prospective snapshot "
+                     "rejected: %s\n",
+                     exc.what());
+        g_ok = false;
+    }
+    expect(parsed_prospective.has_workspace_capacity_snapshot &&
+               parsed_prospective.workspace_capacity_snapshot.size() == 2 &&
+               parsed_prospective.workspace_capacity_snapshot[0]
+                   .has_prospective_workspace &&
+               parsed_prospective.workspace_capacity_snapshot[0]
+                       .prospective_workspace_bytes == 800 &&
+               parsed_prospective.workspace_capacity_snapshot[1]
+                   .has_prospective_workspace &&
+               parsed_prospective.workspace_capacity_snapshot[1]
+                       .prospective_workspace_bytes == 1152,
+           "protocol 2 requires full-rank E and accepts exact fit");
+
+    auto explicit_zero = prospective;
+    explicit_zero["workspace_capacity_snapshot"]["ranks"][0]
+                  ["prospective_workspace_bytes"] = 0;
+    explicit_zero["workspace_capacity_snapshot"]["ranks"][1]
+                  ["prospective_workspace_bytes"] = 0;
+    const ParsedGraphBatch parsed_zero = parse_graph_batch(
+        explicit_zero, 2, 2, full_request_state);
+    expect(parsed_zero.workspace_capacity_snapshot[0]
+                   .has_prospective_workspace &&
+               parsed_zero.workspace_capacity_snapshot[0]
+                       .prospective_workspace_bytes == 0,
+           "protocol 2 explicit E=0 differs from active-only protocol 1");
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][1].erase(
+        "prospective_workspace_bytes");
+    expect_v2_parse_error(malformed, full_request_state,
+                          "protocol 2 requires E on each rank",
+                          "missing field \"prospective_workspace_bytes\"", 2);
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = 800.0;
+    expect_v2_parse_error(malformed, full_request_state,
+                          "prospective bytes reject floating point values",
+                          "is not an integer", 2);
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = true;
+    expect_v2_parse_error(malformed, full_request_state,
+                          "prospective bytes reject bool values",
+                          "is not an integer", 2);
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = -1;
+    expect_v2_parse_error(malformed, full_request_state,
+                          "prospective bytes reject negative values",
+                          "is negative", 2);
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["prospective_workspace_bytes"] = 801;
+    expect_v2_parse_error(malformed, full_request_state,
+                          "base plus E must fit capacity",
+                          "prospective workspace plus base-used bytes", 2);
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]["extra"] = 1;
+    expect_v2_parse_error(malformed, full_request_state,
+                          "protocol 2 keeps exact rank shape", "extra", 2);
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["ranks"][0]
+             ["workspace_revision"] = 4;
+    expect_v2_parse_error(malformed, full_request_state,
+                          "protocol 2 echoes the same rank revision",
+                          "does not echo request view", 2);
+
+    malformed = prospective;
+    malformed["workspace_capacity_snapshot"]["protocol_version"] = 3;
+    expect_v2_parse_error(malformed, full_request_state,
+                          "unknown capacity protocol is rejected",
+                          "protocol_version mismatch", 2);
 }
 
 void test_top_level_rules() {

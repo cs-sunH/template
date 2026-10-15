@@ -1,0 +1,1978 @@
+{
+  "python/astra-sim-face/identity-and-command.json": {
+    "source": "work/face-future-service-20261015/verified-python-astra-sim-face/identity-and-command.json",
+    "raw_sha256": "37249b8c1a993c87c6d939a0c6a7334e2b62b3ac5ec53c218282be964cb82886",
+    "raw_bytes": 9438,
+    "stored_sha256": "37249b8c1a993c87c6d939a0c6a7334e2b62b3ac5ec53c218282be964cb82886",
+    "stored_bytes": 9438,
+    "gzip": false
+  },
+  "python/astra-sim-face/tests.log": {
+    "source": "work/face-future-service-20261015/verified-python-astra-sim-face.log",
+    "raw_sha256": "c2f4f9e2afa27fa953355c7d4c036f476c5b993bfaab8a8b46e2809488bcf8d2",
+    "raw_bytes": 22475,
+    "stored_sha256": "c2f4f9e2afa27fa953355c7d4c036f476c5b993bfaab8a8b46e2809488bcf8d2",
+    "stored_bytes": 22475,
+    "gzip": false
+  },
+  "python/astra-sim-face/actual-face-emitter.json": {
+    "source": "work/face-future-service-20261015/verified-python-astra-sim-face/emitter-evidence/actual-face-emitter.json",
+    "raw_sha256": "97549bf7ea41c11174d58d6f9eb16304e057819b78156882db1b0a59b5fd9548",
+    "raw_bytes": 76490,
+    "stored_sha256": "97549bf7ea41c11174d58d6f9eb16304e057819b78156882db1b0a59b5fd9548",
+    "stored_bytes": 76490,
+    "gzip": false
+  },
+  "python/astra-sim-face/manifest-plan-coverage.json.gz": {
+    "source": "work/face-future-service-20261015/verified-python-astra-sim-face/emitter-evidence/manifest-plan-coverage.json",
+    "raw_sha256": "50da200027966d46867e7fd9880d6580e56bf39bb9b5ef46b482b083dbc762bf",
+    "raw_bytes": 306007,
+    "stored_sha256": "2b1846ea7e4bbf7b27536e9644732d9990acc9f066659bef4b105d9a3d56abf6",
+    "stored_bytes": 29447,
+    "gzip": true
+  },
+  "cpp/astra-sim-face/final-build.log": {
+    "source": "work/face-future-ledger-20261015/face-final-build.log",
+    "raw_sha256": "4f94a0087ee404398137ded9edd7e5817ba5bd0439d0ed601adbebf2f68cda17",
+    "raw_bytes": 8973,
+    "stored_sha256": "4f94a0087ee404398137ded9edd7e5817ba5bd0439d0ed601adbebf2f68cda17",
+    "stored_bytes": 8973,
+    "gzip": false
+  },
+  "cpp/astra-sim-face/final-ctest.log": {
+    "source": "work/face-future-ledger-20261015/face-final-ctest.log",
+    "raw_sha256": "088291fae199503ea12b19f9ad3934fda95d5eff642e79d5d6f02fc17d678851",
+    "raw_bytes": 1666,
+    "stored_sha256": "088291fae199503ea12b19f9ad3934fda95d5eff642e79d5d6f02fc17d678851",
+    "stored_bytes": 1666,
+    "gzip": false
+  },
+  "cpp/astra-sim-face/online-build.log": {
+    "source": "work/face-future-ledger-20261015/face-online-build.log",
+    "raw_sha256": "0b22a9cf4fdddd73d8d3d3a92e317df5b73a2ea60ff5b951a1f70983d8e58c8e",
+    "raw_bytes": 1799,
+    "stored_sha256": "0b22a9cf4fdddd73d8d3d3a92e317df5b73a2ea60ff5b951a1f70983d8e58c8e",
+    "stored_bytes": 1799,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/runner.log": {
+    "source": "work/face-future-online-20261015/face-verified-legacy.log",
+    "raw_sha256": "437f0b9f9c6210ce0d3b5a36ca380775db58845b8e0290a5020a0b4df5461bee",
+    "raw_bytes": 1096,
+    "stored_sha256": "437f0b9f9c6210ce0d3b5a36ca380775db58845b8e0290a5020a0b4df5461bee",
+    "stored_bytes": 1096,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/bridge/online_decision_log.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/bridge/online_decision_log.jsonl",
+    "raw_sha256": "3e2084f8df1c4c6177c1ba78d2e5d3eab3db24097e60032a47b64deebb837429",
+    "raw_bytes": 4607,
+    "stored_sha256": "3e2084f8df1c4c6177c1ba78d2e5d3eab3db24097e60032a47b64deebb837429",
+    "stored_bytes": 4607,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/bridge/online_stats.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/bridge/online_stats.jsonl",
+    "raw_sha256": "b3cb172da2b4e5da80845a3803f093bd93a66e568bd0293aaa770bbc89344ac3",
+    "raw_bytes": 889,
+    "stored_sha256": "b3cb172da2b4e5da80845a3803f093bd93a66e568bd0293aaa770bbc89344ac3",
+    "stored_bytes": 889,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/bridge/request_journal.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/bridge/request_journal.jsonl",
+    "raw_sha256": "44390bb39b6d4c0250855405cd402ad7453f3d1ac1acce2a7f0fd24398e62ad2",
+    "raw_bytes": 1436,
+    "stored_sha256": "44390bb39b6d4c0250855405cd402ad7453f3d1ac1acce2a7f0fd24398e62ad2",
+    "stored_bytes": 1436,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/bridge/train_ledger.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/bridge/train_ledger.jsonl",
+    "raw_sha256": "679b46f7245b38e298d5024133b0b6ce097727d5f870f5f859669fed1731b5c6",
+    "raw_bytes": 477,
+    "stored_sha256": "679b46f7245b38e298d5024133b0b6ce097727d5f870f5f859669fed1731b5c6",
+    "stored_bytes": 477,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/cpp.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/cpp.log",
+    "raw_sha256": "a28d2cb5e6757e31d4b664358aaf102a5d49bd5c509f5d2453af644f0bc4a905",
+    "raw_bytes": 215489,
+    "stored_sha256": "a28d2cb5e6757e31d4b664358aaf102a5d49bd5c509f5d2453af644f0bc4a905",
+    "stored_bytes": 215489,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/comm_group.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/comm_group.json",
+    "raw_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "raw_bytes": 1235,
+    "stored_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "stored_bytes": 1235,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/completion-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/completion-identity.json",
+    "raw_sha256": "aff38d4edf4e5d897e278a6576f01dc0fc2e108ca6df959e2b715427cb0459d5",
+    "raw_bytes": 610,
+    "stored_sha256": "aff38d4edf4e5d897e278a6576f01dc0fc2e108ca6df959e2b715427cb0459d5",
+    "stored_bytes": 610,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/cpp-source-identity-post.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/cpp-source-identity-post.json",
+    "raw_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "raw_bytes": 122275,
+    "stored_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "stored_bytes": 122275,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/cpp-source-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/cpp-source-identity.json",
+    "raw_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "raw_bytes": 122275,
+    "stored_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "stored_bytes": 122275,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/manifest.json",
+    "raw_sha256": "175901d8451ed9a5c6e91aa1007e2b7527e8e31af493e2a7e676bafe601791be",
+    "raw_bytes": 1393,
+    "stored_sha256": "175901d8451ed9a5c6e91aa1007e2b7527e8e31af493e2a7e676bafe601791be",
+    "stored_bytes": 1393,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/metrics_manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/metrics_manifest.json",
+    "raw_sha256": "6065b30efa23ddd6e0b34a650a67958bed96a7957fd0e6809ac920a9f55f9fc1",
+    "raw_bytes": 707,
+    "stored_sha256": "6065b30efa23ddd6e0b34a650a67958bed96a7957fd0e6809ac920a9f55f9fc1",
+    "stored_bytes": 707,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/network.yml": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/network.yml",
+    "raw_sha256": "a0f3f43c8d2f343e00c3f4102bda47070dce8be0fc9525f4110c8005d221247f",
+    "raw_bytes": 261,
+    "stored_sha256": "a0f3f43c8d2f343e00c3f4102bda47070dce8be0fc9525f4110c8005d221247f",
+    "stored_bytes": 261,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/protobuf/et_def.proto": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/protobuf/et_def.proto",
+    "raw_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "raw_bytes": 3175,
+    "stored_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "stored_bytes": 3175,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/protobuf/et_def_pb2.py": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/protobuf/et_def_pb2.py",
+    "raw_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "raw_bytes": 7003,
+    "stored_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "stored_bytes": 7003,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/request_queue.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/request_queue.csv",
+    "raw_sha256": "f51b533edb0901116419d23363f41b600e0ed1fbbca53031b0e0a1be449e1a6f",
+    "raw_bytes": 217,
+    "stored_sha256": "f51b533edb0901116419d23363f41b600e0ed1fbbca53031b0e0a1be449e1a6f",
+    "stored_bytes": 217,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/request_queue.csv.provenance.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/request_queue.csv.provenance.json",
+    "raw_sha256": "cc10ecbe13a971440ad4137f5fb50561c735c9fc2f060da720156fb2a2455d89",
+    "raw_bytes": 404,
+    "stored_sha256": "cc10ecbe13a971440ad4137f5fb50561c735c9fc2f060da720156fb2a2455d89",
+    "stored_bytes": 404,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/run-input-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/run-input-identity.json",
+    "raw_sha256": "d43ca1543a3731d8418b42aba814d1a29873f1d37485ce2b4c89cf4202d3044f",
+    "raw_bytes": 13343,
+    "stored_sha256": "d43ca1543a3731d8418b42aba814d1a29873f1d37485ce2b4c89cf4202d3044f",
+    "stored_bytes": 13343,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/source-stage-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/source-stage-identity.json",
+    "raw_sha256": "61e2807e11db0f0afe4f219098fa2b7e09098338df1489cdf121a05b2e654d3d",
+    "raw_bytes": 11781,
+    "stored_sha256": "61e2807e11db0f0afe4f219098fa2b7e09098338df1489cdf121a05b2e654d3d",
+    "stored_bytes": 11781,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/system.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/system.json",
+    "raw_sha256": "5030dc90d68e880cde1e7a7d08f6cac03c3433faf1cd0ebaa376ec084af25c2e",
+    "raw_bytes": 882,
+    "stored_sha256": "5030dc90d68e880cde1e7a7d08f6cac03c3433faf1cd0ebaa376ec084af25c2e",
+    "stored_bytes": 882,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/tiny-inputs.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/tiny-inputs.json",
+    "raw_sha256": "a740394b2e70c359531a4ae944e84544ad2759c9e9923cccefc7921feefff62a",
+    "raw_bytes": 4064,
+    "stored_sha256": "a740394b2e70c359531a4ae944e84544ad2759c9e9923cccefc7921feefff62a",
+    "stored_bytes": 4064,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/inputs/trace_config.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/inputs/trace_config.csv",
+    "raw_sha256": "8947eb86e369569aa88a01e475664760352fdff0767666097439a9f49bac184c",
+    "raw_bytes": 3745,
+    "stored_sha256": "8947eb86e369569aa88a01e475664760352fdff0767666097439a9f49bac184c",
+    "stored_bytes": 3745,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/invocation.txt": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/invocation.txt",
+    "raw_sha256": "3463057d632ae9e38de11c45cd37c042177b3b7cb976dc58533dcbb1c27ae5c1",
+    "raw_bytes": 623,
+    "stored_sha256": "3463057d632ae9e38de11c45cd37c042177b3b7cb976dc58533dcbb1c27ae5c1",
+    "stored_bytes": 623,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/prepare.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/prepare.log",
+    "raw_sha256": "a740394b2e70c359531a4ae944e84544ad2759c9e9923cccefc7921feefff62a",
+    "raw_bytes": 4064,
+    "stored_sha256": "a740394b2e70c359531a4ae944e84544ad2759c9e9923cccefc7921feefff62a",
+    "stored_bytes": 4064,
+    "gzip": false
+  },
+  "online/astra-sim-face/legacy/python.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/legacy-tiny-20261015T031945Z-67110/python.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/runner.log": {
+    "source": "work/face-future-online-20261015/face-verified-overlap.log",
+    "raw_sha256": "0a180d018c7966bde661def9560736fe49ad1c09b242e5f0ae2e949c4249a7c3",
+    "raw_bytes": 1539,
+    "stored_sha256": "0a180d018c7966bde661def9560736fe49ad1c09b242e5f0ae2e949c4249a7c3",
+    "stored_bytes": 1539,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/bridge/online_decision_log.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/bridge/online_decision_log.jsonl",
+    "raw_sha256": "4bdaa8ab9f25fefdc23d0a1004daf8154968fffeabcf66e353f95ad6b8fdbee3",
+    "raw_bytes": 3101,
+    "stored_sha256": "4bdaa8ab9f25fefdc23d0a1004daf8154968fffeabcf66e353f95ad6b8fdbee3",
+    "stored_bytes": 3101,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/bridge/online_stats.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/bridge/online_stats.jsonl",
+    "raw_sha256": "7db3b119abb2fbded80ee3571532d8fa881fc8f8024a17f5972d67aa28dede21",
+    "raw_bytes": 1637,
+    "stored_sha256": "7db3b119abb2fbded80ee3571532d8fa881fc8f8024a17f5972d67aa28dede21",
+    "stored_bytes": 1637,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/bridge/request_journal.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/bridge/request_journal.jsonl",
+    "raw_sha256": "03a4180a95f7609a50688503b91e23b09f3144f415d139a1fa4f63f6d42c687f",
+    "raw_bytes": 23354,
+    "stored_sha256": "03a4180a95f7609a50688503b91e23b09f3144f415d139a1fa4f63f6d42c687f",
+    "stored_bytes": 23354,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/bridge/train_ledger.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/bridge/train_ledger.jsonl",
+    "raw_sha256": "8272c4a35a2065bbbadcdddcf95e21c9d20dc8b4325e3cd2a9f19f8bfcf5be4a",
+    "raw_bytes": 979,
+    "stored_sha256": "8272c4a35a2065bbbadcdddcf95e21c9d20dc8b4325e3cd2a9f19f8bfcf5be4a",
+    "stored_bytes": 979,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/bridge/workspace_envelope_certificate.json.gz": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/bridge/workspace_envelope_certificate.json",
+    "raw_sha256": "7a24428cd127fdd36481d548ff840e6f41bf4b7eb17c0b65c36295eb8fdd0ba5",
+    "raw_bytes": 496675,
+    "stored_sha256": "363cad5998e073453d3518a346d1ac7d6ae728d399f8f268ac235641d380eee5",
+    "stored_bytes": 29356,
+    "gzip": true
+  },
+  "online/astra-sim-face/overlap/cpp.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/cpp.log",
+    "raw_sha256": "76d50976a5240589a6b4f6cf6acc9f8b17c6d422354dff3ef18f8c0ebe2ef7ce",
+    "raw_bytes": 217675,
+    "stored_sha256": "76d50976a5240589a6b4f6cf6acc9f8b17c6d422354dff3ef18f8c0ebe2ef7ce",
+    "stored_bytes": 217675,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/comm_group.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/comm_group.json",
+    "raw_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "raw_bytes": 1235,
+    "stored_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "stored_bytes": 1235,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/completion-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/completion-identity.json",
+    "raw_sha256": "aff38d4edf4e5d897e278a6576f01dc0fc2e108ca6df959e2b715427cb0459d5",
+    "raw_bytes": 610,
+    "stored_sha256": "aff38d4edf4e5d897e278a6576f01dc0fc2e108ca6df959e2b715427cb0459d5",
+    "stored_bytes": 610,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/cpp-source-identity-post.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/cpp-source-identity-post.json",
+    "raw_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "raw_bytes": 122275,
+    "stored_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "stored_bytes": 122275,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/cpp-source-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/cpp-source-identity.json",
+    "raw_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "raw_bytes": 122275,
+    "stored_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "stored_bytes": 122275,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/manifest.json",
+    "raw_sha256": "95edcdff594f6336134fe2d1a81d5b6e0c58638b928e84b48d71fcedb95abbc5",
+    "raw_bytes": 1786,
+    "stored_sha256": "95edcdff594f6336134fe2d1a81d5b6e0c58638b928e84b48d71fcedb95abbc5",
+    "stored_bytes": 1786,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/metrics_manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/metrics_manifest.json",
+    "raw_sha256": "b33d7da0237ebe9fa92a50187a44b53d1e256328aa56b2a2de56809d67efcc59",
+    "raw_bytes": 1016,
+    "stored_sha256": "b33d7da0237ebe9fa92a50187a44b53d1e256328aa56b2a2de56809d67efcc59",
+    "stored_bytes": 1016,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/network.yml": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/network.yml",
+    "raw_sha256": "6869336cc2b26ecb0aacd484c34a18c07b9251089c02a8cce30e9cf43678a787",
+    "raw_bytes": 276,
+    "stored_sha256": "6869336cc2b26ecb0aacd484c34a18c07b9251089c02a8cce30e9cf43678a787",
+    "stored_bytes": 276,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/protobuf/et_def.proto": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/protobuf/et_def.proto",
+    "raw_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "raw_bytes": 3175,
+    "stored_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "stored_bytes": 3175,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/protobuf/et_def_pb2.py": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/protobuf/et_def_pb2.py",
+    "raw_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "raw_bytes": 7003,
+    "stored_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "stored_bytes": 7003,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/request_queue.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/request_queue.csv",
+    "raw_sha256": "ff6990b6da261ef380a1363f3e7c47d9cd7c58e69adbd170f1803d8ea896f23d",
+    "raw_bytes": 384,
+    "stored_sha256": "ff6990b6da261ef380a1363f3e7c47d9cd7c58e69adbd170f1803d8ea896f23d",
+    "stored_bytes": 384,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/request_queue.csv.provenance.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/request_queue.csv.provenance.json",
+    "raw_sha256": "22c169995e7977e9c06d26fcf07ccfd68d1969a99724d0486585078957beaf2a",
+    "raw_bytes": 423,
+    "stored_sha256": "22c169995e7977e9c06d26fcf07ccfd68d1969a99724d0486585078957beaf2a",
+    "stored_bytes": 423,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/run-input-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/run-input-identity.json",
+    "raw_sha256": "465d033ef7952ca3ca083f104fbecfc77b83192f152b73d8ce28228c2c4683a2",
+    "raw_bytes": 13396,
+    "stored_sha256": "465d033ef7952ca3ca083f104fbecfc77b83192f152b73d8ce28228c2c4683a2",
+    "stored_bytes": 13396,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/source-stage-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/source-stage-identity.json",
+    "raw_sha256": "61e2807e11db0f0afe4f219098fa2b7e09098338df1489cdf121a05b2e654d3d",
+    "raw_bytes": 11781,
+    "stored_sha256": "61e2807e11db0f0afe4f219098fa2b7e09098338df1489cdf121a05b2e654d3d",
+    "stored_bytes": 11781,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/system.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/system.json",
+    "raw_sha256": "4f7859d5e9080b4ad3e40dc48c47529777c42e95a2c991215e08103a1f32f274",
+    "raw_bytes": 876,
+    "stored_sha256": "4f7859d5e9080b4ad3e40dc48c47529777c42e95a2c991215e08103a1f32f274",
+    "stored_bytes": 876,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/tiny-inputs.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/tiny-inputs.json",
+    "raw_sha256": "6a365886216c0bdb0b77f1a3e6cf25b6944e74d7621acd371488915056785abc",
+    "raw_bytes": 4175,
+    "stored_sha256": "6a365886216c0bdb0b77f1a3e6cf25b6944e74d7621acd371488915056785abc",
+    "stored_bytes": 4175,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/inputs/trace_config.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/inputs/trace_config.csv",
+    "raw_sha256": "6bc11a5d5d0b3f81f533a129ad6382c3e12317dd89993705fbca2c04efdf50a4",
+    "raw_bytes": 3770,
+    "stored_sha256": "6bc11a5d5d0b3f81f533a129ad6382c3e12317dd89993705fbca2c04efdf50a4",
+    "stored_bytes": 3770,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/invocation.txt": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/invocation.txt",
+    "raw_sha256": "3233df2ba51aadb66b4de6fbeacf54793387142cd96f625e50cccf20cd65fc2b",
+    "raw_bytes": 663,
+    "stored_sha256": "3233df2ba51aadb66b4de6fbeacf54793387142cd96f625e50cccf20cd65fc2b",
+    "stored_bytes": 663,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/prepare.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/prepare.log",
+    "raw_sha256": "6a365886216c0bdb0b77f1a3e6cf25b6944e74d7621acd371488915056785abc",
+    "raw_bytes": 4175,
+    "stored_sha256": "6a365886216c0bdb0b77f1a3e6cf25b6944e74d7621acd371488915056785abc",
+    "stored_bytes": 4175,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/python.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/python.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/trace-logs/err.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/trace-logs/err.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "online/astra-sim-face/overlap/trace-logs/log.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-workspace-overlap-20261015T031948Z-67232/trace-logs/log.log",
+    "raw_sha256": "964bc95b2bc3a79e7cab04a0251848226160a17c13cc69072afd4462b9771104",
+    "raw_bytes": 128280,
+    "stored_sha256": "964bc95b2bc3a79e7cab04a0251848226160a17c13cc69072afd4462b9771104",
+    "stored_bytes": 128280,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/runner.log": {
+    "source": "work/face-future-online-20261015/face-verified-cap2-split.log",
+    "raw_sha256": "7dabb8f7586daab55c758567ee7701573371359374d552aaf6d93510f9b06f5c",
+    "raw_bytes": 1353,
+    "stored_sha256": "7dabb8f7586daab55c758567ee7701573371359374d552aaf6d93510f9b06f5c",
+    "stored_bytes": 1353,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/bridge/online_decision_log.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/bridge/online_decision_log.jsonl",
+    "raw_sha256": "24aca98cbedd129596648af60b709a38dbe620950e74dcdf06ca73eb9d7473ab",
+    "raw_bytes": 1528,
+    "stored_sha256": "24aca98cbedd129596648af60b709a38dbe620950e74dcdf06ca73eb9d7473ab",
+    "stored_bytes": 1528,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/bridge/online_stats.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/bridge/online_stats.jsonl",
+    "raw_sha256": "de1484ceefb052e6975add581bfad43b1acb5eda8e7ffba1c8d0bca7d8a75776",
+    "raw_bytes": 1326,
+    "stored_sha256": "de1484ceefb052e6975add581bfad43b1acb5eda8e7ffba1c8d0bca7d8a75776",
+    "stored_bytes": 1326,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/bridge/request_journal.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/bridge/request_journal.jsonl",
+    "raw_sha256": "025cc8fa0557de30d207e9adf2718ae196690e88fff0fc0c5fdd295435fa90df",
+    "raw_bytes": 15435,
+    "stored_sha256": "025cc8fa0557de30d207e9adf2718ae196690e88fff0fc0c5fdd295435fa90df",
+    "stored_bytes": 15435,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/bridge/train_ledger.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/bridge/train_ledger.jsonl",
+    "raw_sha256": "b5f315ba2cf852f5839e35caabb854ea61a230fe840331547cc3138ddfb34a21",
+    "raw_bytes": 748,
+    "stored_sha256": "b5f315ba2cf852f5839e35caabb854ea61a230fe840331547cc3138ddfb34a21",
+    "stored_bytes": 748,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/bridge/workspace_envelope_certificate.json.gz": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/bridge/workspace_envelope_certificate.json",
+    "raw_sha256": "9c0df4ad149edd00aa446969a861d156b5c551ef35b3a785821573b4e18ac6b7",
+    "raw_bytes": 443266,
+    "stored_sha256": "afeaa868b529b13223723b7507413994490f317ce1497976a423fe225fb85b3b",
+    "stored_bytes": 28771,
+    "gzip": true
+  },
+  "online/astra-sim-face/cap2-split/cpp.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/cpp.log",
+    "raw_sha256": "168e8721d98264ad747014a47894aef0c575c44f4b2dead70165cb581062cc48",
+    "raw_bytes": 214973,
+    "stored_sha256": "168e8721d98264ad747014a47894aef0c575c44f4b2dead70165cb581062cc48",
+    "stored_bytes": 214973,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/comm_group.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/comm_group.json",
+    "raw_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "raw_bytes": 1235,
+    "stored_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "stored_bytes": 1235,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/completion-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/completion-identity.json",
+    "raw_sha256": "aff38d4edf4e5d897e278a6576f01dc0fc2e108ca6df959e2b715427cb0459d5",
+    "raw_bytes": 610,
+    "stored_sha256": "aff38d4edf4e5d897e278a6576f01dc0fc2e108ca6df959e2b715427cb0459d5",
+    "stored_bytes": 610,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/cpp-source-identity-post.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/cpp-source-identity-post.json",
+    "raw_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "raw_bytes": 122275,
+    "stored_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "stored_bytes": 122275,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/cpp-source-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/cpp-source-identity.json",
+    "raw_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "raw_bytes": 122275,
+    "stored_sha256": "dd0413664315f44b7214d742adb466dd7f45263b1893d4ac32caa9badc26870e",
+    "stored_bytes": 122275,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/manifest.json",
+    "raw_sha256": "2f6f6a01acc66824541826ccd3f9932427758eeac50e40fcf03c225527a61a54",
+    "raw_bytes": 1468,
+    "stored_sha256": "2f6f6a01acc66824541826ccd3f9932427758eeac50e40fcf03c225527a61a54",
+    "stored_bytes": 1468,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/metrics_manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/metrics_manifest.json",
+    "raw_sha256": "64db6073bddf372c5fea687038e47b33d3b142e902f9f623acc65fd6fc6cf758",
+    "raw_bytes": 723,
+    "stored_sha256": "64db6073bddf372c5fea687038e47b33d3b142e902f9f623acc65fd6fc6cf758",
+    "stored_bytes": 723,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/network.yml": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/network.yml",
+    "raw_sha256": "6869336cc2b26ecb0aacd484c34a18c07b9251089c02a8cce30e9cf43678a787",
+    "raw_bytes": 276,
+    "stored_sha256": "6869336cc2b26ecb0aacd484c34a18c07b9251089c02a8cce30e9cf43678a787",
+    "stored_bytes": 276,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/protobuf/et_def.proto": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/protobuf/et_def.proto",
+    "raw_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "raw_bytes": 3175,
+    "stored_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "stored_bytes": 3175,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/protobuf/et_def_pb2.py": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/protobuf/et_def_pb2.py",
+    "raw_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "raw_bytes": 7003,
+    "stored_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "stored_bytes": 7003,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/request_queue.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/request_queue.csv",
+    "raw_sha256": "f51b533edb0901116419d23363f41b600e0ed1fbbca53031b0e0a1be449e1a6f",
+    "raw_bytes": 217,
+    "stored_sha256": "f51b533edb0901116419d23363f41b600e0ed1fbbca53031b0e0a1be449e1a6f",
+    "stored_bytes": 217,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/request_queue.csv.provenance.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/request_queue.csv.provenance.json",
+    "raw_sha256": "cc10ecbe13a971440ad4137f5fb50561c735c9fc2f060da720156fb2a2455d89",
+    "raw_bytes": 404,
+    "stored_sha256": "cc10ecbe13a971440ad4137f5fb50561c735c9fc2f060da720156fb2a2455d89",
+    "stored_bytes": 404,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/run-input-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/run-input-identity.json",
+    "raw_sha256": "bf580b2cb2a8cec53d2752da4852f431fd6735708ec67f93d1f75979b7434f3b",
+    "raw_bytes": 13343,
+    "stored_sha256": "bf580b2cb2a8cec53d2752da4852f431fd6735708ec67f93d1f75979b7434f3b",
+    "stored_bytes": 13343,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/source-stage-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/source-stage-identity.json",
+    "raw_sha256": "61e2807e11db0f0afe4f219098fa2b7e09098338df1489cdf121a05b2e654d3d",
+    "raw_bytes": 11781,
+    "stored_sha256": "61e2807e11db0f0afe4f219098fa2b7e09098338df1489cdf121a05b2e654d3d",
+    "stored_bytes": 11781,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/system.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/system.json",
+    "raw_sha256": "f115599537c5090f7c7be13586b77212751fb9c547fd7d30e01322da86d610a4",
+    "raw_bytes": 876,
+    "stored_sha256": "f115599537c5090f7c7be13586b77212751fb9c547fd7d30e01322da86d610a4",
+    "stored_bytes": 876,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/tiny-inputs.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/tiny-inputs.json",
+    "raw_sha256": "4c1e3123f9ed1d802d51b0c44c8f45f2309c90ffbffa90ae100718d58327d19b",
+    "raw_bytes": 4121,
+    "stored_sha256": "4c1e3123f9ed1d802d51b0c44c8f45f2309c90ffbffa90ae100718d58327d19b",
+    "stored_bytes": 4121,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/inputs/trace_config.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/inputs/trace_config.csv",
+    "raw_sha256": "6bc11a5d5d0b3f81f533a129ad6382c3e12317dd89993705fbca2c04efdf50a4",
+    "raw_bytes": 3770,
+    "stored_sha256": "6bc11a5d5d0b3f81f533a129ad6382c3e12317dd89993705fbca2c04efdf50a4",
+    "stored_bytes": 3770,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/invocation.txt": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/invocation.txt",
+    "raw_sha256": "9184e40777bf4036b40de517b6dd53810a4453afaa00b24db3101e6779d14d4c",
+    "raw_bytes": 623,
+    "stored_sha256": "9184e40777bf4036b40de517b6dd53810a4453afaa00b24db3101e6779d14d4c",
+    "stored_bytes": 623,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/prepare.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/prepare.log",
+    "raw_sha256": "4c1e3123f9ed1d802d51b0c44c8f45f2309c90ffbffa90ae100718d58327d19b",
+    "raw_bytes": 4121,
+    "stored_sha256": "4c1e3123f9ed1d802d51b0c44c8f45f2309c90ffbffa90ae100718d58327d19b",
+    "stored_bytes": 4121,
+    "gzip": false
+  },
+  "online/astra-sim-face/cap2-split/python.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T031953Z-67406/python.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/runner.log": {
+    "source": "work/face-future-pressure-20261015/face-pressure-final.log",
+    "raw_sha256": "480b2090e46506003bd6d18c611c6c6734fe0f152a7749e8fb90e70adaf6fdf5",
+    "raw_bytes": 6173,
+    "stored_sha256": "480b2090e46506003bd6d18c611c6c6734fe0f152a7749e8fb90e70adaf6fdf5",
+    "stored_bytes": 6173,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/bridge/.bridge_processing_stats.partial.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/bridge/.bridge_processing_stats.partial.jsonl",
+    "raw_sha256": "28964ff30668b2b2f379f4ccc7bc6e3cd8f659a3b048736b6a3a1c36c052c1e6",
+    "raw_bytes": 34,
+    "stored_sha256": "28964ff30668b2b2f379f4ccc7bc6e3cd8f659a3b048736b6a3a1c36c052c1e6",
+    "stored_bytes": 34,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/bridge/graph_batch_digests.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/bridge/graph_batch_digests.jsonl",
+    "raw_sha256": "40e7fbc034bf969bda29e128db82bffeaa42ad95e4c335e4d5adf0d19892eca3",
+    "raw_bytes": 260,
+    "stored_sha256": "40e7fbc034bf969bda29e128db82bffeaa42ad95e4c335e4d5adf0d19892eca3",
+    "stored_bytes": 260,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/bridge/online_decision_log.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/bridge/online_decision_log.jsonl",
+    "raw_sha256": "83f355956bcede39e7d57c75e2d18ba657f8fda636c50e57e119d2dd1eae1173",
+    "raw_bytes": 489,
+    "stored_sha256": "83f355956bcede39e7d57c75e2d18ba657f8fda636c50e57e119d2dd1eae1173",
+    "stored_bytes": 489,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/bridge/online_stats.jsonl.partial": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/bridge/online_stats.jsonl.partial",
+    "raw_sha256": "db2118972932f5cac9f15130d5bc8b3d9021507fd0719efed63dbf1d755faf99",
+    "raw_bytes": 108,
+    "stored_sha256": "db2118972932f5cac9f15130d5bc8b3d9021507fd0719efed63dbf1d755faf99",
+    "stored_bytes": 108,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/bridge/request_journal.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/bridge/request_journal.jsonl",
+    "raw_sha256": "1cb6e2a6a4eb10befe055bcb4645693f8effa203152b48cc81c71bb4266efe23",
+    "raw_bytes": 3898,
+    "stored_sha256": "1cb6e2a6a4eb10befe055bcb4645693f8effa203152b48cc81c71bb4266efe23",
+    "stored_bytes": 3898,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/bridge/train_ledger.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/bridge/train_ledger.jsonl",
+    "raw_sha256": "3b86a26c4c75aa2b95e701a43bdba1dd19d072f0304c6bcd492699d1211d7969",
+    "raw_bytes": 205,
+    "stored_sha256": "3b86a26c4c75aa2b95e701a43bdba1dd19d072f0304c6bcd492699d1211d7969",
+    "stored_bytes": 205,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/bridge/workspace_envelope_certificate.json.gz": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/bridge/workspace_envelope_certificate.json",
+    "raw_sha256": "3e5b81aa8b95c048adc17b800ba778488840e4c267d4f7899c7e3525d2e89f92",
+    "raw_bytes": 1662208,
+    "stored_sha256": "0bd511945973c0332a8775739cf801347f2d9b48aae5553a6ab146bee2e9b77c",
+    "stored_bytes": 37896,
+    "gzip": true
+  },
+  "failed-pressure/astra-sim-face/cpp.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/cpp.log",
+    "raw_sha256": "1881515d1caeff074d8b9af06a70ecdc7df901ae18e1f8d472880f53d0d6e0c4",
+    "raw_bytes": 4536,
+    "stored_sha256": "1881515d1caeff074d8b9af06a70ecdc7df901ae18e1f8d472880f53d0d6e0c4",
+    "stored_bytes": 4536,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/comm_group.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/comm_group.json",
+    "raw_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "raw_bytes": 1235,
+    "stored_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "stored_bytes": 1235,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/completion-identity.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/completion-identity.json",
+    "raw_sha256": "1e2aad6d311aa93c08481da615e6b801bfe1c5d8586261c6b25f15c1cf3d2659",
+    "raw_bytes": 610,
+    "stored_sha256": "1e2aad6d311aa93c08481da615e6b801bfe1c5d8586261c6b25f15c1cf3d2659",
+    "stored_bytes": 610,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/cpp-source-identity-post.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/cpp-source-identity-post.json",
+    "raw_sha256": "f142204c25002e86e69ed4d3e43de10e9c48f10f11336b4e83d17c78166f2f50",
+    "raw_bytes": 122275,
+    "stored_sha256": "f142204c25002e86e69ed4d3e43de10e9c48f10f11336b4e83d17c78166f2f50",
+    "stored_bytes": 122275,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/cpp-source-identity.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/cpp-source-identity.json",
+    "raw_sha256": "f142204c25002e86e69ed4d3e43de10e9c48f10f11336b4e83d17c78166f2f50",
+    "raw_bytes": 122275,
+    "stored_sha256": "f142204c25002e86e69ed4d3e43de10e9c48f10f11336b4e83d17c78166f2f50",
+    "stored_bytes": 122275,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/manifest.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/manifest.json",
+    "raw_sha256": "1e20f22459ac913ca7f8a6ce7417682683043f35e6fe6721f046e7d70725da1a",
+    "raw_bytes": 8635,
+    "stored_sha256": "1e20f22459ac913ca7f8a6ce7417682683043f35e6fe6721f046e7d70725da1a",
+    "stored_bytes": 8635,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/metrics_manifest.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/metrics_manifest.json",
+    "raw_sha256": "c78a7fd206b84034e6ffe229fffecd3d9831cc5e7a0ad2986ab850f63c0ff36d",
+    "raw_bytes": 7735,
+    "stored_sha256": "c78a7fd206b84034e6ffe229fffecd3d9831cc5e7a0ad2986ab850f63c0ff36d",
+    "stored_bytes": 7735,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/network.yml": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/network.yml",
+    "raw_sha256": "9c44537f5ca79be198af87ac03b51212e056466cdd52616d5f819a82253e107b",
+    "raw_bytes": 278,
+    "stored_sha256": "9c44537f5ca79be198af87ac03b51212e056466cdd52616d5f819a82253e107b",
+    "stored_bytes": 278,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/protobuf/et_def.proto": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/protobuf/et_def.proto",
+    "raw_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "raw_bytes": 3175,
+    "stored_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "stored_bytes": 3175,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/protobuf/et_def_pb2.py": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/protobuf/et_def_pb2.py",
+    "raw_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "raw_bytes": 7003,
+    "stored_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "stored_bytes": 7003,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/request_queue.csv": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/request_queue.csv",
+    "raw_sha256": "17552702f6479a069dec45f67cb66ab527ea20bb8322a9bf76a7c0228107de5b",
+    "raw_bytes": 3094,
+    "stored_sha256": "17552702f6479a069dec45f67cb66ab527ea20bb8322a9bf76a7c0228107de5b",
+    "stored_bytes": 3094,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/request_queue.csv.provenance.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/request_queue.csv.provenance.json",
+    "raw_sha256": "51a58e128cdbb6679ef54fead88a1452dda6e1ee532ec87ea0a278c9878ab771",
+    "raw_bytes": 433,
+    "stored_sha256": "51a58e128cdbb6679ef54fead88a1452dda6e1ee532ec87ea0a278c9878ab771",
+    "stored_bytes": 433,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/run-input-identity.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/run-input-identity.json",
+    "raw_sha256": "02bcb0d110db21158cc36bd174ae20e39ddabaedbde3a1af6e18d92965b0ad1e",
+    "raw_bytes": 13400,
+    "stored_sha256": "02bcb0d110db21158cc36bd174ae20e39ddabaedbde3a1af6e18d92965b0ad1e",
+    "stored_bytes": 13400,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/source-stage-identity.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/source-stage-identity.json",
+    "raw_sha256": "3391ee4b9e1788b40a1ebee9096761c5ed58532e49649e688a03ef50f295a1b0",
+    "raw_bytes": 11781,
+    "stored_sha256": "3391ee4b9e1788b40a1ebee9096761c5ed58532e49649e688a03ef50f295a1b0",
+    "stored_bytes": 11781,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/system.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/system.json",
+    "raw_sha256": "d073c62b0551269c71684eb51a9553f75942bc3251928827d0c4722ace0dd0d7",
+    "raw_bytes": 878,
+    "stored_sha256": "d073c62b0551269c71684eb51a9553f75942bc3251928827d0c4722ace0dd0d7",
+    "stored_bytes": 878,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/tiny-inputs.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/tiny-inputs.json",
+    "raw_sha256": "b9e3661b75b43bcd2b013ddaf915d99714ea7a037700c837be24ed3437fc413f",
+    "raw_bytes": 4973,
+    "stored_sha256": "b9e3661b75b43bcd2b013ddaf915d99714ea7a037700c837be24ed3437fc413f",
+    "stored_bytes": 4973,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/inputs/trace_config.csv": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/inputs/trace_config.csv",
+    "raw_sha256": "5e2e232aaa509cb6bd351e2f5ec07ad3b49e24363a246c0afd3813d1e3ea67e2",
+    "raw_bytes": 3781,
+    "stored_sha256": "5e2e232aaa509cb6bd351e2f5ec07ad3b49e24363a246c0afd3813d1e3ea67e2",
+    "stored_bytes": 3781,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/invocation.txt": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/invocation.txt",
+    "raw_sha256": "bcb0444f1307d908732026c65752d35d5b21076e5bb2617608799807be7c5e81",
+    "raw_bytes": 656,
+    "stored_sha256": "bcb0444f1307d908732026c65752d35d5b21076e5bb2617608799807be7c5e81",
+    "stored_bytes": 656,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/prepare.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/prepare.log",
+    "raw_sha256": "b9e3661b75b43bcd2b013ddaf915d99714ea7a037700c837be24ed3437fc413f",
+    "raw_bytes": 4973,
+    "stored_sha256": "b9e3661b75b43bcd2b013ddaf915d99714ea7a037700c837be24ed3437fc413f",
+    "stored_bytes": 4973,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/python.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/python.log",
+    "raw_sha256": "2675ae79ac90601e6a71d0d86ffd3e61d65a655725d1ac6d204e8b1cf201733e",
+    "raw_bytes": 108,
+    "stored_sha256": "2675ae79ac90601e6a71d0d86ffd3e61d65a655725d1ac6d204e8b1cf201733e",
+    "stored_bytes": 108,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/trace-logs/err.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/trace-logs/err.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face/trace-logs/log.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face/coarse-capacity-pressure-20261015T031550Z-64504/trace-logs/log.log",
+    "raw_sha256": "07e446d4213c5852fc62635fb961eb8996b1b54a7de6e6232ffd06cd3de1b2d2",
+    "raw_bytes": 8670,
+    "stored_sha256": "07e446d4213c5852fc62635fb961eb8996b1b54a7de6e6232ffd06cd3de1b2d2",
+    "stored_bytes": 8670,
+    "gzip": false
+  },
+  "python/astra-sim-face-LRU/identity-and-command.json": {
+    "source": "work/face-future-service-20261015/verified-python-astra-sim-face-LRU/identity-and-command.json",
+    "raw_sha256": "e8ad4606aa415e41fba843dc011bc172fc2eea7b4f585ab4898a814345eec1d7",
+    "raw_bytes": 9147,
+    "stored_sha256": "e8ad4606aa415e41fba843dc011bc172fc2eea7b4f585ab4898a814345eec1d7",
+    "stored_bytes": 9147,
+    "gzip": false
+  },
+  "python/astra-sim-face-LRU/tests.log": {
+    "source": "work/face-future-service-20261015/verified-python-astra-sim-face-LRU.log",
+    "raw_sha256": "26eedd365bc393557c4f3962eab876342f1daa34ec5ea761c002aa7679355ab1",
+    "raw_bytes": 27527,
+    "stored_sha256": "26eedd365bc393557c4f3962eab876342f1daa34ec5ea761c002aa7679355ab1",
+    "stored_bytes": 27527,
+    "gzip": false
+  },
+  "python/astra-sim-face-LRU/actual-face-emitter.json": {
+    "source": "work/face-future-service-20261015/verified-python-astra-sim-face-LRU/emitter-evidence/actual-face-emitter.json",
+    "raw_sha256": "97549bf7ea41c11174d58d6f9eb16304e057819b78156882db1b0a59b5fd9548",
+    "raw_bytes": 76490,
+    "stored_sha256": "97549bf7ea41c11174d58d6f9eb16304e057819b78156882db1b0a59b5fd9548",
+    "stored_bytes": 76490,
+    "gzip": false
+  },
+  "python/astra-sim-face-LRU/manifest-plan-coverage.json.gz": {
+    "source": "work/face-future-service-20261015/verified-python-astra-sim-face-LRU/emitter-evidence/manifest-plan-coverage.json",
+    "raw_sha256": "50da200027966d46867e7fd9880d6580e56bf39bb9b5ef46b482b083dbc762bf",
+    "raw_bytes": 306007,
+    "stored_sha256": "2b1846ea7e4bbf7b27536e9644732d9990acc9f066659bef4b105d9a3d56abf6",
+    "stored_bytes": 29447,
+    "gzip": true
+  },
+  "cpp/astra-sim-face-LRU/final-build.log": {
+    "source": "work/face-future-ledger-20261015/face-lru-final-build.log",
+    "raw_sha256": "e8245da5d3af9b2ffeb2dfef02f77ab1bc4ea065840e377ff7bf45b7497a7530",
+    "raw_bytes": 9150,
+    "stored_sha256": "e8245da5d3af9b2ffeb2dfef02f77ab1bc4ea065840e377ff7bf45b7497a7530",
+    "stored_bytes": 9150,
+    "gzip": false
+  },
+  "cpp/astra-sim-face-LRU/final-ctest.log": {
+    "source": "work/face-future-ledger-20261015/face-lru-final-ctest.log",
+    "raw_sha256": "e08402629b7fd1e6249006e9ba94d28babbbea4b35af516b2529363bc3e423cf",
+    "raw_bytes": 1674,
+    "stored_sha256": "e08402629b7fd1e6249006e9ba94d28babbbea4b35af516b2529363bc3e423cf",
+    "stored_bytes": 1674,
+    "gzip": false
+  },
+  "cpp/astra-sim-face-LRU/online-build.log": {
+    "source": "work/face-future-ledger-20261015/face-lru-online-build.log",
+    "raw_sha256": "faa4ba158a900af2a7e47b555924747c7548c43579ac80440cf36136a27a0d08",
+    "raw_bytes": 1827,
+    "stored_sha256": "faa4ba158a900af2a7e47b555924747c7548c43579ac80440cf36136a27a0d08",
+    "stored_bytes": 1827,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/runner.log": {
+    "source": "work/face-future-online-20261015/face-lru-verified-legacy.log",
+    "raw_sha256": "db790c5424edd9f6938d0ee07af740e8a73de3dbdc6061c2a6a5bb3765410356",
+    "raw_bytes": 1112,
+    "stored_sha256": "db790c5424edd9f6938d0ee07af740e8a73de3dbdc6061c2a6a5bb3765410356",
+    "stored_bytes": 1112,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/bridge/online_decision_log.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/bridge/online_decision_log.jsonl",
+    "raw_sha256": "a439b3221c41794cced5979ec04c93058d30aa6ef3ef720dc13d7fe279645583",
+    "raw_bytes": 5087,
+    "stored_sha256": "a439b3221c41794cced5979ec04c93058d30aa6ef3ef720dc13d7fe279645583",
+    "stored_bytes": 5087,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/bridge/online_stats.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/bridge/online_stats.jsonl",
+    "raw_sha256": "9c11952c86de39dd5ab19639bb0c7fb7f8ebc45b0cdcb84c1b38add8043ec603",
+    "raw_bytes": 889,
+    "stored_sha256": "9c11952c86de39dd5ab19639bb0c7fb7f8ebc45b0cdcb84c1b38add8043ec603",
+    "stored_bytes": 889,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/bridge/request_journal.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/bridge/request_journal.jsonl",
+    "raw_sha256": "44390bb39b6d4c0250855405cd402ad7453f3d1ac1acce2a7f0fd24398e62ad2",
+    "raw_bytes": 1436,
+    "stored_sha256": "44390bb39b6d4c0250855405cd402ad7453f3d1ac1acce2a7f0fd24398e62ad2",
+    "stored_bytes": 1436,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/bridge/train_ledger.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/bridge/train_ledger.jsonl",
+    "raw_sha256": "679b46f7245b38e298d5024133b0b6ce097727d5f870f5f859669fed1731b5c6",
+    "raw_bytes": 477,
+    "stored_sha256": "679b46f7245b38e298d5024133b0b6ce097727d5f870f5f859669fed1731b5c6",
+    "stored_bytes": 477,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/cpp.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/cpp.log",
+    "raw_sha256": "00c085ae11779339f4e93c68bf879c06efb3ff5986a29716e318aeaae1535488",
+    "raw_bytes": 236149,
+    "stored_sha256": "00c085ae11779339f4e93c68bf879c06efb3ff5986a29716e318aeaae1535488",
+    "stored_bytes": 236149,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/comm_group.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/comm_group.json",
+    "raw_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "raw_bytes": 1235,
+    "stored_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "stored_bytes": 1235,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/completion-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/completion-identity.json",
+    "raw_sha256": "7a420da2980f4f7c3a42f87ecda6df9741e7d352ada284384617a319f0d943be",
+    "raw_bytes": 610,
+    "stored_sha256": "7a420da2980f4f7c3a42f87ecda6df9741e7d352ada284384617a319f0d943be",
+    "stored_bytes": 610,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/cpp-source-identity-post.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/cpp-source-identity-post.json",
+    "raw_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "raw_bytes": 102784,
+    "stored_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "stored_bytes": 102784,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/cpp-source-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/cpp-source-identity.json",
+    "raw_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "raw_bytes": 102784,
+    "stored_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "stored_bytes": 102784,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/manifest.json",
+    "raw_sha256": "9009e3580bac78ccaa52bc86e7dff13d9aea08ca6c2fc194db5432e61929f310",
+    "raw_bytes": 1377,
+    "stored_sha256": "9009e3580bac78ccaa52bc86e7dff13d9aea08ca6c2fc194db5432e61929f310",
+    "stored_bytes": 1377,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/metrics_manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/metrics_manifest.json",
+    "raw_sha256": "b69d6022f2c0b1403ac50ba5a4a6aa61bbcfc6e8e7d9b76d9e35c8feab444421",
+    "raw_bytes": 719,
+    "stored_sha256": "b69d6022f2c0b1403ac50ba5a4a6aa61bbcfc6e8e7d9b76d9e35c8feab444421",
+    "stored_bytes": 719,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/network.yml": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/network.yml",
+    "raw_sha256": "ae786af9516305078f5a023b4e70c2d6562bd037d3fc5218d91718e1946992f5",
+    "raw_bytes": 265,
+    "stored_sha256": "ae786af9516305078f5a023b4e70c2d6562bd037d3fc5218d91718e1946992f5",
+    "stored_bytes": 265,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/protobuf/et_def.proto": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/protobuf/et_def.proto",
+    "raw_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "raw_bytes": 3175,
+    "stored_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "stored_bytes": 3175,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/protobuf/et_def_pb2.py": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/protobuf/et_def_pb2.py",
+    "raw_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "raw_bytes": 7003,
+    "stored_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "stored_bytes": 7003,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/remote_memory.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/remote_memory.json",
+    "raw_sha256": "3c315055309b0841776c73cf1b4e226aaa47dd3f01c2874a4ade47e1a1635301",
+    "raw_bytes": 323,
+    "stored_sha256": "3c315055309b0841776c73cf1b4e226aaa47dd3f01c2874a4ade47e1a1635301",
+    "stored_bytes": 323,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/request_queue.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/request_queue.csv",
+    "raw_sha256": "f51b533edb0901116419d23363f41b600e0ed1fbbca53031b0e0a1be449e1a6f",
+    "raw_bytes": 217,
+    "stored_sha256": "f51b533edb0901116419d23363f41b600e0ed1fbbca53031b0e0a1be449e1a6f",
+    "stored_bytes": 217,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/request_queue.csv.provenance.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/request_queue.csv.provenance.json",
+    "raw_sha256": "cc10ecbe13a971440ad4137f5fb50561c735c9fc2f060da720156fb2a2455d89",
+    "raw_bytes": 404,
+    "stored_sha256": "cc10ecbe13a971440ad4137f5fb50561c735c9fc2f060da720156fb2a2455d89",
+    "stored_bytes": 404,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/run-input-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/run-input-identity.json",
+    "raw_sha256": "a92790a2b0c281970c516fce3194c83b98bfb269c09da22164120b658dbfc721",
+    "raw_bytes": 13220,
+    "stored_sha256": "a92790a2b0c281970c516fce3194c83b98bfb269c09da22164120b658dbfc721",
+    "stored_bytes": 13220,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/source-stage-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/source-stage-identity.json",
+    "raw_sha256": "22fff3220f70040a9fb7cec0187074578a874b14fcec3588ecad7acdb3eebff1",
+    "raw_bytes": 11357,
+    "stored_sha256": "22fff3220f70040a9fb7cec0187074578a874b14fcec3588ecad7acdb3eebff1",
+    "stored_bytes": 11357,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/system.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/system.json",
+    "raw_sha256": "41115a6359d17a97af5c62b6df323772adaa2bb8805aeea6912bc6fee2726461",
+    "raw_bytes": 982,
+    "stored_sha256": "41115a6359d17a97af5c62b6df323772adaa2bb8805aeea6912bc6fee2726461",
+    "stored_bytes": 982,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/tiny-inputs.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/tiny-inputs.json",
+    "raw_sha256": "55d2e91e93e0c70cc0ba9b6647bc5fe39c9904997f1dc2ccf0506ff472bdbd9f",
+    "raw_bytes": 4136,
+    "stored_sha256": "55d2e91e93e0c70cc0ba9b6647bc5fe39c9904997f1dc2ccf0506ff472bdbd9f",
+    "stored_bytes": 4136,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/inputs/trace_config.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/inputs/trace_config.csv",
+    "raw_sha256": "0a4e5ff132b363b1f9e0d9e190984fb00b7b69ce8982e0379ae950214cb4b48b",
+    "raw_bytes": 3617,
+    "stored_sha256": "0a4e5ff132b363b1f9e0d9e190984fb00b7b69ce8982e0379ae950214cb4b48b",
+    "stored_bytes": 3617,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/invocation.txt": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/invocation.txt",
+    "raw_sha256": "d3c977de440845c953a60f24bb4ab23a2e70d597a657aba7eae757bbf77a8c4d",
+    "raw_bytes": 639,
+    "stored_sha256": "d3c977de440845c953a60f24bb4ab23a2e70d597a657aba7eae757bbf77a8c4d",
+    "stored_bytes": 639,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/prepare.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/prepare.log",
+    "raw_sha256": "55d2e91e93e0c70cc0ba9b6647bc5fe39c9904997f1dc2ccf0506ff472bdbd9f",
+    "raw_bytes": 4136,
+    "stored_sha256": "55d2e91e93e0c70cc0ba9b6647bc5fe39c9904997f1dc2ccf0506ff472bdbd9f",
+    "stored_bytes": 4136,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/legacy/python.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/legacy-tiny-20261015T031945Z-67116/python.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/runner.log": {
+    "source": "work/face-future-online-20261015/face-lru-verified-overlap.log",
+    "raw_sha256": "a103eab40fd9ba716ba3c7cdb4cfb049f0ad2db4b64ed32f98f814508cea2d82",
+    "raw_bytes": 1555,
+    "stored_sha256": "a103eab40fd9ba716ba3c7cdb4cfb049f0ad2db4b64ed32f98f814508cea2d82",
+    "stored_bytes": 1555,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/bridge/online_decision_log.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/bridge/online_decision_log.jsonl",
+    "raw_sha256": "6f08a1a0478c000be9674210cf764a915617edf26aebe6a5444fe1fa79a5c2e8",
+    "raw_bytes": 4069,
+    "stored_sha256": "6f08a1a0478c000be9674210cf764a915617edf26aebe6a5444fe1fa79a5c2e8",
+    "stored_bytes": 4069,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/bridge/online_stats.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/bridge/online_stats.jsonl",
+    "raw_sha256": "535c734952a0c358439eef436f0a6b22ae6805c9f63f4258d1686666e85f4b36",
+    "raw_bytes": 1638,
+    "stored_sha256": "535c734952a0c358439eef436f0a6b22ae6805c9f63f4258d1686666e85f4b36",
+    "stored_bytes": 1638,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/bridge/request_journal.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/bridge/request_journal.jsonl",
+    "raw_sha256": "03a4180a95f7609a50688503b91e23b09f3144f415d139a1fa4f63f6d42c687f",
+    "raw_bytes": 23354,
+    "stored_sha256": "03a4180a95f7609a50688503b91e23b09f3144f415d139a1fa4f63f6d42c687f",
+    "stored_bytes": 23354,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/bridge/train_ledger.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/bridge/train_ledger.jsonl",
+    "raw_sha256": "8272c4a35a2065bbbadcdddcf95e21c9d20dc8b4325e3cd2a9f19f8bfcf5be4a",
+    "raw_bytes": 979,
+    "stored_sha256": "8272c4a35a2065bbbadcdddcf95e21c9d20dc8b4325e3cd2a9f19f8bfcf5be4a",
+    "stored_bytes": 979,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/bridge/workspace_envelope_certificate.json.gz": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/bridge/workspace_envelope_certificate.json",
+    "raw_sha256": "aa416984d50447a8ad274c3bc9812b04862f257b44c322e5a37912cefad1d66c",
+    "raw_bytes": 496529,
+    "stored_sha256": "25d3ece25edab1ef01ad77425a22a3e0529dd77b1bbda6e50f60050f913ae907",
+    "stored_bytes": 29323,
+    "gzip": true
+  },
+  "online/astra-sim-face-LRU/overlap/cpp.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/cpp.log",
+    "raw_sha256": "36e4cf54a445b9fd39014b06e4a0a7e66d5c629fb4db7103b8aedba9fe47b9c1",
+    "raw_bytes": 238338,
+    "stored_sha256": "36e4cf54a445b9fd39014b06e4a0a7e66d5c629fb4db7103b8aedba9fe47b9c1",
+    "stored_bytes": 238338,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/comm_group.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/comm_group.json",
+    "raw_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "raw_bytes": 1235,
+    "stored_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "stored_bytes": 1235,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/completion-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/completion-identity.json",
+    "raw_sha256": "7a420da2980f4f7c3a42f87ecda6df9741e7d352ada284384617a319f0d943be",
+    "raw_bytes": 610,
+    "stored_sha256": "7a420da2980f4f7c3a42f87ecda6df9741e7d352ada284384617a319f0d943be",
+    "stored_bytes": 610,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/cpp-source-identity-post.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/cpp-source-identity-post.json",
+    "raw_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "raw_bytes": 102784,
+    "stored_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "stored_bytes": 102784,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/cpp-source-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/cpp-source-identity.json",
+    "raw_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "raw_bytes": 102784,
+    "stored_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "stored_bytes": 102784,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/manifest.json",
+    "raw_sha256": "1aa10980b6135f44348dfdc1b7ec6cce2ae8692263cc9f39d12dd26dc3961af3",
+    "raw_bytes": 1760,
+    "stored_sha256": "1aa10980b6135f44348dfdc1b7ec6cce2ae8692263cc9f39d12dd26dc3961af3",
+    "stored_bytes": 1760,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/metrics_manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/metrics_manifest.json",
+    "raw_sha256": "1039a21c08d81c51adc8408638b8bfda438c1849a0959ac4cfc6f01ebc42e7ca",
+    "raw_bytes": 1028,
+    "stored_sha256": "1039a21c08d81c51adc8408638b8bfda438c1849a0959ac4cfc6f01ebc42e7ca",
+    "stored_bytes": 1028,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/network.yml": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/network.yml",
+    "raw_sha256": "dd19a2ce061b6f61b8c15130d64671a12968d62dd954d0eaabc93a275a7ba7ef",
+    "raw_bytes": 280,
+    "stored_sha256": "dd19a2ce061b6f61b8c15130d64671a12968d62dd954d0eaabc93a275a7ba7ef",
+    "stored_bytes": 280,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/protobuf/et_def.proto": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/protobuf/et_def.proto",
+    "raw_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "raw_bytes": 3175,
+    "stored_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "stored_bytes": 3175,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/protobuf/et_def_pb2.py": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/protobuf/et_def_pb2.py",
+    "raw_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "raw_bytes": 7003,
+    "stored_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "stored_bytes": 7003,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/remote_memory.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/remote_memory.json",
+    "raw_sha256": "3c315055309b0841776c73cf1b4e226aaa47dd3f01c2874a4ade47e1a1635301",
+    "raw_bytes": 323,
+    "stored_sha256": "3c315055309b0841776c73cf1b4e226aaa47dd3f01c2874a4ade47e1a1635301",
+    "stored_bytes": 323,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/request_queue.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/request_queue.csv",
+    "raw_sha256": "ff6990b6da261ef380a1363f3e7c47d9cd7c58e69adbd170f1803d8ea896f23d",
+    "raw_bytes": 384,
+    "stored_sha256": "ff6990b6da261ef380a1363f3e7c47d9cd7c58e69adbd170f1803d8ea896f23d",
+    "stored_bytes": 384,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/request_queue.csv.provenance.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/request_queue.csv.provenance.json",
+    "raw_sha256": "22c169995e7977e9c06d26fcf07ccfd68d1969a99724d0486585078957beaf2a",
+    "raw_bytes": 423,
+    "stored_sha256": "22c169995e7977e9c06d26fcf07ccfd68d1969a99724d0486585078957beaf2a",
+    "stored_bytes": 423,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/run-input-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/run-input-identity.json",
+    "raw_sha256": "b4ee57789a0e16418c2caba8a469c6b677dc73fd9d409a713e16f48cbdc3cfb3",
+    "raw_bytes": 13289,
+    "stored_sha256": "b4ee57789a0e16418c2caba8a469c6b677dc73fd9d409a713e16f48cbdc3cfb3",
+    "stored_bytes": 13289,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/source-stage-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/source-stage-identity.json",
+    "raw_sha256": "22fff3220f70040a9fb7cec0187074578a874b14fcec3588ecad7acdb3eebff1",
+    "raw_bytes": 11357,
+    "stored_sha256": "22fff3220f70040a9fb7cec0187074578a874b14fcec3588ecad7acdb3eebff1",
+    "stored_bytes": 11357,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/system.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/system.json",
+    "raw_sha256": "177565b746302acee0db7dd849cc1710636783d18b2e6f2c37251f0de59e779d",
+    "raw_bytes": 976,
+    "stored_sha256": "177565b746302acee0db7dd849cc1710636783d18b2e6f2c37251f0de59e779d",
+    "stored_bytes": 976,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/tiny-inputs.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/tiny-inputs.json",
+    "raw_sha256": "60d558351998851d51d1bd86ee30c7b5892896ca0d577355ee9e8749f932ccad",
+    "raw_bytes": 4247,
+    "stored_sha256": "60d558351998851d51d1bd86ee30c7b5892896ca0d577355ee9e8749f932ccad",
+    "stored_bytes": 4247,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/inputs/trace_config.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/inputs/trace_config.csv",
+    "raw_sha256": "aaf563bef07653fa8324df0d67dd44efe571a9e1cff34e6080ab93dcd6251204",
+    "raw_bytes": 3642,
+    "stored_sha256": "aaf563bef07653fa8324df0d67dd44efe571a9e1cff34e6080ab93dcd6251204",
+    "stored_bytes": 3642,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/invocation.txt": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/invocation.txt",
+    "raw_sha256": "dd85b7040056006b12d41463ee4b02794619dc74ef450710ba156d7b54cefa90",
+    "raw_bytes": 679,
+    "stored_sha256": "dd85b7040056006b12d41463ee4b02794619dc74ef450710ba156d7b54cefa90",
+    "stored_bytes": 679,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/prepare.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/prepare.log",
+    "raw_sha256": "60d558351998851d51d1bd86ee30c7b5892896ca0d577355ee9e8749f932ccad",
+    "raw_bytes": 4247,
+    "stored_sha256": "60d558351998851d51d1bd86ee30c7b5892896ca0d577355ee9e8749f932ccad",
+    "stored_bytes": 4247,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/python.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/python.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/trace-logs/err.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/trace-logs/err.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/overlap/trace-logs/log.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-workspace-overlap-20261015T031948Z-67220/trace-logs/log.log",
+    "raw_sha256": "f1c679624b9fb1c2094f3f5f94754a607b9387201ac1a6ede9ee9d583e2e6bf3",
+    "raw_bytes": 128280,
+    "stored_sha256": "f1c679624b9fb1c2094f3f5f94754a607b9387201ac1a6ede9ee9d583e2e6bf3",
+    "stored_bytes": 128280,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/runner.log": {
+    "source": "work/face-future-online-20261015/face-lru-verified-cap2-split.log",
+    "raw_sha256": "89371509c661ad048273cff88f999f006c7ed4a2ef359fa9997eb1b1067b5f84",
+    "raw_bytes": 1369,
+    "stored_sha256": "89371509c661ad048273cff88f999f006c7ed4a2ef359fa9997eb1b1067b5f84",
+    "stored_bytes": 1369,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/bridge/online_decision_log.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/bridge/online_decision_log.jsonl",
+    "raw_sha256": "34075b3056917b679229c371fcb82b8c05774fbd5fa7d725d58810c4ec6ffa84",
+    "raw_bytes": 2008,
+    "stored_sha256": "34075b3056917b679229c371fcb82b8c05774fbd5fa7d725d58810c4ec6ffa84",
+    "stored_bytes": 2008,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/bridge/online_stats.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/bridge/online_stats.jsonl",
+    "raw_sha256": "efcc21322380a3bbfd0b332cd527c109e5b73aec369d32412cc6ac901f937c84",
+    "raw_bytes": 1326,
+    "stored_sha256": "efcc21322380a3bbfd0b332cd527c109e5b73aec369d32412cc6ac901f937c84",
+    "stored_bytes": 1326,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/bridge/request_journal.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/bridge/request_journal.jsonl",
+    "raw_sha256": "025cc8fa0557de30d207e9adf2718ae196690e88fff0fc0c5fdd295435fa90df",
+    "raw_bytes": 15435,
+    "stored_sha256": "025cc8fa0557de30d207e9adf2718ae196690e88fff0fc0c5fdd295435fa90df",
+    "stored_bytes": 15435,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/bridge/train_ledger.jsonl": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/bridge/train_ledger.jsonl",
+    "raw_sha256": "b5f315ba2cf852f5839e35caabb854ea61a230fe840331547cc3138ddfb34a21",
+    "raw_bytes": 748,
+    "stored_sha256": "b5f315ba2cf852f5839e35caabb854ea61a230fe840331547cc3138ddfb34a21",
+    "stored_bytes": 748,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/bridge/workspace_envelope_certificate.json.gz": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/bridge/workspace_envelope_certificate.json",
+    "raw_sha256": "d39c1ab98686364b65a6e32b43b97a3d0b10d75ddece9c7525d0782a39a8df45",
+    "raw_bytes": 443120,
+    "stored_sha256": "d5dff5f186c1a4bb85998ae2e4c9cc8d6bd05525d772b9f771c8af083527a9c5",
+    "stored_bytes": 28737,
+    "gzip": true
+  },
+  "online/astra-sim-face-LRU/cap2-split/cpp.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/cpp.log",
+    "raw_sha256": "c515648ed91ee6909873f329d87896835e5563bc594485d8dcc38b92c1f30f6f",
+    "raw_bytes": 235635,
+    "stored_sha256": "c515648ed91ee6909873f329d87896835e5563bc594485d8dcc38b92c1f30f6f",
+    "stored_bytes": 235635,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/comm_group.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/comm_group.json",
+    "raw_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "raw_bytes": 1235,
+    "stored_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "stored_bytes": 1235,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/completion-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/completion-identity.json",
+    "raw_sha256": "7a420da2980f4f7c3a42f87ecda6df9741e7d352ada284384617a319f0d943be",
+    "raw_bytes": 610,
+    "stored_sha256": "7a420da2980f4f7c3a42f87ecda6df9741e7d352ada284384617a319f0d943be",
+    "stored_bytes": 610,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/cpp-source-identity-post.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/cpp-source-identity-post.json",
+    "raw_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "raw_bytes": 102784,
+    "stored_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "stored_bytes": 102784,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/cpp-source-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/cpp-source-identity.json",
+    "raw_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "raw_bytes": 102784,
+    "stored_sha256": "7b1652bf7d92c99dd36fded2e59b6b5c7b39b5b8eaee1d7885bd86d3356726bc",
+    "stored_bytes": 102784,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/manifest.json",
+    "raw_sha256": "33c4c537bb3d7016cbc945b9004cccdf627e7cd5b85f57a84d725e030e905c19",
+    "raw_bytes": 1442,
+    "stored_sha256": "33c4c537bb3d7016cbc945b9004cccdf627e7cd5b85f57a84d725e030e905c19",
+    "stored_bytes": 1442,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/metrics_manifest.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/metrics_manifest.json",
+    "raw_sha256": "5b312d7a8bad4fd9548ac50c65765fa14d6a2192bf54da23f1db0df0d180761b",
+    "raw_bytes": 735,
+    "stored_sha256": "5b312d7a8bad4fd9548ac50c65765fa14d6a2192bf54da23f1db0df0d180761b",
+    "stored_bytes": 735,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/network.yml": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/network.yml",
+    "raw_sha256": "dd19a2ce061b6f61b8c15130d64671a12968d62dd954d0eaabc93a275a7ba7ef",
+    "raw_bytes": 280,
+    "stored_sha256": "dd19a2ce061b6f61b8c15130d64671a12968d62dd954d0eaabc93a275a7ba7ef",
+    "stored_bytes": 280,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/protobuf/et_def.proto": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/protobuf/et_def.proto",
+    "raw_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "raw_bytes": 3175,
+    "stored_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "stored_bytes": 3175,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/protobuf/et_def_pb2.py": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/protobuf/et_def_pb2.py",
+    "raw_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "raw_bytes": 7003,
+    "stored_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "stored_bytes": 7003,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/remote_memory.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/remote_memory.json",
+    "raw_sha256": "3c315055309b0841776c73cf1b4e226aaa47dd3f01c2874a4ade47e1a1635301",
+    "raw_bytes": 323,
+    "stored_sha256": "3c315055309b0841776c73cf1b4e226aaa47dd3f01c2874a4ade47e1a1635301",
+    "stored_bytes": 323,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/request_queue.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/request_queue.csv",
+    "raw_sha256": "f51b533edb0901116419d23363f41b600e0ed1fbbca53031b0e0a1be449e1a6f",
+    "raw_bytes": 217,
+    "stored_sha256": "f51b533edb0901116419d23363f41b600e0ed1fbbca53031b0e0a1be449e1a6f",
+    "stored_bytes": 217,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/request_queue.csv.provenance.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/request_queue.csv.provenance.json",
+    "raw_sha256": "cc10ecbe13a971440ad4137f5fb50561c735c9fc2f060da720156fb2a2455d89",
+    "raw_bytes": 404,
+    "stored_sha256": "cc10ecbe13a971440ad4137f5fb50561c735c9fc2f060da720156fb2a2455d89",
+    "stored_bytes": 404,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/run-input-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/run-input-identity.json",
+    "raw_sha256": "b5f293a39c9990c753bd8f8b0ab683a9bb0539ac8ab702ed27efe652fd31195c",
+    "raw_bytes": 13236,
+    "stored_sha256": "b5f293a39c9990c753bd8f8b0ab683a9bb0539ac8ab702ed27efe652fd31195c",
+    "stored_bytes": 13236,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/source-stage-identity.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/source-stage-identity.json",
+    "raw_sha256": "22fff3220f70040a9fb7cec0187074578a874b14fcec3588ecad7acdb3eebff1",
+    "raw_bytes": 11357,
+    "stored_sha256": "22fff3220f70040a9fb7cec0187074578a874b14fcec3588ecad7acdb3eebff1",
+    "stored_bytes": 11357,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/system.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/system.json",
+    "raw_sha256": "6fe671c246044751ee2f52ba269aade6713b0825dd47a2818a9c7ac6c164fb50",
+    "raw_bytes": 976,
+    "stored_sha256": "6fe671c246044751ee2f52ba269aade6713b0825dd47a2818a9c7ac6c164fb50",
+    "stored_bytes": 976,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/tiny-inputs.json": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/tiny-inputs.json",
+    "raw_sha256": "2355beee63bad06f6535695f13583ca8173cd336e294a91a27e3e832a9f8757c",
+    "raw_bytes": 4193,
+    "stored_sha256": "2355beee63bad06f6535695f13583ca8173cd336e294a91a27e3e832a9f8757c",
+    "stored_bytes": 4193,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/inputs/trace_config.csv": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/inputs/trace_config.csv",
+    "raw_sha256": "aaf563bef07653fa8324df0d67dd44efe571a9e1cff34e6080ab93dcd6251204",
+    "raw_bytes": 3642,
+    "stored_sha256": "aaf563bef07653fa8324df0d67dd44efe571a9e1cff34e6080ab93dcd6251204",
+    "stored_bytes": 3642,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/invocation.txt": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/invocation.txt",
+    "raw_sha256": "bae0edc43a30527cc6d1ac4856987b718dd356a8a8255ce6eb8d093deab27625",
+    "raw_bytes": 639,
+    "stored_sha256": "bae0edc43a30527cc6d1ac4856987b718dd356a8a8255ce6eb8d093deab27625",
+    "stored_bytes": 639,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/prepare.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/prepare.log",
+    "raw_sha256": "2355beee63bad06f6535695f13583ca8173cd336e294a91a27e3e832a9f8757c",
+    "raw_bytes": 4193,
+    "stored_sha256": "2355beee63bad06f6535695f13583ca8173cd336e294a91a27e3e832a9f8757c",
+    "stored_bytes": 4193,
+    "gzip": false
+  },
+  "online/astra-sim-face-LRU/cap2-split/python.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face-LRU/coarse-tiny-20261015T031953Z-67388/python.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/runner.log": {
+    "source": "work/face-future-pressure-20261015/face-lru-pressure-final.log",
+    "raw_sha256": "f99ed51401097195ee760a36b54ba342d5ba7ca9e5aa3e08148a3678e7897cb4",
+    "raw_bytes": 6189,
+    "stored_sha256": "f99ed51401097195ee760a36b54ba342d5ba7ca9e5aa3e08148a3678e7897cb4",
+    "stored_bytes": 6189,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/bridge/.bridge_processing_stats.partial.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/bridge/.bridge_processing_stats.partial.jsonl",
+    "raw_sha256": "4c06085267f8dba29dccbd5bc6b7cf65bbcc9d804b83dd581a0a85cea9f82b83",
+    "raw_bytes": 34,
+    "stored_sha256": "4c06085267f8dba29dccbd5bc6b7cf65bbcc9d804b83dd581a0a85cea9f82b83",
+    "stored_bytes": 34,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/bridge/graph_batch_digests.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/bridge/graph_batch_digests.jsonl",
+    "raw_sha256": "40e7fbc034bf969bda29e128db82bffeaa42ad95e4c335e4d5adf0d19892eca3",
+    "raw_bytes": 260,
+    "stored_sha256": "40e7fbc034bf969bda29e128db82bffeaa42ad95e4c335e4d5adf0d19892eca3",
+    "stored_bytes": 260,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/bridge/online_decision_log.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/bridge/online_decision_log.jsonl",
+    "raw_sha256": "34b9b51f5394e4965a23e00853712fdd5d2169c9f11948015f0996cce107f693",
+    "raw_bytes": 675,
+    "stored_sha256": "34b9b51f5394e4965a23e00853712fdd5d2169c9f11948015f0996cce107f693",
+    "stored_bytes": 675,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/bridge/online_stats.jsonl.partial": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/bridge/online_stats.jsonl.partial",
+    "raw_sha256": "98f29ed393b5256adcad2fa801b57b57648ef1c6ebb3aed0882200139b12a5d0",
+    "raw_bytes": 108,
+    "stored_sha256": "98f29ed393b5256adcad2fa801b57b57648ef1c6ebb3aed0882200139b12a5d0",
+    "stored_bytes": 108,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/bridge/request_journal.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/bridge/request_journal.jsonl",
+    "raw_sha256": "1cb6e2a6a4eb10befe055bcb4645693f8effa203152b48cc81c71bb4266efe23",
+    "raw_bytes": 3898,
+    "stored_sha256": "1cb6e2a6a4eb10befe055bcb4645693f8effa203152b48cc81c71bb4266efe23",
+    "stored_bytes": 3898,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/bridge/train_ledger.jsonl": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/bridge/train_ledger.jsonl",
+    "raw_sha256": "3b86a26c4c75aa2b95e701a43bdba1dd19d072f0304c6bcd492699d1211d7969",
+    "raw_bytes": 205,
+    "stored_sha256": "3b86a26c4c75aa2b95e701a43bdba1dd19d072f0304c6bcd492699d1211d7969",
+    "stored_bytes": 205,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/bridge/workspace_envelope_certificate.json.gz": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/bridge/workspace_envelope_certificate.json",
+    "raw_sha256": "df62042230fea85ffc86922af7a635a54f8665447fac53c6cce825bec54d6d6a",
+    "raw_bytes": 1662060,
+    "stored_sha256": "1d7e24788dc49d912df874f2b6b0216b62a88eb064e5543994d3df77f5f6b266",
+    "stored_bytes": 37867,
+    "gzip": true
+  },
+  "failed-pressure/astra-sim-face-LRU/cpp.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/cpp.log",
+    "raw_sha256": "3841d7d066683ba0fd7cf20fc3f994e7cdd4ef7bd95cbb905f66174125899b54",
+    "raw_bytes": 4544,
+    "stored_sha256": "3841d7d066683ba0fd7cf20fc3f994e7cdd4ef7bd95cbb905f66174125899b54",
+    "stored_bytes": 4544,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/comm_group.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/comm_group.json",
+    "raw_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "raw_bytes": 1235,
+    "stored_sha256": "cecece505caeaee5c37d169928d540bf36a66da59d075201a303d3823caf76b1",
+    "stored_bytes": 1235,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/completion-identity.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/completion-identity.json",
+    "raw_sha256": "5e8e30e44897afabe1d408c40ce5d72b4cdf0eb281de0293bae77c30ed293684",
+    "raw_bytes": 610,
+    "stored_sha256": "5e8e30e44897afabe1d408c40ce5d72b4cdf0eb281de0293bae77c30ed293684",
+    "stored_bytes": 610,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/cpp-source-identity-post.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/cpp-source-identity-post.json",
+    "raw_sha256": "cc503411ee55333d76f3433b7e27bfdbf804bda8454ded1b543d4676b91b49bc",
+    "raw_bytes": 102784,
+    "stored_sha256": "cc503411ee55333d76f3433b7e27bfdbf804bda8454ded1b543d4676b91b49bc",
+    "stored_bytes": 102784,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/cpp-source-identity.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/cpp-source-identity.json",
+    "raw_sha256": "cc503411ee55333d76f3433b7e27bfdbf804bda8454ded1b543d4676b91b49bc",
+    "raw_bytes": 102784,
+    "stored_sha256": "cc503411ee55333d76f3433b7e27bfdbf804bda8454ded1b543d4676b91b49bc",
+    "stored_bytes": 102784,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/manifest.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/manifest.json",
+    "raw_sha256": "b9fb0cf531b52e9000ac82592f1f50a837c8551a0a1db89bf2f9ba7199db77ad",
+    "raw_bytes": 8609,
+    "stored_sha256": "b9fb0cf531b52e9000ac82592f1f50a837c8551a0a1db89bf2f9ba7199db77ad",
+    "stored_bytes": 8609,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/metrics_manifest.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/metrics_manifest.json",
+    "raw_sha256": "03d53e8fde81c7d596899876f39d66544d59af148ae1c0d7966f8d20682f33ea",
+    "raw_bytes": 7747,
+    "stored_sha256": "03d53e8fde81c7d596899876f39d66544d59af148ae1c0d7966f8d20682f33ea",
+    "stored_bytes": 7747,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/network.yml": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/network.yml",
+    "raw_sha256": "c9d656c6ebded1a0200f47245e0e5836601aab17ade74c17f21edea0fa4064c1",
+    "raw_bytes": 282,
+    "stored_sha256": "c9d656c6ebded1a0200f47245e0e5836601aab17ade74c17f21edea0fa4064c1",
+    "stored_bytes": 282,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/protobuf/et_def.proto": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/protobuf/et_def.proto",
+    "raw_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "raw_bytes": 3175,
+    "stored_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "stored_bytes": 3175,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/protobuf/et_def_pb2.py": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/protobuf/et_def_pb2.py",
+    "raw_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "raw_bytes": 7003,
+    "stored_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "stored_bytes": 7003,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/remote_memory.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/remote_memory.json",
+    "raw_sha256": "3c315055309b0841776c73cf1b4e226aaa47dd3f01c2874a4ade47e1a1635301",
+    "raw_bytes": 323,
+    "stored_sha256": "3c315055309b0841776c73cf1b4e226aaa47dd3f01c2874a4ade47e1a1635301",
+    "stored_bytes": 323,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/request_queue.csv": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/request_queue.csv",
+    "raw_sha256": "17552702f6479a069dec45f67cb66ab527ea20bb8322a9bf76a7c0228107de5b",
+    "raw_bytes": 3094,
+    "stored_sha256": "17552702f6479a069dec45f67cb66ab527ea20bb8322a9bf76a7c0228107de5b",
+    "stored_bytes": 3094,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/request_queue.csv.provenance.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/request_queue.csv.provenance.json",
+    "raw_sha256": "51a58e128cdbb6679ef54fead88a1452dda6e1ee532ec87ea0a278c9878ab771",
+    "raw_bytes": 433,
+    "stored_sha256": "51a58e128cdbb6679ef54fead88a1452dda6e1ee532ec87ea0a278c9878ab771",
+    "stored_bytes": 433,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/run-input-identity.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/run-input-identity.json",
+    "raw_sha256": "c17a866c12c2a72f93fdfb8ea08f9d0ad52d024de4b14afe90a3e38fde8b990c",
+    "raw_bytes": 13295,
+    "stored_sha256": "c17a866c12c2a72f93fdfb8ea08f9d0ad52d024de4b14afe90a3e38fde8b990c",
+    "stored_bytes": 13295,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/source-stage-identity.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/source-stage-identity.json",
+    "raw_sha256": "c9fc753eb87506d9a83fc497aef5512e8f835a84db58fd4075ec213642ee8180",
+    "raw_bytes": 11357,
+    "stored_sha256": "c9fc753eb87506d9a83fc497aef5512e8f835a84db58fd4075ec213642ee8180",
+    "stored_bytes": 11357,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/system.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/system.json",
+    "raw_sha256": "c2d05dbaca42c3dbada3d03b222542619f271cd03c3fa486cf4b2e916c179365",
+    "raw_bytes": 978,
+    "stored_sha256": "c2d05dbaca42c3dbada3d03b222542619f271cd03c3fa486cf4b2e916c179365",
+    "stored_bytes": 978,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/tiny-inputs.json": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/tiny-inputs.json",
+    "raw_sha256": "b6d974c997605abb2e5892274cba980554c3573bb34a232dfc839576faff5fed",
+    "raw_bytes": 5045,
+    "stored_sha256": "b6d974c997605abb2e5892274cba980554c3573bb34a232dfc839576faff5fed",
+    "stored_bytes": 5045,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/inputs/trace_config.csv": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/inputs/trace_config.csv",
+    "raw_sha256": "ca7e28565f08e76380ae2ae91dbf616ffbd44ff16d250f56fa08b5cc7be47d13",
+    "raw_bytes": 3653,
+    "stored_sha256": "ca7e28565f08e76380ae2ae91dbf616ffbd44ff16d250f56fa08b5cc7be47d13",
+    "stored_bytes": 3653,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/invocation.txt": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/invocation.txt",
+    "raw_sha256": "1490907332c71313795e6d9019b153693d694db46d168f9af8f5e255fe0fd50c",
+    "raw_bytes": 672,
+    "stored_sha256": "1490907332c71313795e6d9019b153693d694db46d168f9af8f5e255fe0fd50c",
+    "stored_bytes": 672,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/prepare.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/prepare.log",
+    "raw_sha256": "b6d974c997605abb2e5892274cba980554c3573bb34a232dfc839576faff5fed",
+    "raw_bytes": 5045,
+    "stored_sha256": "b6d974c997605abb2e5892274cba980554c3573bb34a232dfc839576faff5fed",
+    "stored_bytes": 5045,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/python.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/python.log",
+    "raw_sha256": "2675ae79ac90601e6a71d0d86ffd3e61d65a655725d1ac6d204e8b1cf201733e",
+    "raw_bytes": 108,
+    "stored_sha256": "2675ae79ac90601e6a71d0d86ffd3e61d65a655725d1ac6d204e8b1cf201733e",
+    "stored_bytes": 108,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/trace-logs/err.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/trace-logs/err.log",
+    "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "raw_bytes": 0,
+    "stored_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "stored_bytes": 0,
+    "gzip": false
+  },
+  "failed-pressure/astra-sim-face-LRU/trace-logs/log.log": {
+    "source": "work/face-future-pressure-20261015/runs/astra-sim-face-LRU/coarse-capacity-pressure-20261015T031550Z-64499/trace-logs/log.log",
+    "raw_sha256": "498e965be4eb91f55a715d8a5dd3d563a07015268fef47d484daa79815f164fd",
+    "raw_bytes": 8670,
+    "stored_sha256": "498e965be4eb91f55a715d8a5dd3d563a07015268fef47d484daa79815f164fd",
+    "stored_bytes": 8670,
+    "gzip": false
+  },
+  "runtime-reproducer/actual-first-train-specs.json": {
+    "source": "work/face-future-pressure-20261015/runtime-isolate-face/actual-first-train-specs.json",
+    "raw_sha256": "7f8dee955ca9b1de15e0e92a46feade0a97f7d58b3cec65c3e0756961ab2e014",
+    "raw_bytes": 14531,
+    "stored_sha256": "7f8dee955ca9b1de15e0e92a46feade0a97f7d58b3cec65c3e0756961ab2e014",
+    "stored_bytes": 14531,
+    "gzip": false
+  },
+  "runtime-reproducer/estimate-response.json.gz": {
+    "source": "work/face-future-pressure-20261015/runtime-isolate-face/estimate-response.json",
+    "raw_sha256": "88b2c646e179818e6f56f2deb5f4874d40004bb961c3efbeba411dc8c3480010",
+    "raw_bytes": 446106,
+    "stored_sha256": "3ce801ae057876c67fbef882ec74818a89f2f8465ddf0719034a9958d4c670c6",
+    "stored_bytes": 42337,
+    "gzip": true
+  },
+  "runtime-reproducer/hardware.json": {
+    "source": "work/face-future-pressure-20261015/runtime-isolate-face/hardware.json",
+    "raw_sha256": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+    "raw_bytes": 3173,
+    "stored_sha256": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+    "stored_bytes": 3173,
+    "gzip": false
+  },
+  "runtime-reproducer/minimal-logits-spec.json": {
+    "source": "work/face-future-pressure-20261015/runtime-isolate-face/minimal-logits-spec.json",
+    "raw_sha256": "c6a30f20d7a546bb94edcfb794ba399fdeccb0d2b7a2e3fa336c08faf54ffb3f",
+    "raw_bytes": 2395,
+    "stored_sha256": "c6a30f20d7a546bb94edcfb794ba399fdeccb0d2b7a2e3fa336c08faf54ffb3f",
+    "stored_bytes": 2395,
+    "gzip": false
+  },
+  "runtime-reproducer/minimal-replay.log": {
+    "source": "work/face-future-pressure-20261015/runtime-isolate-face/minimal-replay.log",
+    "raw_sha256": "e43d4fac95ec7399b0cde3b46aa60356966da7a812c555d142b077d0c0d9dee7",
+    "raw_bytes": 397,
+    "stored_sha256": "e43d4fac95ec7399b0cde3b46aa60356966da7a812c555d142b077d0c0d9dee7",
+    "stored_bytes": 397,
+    "gzip": false
+  },
+  "runtime-reproducer/minimal-response.json": {
+    "source": "work/face-future-pressure-20261015/runtime-isolate-face/minimal-response.json",
+    "raw_sha256": "79118ac173bc5e397eb58c19898c6111c8aca7a5e9de3ad357e4d8a651612f55",
+    "raw_bytes": 291,
+    "stored_sha256": "79118ac173bc5e397eb58c19898c6111c8aca7a5e9de3ad357e4d8a651612f55",
+    "stored_bytes": 291,
+    "gzip": false
+  },
+  "failed-probes/lru-parser-original.log": {
+    "source": "work/face-future-ledger-20261015/face-lru-ctest.log",
+    "raw_sha256": "9e1bceaea1fb04c78906d76aa65e7a60b7d4e056d0674d1e18bfa555d13a3098",
+    "raw_bytes": 2554,
+    "stored_sha256": "9e1bceaea1fb04c78906d76aa65e7a60b7d4e056d0674d1e18bfa555d13a3098",
+    "stored_bytes": 2554,
+    "gzip": false
+  },
+  "failed-probes/capacity-fixture-original.log": {
+    "source": "work/face-future-certificate-20261015/test-face.log",
+    "raw_sha256": "6afbfeca7d846349bec2e224c0be7c065450dbdf9f9f069d4a114a0ff8387091",
+    "raw_bytes": 1626,
+    "stored_sha256": "6afbfeca7d846349bec2e224c0be7c065450dbdf9f9f069d4a114a0ff8387091",
+    "stored_bytes": 1626,
+    "gzip": false
+  },
+  "failed-probes/pressure-swiglu-weights.log": {
+    "source": "work/face-future-pressure-20261015/face-lru-pressure.log",
+    "raw_sha256": "a87cfbe45c180561d938cbfe66ded74c6c7c7eb0b2e99ec6e202bb75e3532fa5",
+    "raw_bytes": 3031,
+    "stored_sha256": "a87cfbe45c180561d938cbfe66ded74c6c7c7eb0b2e99ec6e202bb75e3532fa5",
+    "stored_bytes": 3031,
+    "gzip": false
+  },
+  "failed-probes/legacy-zero-stride.log": {
+    "source": "work/face-future-online-20261015/runs/astra-sim-face/coarse-tiny-20261015T030537Z-63067/python.log",
+    "raw_sha256": "998fc3a73cb9867f324aabbfe435e1be9e30e1aae3952888f82640f14bf1a054",
+    "raw_bytes": 241,
+    "stored_sha256": "998fc3a73cb9867f324aabbfe435e1be9e30e1aae3952888f82640f14bf1a054",
+    "stored_bytes": 241,
+    "gzip": false
+  },
+  "github/manager-remote-verification.json": {
+    "source": "work/face-future-service-20261015/manager-remote-verification.json",
+    "raw_sha256": "8dbdf0ec8990ea830214cfed86065638e8b045107ad161d98266cce857246bfd",
+    "raw_bytes": 282,
+    "stored_sha256": "8dbdf0ec8990ea830214cfed86065638e8b045107ad161d98266cce857246bfd",
+    "stored_bytes": 282,
+    "gzip": false
+  }
+}

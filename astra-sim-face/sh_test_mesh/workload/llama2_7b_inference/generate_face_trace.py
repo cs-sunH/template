@@ -447,7 +447,12 @@ def _paired_transfer(
     target_group: InferenceGroup,
     total_bytes: int,
     timer_gates: Optional[dict[int, Optional[int]]] = None,
+    source_release_ack: bool = False,
+    source_release_ack_tag_factory=None,
+    source_release_arm_ids: Optional[dict[int, Sequence[int]]] = None,
 ) -> list[dict[str, object]]:
+    if source_release_ack and not callable(source_release_ack_tag_factory):
+        raise ValueError("source release ACK requires its disjoint tag allocator")
     if len(source_group.ranks) != len(target_group.ranks):
         raise ValueError("FACE direct KV shard pairing requires equal TP degree")
     if source_group.name == target_group.name:
@@ -485,6 +490,13 @@ def _paired_transfer(
             comm_size=bytes_by_relative_rank[relative_index],
             comm_tag=tag,
         )
+        send_node_id = builders[source].previous_id
+        # A previous release on the destination rank must precede this new
+        # HBM-resident copy.  The optional arm is absent in legacy mode, so
+        # the historical graph is byte-for-byte unchanged.
+        for release_node_id in (source_release_arm_ids or {}).get(target, ()):
+            builders[target].pending_extra_dependencies.append(
+                int(release_node_id))
         builders[target].comm_recv(
             f"{name}_recv_rank{source}_to_rank{target}",
             src=source,
@@ -492,17 +504,43 @@ def _paired_transfer(
             comm_size=bytes_by_relative_rank[relative_index],
             comm_tag=tag,
         )
+        recv_node_id = builders[target].previous_id
         path = _xy_route(config.hardware, source, target)
-        routes.append(
-            {
-                "relative_shard": relative_index,
-                "source_rank": source,
-                "target_rank": target,
-                "bytes": bytes_by_relative_rank[relative_index],
-                "noc_path": path,
-                "noc_hops": len(path) - 1,
-            }
-        )
+        route = {
+            "relative_shard": relative_index,
+            "source_rank": source,
+            "target_rank": target,
+            "bytes": bytes_by_relative_rank[relative_index],
+            "noc_path": path,
+            "noc_hops": len(path) - 1,
+        }
+        if source_release_ack:
+            # The destination can acknowledge only after its matching data
+            # receive completed.  The source-side receive is therefore a
+            # physical source-release tail; its explicit local send edge also
+            # keeps the ACK wait behind the outgoing data operation.
+            ack_tag = source_release_ack_tag_factory()
+            builders[target].comm_send(
+                f"{name}_shard{relative_index}_ack_to_rank{source}",
+                src=target,
+                dst=source,
+                comm_size=1,
+                comm_tag=ack_tag,
+            )
+            builders[source].pending_extra_dependencies.append(int(send_node_id))
+            builders[source].comm_recv(
+                f"{name}_shard{relative_index}_ack_from_rank{target}",
+                src=target,
+                dst=source,
+                comm_size=1,
+                comm_tag=ack_tag,
+            )
+            route.update({
+                "ack_tag": ack_tag,
+                "source_release_dependency": "noc_migration_ack_recv",
+                "source_release_node_id": builders[source].previous_id,
+            })
+        routes.append(route)
     return routes
 
 

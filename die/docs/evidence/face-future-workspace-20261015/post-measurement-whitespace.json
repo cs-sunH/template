@@ -1,0 +1,14 @@
+{
+  "astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/online/coarse_workspace_envelope.py": {
+    "measured_sha256": "acada7eb1309289fb488c76e287b5ba525334b58b54b005723e5ed6d32405ef0",
+    "delivered_sha256": "8fe2675dcfdac309039c6bdf2f8b800ad3006a6aea780916c31570c35da29261",
+    "change": "remove one trailing empty line copied from upstream client",
+    "compiled_code_objects_equal": true
+  },
+  "astra-sim-face-LRU/sh_test_mesh/workload/llama2_7b_inference/online/coarse_workspace_envelope.py": {
+    "measured_sha256": "acada7eb1309289fb488c76e287b5ba525334b58b54b005723e5ed6d32405ef0",
+    "delivered_sha256": "8fe2675dcfdac309039c6bdf2f8b800ad3006a6aea780916c31570c35da29261",
+    "change": "remove one trailing empty line copied from upstream client",
+    "compiled_code_objects_equal": true
+  }
+}

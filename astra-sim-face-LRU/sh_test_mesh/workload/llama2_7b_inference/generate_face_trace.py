@@ -506,6 +506,9 @@ def _paired_transfer(
     total_bytes: int,
     timer_gates: Optional[dict[int, Optional[int]]] = None,
     extra_send_arm_ids: Optional[dict[int, Sequence[int]]] = None,
+    source_release_ack: bool = False,
+    source_release_ack_tag_factory=None,
+    source_release_arm_ids: Optional[dict[int, Sequence[int]]] = None,
 ) -> list[dict[str, object]]:
     """死锁真修（方案①，2026-10-11，自 WL 同构移植）：send/recv 中立化——
     不占主链 frontier；门与前驱改显式 arm；recv 节点 id 随 route 落账
@@ -513,6 +516,8 @@ def _paired_transfer(
     arm(data recv)）。extra_send_arm_ids：send 中立段进入前显式 arm 的
     额外同 rank 前驱表 {source_rank: [节点 id]}（跨实例时序控制 recv 等，
     承载原链位序）。"""
+    if source_release_ack and not callable(source_release_ack_tag_factory):
+        raise ValueError("source release ACK requires its disjoint tag allocator")
     if len(source_group.ranks) != len(target_group.ranks):
         raise ValueError("FACE direct KV shard pairing requires equal TP degree")
     if source_group.name == target_group.name:
@@ -549,7 +554,7 @@ def _paired_transfer(
         send_arm_ids = [timer_gates.get(source)] if timer_gates is not None else []
         send_arm_ids.extend((extra_send_arm_ids or {}).get(source) or ())
         tag = _stage_tag(queue_index, category, relative_index)
-        _frontier_neutral(
+        send_node_id = _frontier_neutral(
             builders[source],
             lambda source=source, target=target, tag=tag:
                 builders[source].comm_send(
@@ -567,19 +572,49 @@ def _paired_transfer(
                     src=source,
                     dst=target,
                     comm_size=bytes_by_relative_rank[relative_index],
-                    comm_tag=tag))
+                    comm_tag=tag),
+            *((source_release_arm_ids or {}).get(target) or ()))
         path = _xy_route(config.hardware, source, target)
-        routes.append(
-            {
-                "relative_shard": relative_index,
-                "source_rank": source,
-                "target_rank": target,
-                "bytes": bytes_by_relative_rank[relative_index],
-                "noc_path": path,
-                "noc_hops": len(path) - 1,
-                "recv_node_id": recv_node_id,
-            }
-        )
+        route = {
+            "relative_shard": relative_index,
+            "source_rank": source,
+            "target_rank": target,
+            "bytes": bytes_by_relative_rank[relative_index],
+            "noc_path": path,
+            "noc_hops": len(path) - 1,
+            "recv_node_id": recv_node_id,
+        }
+        if source_release_ack:
+            # The destination ACK starts only after data arrival.  Its
+            # matched source receive, also ordered after the local data send,
+            # is the physical source-release point.
+            ack_tag = source_release_ack_tag_factory()
+            _frontier_neutral(
+                builders[target],
+                lambda source=source, target=target, ack_tag=ack_tag:
+                    builders[target].comm_send(
+                        f"{name}_shard{relative_index}_ack_to_rank{source}",
+                        src=target,
+                        dst=source,
+                        comm_size=1,
+                        comm_tag=ack_tag),
+                recv_node_id)
+            source_release_node_id = _frontier_neutral(
+                builders[source],
+                lambda source=source, target=target, ack_tag=ack_tag:
+                    builders[source].comm_recv(
+                        f"{name}_shard{relative_index}_ack_from_rank{target}",
+                        src=target,
+                        dst=source,
+                        comm_size=1,
+                        comm_tag=ack_tag),
+                send_node_id)
+            route.update({
+                "ack_tag": ack_tag,
+                "source_release_dependency": "noc_migration_ack_recv",
+                "source_release_node_id": source_release_node_id,
+            })
+        routes.append(route)
     return routes
 
 
@@ -713,8 +748,10 @@ class TransferTagAllocator:
     scale is audit-level only.
     """
 
-    def __init__(self) -> None:
-        self._next_tag = 10_000_000
+    def __init__(self, start_tag: int = 10_000_000) -> None:
+        if type(start_tag) is not int or not 0 <= start_tag <= 0xFFFFFFFF:
+            raise ValueError("invalid KV transfer tag base")
+        self._next_tag = start_tag
 
     def take(self) -> int:
         if self._next_tag > 0xFFFFFFFF:
@@ -892,6 +929,7 @@ def _emit_kv_transfer(
     trigger_gate: Optional[TransferTriggerGate] = None,
     transfer_anchor_sink=None,
     extra_arm_ids: Optional[dict[int, Sequence[int]]] = None,
+    source_release_arm_ids: Optional[dict[int, Sequence[int]]] = None,
 ) -> dict[str, object]:
     """sh_2.0 generate_face_trace.py 的 KV-transfer 发射函数抽取适配
     (KVTransfer/kind 载体来自本仓 B2 内核)。
@@ -900,6 +938,10 @@ def _emit_kv_transfer(
     store→restore 补偿边的显式传参形态 {rank: [节点 id]};remote_load 链
     在对应 rank 的首节点显式 arm（数据面中立化后主链 pending 不再被
     传输链消费）。
+
+    source_release_arm_ids:rank-indexed 的前序源 HBM 释放尾。remote_load
+    消费在目标 HBM restore 写上,与池 store→restore 的 mem_load arm
+    分开维护。
 
     HBM 计费地图(契约 §12.5/§9,照抄 sh,禁止"优化";端口计时按 README
     §D 2026-09-24 并发化口径:池端口为并发在途+流体均分,端口内无 FIFO
@@ -1182,7 +1224,9 @@ def _emit_kv_transfer(
                 lambda: builders[target_rank].local_hbm_kv_restore(
                     f"{action_name}_shard{shard_index}_target_hbm_write",
                     shard.bytes),
-                restore_gate)
+                *((restore_gate,)
+                  if restore_gate is not None else ()),
+                *((source_release_arm_ids or {}).get(target_rank) or ()))
             if target_hbm_completion_node_id is None:
                 raise RuntimeError("target HBM restore did not generate a node")
             if transfer_anchor_sink is not None:

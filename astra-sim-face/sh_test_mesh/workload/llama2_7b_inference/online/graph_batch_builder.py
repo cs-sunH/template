@@ -120,6 +120,9 @@ class OnlineTraceBuilder:
         self.request_id = ""
         self.stage = ""
         self.generation = 0
+        # Optional capacity-release ordering hook installed by
+        # GraphBatchBuilder.  Keeping it absent is the legacy emission path.
+        self.before_capacity_comp = None
 
     def set_context(self, request_id: str, stage: str, generation: int) -> None:
         self.request_id = request_id
@@ -258,6 +261,9 @@ class OnlineTraceBuilder:
         节点,runtime_ns 保持缺省 0——die_op_spec 存在 ⇒ runtime_ns 必为
         0);op_role 缺省 "compute"(不写键,schema 缺省即 compute),仅
         marker/哨兵显式写 "control_marker"(契约 §7 裁定 8)。"""
+        if (self.before_capacity_comp is not None
+                and op_role != "control_marker"):
+            self.before_capacity_comp()
         node = self._new_node(name, COMP_NODE)
         node["compute"]["num_ops"] = self._uint64(num_ops)
         node["compute"]["tensor_size"] = self._uint64(tensor_size)
@@ -305,8 +311,20 @@ class GraphBatchBuilder:
     """在线构图器:持有 per-rank OnlineTraceBuilder(状态跨批次),按决策边界
     发射 prefill 整段 / decode 整段,并维护 completion_gates 账本。"""
 
-    def __init__(self, config):
+    def __init__(self, config, *, source_release_capacity_gates=False):
         self.config = config
+        if not isinstance(source_release_capacity_gates, bool):
+            raise TypeError("source_release_capacity_gates must be bool")
+        self.source_release_capacity_gates = source_release_capacity_gates
+        if source_release_capacity_gates:
+            # Finite producer: place new ACKs (and LRU pool transfers) above
+            # every possible old stage tag, even beyond 1000 requests.
+            max_tp = max(len(group.ranks) for group in config.inference_groups)
+            release_tag_base = max(10_000_000,
+                len(config.request_queue) * 10000 + 4000 + max_tp)
+            if release_tag_base > 0xFFFFFFFF:
+                raise OverflowError("source release communication tag space was exhausted")
+            self._next_source_release_tag = release_tag_base
         # die 后端发射语境(阶段 C;None = legacy)。online_service.py 构造
         # 本构图器时不感知 backend——语境由 OnlineSchedulerBase 从 manifest
         # 的 compute-cost-model/die-model-config 键构造后在每批发射前经
@@ -319,6 +337,14 @@ class GraphBatchBuilder:
                 rank, remote_operand_loads=config.remote_operand_loads)
             for rank in range(config.npus_count)
         }
+        # Source HBM releases cross sessions and batches.  Keep them separate
+        # from any same-session pool ordering ledger.
+        self.pending_source_release_tails = {}
+        if self.source_release_capacity_gates:
+            for rank, builder in self.builders.items():
+                builder.before_capacity_comp = (
+                    lambda rank=rank:
+                    self._consume_source_release_tails(rank))
         self.group_by_index = dict(enumerate(config.inference_groups))
         # session_id -> (decode_instance_index, {rank: end_barrier_id});
         # completion_gates 只保存下一同 session turn 尚未消费的 interval
@@ -364,6 +390,54 @@ class GraphBatchBuilder:
                 edges if edge_mark == 0 else edges[edge_mark:])
             nodes.clear()
             edges.clear()
+
+    def _register_source_release_routes(self, routes) -> None:
+        if not self.source_release_capacity_gates:
+            return
+        for route in routes or ():
+            source_rank = route.get("source_rank")
+            release_node_id = route.get("source_release_node_id")
+            if (isinstance(source_rank, bool)
+                    or not isinstance(source_rank, int)
+                    or source_rank not in self.builders):
+                raise RuntimeError(
+                    "source-release route is missing a valid source rank")
+            if (isinstance(release_node_id, bool)
+                    or not isinstance(release_node_id, int)
+                    or release_node_id < 0
+                    or release_node_id >= self.builders[source_rank].next_id):
+                raise RuntimeError(
+                    "source-release route is missing an emitted source tail")
+            self.pending_source_release_tails.setdefault(
+                source_rank, []).append(release_node_id)
+
+    def _source_release_ack_tag(self) -> int:
+        tag = self._next_source_release_tag
+        if tag > 0xFFFFFFFF:
+            raise OverflowError("source release communication tag space was exhausted")
+        self._next_source_release_tag += 1
+        return tag
+
+    def _take_source_release_tails(self, rank: int) -> tuple[int, ...]:
+        if not self.source_release_capacity_gates:
+            return ()
+        return tuple(self.pending_source_release_tails.pop(rank, ()))
+
+    def _take_source_release_arms(self, ranks) -> dict[int, tuple[int, ...]]:
+        arms = {}
+        for rank in ranks:
+            tails = self._take_source_release_tails(int(rank))
+            if tails:
+                arms[int(rank)] = tails
+        return arms
+
+    def _consume_source_release_tails(self, rank: int) -> None:
+        builder = self.builders[rank]
+        for node_id in self._take_source_release_tails(rank):
+            # FACE base predates the generic arm_dependency helper; this is
+            # the same checked-by-construction per-rank dependency queue that
+            # _new_node consumes when it emits the capacity COMP.
+            builder.pending_extra_dependencies.append(node_id)
 
     def _mark(self) -> dict:
         return {
@@ -556,14 +630,21 @@ class GraphBatchBuilder:
                 joiner["prefill_instance_index"]]
             decode_group = self.group_by_index[
                 joiner["decode_instance_index"]]
-            _paired_transfer(
+            joiner_routes = _paired_transfer(
                 config=self.config, builders=self.builders,
                 queue_index=joiner["queue_index"], category=3000,
                 name="{}_prefill_to_decode_kv".format(_prefix_of(joiner)),
                 source_group=prefill_group, target_group=decode_group,
                 total_bytes=kv_cache_bytes_for_tokens(
                     self.config.model, joiner["prefill_context_tokens"]),
+                source_release_ack=self.source_release_capacity_gates,
+                source_release_ack_tag_factory=self._source_release_ack_tag,
+                source_release_arm_ids=(
+                    self._take_source_release_arms(decode_group.ranks)
+                    if (self.source_release_capacity_gates
+                        and prefill_group.name != decode_group.name) else {}),
             )
+            self._register_source_release_routes(joiner_routes)
 
         # ---- 起始标记节点(指标锚点;§3.5:decode_start = 请求加入后
         #      第一个迭代所在列车节点;prefill_start = 请求首个 chunk
@@ -845,14 +926,20 @@ class GraphBatchBuilder:
                         timer_gates=timers,
                     )
                     timers = {rank: None for rank in source_group.ranks}
-                _paired_transfer(
+                migration_routes = _paired_transfer(
                     config=self.config, builders=builders,
                     queue_index=request_plan["queue_index"], category=1000,
                     name="{}_history_kv".format(prefix),
                     source_group=source_group, target_group=prefill_group,
                     total_bytes=request_plan["history_transfer_bytes"],
                     timer_gates=timers,
+                    source_release_ack=self.source_release_capacity_gates,
+                    source_release_ack_tag_factory=self._source_release_ack_tag,
+                    source_release_arm_ids=(
+                        self._take_source_release_arms(prefill_group.ranks)
+                        if self.source_release_capacity_gates else {}),
                 )
+                self._register_source_release_routes(migration_routes)
             else:
                 _emit_control_trigger(
                     builders=builders, queue_index=request_plan["queue_index"],

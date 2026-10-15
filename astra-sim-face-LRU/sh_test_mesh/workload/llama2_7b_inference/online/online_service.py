@@ -201,9 +201,6 @@ def main(argv=None) -> int:
     else:
         config = load_face_trace_config()
 
-    # 根因 #5(蓝本裁决 2026-08-15 第三项):strategy 模式保持物理跨 request 链。
-    graph = GraphBatchBuilder(config)
-
     # 阶段 D(2026-10-03,契约 §3.2/§7 裁定 2;face-LRU 随迁):计算成本
     # 后端选择。backend=die(manifest compute-cost-model == "die",或显式
     # --die-model-lib/--die-model-config 选通)时构造 DieModelOracle 注入
@@ -280,7 +277,26 @@ def main(argv=None) -> int:
     # kv_cache_policy)。
     ledger_sink = None
     if config.kv_cache_policy == "session_lru_tiered":
-        from online.face_online_scheduler import FaceOnlineScheduler  # noqa: E402
+        from online.face_online_scheduler import (  # noqa: E402
+            FaceOnlineScheduler, read_train_max_iter,
+        )
+        train_max_iter = read_train_max_iter()
+        certificate = None
+        if workspace_admission == "required":
+            from online.manifest_workspace_envelope import (
+                derive_manifest_workspace_envelope,
+            )
+            if cost_oracle is None or not cost_oracle.coarse:
+                raise ValueError("workspace certificate requires coarse Die oracle")
+            certificate = derive_manifest_workspace_envelope(
+                manifest, config, train_max_iter=train_max_iter,
+                library_path=cost_oracle.lib_path,
+            )
+            certificate_path = Path(args.bridge_dir) / "workspace_envelope_certificate.json"
+            certificate_path.write_text(certificate.canonical_json + "\n", encoding="utf-8")
+            certificate = certificate.without_proof()
+        graph = GraphBatchBuilder(
+            config, source_release_capacity_gates=workspace_admission == "required")
         # completed-unreconciled 行在 REQUEST_COMPLETE 边界立即写出；避免
         # 结束时由调度器聚合全量 completed ledger。
         ledger_sink = (
@@ -301,6 +317,8 @@ def main(argv=None) -> int:
             ledger_sink=ledger_sink,
             cost_oracle=cost_oracle,
             workspace_admission=workspace_admission,
+            train_max_iter=train_max_iter,
+            prospective_workspace_certificate=certificate,
         )
     else:
         raise ValueError(
@@ -308,7 +326,7 @@ def main(argv=None) -> int:
                 config.kv_cache_policy))
     # Scheduler 已提取构造期所需字段；不要让 main() 的局部变量再额外钉住
     # 完整 manifest。
-    del manifest
+    del manifest, certificate
 
     # Official peer is FileDecisionBridge: request files are exactly
     # nlohmann::json::dump() bytes (compact, no trailing newline).

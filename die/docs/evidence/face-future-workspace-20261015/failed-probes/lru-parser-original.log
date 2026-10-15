@@ -1,0 +1,41 @@
+Internal ctest changing into directory: /workspace/template/work/face-workspace-port-20261014/cpp-face-lru/build
+Test project /workspace/template/work/face-workspace-port-20261014/cpp-face-lru/build
+    Start 16: AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest
+    Start 18: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+1/4 Test #18: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...   Passed    0.01 sec
+    Start 17: AstraSim_Analytical_Congestion_Aware_ParsedBatchTest
+2/4 Test #17: AstraSim_Analytical_Congestion_Aware_ParsedBatchTest .............***Failed    0.01 sec
+[parsed_graph_batch_test] v2 message mismatch for protocol 2 requires E on each rank:
+  got: v2 request workspace_state does not cover every configured rank
+  want substring: missing field "prospective_workspace_bytes"
+[parsed_graph_batch_test] v2 message mismatch for prospective bytes reject floating point values:
+  got: v2 request workspace_state does not cover every configured rank
+  want substring: is not an integer
+[parsed_graph_batch_test] v2 message mismatch for prospective bytes reject bool values:
+  got: v2 request workspace_state does not cover every configured rank
+  want substring: is not an integer
+[parsed_graph_batch_test] v2 message mismatch for prospective bytes reject negative values:
+  got: v2 request workspace_state does not cover every configured rank
+  want substring: is negative
+[parsed_graph_batch_test] v2 message mismatch for base plus E must fit capacity:
+  got: v2 request workspace_state does not cover every configured rank
+  want substring: prospective workspace plus base-used bytes
+[parsed_graph_batch_test] v2 message mismatch for protocol 2 keeps exact rank shape:
+  got: v2 request workspace_state does not cover every configured rank
+  want substring: extra
+[parsed_graph_batch_test] v2 message mismatch for protocol 2 echoes the same rank revision:
+  got: v2 request workspace_state does not cover every configured rank
+  want substring: does not echo request view
+[parsed_graph_batch_test] FAILURES
+
+    Start 14: AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+3/4 Test #14: AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest ......   Passed    0.00 sec
+4/4 Test #16: AstraSim_Analytical_Congestion_Aware_GraphBatchCommitterTest .....   Passed    8.75 sec
+
+75% tests passed, 1 tests failed out of 4
+
+Total Test time (real) =   8.75 sec
+
+The following tests FAILED:
+	 17 - AstraSim_Analytical_Congestion_Aware_ParsedBatchTest (Failed)
+Errors while running CTest

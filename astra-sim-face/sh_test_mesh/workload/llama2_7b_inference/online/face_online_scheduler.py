@@ -291,6 +291,17 @@ def _kv_event_dict(event) -> dict:
     }
 
 
+def read_train_max_iter() -> int:
+    """Read the producer cap once for both emission and its certificate."""
+    _train_max_iter_raw = os.environ.get("SH_TRAIN_MAX_ITER", "8")
+    if not (_train_max_iter_raw.isascii() and _train_max_iter_raw.isdigit()):
+        raise ValueError(
+            "SH_TRAIN_MAX_ITER must be a non-negative decimal integer "
+            "(0 = unlimited), got {!r}".format(_train_max_iter_raw))
+    value = int(_train_max_iter_raw)
+    return value
+
+
 class FaceOnlineScheduler(OnlineSchedulerBase):
     """strategy 变体:face 真实策略(关感知)在在线骨架中运行。
 
@@ -307,7 +318,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                  defensive_reply_cache: bool = False,
                  sensing_query_sink=None, online_stats_sink=None,
                  ledger_sink=None, cost_oracle=None,
-                 workspace_admission: str = "off"):
+                 workspace_admission: str = "off",
+                 train_max_iter=None,
+                 prospective_workspace_certificate=None):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -387,10 +400,38 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
 
         # 蓝图:加权实例图 + KV 账本。Roofline 估计在候选选择
         # 时直接使用精确 d_token 计算，不持久化工作负载表。
+        # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
+        # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代(截断列车无自然
+        # drain/exit 标记时发射哨兵标记)。交付默认 = 8(2026-08-22 §7.4
+        # A2 对拍裁决,与 sh_1.0 母本统一:无上限 TTFT -67.3%,16 仍
+        # -19.1%,8 全指标 ≤1.3%;原则 1 优先于节点数);0 = 不设限
+        # (oracle/灵敏度复跑用)。
+        # R3-I2(2026-09-29):启动即校验(旧写法 int(raw or 0) 让负值静默
+        # 穿透、空串静默当 0 不设限,到发射点才崩):显式设置必须为非负
+        # 十进制整数(0 = 不设限),否则构造期立即 fail-closed。
+        # A production certificate and the actual train producer share one cap.
+        # Legacy/direct active-only callers retain their existing default path.
+        if train_max_iter is None:
+            train_max_iter = read_train_max_iter()
+        if type(train_max_iter) is not int or train_max_iter < 0:
+            raise ValueError("train_max_iter must be a non-negative integer")
+        self._train_max_iter = train_max_iter
+        certificate = prospective_workspace_certificate
+        if certificate is not None:
+            from online.manifest_workspace_envelope import validate_manifest_workspace_certificate
+            if workspace_admission != "required":
+                raise ValueError("workspace certificate requires workspace admission")
+            validate_manifest_workspace_certificate(
+                certificate, manifest, config, self._train_max_iter, die_context)
+            self.workspace_envelope_certificate = certificate.without_proof()
+        else:
+            self.workspace_envelope_certificate = None
         self.instance_graph = WeightedInstanceGraph(self.topology)
         self.kv_manager = SessionKVCacheManager(
             self.topology,
             config.model,
+            prospective_workspace_bytes_by_rank=(
+                certificate.bytes_by_rank if certificate is not None else None),
         )
         self._workspace_rank_to_instance = {
             rank: instance.index
@@ -429,21 +470,6 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         # 隔离时间线没有邻居完成事件重开它 => 40 个 prefill 卡死形态
         # (总文档 §4 P0-1)。阻塞即置 dirty,下一个决策边界重试。
         self.prefill_admission_dirty = set()
-        # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
-        # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代(截断列车无自然
-        # drain/exit 标记时发射哨兵标记)。交付默认 = 8(2026-08-22 §7.4
-        # A2 对拍裁决,与 sh_1.0 母本统一:无上限 TTFT -67.3%,16 仍
-        # -19.1%,8 全指标 ≤1.3%;原则 1 优先于节点数);0 = 不设限
-        # (oracle/灵敏度复跑用)。
-        # R3-I2(2026-09-29):启动即校验(旧写法 int(raw or 0) 让负值静默
-        # 穿透、空串静默当 0 不设限,到发射点才崩):显式设置必须为非负
-        # 十进制整数(0 = 不设限),否则构造期立即 fail-closed。
-        _train_max_iter_raw = os.environ.get("SH_TRAIN_MAX_ITER", "8")
-        if not (_train_max_iter_raw.isascii() and _train_max_iter_raw.isdigit()):
-            raise ValueError(
-                "SH_TRAIN_MAX_ITER must be a non-negative decimal integer "
-                "(0 = unlimited), got {!r}".format(_train_max_iter_raw))
-        self._train_max_iter = int(_train_max_iter_raw)
         # train_id -> instance_index(哨兵事件路由)。
         self._train_instance_index = {}
         # WP9 首 token 首步批拆分(2026-08-26):batch_train_<id>_first_step

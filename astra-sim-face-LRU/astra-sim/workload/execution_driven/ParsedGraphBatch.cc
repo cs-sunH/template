@@ -531,9 +531,10 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
     const uint64_t protocol_version = get_uint(
         snapshot["protocol_version"], "protocol_version",
         "workspace_capacity_snapshot");
-    if (protocol_version != 1) {
+    if (protocol_version != 1 && protocol_version != 2) {
         fail("workspace_capacity_snapshot protocol_version mismatch");
     }
+    const bool has_prospective_protocol = protocol_version == 2;
     const auto& ranks = snapshot["ranks"];
     if (!ranks.is_array()) {
         fail("workspace_capacity_snapshot.ranks is not an array");
@@ -561,14 +562,17 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
         if (!rank_json.is_object()) {
             fail(where + " is not an object");
         }
-        check_key_set(rank_json,
-                      {"rank", "workspace_revision", "capacity_bytes",
-                       "model_weight_bytes", "resident_kv_bytes",
-                       "reserved_request_bytes"},
-                      {"rank", "workspace_revision", "capacity_bytes",
-                       "model_weight_bytes", "resident_kv_bytes",
-                       "reserved_request_bytes"},
-                      where);
+        const std::vector<const char*> rank_keys{
+            "rank", "workspace_revision", "capacity_bytes",
+            "model_weight_bytes", "resident_kv_bytes",
+            "reserved_request_bytes"};
+        std::vector<const char*> allowed_rank_keys = rank_keys;
+        std::vector<const char*> required_rank_keys = rank_keys;
+        if (has_prospective_protocol) {
+            allowed_rank_keys.push_back("prospective_workspace_bytes");
+            required_rank_keys.push_back("prospective_workspace_bytes");
+        }
+        check_key_set(rank_json, allowed_rank_keys, required_rank_keys, where);
         WorkspaceCapacityRank entry;
         entry.rank = get_int(rank_json["rank"], "rank", where);
         check_rank_domain(entry.rank, num_ranks, where);
@@ -594,6 +598,12 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
         entry.reserved_request_bytes = get_uint(
             rank_json["reserved_request_bytes"], "reserved_request_bytes",
             where);
+        if (has_prospective_protocol) {
+            entry.has_prospective_workspace = true;
+            entry.prospective_workspace_bytes = get_uint(
+                rank_json["prospective_workspace_bytes"],
+                "prospective_workspace_bytes", where);
+        }
         const auto checked_add = [&where](const uint64_t a,
                                           const uint64_t b) {
             if (b > std::numeric_limits<uint64_t>::max() - a) {
@@ -606,6 +616,11 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
             entry.reserved_request_bytes);
         if (base > entry.capacity_bytes) {
             fail(where + ": base-used bytes exceed capacity_bytes");
+        }
+        if (entry.has_prospective_workspace &&
+            entry.prospective_workspace_bytes > entry.capacity_bytes - base) {
+            fail(where + ": prospective workspace plus base-used bytes "
+                         "exceed capacity_bytes");
         }
         parsed.push_back(entry);
     }
