@@ -1,7 +1,7 @@
 # 单 die 仿真器设计文档：最粗粒度参数响应版
 
 版本：coarse_die_v2（审查修订，待实现）  
-日期：2026-10-13；解析粗粒度路线澄清：2026-10-15<br>
+日期：2026-10-13；解析路线及硬件输入/10%—20%精度要求更新：2026-10-15<br>
 推荐实现：C++17 公共库，C ABI，五仓库各保留薄适配层  
 建议源码位置：template/die/；交付给各仓库的固定版本位于 extern/die_model/  
 资料基线：cs-sunH/template，提交 9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8
@@ -54,7 +54,7 @@
 - 增加边缘空白、修改 Wafer 可铺排区域，不应在 Core 网格不变时凭空改变计算时间。
 - HBM 颗数增加后，若入口或内部互连已饱和，延迟可以不再下降。
 - SRAM 增大但没有跨过分块或驻留阈值，某个算子的时间可以相同。
-- 两种搜索路径生成相同硬件实例，时间必须相同。
+- 用户给定的同一硬件实例与任务必须产生相同时间；不生成或推荐面积/Core排列的硬件候选。
 - 源文只给几何等价的两种 HBM 摆放。本文若根据入口位置产生时间差异，依据是显式的聚合入口假设，不是两种外廓大小不同。
 
 验收检查的是“参数是否通过正确机制影响模型”，不要求给所有参数人为添加非零延迟系数。
@@ -65,7 +65,7 @@
 
 实现优先采用闭式计算、解析计数及固定数量的分段公式。几何派生、容量合计、重复工作量和可以直接求解的辅助环节不增加独立模拟对象或内部事件。内部状态仅为保留架构/任务自变量的可观察影响、精确容量与工作量守恒，以及实际外部依赖和共享竞争所需的机制而保留。
 
-需要新增状态或复杂数值机制时，应明确指出其对应的输入参数或可观察行为、简单公式不能满足的具体证据，以及准确性收益与仿真开销。已有复杂研究不能成为继续扩展的理由。源架构变量、真实 shape/精度/TP/span、必要的就绪/容量/竞争约束及原验收门槛继续有效。
+需要新增状态或复杂数值机制时，应明确指出其对应的输入参数或可观察行为、简单公式不能满足的具体证据，以及准确性收益与仿真开销。已有复杂研究不能成为继续扩展的理由。源架构变量、真实 shape/精度/TP/span、必要的就绪/容量/竞争约束继续有效；精度目标以§1.6的最新用户决定为准。
 
 ### 1.5 已确认的解析粗粒度主线（2026-10-15）
 
@@ -77,7 +77,21 @@
 
 服务曲线、单位及切向约束按§8.2.1生成；总量/容量/外部依赖严格正确，内部细碎交错采用显式聚合近似，不以复现每个离散就绪时刻作为默认目标。保留架构变量响应、owner Q/alpha、13域、PRIVATE及五仓业务/指标兼容。解析或水填充仲裁只在与原公平定义等价时启用，多资源不能简单均分带宽后取最小值。
 
-速度和精度从第一版共同作为准入条件，规范化缓存、轻量查询与模型修改同步实施；§13的原性能目标、独占3%/并发与共享HBM busy 5%及busy定义保持不变。另报busy绝对误差、参考共享时长及适用范围，未通过标failed或tradeoff_unresolved；任何验收口径调整需用户另行明确决定，不用放宽门槛、事后修busy或逐tile fallback掩盖取舍。
+速度和精度从第一版共同检查，规范化缓存、轻量查询与模型修改同步实施；§13的速度预算及原busy定义保留。精度按§1.6：目标10%，多次合理测试/校准仍难达到时可接受20%，不得静默将20%写成10%通过。另报绝对误差、参考共享时长及适用范围；超过20%、缺少有效对照或速度未通过时，分别如实记录failed/not_available/tradeoff_unresolved，不事后修busy或逐tile fallback。
+
+### 1.6 最新用户决定：给定硬件预测延迟与适度精度（2026-10-15）
+
+本节优先于本文及历史交接中有关硬件搜索、3%/5%门槛的旧要求。仿真器是用户架构研究的工具：**用户输入一套硬件配置和实际本地任务，公共库预测其延迟；不替用户搜索或决定Die面积、Core行列数或Wafer的Die排列。** 当前实现范围到单Die面积/外形及Nx×Ny Core网格即可，Wafer级铺排不作必填项或前置条件。源架构文中的研究搜索表/结论保留作用户资料，不构成仿真器功能。
+
+移除生产硬件候选枚举、Core-first/Wafer-first搜索、Pareto/最优面积推荐及相应CLI/API。给定Core类型、每核SRAM、NoC位宽、Die宽高、Core行列、HBM及性能profile后，只做输入一致性、几何/容量合法性和资源服务率推导，不自动扩大Die、改变网格或选择另一套硬件。给定硬件下的算子tile、驻留/融合等软件映射选择仍保留。
+
+**延迟预测与已有模型近似对照的目标相对误差为10%；多次有记录的合理测试与超参调整仍难达到时，20%以内也可接受。** 这一决定替代原独占3%、并发完成/busy5%的硬门槛。沿用独占、逐请求并发完成和原busy对照口径并逐项报告，busy仍为正服务时间的并集/共享积分；不以平均利用率替换。参考非零时报告相对及绝对误差；参考为零时单报绝对值与覆盖，不能以任意分母制造通过。
+
+误差≤10%记目标达成；10%—20%只有在保留多次测试/调整记录、说明10%未达及适用范围时记为容许范围内接受，不称10%通过；>20%记failed。旧3%/5%的历史raw/报告不重写，按新阈值复评须另存指标版本和原始数值。20%不是跳过测试的默认目标，也不允许超出后自行继续放宽。
+
+校准以满足docx/本文的资源、工作量、容量、依赖及参数响应要求为前提，基于xlsx“实测”正确分解后的算子时间，用少量有含义且可识别的超参使量级和趋势大致吻合；不追求噪声数据逐点精确，不为贴时间增加复杂机制或每算子独立乘数。TX8条件参考、目标工程先验、模型间oracle和独立目标测量继续分别标注；无独立目标数据不宣称目标芯片已实测校准。
+
+工作量/容量/归账、必要依赖和公平策略的正确性不适用10%/20%近似容差。§13的hot20μs、冷编译2ms、J≤32更新50μs及五仓CPU增加≤10%预算未改变。继续固定分段解析模型，不恢复逐K/周期生产方案。实施顺序为先提交并同步本设计决定，再改硬件输入/移除搜索，最后按新指标复评、校准与五仓兼容验证。
 
 ## 2. 粒度与公共架构
 
@@ -123,7 +137,7 @@
 
 ### 3.1 三类配置
 
-配置分为 architecture、search_profile、performance_profile。前两类覆盖《架构建模新.md》的变量与搜索设置；第三类是本文新增的执行假设和待校准超参。
+配置以 architecture（用户给定的单Die实例）、performance_profile（执行假设/待校准超参）为主体；可选validation_constraints仅检查该实例，不生成候选。旧search_profile仅作已有配置的迁移兼容元数据，不再作为必填项、几何来源或搜索接口。
 
 派生量不能作为第二份独立输入覆盖结果。例如 A_die、Core 数、HBM 总颗数必须由规范输入计算；若客户端附带镜像值，只允许一致性校验。
 
@@ -136,36 +150,21 @@
 | noc_width_bits | 64 / 128 / 256 / 512 | 同时影响 Core 内互连、Core 间 Mesh 及 PE/Vec 安装数 |
 | core_columns_nx | 正整数 | Core 列数、X/Y 截面和几何 |
 | core_rows_ny | 正整数 | Core 行数、X/Y 截面和几何 |
-| die_width_mm、die_height_mm | 已解析实例的正数宽高；可由最小外形生成 | Die 面积、bump、模块及系统资源 |
-| die_geometry | minimum_grid / grow_width / grow_height / isotropic / resolved_source_boundary | 按源文最低面积边界生成或校验最终W/H |
+| die_width_mm、die_height_mm | 用户给定的正数宽高 | 面积由W×H派生；不自动选择或扩展外形 |
+| die_geometry | explicit；旧标记仅作迁移兼容 | 使用给定W/H，不生成最低面积边界候选 |
 | core_pitch_x_mm、core_pitch_y_mm | 源文示例为 0 | Core 间几何余量 |
 | die_extra_width_mm、die_extra_height_mm | 源文示例每轴总余量 0.10 mm | 最小 Die 外形；不是两边各 0.10 |
 | hbm_stacks_per_row | n；源文主搜索 1…14 | 两排总 2n 栈、容量和理论带宽 |
 | hbm_placement_mode | same_side_two_rows / two_sides_one_row_each | 源外廓相同；只有指定接入profile时才产生位置时序差异 |
-| system_region_width_mm、system_region_height_mm | 源文固定示例均为 215 | 系统模块铺排、总容量与峰值 |
+| system_region_width_mm、system_region_height_mm | 可选历史系统诊断，不是单Die必填输入 | 不决定Die实例、rank数或单Die延迟 |
 
-若用户只提供源文中的上层搜索变量，resolver 先生成一个或一组具体实例，再调用单 die 引擎。单 die 引擎不在每次算子请求中重复执行架构搜索。
+用户必须给定一套明确的Die外形与Core网格，resolver只解析和校验这一套实例。只给面积不能确定宽高或Nx×Ny；缺少必要尺寸/网格就返回缺字段诊断，不反推“最优”配置或floor(sqrt(area))方阵。若同时附带面积、Core总数等镜像字段，只检查其与W×H、Nx×Ny一致。
 
-只给面积不能确定 Nx×Ny。必须提供网格或明确调用几何生成器，不能 floor(sqrt(area)) 后当成源文的动态矩形方案。
+### 3.3 实例校验与旧搜索配置迁移
 
-### 3.3 搜索变量与候选生成设置
+面积/曝光场/长宽比/D2D预算等研究约束可由用户显式启用，用来接受或拒绝当前实例；不调整输入、不返回另一套硬件。Nx/Ny/HBM范围、geometry_search_mode、area_extension_rules、wafer范围、objective及Pareto选择不属于生产仿真接口。旧配置携带这些字段时，只按明确迁移规则兼容读取；不得触发候选枚举，也不得要求新配置提供它们。
 
-| 字段 | 源文主设定 | 单 die 引擎的处理 |
-|---|---|---|
-| die_area_min_mm2 / max_mm2 | 200 / 800 | DSE 筛选条件；支持 150 下界敏感性 |
-| reticle_width_mm / height_mm | 26 / 33 | 曝光场筛选 |
-| allow_reticle_rotation | true | 允许宽高旋转后检查 |
-| die_max_aspect_ratio | 2；敏感性可取 3 | 搜索筛选 |
-| nx_range / ny_range | 枚举的正整数区间 | 上层产生具体网格 |
-| hbm_n_range | 1…14 | 上层产生具体 n |
-| geometry_search_mode | core_first / wafer_first | 相同可行集的两条生成/复核路径 |
-| area_extension_rules | 固定宽增高、固定高增宽、同比扩大 | 补足最低面积或 bump 约束 |
-| wafer_columns / wafer_rows | Wafer-first 中枚举 Mx、My | 反推模块和 Die 上界；解析后重新验证 |
-| objective | compute_peak / hbm_capacity / pareto | 只改变候选选择，不改变同一实例的时间 |
-| require_nonnegative_d2d_budget | true | bump−HBM 预算筛选 |
-| require_hbm_row_within_die | false | 源文允许超宽后扩大模块；true 是额外封装实验 |
-
-不要把某次搜索得出的最优硬件行写成全局固定配置。
+Core64源表可用于解析用户指定Core类型/SRAM/B对应的资源数，这不是硬件方案搜索。无Wafer/system字段时正常解析单Die；已有上层提供的系统诊断可保留，但不反向约束或自动改写单Die输入。
 
 ### 3.4 版本化常量
 
@@ -230,17 +229,9 @@ B_D2D_oneway_GBps = B_D2D_bi_GBps/2
 
 Core 数只随显式 Nx、Ny 改变，不因增加 Die 留白自动增长。HBM 超宽时设置 hbm_row_overhang=true，扩大模块并记录物理待验证；不按旧文档硬性过滤。
 
-源文候选外形不能被任意W/H扩大。令 A0=W_min*H_min，k_bump为上述每平方毫米bump预算系数，A_req=max(search_profile.die_area_min_mm2, 2*n*1177.6/k_bump)。当A0≥A_req，标准源文候选只用W_min/H_min；否则只生成以下三点，再筛选曝光场/面积上界/长宽比：
+W_die、H_die、Nx、Ny均由用户给定。W_min/H_min只用于检查Core网格能否装入该Die；bump与HBM扣除预算按给定面积解析计算。不得按面积下界自动grow_width/grow_height/isotropic，不要求输入恰好落在旧搜索产生的三个边界点上。可选研究约束拒绝不合法实例时，返回原因并保持输入，不推荐替代方案。
 
-~~~text
-grow_width:  W=A_req/H_min, H=H_min
-grow_height: W=W_min, H=A_req/W_min
-isotropic:  W=W_min*sqrt(A_req/A0), H=H_min*sqrt(A_req/A0)
-~~~
-
-minimum_grid只有最小网格已满足A_req时才合法。resolved_source_boundary须附上上游SearchProfile及扩展身份，并校验其W/H恰为最小网格或适用的三个边界点之一。Wafer-first反推的候选也须落在相同规则集合内。任意更大外形只可进入显式extended_geometry实验，不计入源文Core-first/Wafer-first交叉核验。
-
-### 4.3 系统资源
+### 4.3 可选历史系统诊断（不属于当前单Die前置条件）
 
 ~~~text
 W_effective = W_module / sqrt(0.90)
@@ -263,7 +254,7 @@ eta_core_region = N_module*Nx*Ny*L0*L0/(region_width*region_height)
 eta_module_region = N_module*W_module*H_module/(0.90*region_width*region_height)
 ~~~
 
-三个字段逐项进入derived_hardware和DSE输出，不合成一个“面积效率”。
+这些字段只在用户显式提供系统区域并请求诊断时派生，不合成一个“面积效率”，也不成为单Die延迟API必填条件。
 
 源文的系统区域不是圆形制造晶圆。N_module 不自动覆盖五仓库 rank_count；创建系统拓扑属于上层显式步骤。
 
@@ -537,7 +528,7 @@ edge的north平均dy=E[y]，south为Ny−1−E[y]；截面用对应目的另一�
 4. 构造HBM-only端点、SRAM命中、Mesh-bound、本核总线-bound和compute-bound探针。HBM-only必须对n的排容量变化响应；其它探针只在受限域变化时要求时间改变。普通算子平台须能由明确瓶颈解释。
 5. 配置排序按相同workload与profile分别求出。未扫结构时ranking_status=not_tested；情景/参数区间内反转时=assumption_sensitive，报告反转点；均保持同序才可标stable_in_tested_scenarios，仍不能当真实芯片证据。
 
-多情景只在离线验证/DSE报告运行；正常五仓热路径使用一个冻结profile，不额外跑三套模型。不为了让n或B改变时间而删除已选情景的合法瓶颈。输出必须列各域容量/工作量、入口/路由身份和物理证据状态，使“无响应”可以审查。
+多情景只在离线验证/用户给定配置的响应报告运行；正常五仓热路径使用一个冻结profile，不额外跑三套模型。不为了让n或B改变时间而删除已选情景的合法瓶颈。输出必须列各域容量/工作量、入口/路由身份和物理证据状态，使“无响应”可以审查。
 
 ### 7.6 空白几何与原文没有的线长延迟
 
@@ -653,7 +644,7 @@ COMP、COMM、RESTORE、POOL的本地HBM端点共用同一仲裁域。HBM↔Core
 
 从合法最低框架（最多5段，零工作段合并）开始，再检查E≤8、E≤16服务epoch/primitive kernel。细分边界取循环首尾、full/tail、K首末、负载/瓶颈变化和oracle显示的主要活动突变；由解析类边界/等量前缀求位置，不枚举全部tile。选通过证据的最小E，不能总开16段。固定模板的子kernel数显式上限4（物化SwiGLU即四个），且同region子kernel串行，一个region最多64服务epoch；超限由编译器拆成PlanBundle内连续region，不偷偷加活动数或改变外部完成。计数不随内部维度增长。
 
-初始工程验收门槛在测结果前冻结：独占延迟相对oracle误差≤3%，每请求并发完成时间误差≤5%，共享HBM繁忙积分误差≤5%；上述均为模型近似预算，非硬件误差承诺。工作量、容量和归账必须精确守恒。接近排序的配置若差值小于误差带标undetermined；超过误差带的配置须同序。不同phase-offset、短/长读写、计算长访存短、恢复突入、不同n/B/SRAM/Nx/Ny须分别覆盖，不能仅验总block时间。
+当前工程精度按§1.6：独占延迟、逐请求并发完成及原共享HBM繁忙积分对照目标误差≤10%；多次合理测试/调整仍难达到时，≤20%可带明确记录与范围接受。上述是当前模型对照预算，不将oracle对拍称为硬件实测校准。工作量、容量和归账必须精确守恒。接近排序的配置若差值小于误差带标undetermined；超过误差带的配置须同序。不同phase-offset、短/长读写、计算长访存短、恢复突入、不同n/B/SRAM/Nx/Ny须分别覆盖，不能仅验总block时间。
 
 运行时默认不启动oracle、不拟合、不按到达频率无限细分。granularity_certificate记录template、E、结构/参数/shape/并发强度覆盖及误差；原参数离开覆盖域标extrapolated。E=16仍失败时返回granularity_validation=failed，假设研究可选择显式接受近似并披露误差，不能把它列入验证性能排序或自动退回逐tile版本。若要覆盖该域，先改聚合表示并重验开销，必要时才另立细粒度扩展。
 
@@ -778,7 +769,7 @@ Norm 两次、Residual 两次；Q/K/V/O 分列；RoPE 和 softmax 组分别合�
 
 优先恢复原始计时日志/实际边界；补同算子的多M/K/N、prefill/decode、KV长度与SRAM驻留阈值，保留warmup和每次重复值。资源层补INT4及所用转换、Vec/SFU、HBM-only读写与共享、入口/NoC位置与截面、本核SRAM/LOCAL命中、启动及首访。动态层补计算长而访存短、恢复突入、独立排与共享入口、多任务phase-offset的完成与byte/busy轨迹。
 
-不能要求虚构目标配置产生真实测量；目标为假想芯片时，可用有完整来源的RTL/更细模拟器作为model_to_model_validation，保留假设与外推状态，不改名hardware_validated。硬件验证阈值由研究用途在看留出结果前固定；本文件的3%/5%是粒度误差预算，不能替代硬件精度门槛。
+不能要求虚构目标配置产生真实测量；目标为假想芯片时，可用有完整来源的RTL/更细模拟器作为model_to_model_validation，保留假设与外推状态，不改名hardware_validated。当前研究用途的预测误差目标为10%、多次测试困难时容许20%（§1.6）；模型oracle、TX8条件参考和独立硬件数据的来源仍必须分开，不能互相冒充。
 
 ## 10. 输出契约
 
@@ -950,7 +941,7 @@ callback只在外层DONE/CANCELLED终结各发一次；内部活动完成不释�
 
 hardware_fingerprint含完整源参数/派生资源、source revision、Core64、topology/route及服务profile；plan_fingerprint再含本地shape、dtype、spans/TP、数据流、驻留、转换、循环/credit、细分级别/证书和校准版本。snapshot额外记录clock/event-order/fairness/rounding版本。任何结构/模板改变不得复用旧时间缓存。
 
-search_profile另记录；同一实例不因搜索路径改变时间。缓存仅放不可变Plan，默认4096条或64MiB双上限按实际字节淘汰；不缓存执行句柄。新schema拒绝把mesh_die_v1/scalar state或coarse_die_v1单phi快照作为v2恢复。
+旧search_profile只作迁移元数据另记；预测由同一给定硬件实例与任务决定，不执行硬件搜索。缓存仅放不可变Plan，默认4096条或64MiB双上限按实际字节淘汰；不缓存执行句柄。新schema拒绝把mesh_die_v1/scalar state或coarse_die_v1单phi快照作为v2恢复。
 
 ### 11.5 完整快照与私有world
 
@@ -1147,11 +1138,11 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 
 开销报告同时列legacy Roofline、旧mesh_die_v1及coarse_v2：cold/hot ns与倍率、总host CPU time/wall time、峰值RSS、缓存命中、事件/仲裁次数、候选world数。测量固定输入图/调度事件序列以隔离后端开销，再另跑完整在线策略看延迟变化造成的图数量差异；不能把两种实验混成一个倍率。真实硬件模型输出的延迟与host仿真耗时分开。
 
-独占3%/并发与共享HBM busy 5%的相对门槛不变；同时报告busy绝对误差、参考共享时长和覆盖范围，不以平均占用率乘积或事后修正统计替代原busy定义。
+精度目标为10%，有多次测试/合理校准记录仍难达到时20%以内可按§1.6接受；同时报告busy绝对误差、参考共享时长和覆盖范围，不以平均占用率乘积或事后修正统计替代原busy定义。速度预算不因精度目标变化而放宽。
 
 最低验证粒度5→8→16的精度/事件/CPU曲线同时报告，选满足误差与开销门槛的最小者。若没有共同满足者，标tradeoff_unresolved并改聚合表示/批量缓存；不能删除SRAM或互连约束，也不能宣称“最粗粒度已验证”。多个入口情景、离散oracle和拟合均离线，不增加默认热路径成本。
 
-公共库不自动多线程；原事件机制决定调度。可并行独立候选world/DSE批次，单rank同一事件序列确定。
+公共库不自动多线程；原事件机制决定调度。可并行独立候选world/用户提供的配置批次，单rank同一事件序列确定。
 
 ## 14. 验收：覆盖、数学和五仓库语义
 
@@ -1179,8 +1170,8 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 | n | 容量、HBM排峰值、模块/bump/系统预算变 | 入口饱和后仍线性加速 |
 | HBM摆放 | 外廓保持源文等价；入口及方向归属按假设变 | 任意固定优劣倍率 |
 | W/H留白、pitch、ex/ey | 原文几何与系统预算变 | 相同资源/网格下凭空提升算力 |
-| 面积/曝光/长宽比筛选 | 候选合法性与选中实例变 | 相同实例的单die时间变 |
-| Core-first↔Wafer-first | 相同可行实例去重一致 | 同一实例有搜索路径惩罚 |
+| 用户给定W/H与可选曝光/长宽比约束 | 当前实例合法性及派生预算；非法时明确拒绝 | 自动改变面积/网格或生成替代硬件 |
+| 无search_profile/Wafer字段 | 正常解析完整的给定单Die配置 | 自动搜索或必须先铺排Wafer |
 | 系统区域/Mx/My/10%占位 | 模块数、整片容量/峰值与面积指标变 | 单die执行器生成整片事件 |
 
 分别验证source-required静态响应与profile-conditional时间响应。SRAM命中向量/GEMM固定计算率、构造LOCAL瓶颈再扫B；HBM-only端点扫n；薄长网格及转置网格构造Mesh瓶颈。服务率应按profile变化，端到端时间只在对应域受限时必须改变。普通算子不响应时报告容量/工作/瓶颈，不能强加惩罚因子。
@@ -1249,7 +1240,7 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 
 ## 16. 输入示例
 
-以下是源文代表配置，不声称最优；数据类型以schema定义为准。
+以下是用户给定单Die配置的示例，不声称最优；无需search_profile或Wafer字段。explicit输入迁移尚待代码实现，数据类型以更新后的schema定义为准。
 
 ~~~json
 {
@@ -1265,20 +1256,11 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
     "core_pitch_y_mm": 0,
     "die_extra_width_mm": 0.10,
     "die_extra_height_mm": 0.10,
-    "die_geometry": "minimum_grid",
+    "die_geometry": "explicit",
+    "die_width_mm": 21,
+    "die_height_mm": 29,
     "hbm_stacks_per_row": 2,
-    "hbm_placement_mode": "two_sides_one_row_each",
-    "system_region_width_mm": 215,
-    "system_region_height_mm": 215
-  },
-  "search_profile": {
-    "die_area_min_mm2": 200,
-    "die_area_max_mm2": 800,
-    "reticle_width_mm": 26,
-    "reticle_height_mm": 33,
-    "allow_reticle_rotation": true,
-    "die_max_aspect_ratio": 2,
-    "require_nonnegative_d2d_budget": true
+    "hbm_placement_mode": "two_sides_one_row_each"
   },
   "performance_profile": {
     "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
@@ -1305,9 +1287,7 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 }
 ~~~
 
-resolver按源公式求L0、最小W/H；不能用显示的2.56355mm近似值执行所有floor。该配置应得到88核、4栈、144GB及4710.4GB/s理论峰值；外廓和模块数以未舍入计算为准。
-
-仅用显示值L0=2.56355演示：W_die≈20.6084mm、H_die≈28.29905mm、HBM行宽22.11mm，模块约22.41×50.85905mm，系统模块9×4。实际输出必须保留计算精度。
+resolver按源公式求L0及最小容纳宽高，只检查给定21×29mm能否容纳8×11网格；不改输入，不查找更优尺寸。面积为609mm²，得到88核、4栈、144GB及4710.4GB/s理论峰值；HBM行宽22.11mm、模块诊断外廓约22.41×51.56mm。没有系统区域输入就不派生Wafer模块铺排。L0和中间计算保留未舍入精度，不能用显示的2.56355mm近似值执行floor。
 
 示例显式选distributed_ideal_v2探索情景，不增加无证据的入口限速，仍受HBM、Mesh、SRAM与LOCAL约束；最终时间不能只按4710.4GB/s计算。若改选edge_single_word_v2，北/南各179.2GB/s、合计358.4GB/s，比HBM理论峰值低约13.14倍。这只证明原入口假设很可能主导该情景，不能证明实际芯片只有358.4GB/s；入口/路由联合敏感性必须另跑并报告配置排序是否反转。
 
