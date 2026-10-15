@@ -1,0 +1,5 @@
+{"variant": "astra-sim-face", "tests": 18, "exit_code": 0}
+{"variant": "astra-sim-face-LRU", "tests": 17, "exit_code": 0}
+{"variant": "astra-sim-joint", "tests": 13, "exit_code": 0}
+{"variant": "astra-sim-wscllm", "tests": 20, "exit_code": 0}
+{"variant": "astra-sim-wscllm-LRU", "tests": 15, "exit_code": 0}

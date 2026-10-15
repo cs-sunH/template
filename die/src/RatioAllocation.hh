@@ -264,7 +264,17 @@ inline bool row_limit(const Constraint& row,
     if (point != lower && arithmetic_nearly_equal(point, lower)) return false;
     if (point > lower) breaks[break_count++] = point;
   }
-  std::sort(breaks.begin(), breaks.begin() + break_count);
+  // At most three entries: avoid the generic sort's larger insertion-sort
+  // machinery (and GCC's out-of-bounds diagnostic on its unreachable branch).
+  for (std::size_t i = 1; i < break_count; ++i) {
+    const Wide value = breaks[i];
+    std::size_t position = i;
+    while (position > 0 && value < breaks[position - 1]) {
+      breaks[position] = breaks[position - 1];
+      --position;
+    }
+    breaks[position] = value;
+  }
   for (std::size_t i = 1; i < break_count; ++i) {
     if (breaks[i] != breaks[i - 1] &&
         arithmetic_nearly_equal(breaks[i], breaks[i - 1]))
@@ -344,6 +354,10 @@ inline bool maximum_feasible_parameter(
           arithmetic_nearly_equal(row_max, maximum)) return false;
       maximum = std::min(maximum, row_max);
     }
+    // A feasible floor and a row upper bound equal to that floor determine
+    // the optimum. The full feasibility certificate below still checks every
+    // row; roots for the remaining rows cannot improve this upper bound.
+    if (maximum == lower) break;
   }
   if (!found_bound || !finite(maximum) || maximum < lower) return false;
   for (const Constraint& row : rows) {
@@ -367,6 +381,51 @@ inline bool rows_feasible(const std::vector<Constraint>& rows,
     if (used > row.b) return false;
   }
   return true;
+}
+
+// Retain one bound witness per variable, then omit rows that cannot bind
+// anywhere inside that witnesses' nonnegative box. Outward rounding makes
+// uncertain rows stay in the solve; the original binary64 rows are still
+// certified before publication. This reduces repeated root calculations,
+// without adding a tolerance or changing the feasible set.
+inline void remove_box_redundant_rows(std::vector<Constraint>& rows,
+                                      std::size_t count) {
+  const Wide infinity = std::numeric_limits<Wide>::infinity();
+  std::array<Wide, 3> upper{{infinity, infinity, infinity}};
+  std::array<std::size_t, 3> witness{{rows.size(), rows.size(), rows.size()}};
+  for (std::size_t row = 0; row < rows.size(); ++row) {
+    for (std::size_t i = 0; i < count; ++i) {
+      if (rows[row].a[i] <= 0.0L) continue;
+      const Wide bound = std::nextafter(rows[row].b / rows[row].a[i], infinity);
+      if (finite(bound) && bound > 0.0L && bound < upper[i]) {
+        upper[i] = bound;
+        witness[i] = row;
+      }
+    }
+  }
+  for (std::size_t i = 0; i < count; ++i)
+    if (witness[i] == rows.size()) return;
+
+  std::size_t retained = 0;
+  for (std::size_t row = 0; row < rows.size(); ++row) {
+    bool keep = false;
+    for (std::size_t i = 0; i < count; ++i)
+      keep = keep || witness[i] == row;
+    if (!keep) {
+      Wide upper_use = 0.0L;
+      for (std::size_t i = 0; i < count; ++i) {
+        if (rows[row].a[i] == 0.0L) continue;
+        const Wide term = std::nextafter(rows[row].a[i] * upper[i], infinity);
+        upper_use = std::nextafter(upper_use + term, infinity);
+      }
+      keep = !finite(upper_use) || upper_use > rows[row].b;
+    }
+    if (keep) {
+      if (retained != row) rows[retained] = std::move(rows[row]);
+      ++retained;
+    }
+  }
+  rows.resize(retained);
 }
 
 inline bool certify_and_round(const std::vector<RatioRow>& input_rows,
@@ -520,6 +579,7 @@ inline bool allocate_ratio(const std::vector<RatioRow>& rows,
     if (edges.empty()) return false;  // Leave nonnegative rows to PackingAllocation.
     if (std::any_of(individually_bounded.begin(), individually_bounded.end(),
                     [](bool value) { return !value; })) return false;
+    remove_box_redundant_rows(physical_rows, count);
 
     std::vector<std::vector<Wide>> gain;
     if (!build_gain_closure(count, edges, gain)) return false;

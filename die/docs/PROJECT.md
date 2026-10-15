@@ -35,7 +35,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 ## 当前代码与运行方式
 
-- 最新实现基于设计先行提交35f4580：删除硬件搜索，新增无search/Wafer的explicit硬件输入/只验证约束和旧格式兼容；旧Hardware完整identity不变。最终42/42 CTest、真实CABI示例7/7通过。新10%/20% axis全部完成指标≤10%、五shape busy>20%仍failed；128³冷2.536ms/OSbulkJ32更新68.982μs仍超预算。证据hardware-input-20261015；五仓新发布/业务尚未跑，工程NOT ACCEPTED，继续自主开发。
+- 最新实现基于设计先行提交35f4580及实现89c2499：显式硬件输入/取消搜索和10%目标/有据20%规则已落地。五仓隔离Release双ABI+配置83/83通过；FACE重复cost结果修复，消费者133/133及152/152通过，0skip。allocator最终42/42通过（22.34s），新行省略速度待测；先前cold/OSbulk J32及五shape busy仍failed。证据explicit-input-integration-20261015；正式vendor尚未publisher，完整业务/五仓CPU预算未验收，工程NOT ACCEPTED，继续自主开发。
 
 - 2026-10-15当前恢复检查点从main `ec07f90`继续：修复曲线终态credit/物理舍入快照、旧计划整数tick、memo/空查询回归，公共Release及41/41 CTest通过；六shape v3 axis仅1过、五shape busy失败（tail独占误差6.9163%），30样本速度仍failed。新route helper仅partial一阶矩未接Mapping；WR/其他模板、二阶/odd-row及五仓新发布仍待完成。证据 `analytical-runtime-recovery-20261015`；工程NOT ACCEPTED，当前持续开发，历史停止记录不适用。
 

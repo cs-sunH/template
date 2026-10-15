@@ -1,0 +1,215 @@
+test_capacity_snapshot_reports_reserved_bytes_where_supported (online.test_workspace_capacity_manager.WorkspaceCapacityManagerTests.test_capacity_snapshot_reports_reserved_bytes_where_supported) ... ok
+test_full_rank_atomic_exact_uint64_monotonic_workspace_view (online.test_workspace_capacity_manager.WorkspaceCapacityManagerTests.test_full_rank_atomic_exact_uint64_monotonic_workspace_view) ... ok
+test_workspace_fit_block_release_retry_and_policy_specific_reclaim (online.test_workspace_capacity_manager.WorkspaceCapacityManagerTests.test_workspace_fit_block_release_retry_and_policy_specific_reclaim) ... ok
+test_workspace_bridge (unittest.loader._FailedTest.test_workspace_bridge) ... ERROR
+test_die_model_adapter (unittest.loader._FailedTest.test_die_model_adapter) ... ERROR
+test_admission_liveness (unittest.loader._FailedTest.test_admission_liveness) ... ERROR
+test_graph_batch_builder (unittest.loader._FailedTest.test_graph_batch_builder) ... ERROR
+test_first_token_split (unittest.loader._FailedTest.test_first_token_split) ... ERROR
+test_train_machinery (unittest.loader._FailedTest.test_train_machinery) ... ERROR
+test_cost_only_batch_keeps_one_ordered_result_per_input (test_die_model_oracle.CoarseCostQueryTests.test_cost_only_batch_keeps_one_ordered_result_per_input) ... ok
+test_explicit_lib_path_wins_over_env (test_die_model_oracle.DieModelOracleDiscoveryTests.test_explicit_lib_path_wins_over_env) ... ok
+test_missing_config_path_fails_closed (test_die_model_oracle.DieModelOracleDiscoveryTests.test_missing_config_path_fails_closed) ... ok
+test_missing_library_fails_closed_without_roofline_fallback (test_die_model_oracle.DieModelOracleDiscoveryTests.test_missing_library_fails_closed_without_roofline_fallback) ... ok
+test_bad_config_fails_closed_with_library_error (test_die_model_oracle.DieModelOracleTests.test_bad_config_fails_closed_with_library_error) ... ok
+test_close_is_idempotent_and_guards_queries (test_die_model_oracle.DieModelOracleTests.test_close_is_idempotent_and_guards_queries) ... ok
+test_config_hash_is_stable_and_short (test_die_model_oracle.DieModelOracleTests.test_config_hash_is_stable_and_short) ... ok
+test_estimate_bad_envelope_fails_closed (test_die_model_oracle.DieModelOracleTests.test_estimate_bad_envelope_fails_closed) ... ok
+test_estimate_batch_and_error_positions (test_die_model_oracle.DieModelOracleTests.test_estimate_batch_and_error_positions) ... ok
+test_estimate_is_deterministic_for_same_spec (test_die_model_oracle.DieModelOracleTests.test_estimate_is_deterministic_for_same_spec) ... ok
+test_estimate_one_raises_on_rejected_spec (test_die_model_oracle.DieModelOracleTests.test_estimate_one_raises_on_rejected_spec) ... ok
+test_hardware_summary_face_case5_die_point (test_die_model_oracle.DieModelOracleTests.test_hardware_summary_face_case5_die_point) ... ok
+test_order_explicit_env_repo_manifest (test_die_model_oracle.ResolveConfigPathOrderTests.test_order_explicit_env_repo_manifest) ... ok
+test_face_scheduler (unittest.loader._FailedTest.test_face_scheduler) ... ERROR
+test_incremental_and_full_checks_reject_corrupt_accounting (test_face_kv_incremental_invariants.IncrementalInvariantTests.test_incremental_and_full_checks_reject_corrupt_accounting) ... ok
+test_incremental_and_strict_mutations_stay_equivalent (test_face_kv_incremental_invariants.IncrementalInvariantTests.test_incremental_and_strict_mutations_stay_equivalent) ... ok
+test_immutable_floor_max_active_and_unchanged_kv_snapshot (online.test_future_workspace_manager.FutureWorkspaceManagerTests.test_immutable_floor_max_active_and_unchanged_kv_snapshot) ... ok
+test_invalid_fixed_floor_and_explicit_zero_protocol (online.test_future_workspace_manager.FutureWorkspaceManagerTests.test_invalid_fixed_floor_and_explicit_zero_protocol) ... ok
+test_permanent_floor_is_infeasible_before_evicting_a_cold_session (online.test_future_workspace_manager.FutureWorkspaceManagerTests.test_permanent_floor_is_infeasible_before_evicting_a_cold_session) ... ok
+test_transient_excess_over_floor_blocks_without_reclaim_then_retries (online.test_future_workspace_manager.FutureWorkspaceManagerTests.test_transient_excess_over_floor_blocks_without_reclaim_then_retries) ... ok
+test_manifest_workspace_envelope (unittest.loader._FailedTest.test_manifest_workspace_envelope) ... ERROR
+test_source_release_capacity (unittest.loader._FailedTest.test_source_release_capacity) ... ERROR
+
+======================================================================
+ERROR: test_workspace_bridge (unittest.loader._FailedTest.test_workspace_bridge)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_workspace_bridge
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_bridge.py", line 20, in <module>
+    from online.online_service import _workspace_admission_mode
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py", line 39, in <module>
+    from generate_face_trace import load_face_trace_config  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py", line 30, in <module>
+    from generate_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+======================================================================
+ERROR: test_die_model_adapter (unittest.loader._FailedTest.test_die_model_adapter)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_die_model_adapter
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_die_model_adapter.py", line 31, in <module>
+    from online.die_model_adapter import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py", line 70, in <module>
+    from generate_trace import shard_extent  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+======================================================================
+ERROR: test_admission_liveness (unittest.loader._FailedTest.test_admission_liveness)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_admission_liveness
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_admission_liveness.py", line 47, in <module>
+    import online.face_online_scheduler as face_online_scheduler  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/face_online_scheduler.py", line 108, in <module>
+    from generate_face_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py", line 30, in <module>
+    from generate_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+======================================================================
+ERROR: test_graph_batch_builder (unittest.loader._FailedTest.test_graph_batch_builder)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_graph_batch_builder
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_graph_batch_builder.py", line 37, in <module>
+    from generate_trace import COMP_NODE  # noqa: E402
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+======================================================================
+ERROR: test_first_token_split (unittest.loader._FailedTest.test_first_token_split)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_first_token_split
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_first_token_split.py", line 39, in <module>
+    from online.graph_batch_builder import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py", line 55, in <module>
+    from generate_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+======================================================================
+ERROR: test_train_machinery (unittest.loader._FailedTest.test_train_machinery)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_train_machinery
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_train_machinery.py", line 38, in <module>
+    from online.face_online_scheduler import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/face_online_scheduler.py", line 108, in <module>
+    from generate_face_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py", line 30, in <module>
+    from generate_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+======================================================================
+ERROR: test_face_scheduler (unittest.loader._FailedTest.test_face_scheduler)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_face_scheduler
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/test_face_scheduler.py", line 44, in <module>
+    from generate_face_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py", line 30, in <module>
+    from generate_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+======================================================================
+ERROR: test_manifest_workspace_envelope (unittest.loader._FailedTest.test_manifest_workspace_envelope)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_manifest_workspace_envelope
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_manifest_workspace_envelope.py", line 17, in <module>
+    import generate_face_trace as trace
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py", line 30, in <module>
+    from generate_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+======================================================================
+ERROR: test_source_release_capacity (unittest.loader._FailedTest.test_source_release_capacity)
+----------------------------------------------------------------------
+ImportError: Failed to import test module: test_source_release_capacity
+Traceback (most recent call last):
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/unittest/loader.py", line 137, in loadTestsFromName
+    module = __import__(module_name)
+             ^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/online/test_source_release_capacity.py", line 6, in <module>
+    import generate_face_trace as trace
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py", line 30, in <module>
+    from generate_trace import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py", line 29, in <module>
+    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402
+  File "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/stage/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
+    from google.protobuf.internal import builder as _builder
+ModuleNotFoundError: No module named 'google'
+
+
+----------------------------------------------------------------------
+Ran 31 tests in 0.039s
+
+FAILED (errors=9)

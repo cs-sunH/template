@@ -1,0 +1,14 @@
+Traceback (most recent call last):
+  File "/workspace/template/die/docs/analysis/analytical-curves-partial-20261015/integration/face_cost_abi_probe.py", line 175, in <module>
+    raise SystemExit(main())
+                     ^^^^^^
+  File "/workspace/template/die/docs/analysis/analytical-curves-partial-20261015/integration/face_cost_abi_probe.py", line 119, in main
+    scheduler_ns = estimate_iteration_time_ns(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/face_scheduler.py", line 524, in estimate_iteration_time_ns
+    return _estimate_iteration_time_ns_die(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/face_scheduler.py", line 489, in _estimate_iteration_time_ns_die
+    seconds[label] = float(result["total_seconds"])
+                           ~~~~~~^^^^^^^^^^^^^^^^^
+KeyError: 'total_seconds'

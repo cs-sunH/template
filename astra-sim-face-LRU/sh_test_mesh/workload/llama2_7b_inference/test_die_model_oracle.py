@@ -40,6 +40,7 @@ for _path in (str(MODULE_DIR), str(ONLINE_DIR)):
 
 from die_model_oracle import (  # noqa: E402
     CABI_LIBRARY_ENV,
+    COARSE_CABI_LIBRARY_ENV,
     COST_RESULT_FIELDS,
     DIE_MODEL_CONFIG_ENV,
     MANIFEST_COMPUTE_COST_MODEL_KEY,
@@ -233,6 +234,75 @@ class DieModelOracleTests(_TempConfigMixin, unittest.TestCase):
         }), encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "die_create_model"):
             DieModelOracle(config_json_path=str(broken))
+
+
+@unittest.skipUnless(
+    os.environ.get(COARSE_CABI_LIBRARY_ENV),
+    "coarse DIE ABI not supplied; set DIE_COARSE_CABI_PATH")
+class CoarseCostQueryTests(unittest.TestCase):
+    def test_cost_only_batch_keeps_one_ordered_result_per_input(self) -> None:
+        repo_root = MODULE_DIR.parents[2]
+        config_path = (repo_root / "extern/die_model/coarse/configs"
+                       / "example_hardware.json")
+        tasks_path = (repo_root / "extern/die_model/coarse/configs"
+                      / "example_tasks.json")
+        task_document = json.loads(tasks_path.read_text(encoding="utf-8"))
+        template = next(
+            row for row in task_document["specs"]
+            if isinstance(row, dict)
+            and row.get("schema") == "coarse_die_task_v2")
+        specs = []
+        for m in range(1, 8):
+            spec = json.loads(json.dumps(template))
+            spec["tensor_shapes"]["m"] = m
+            specs.append(spec)
+
+        with DieModelOracle(
+                lib_path=os.environ[COARSE_CABI_LIBRARY_ENV],
+                config_json_path=str(config_path)) as oracle:
+            self.assertTrue(oracle.coarse)
+            self.assertTrue(oracle.supports_estimate_cost)
+
+            full = oracle.estimate(specs)
+            self.assertEqual(len(full), len(specs))
+            self.assertEqual(oracle.last_errors, [None] * len(specs))
+
+            selected = oracle.estimate_cost(specs)
+            self.assertEqual(len(selected), len(specs))
+            self.assertEqual(oracle.last_errors, [None] * len(specs))
+            individual = []
+            for spec in specs:
+                one = oracle.estimate_cost([spec])
+                self.assertEqual(len(one), 1)
+                self.assertEqual(oracle.last_errors, [None])
+                individual.append(one[0])
+
+            for actual, expected, single in zip(selected, full, individual):
+                self.assertIsNotNone(actual)
+                self.assertIsNotNone(expected)
+                self.assertIsNotNone(single)
+                self.assertEqual(set(actual), {
+                    "estimated_latency_ns", "plan_hash", "status",
+                    "total_seconds",
+                })
+                self.assertEqual(
+                    actual["estimated_latency_ns"],
+                    expected["estimated_latency_ns"])
+                self.assertEqual(actual["plan_hash"],
+                                 expected["plan_fingerprint"])
+                self.assertEqual(actual["status"], expected["status"])
+                self.assertEqual(
+                    actual["total_seconds"],
+                    float(actual["estimated_latency_ns"]) / 1e9)
+                self.assertEqual(actual, single)
+
+            # Simulate an older coarse library that has no additive cost
+            # endpoint: estimate_cost must preserve the established full-row
+            # fallback, including one result per input and input ordering.
+            with mock.patch.object(oracle, "supports_estimate_cost", False):
+                fallback = oracle.estimate_cost(specs)
+            self.assertEqual(len(fallback), len(specs))
+            self.assertEqual(fallback, full)
 
 
 class DieModelOracleDiscoveryTests(unittest.TestCase):

@@ -1,0 +1,37 @@
+[
+  {
+    "command": [
+      "python3",
+      "/workspace/template/die/docs/analysis/face-workspace-20261015/run_python_checks.py",
+      "astra-sim-face",
+      "--repo-root",
+      "/workspace/template/work/integration-input-20261015/stage-root",
+      "--work-dir",
+      "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face",
+      "--legacy-library",
+      "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libdie_model_cabi.so",
+      "--coarse-library",
+      "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libcoarse_die_cabi.so",
+      "online.test_workspace_capacity_manager",
+      "online.test_workspace_bridge",
+      "online.test_die_model_adapter",
+      "online.test_admission_liveness",
+      "online.test_graph_batch_builder",
+      "online.test_first_token_split",
+      "online.test_train_machinery",
+      "test_die_model_oracle",
+      "test_face_scheduler",
+      "test_face_kv_incremental_invariants",
+      "online.test_future_workspace_manager",
+      "online.test_manifest_workspace_envelope",
+      "online.test_source_release_capacity"
+    ],
+    "elapsed": "0.039s",
+    "exit_code": 1,
+    "ran": 31,
+    "skipped": 0,
+    "stdout_log": "/workspace/template/work/integration-input-20261015/python-consumers/astra-sim-face.log",
+    "variant": "astra-sim-face",
+    "work_identity": "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/identity-and-command.json"
+  }
+]

@@ -116,6 +116,40 @@ void exact_ratio_cycle_closes_without_zeroing() {
   close(rates.at(1), 1.0, "contracting cycle second rate");
 }
 
+void redundant_resource_rows_keep_bound_witnesses_and_uncertain_boundaries() {
+  using namespace coarse_die::detail::ratio_allocation_internal;
+  std::vector<Constraint> rows{
+      {{1.0L, 1.0L, 1.0L}, 7.0L},  // strictly outside the witnessed box
+      {{1.0L, 0.0L, 0.0L}, 1.0L},
+      {{0.0L, 1.0L, 0.0L}, 2.0L},
+      {{0.0L, 0.0L, 1.0L}, 3.0L},
+      {{1.0L, 1.0L, 1.0L}, 6.0L},  // exact boundary is retained conservatively
+      {{1.0L, 1.0L, 1.0L}, 5.0L},  // cuts the independent box
+  };
+  remove_box_redundant_rows(rows, 3);
+  require(rows.size() == 5, "only a proven nonbinding row is omitted");
+  require(rows[0].b == 1.0L && rows[1].b == 2.0L && rows[2].b == 3.0L,
+          "all independent bound witnesses survive compaction");
+  require(rows[3].b == 6.0L && rows[4].b == 5.0L,
+          "rounding envelope and constraining coupled row both stay");
+
+  std::vector<RatioRow> original{
+      {{1.0, 0.0}, 1.0}, {{0.0, 1.0}, 2.0}, {{1.0, -1.0}, 0.0}};
+  std::vector<double> expected, expected_alpha, actual, actual_alpha;
+  require(allocate_ratio(original, {"A", "B"}, {1.0, 1.0},
+                         expected, expected_alpha), "reference box system allocates");
+  for (unsigned i = 0; i < 32; ++i)
+    original.push_back({{1.0, 1.0}, 4.0 + i});
+  require(allocate_ratio(original, {"A", "B"}, {1.0, 1.0}, actual, actual_alpha),
+          "redundant original resource rows allocate");
+  require(actual == expected && actual_alpha == expected_alpha,
+          "nonbinding resource rows preserve rates and owner shares exactly");
+  for (const auto& row : original)
+    require(static_cast<long double>(row.a[0]) * actual[0] +
+                static_cast<long double>(row.a[1]) * actual[1] <= row.b,
+            "all original resource and signed rows remain strictly feasible");
+}
+
 // Small exact rational arithmetic used only by the test oracle. Random inputs
 // are small integers, so signed 64-bit storage has a wide safety margin.
 struct Fraction {
@@ -487,6 +521,7 @@ int main() {
   signed_pair_manual_solution_and_owner_alpha();
   three_activity_closure_freezes_forced_tiers_and_keeps_private_rows();
   exact_ratio_cycle_closes_without_zeroing();
+  redundant_resource_rows_keep_bound_witnesses_and_uncertain_boundaries();
   randomized_exact_vertex_oracle();
   unsupported_rows_and_cycles_fall_back_without_mutation();
   std::cout << "PASS ratio_allocator_test\n";

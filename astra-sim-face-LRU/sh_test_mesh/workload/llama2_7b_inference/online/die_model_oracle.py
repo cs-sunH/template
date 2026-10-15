@@ -399,6 +399,7 @@ class DieModelOracle:
                         "status": status,
                         "total_seconds": float(latency_ns) / 1e9,
                     })
+                    continue
                 elif self.coarse:
                     latency_ns = result.get("estimated_latency_ns")
                     if latency_ns is None:

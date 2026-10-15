@@ -12,6 +12,8 @@
 
 最终Release及公共CTest **42/42通过，20.40s**，包含新硬件输入/原兼容、精确Fraction、曲线大绝对时钟/快照/容量/取消与Python新误差策略12项。真实explicit配置7个示例经公开C ABI全部ok_assumed。新schema2/10%目标/有据20% fallback的6shape×18场景已跑：全部完成时间指标满足10%，五个shape的busy仍>20%，整体比较failed；原6.9163%完成误差不再是待优化问题。最终30样本速度仍failed：128³冷P95 2.536207ms，OSbulk J32 68.982μs，J1/J8约24.223/40.923μs，hot约2.6—7.2μs；保留全部中间失败与初始CAPI测试错误预期日志。证据见 `analysis/hardware-input-20261015/` /对应evidence verification.json。五仓尚未发布此源/未跑新业务；TX8条件参考与目标先验未改，target raw仍not_available。不是工程ACCEPTED，也不是停止交接。
 
+最新隔离集成：冻结实现89c2499的29文件预览已五仓Release双ABI构建、83/83配置通过（0skip），未正式publisher。真实cost-only消费者发现并修复FACE两仓重复append，同序7→7/秒转换/full parity/legacy fallback新增回归；FACE133/133、FACE-LRU152/152（各比原套件多1项），0skip。所有初次失败保留。root另优化分配行复用、固定插入排序、匹配floor上界早停及有独立上界证据的非负冗余行省略；保留原行严格认证与公平定义，全42/42 CTest通过22.34s。中间速度仍failed，最终行省略版本计时待跑，不能沿用旧速度通过。实际SDK源89与后续allocator源分别绑定；证据见analysis/evidence的explicit-input-integration-20261015。活动JOINT新native/Online构建正在继续，逐元素向量首输出/精确SRAM升级单独实施，尚未运行者不算通过；新canonical仍未发布，工程NOT ACCEPTED。busy条件界只说明当前C_in/容量模型与少量on-runs的限制，见hardware-input分析目录busy-contract-scope.md；不改指标或隐去切换。
+
 ### 当前：解析 Runtime 恢复与真实精度/速度失败（持续开发）
 
 本任务从干净旧检出快进到最新main `ec07f90ebabe6a0b97d458c01a3391377fc54aec`，工作分支 `codex/die-analytical-continue-20261015`。已核实包含K门控c13e9a7、clock b22e065、JOINT取消0f56921、Program归档及旧JOINT删除，未覆盖/回滚其它提交。当前用户授权持续源码开发，历史停止/仅文档范围均不适用。

@@ -1,0 +1,22 @@
+task=gemm_128x128x128 repetitions=60 candidates=28 manual_trial_samples=1680
+normalize wall_ns{mean=30015,p50=29226,p95=32956,p99=53341,min=26247,max=53341} cpu_ns{mean=29829,p50=29110,p95=32248,p99=53343,min=26157,max=53343}
+enumerate_candidates wall_ns{mean=657599,p50=616648,p95=842076,p99=965599,min=574227,max=965599} cpu_ns{mean=657096,p50=616812,p95=843062,p99=965890,min=574268,max=965890}
+one_candidate_plan_structure_validation wall_ns{mean=826,p50=660,p95=1453,p99=1738,min=322,max=49600} cpu_ns{mean=826,p50=657,p95=1453,p99=1752,min=317,max=50101}
+one_candidate_estimate_candidate_latency wall_ns{mean=36683,p50=21951,p95=85390,p99=146207,min=5550,max=724189} cpu_ns{mean=36626,p50=21973,p95=85424,p99=146356,min=5563,max=724868}
+rank_sort_selected_summary_and_fingerprint wall_ns{mean=119555,p50=107324,p95=181762,p99=251279,min=101960,max=251279} cpu_ns{mean=119646,p50=107374,p95=182304,p99=251571,min=101988,max=251571}
+actual_compile_end_to_end wall_ns{mean=1989090,p50=1925316,p95=2326296,p99=2597002,min=1784057,max=2597002} cpu_ns{mean=1984148,p50=1919093,p95=2327051,p99=2597751,min=1784466,max=2597751}
+all_candidate_runtime_trials_per_compile wall_ns{mean=1027127,p50=993707,p95=1248966,p99=1582063,min=888122,max=1582063} cpu_ns{mean=1025529,p50=994567,p95=1216751,p99=1583537,min=888905,max=1583537}
+slowest_candidate_estimate_means_ns (wall/cpu p50,p95):
+  weight_resident_v2 tm=1 tn=64 tk=64 mean_wall=98819 wall_p50=85572 wall_p95=192866 cpu_p50=85617 cpu_p95=193656
+  weight_resident_v2 tm=1 tn=128 tk=128 mean_wall=83040 wall_p50=60164 wall_p95=243910 cpu_p50=60210 cpu_p95=244113
+  weight_resident_v2 tm=1 tn=128 tk=64 mean_wall=77567 wall_p50=61833 wall_p95=95629 cpu_p50=61881 cpu_p95=95722
+  weight_resident_v2 tm=1 tn=64 tk=128 mean_wall=76100 wall_p50=69673 wall_p95=100645 cpu_p50=69727 cpu_p95=90883
+  output_stationary_v2 tm=1 tn=64 tk=64 mean_wall=68363 wall_p50=60011 wall_p95=128548 cpu_p50=60049 cpu_p95=128686
+  weight_resident_v2 tm=16 tn=64 tk=128 mean_wall=63411 wall_p50=57054 wall_p95=82861 cpu_p50=57096 cpu_p95=82909
+  weight_resident_v2 tm=16 tn=128 tk=128 mean_wall=62441 wall_p50=56075 wall_p95=112166 cpu_p50=56113 cpu_p95=112356
+  weight_resident_v2 tm=16 tn=128 tk=64 mean_wall=60926 wall_p50=56599 wall_p95=85769 cpu_p50=56612 cpu_p95=85982
+  weight_resident_v2 tm=16 tn=64 tk=64 mean_wall=60827 wall_p50=58755 wall_p95=68331 cpu_p50=58794 cpu_p95=68355
+  output_stationary_v2 tm=1 tn=128 tk=64 mean_wall=58164 wall_p50=54499 wall_p95=81275 cpu_p50=54524 cpu_p95=81418
+one_fresh_runtime_constructor_including_hardware_validation wall_ns{mean=1580,p50=1328,p95=1365,p99=1407,min=1308,max=225944} cpu_ns{mean=1578,p50=1326,p95=1362,p99=1405,min=1307,max=226483}
+one_empty_runtime_prototype_copy wall_ns{mean=234,p50=219,p95=222,p99=239,min=214,max=24767} cpu_ns{mean=233,p50=218,p95=221,p99=227,min=214,max=24866}
+estimated_28_candidate_constructor_only_savings_ns{wall=31052,cpu=31024}

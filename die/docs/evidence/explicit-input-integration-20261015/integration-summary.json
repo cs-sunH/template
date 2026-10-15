@@ -1,0 +1,747 @@
+{
+  "builds": {
+    "astra-sim-face": {
+      "libraries": {
+        "libcoarse_die_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libcoarse_die_cabi.so",
+          "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "size": 1595072
+        },
+        "libdie_model_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libdie_model_cabi.so",
+          "sha256": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68",
+          "size": 499992
+        }
+      },
+      "phases": [
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "-S",
+            "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face/extern/die_model",
+            "-B",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-face",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCOARSE_DIE_JSON_INCLUDE=/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face/extern/helper",
+            "-DCOARSE_DIE_BUILD_TESTS=OFF"
+          ],
+          "elapsed_seconds": 0.584,
+          "log": "/workspace/template/work/integration-input-20261015/logs/astra-sim-face/configure.log",
+          "phase": "configure",
+          "returncode": 0
+        },
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "--build",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-face",
+            "--parallel",
+            "2",
+            "--target",
+            "die_model_cabi",
+            "coarse_die_cabi"
+          ],
+          "elapsed_seconds": 60.822,
+          "log": "/workspace/template/work/integration-input-20261015/logs/astra-sim-face/build.log",
+          "phase": "build",
+          "returncode": 0
+        }
+      ],
+      "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+      "source_commit": "89c2499c6e61de450291961d800594a8a83eeca7"
+    },
+    "astra-sim-face-LRU": {
+      "libraries": {
+        "libcoarse_die_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+          "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "size": 1595072
+        },
+        "libdie_model_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+          "sha256": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68",
+          "size": 499992
+        }
+      },
+      "phases": [
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "-S",
+            "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face-LRU/extern/die_model",
+            "-B",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCOARSE_DIE_JSON_INCLUDE=/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face-LRU/extern/helper",
+            "-DCOARSE_DIE_BUILD_TESTS=OFF"
+          ],
+          "elapsed_seconds": 0.526,
+          "log": "/workspace/template/work/integration-input-20261015/logs/astra-sim-face-LRU/configure.log",
+          "phase": "configure",
+          "returncode": 0
+        },
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "--build",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU",
+            "--parallel",
+            "2",
+            "--target",
+            "die_model_cabi",
+            "coarse_die_cabi"
+          ],
+          "elapsed_seconds": 75.998,
+          "log": "/workspace/template/work/integration-input-20261015/logs/astra-sim-face-LRU/build.log",
+          "phase": "build",
+          "returncode": 0
+        }
+      ],
+      "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+      "source_commit": "89c2499c6e61de450291961d800594a8a83eeca7"
+    },
+    "astra-sim-joint": {
+      "libraries": {
+        "libcoarse_die_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-joint/lib/libcoarse_die_cabi.so",
+          "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "size": 1595072
+        },
+        "libdie_model_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-joint/lib/libdie_model_cabi.so",
+          "sha256": "fe16553813ac00874dfc5e1d0ea098236ea4fc06d1707567926b57b58137684b",
+          "size": 613520
+        }
+      },
+      "phases": [
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "-S",
+            "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-joint/extern/die_model",
+            "-B",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-joint",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCOARSE_DIE_JSON_INCLUDE=/workspace/template/work/integration-input-20261015/stage-root/astra-sim-joint/extern/helper",
+            "-DCOARSE_DIE_BUILD_TESTS=OFF"
+          ],
+          "elapsed_seconds": 0.634,
+          "log": "/workspace/template/work/integration-input-20261015/logs/astra-sim-joint/configure.log",
+          "phase": "configure",
+          "returncode": 0
+        },
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "--build",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-joint",
+            "--parallel",
+            "2",
+            "--target",
+            "die_model_cabi",
+            "coarse_die_cabi"
+          ],
+          "elapsed_seconds": 61.513,
+          "log": "/workspace/template/work/integration-input-20261015/logs/astra-sim-joint/build.log",
+          "phase": "build",
+          "returncode": 0
+        }
+      ],
+      "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+      "source_commit": "89c2499c6e61de450291961d800594a8a83eeca7"
+    },
+    "astra-sim-wscllm": {
+      "libraries": {
+        "libcoarse_die_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm/lib/libcoarse_die_cabi.so",
+          "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "size": 1595072
+        },
+        "libdie_model_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm/lib/libdie_model_cabi.so",
+          "sha256": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68",
+          "size": 499992
+        }
+      },
+      "phases": [
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "-S",
+            "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-wscllm/extern/die_model",
+            "-B",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCOARSE_DIE_JSON_INCLUDE=/workspace/template/work/integration-input-20261015/stage-root/astra-sim-wscllm/extern/helper",
+            "-DCOARSE_DIE_BUILD_TESTS=OFF"
+          ],
+          "elapsed_seconds": 0.4,
+          "log": "interactive configure output shown in work log",
+          "phase": "configure",
+          "returncode": 0
+        },
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "--build",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm",
+            "--parallel",
+            "2",
+            "--target",
+            "die_model_cabi",
+            "coarse_die_cabi"
+          ],
+          "elapsed_seconds": 39,
+          "log": "build-console-fragments.log; original stdout was interactive",
+          "phase": "build",
+          "returncode": 0
+        }
+      ],
+      "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+      "source_commit": "89c2499c6e61de450291961d800594a8a83eeca7"
+    },
+    "astra-sim-wscllm-LRU": {
+      "libraries": {
+        "libcoarse_die_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so",
+          "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "size": 1595072
+        },
+        "libdie_model_cabi.so": {
+          "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so",
+          "sha256": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68",
+          "size": 499992
+        }
+      },
+      "phases": [
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "-S",
+            "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-wscllm-LRU/extern/die_model",
+            "-B",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm-LRU",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DCOARSE_DIE_JSON_INCLUDE=/workspace/template/work/integration-input-20261015/stage-root/astra-sim-wscllm-LRU/extern/helper",
+            "-DCOARSE_DIE_BUILD_TESTS=OFF"
+          ],
+          "elapsed_seconds": 0.988,
+          "log": "/workspace/template/work/integration-input-20261015/logs/astra-sim-wscllm-LRU/configure.log",
+          "phase": "configure",
+          "returncode": 0
+        },
+        {
+          "command": [
+            "/workspace/template/work/tooling/bin/cmake",
+            "--build",
+            "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm-LRU",
+            "--parallel",
+            "2",
+            "--target",
+            "die_model_cabi",
+            "coarse_die_cabi"
+          ],
+          "elapsed_seconds": 73.841,
+          "log": "/workspace/template/work/integration-input-20261015/logs/astra-sim-wscllm-LRU/build.log",
+          "phase": "build",
+          "returncode": 0
+        }
+      ],
+      "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+      "source_commit": "89c2499c6e61de450291961d800594a8a83eeca7"
+    }
+  },
+  "config_abi_validation": {
+    "per_variant": [
+      {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face/sh_test_mesh/tests",
+          "-p",
+          "test_config_resolver*.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "libraries": {
+          "DIE_COARSE_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libcoarse_die_cabi.so",
+            "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3"
+          },
+          "DIE_MODEL_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libdie_model_cabi.so",
+            "sha256": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+          }
+        },
+        "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+        "tests": 18,
+        "variant": "astra-sim-face"
+      },
+      {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face-LRU/sh_test_mesh/tests",
+          "-p",
+          "test_config_resolver*.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "libraries": {
+          "DIE_COARSE_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+            "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3"
+          },
+          "DIE_MODEL_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+            "sha256": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+          }
+        },
+        "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+        "tests": 17,
+        "variant": "astra-sim-face-LRU"
+      },
+      {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-joint/sh_test_mesh/tests",
+          "-p",
+          "test_config_resolver*.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "libraries": {
+          "DIE_COARSE_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-joint/lib/libcoarse_die_cabi.so",
+            "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3"
+          },
+          "DIE_MODEL_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-joint/lib/libdie_model_cabi.so",
+            "sha256": "fe16553813ac00874dfc5e1d0ea098236ea4fc06d1707567926b57b58137684b"
+          }
+        },
+        "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+        "tests": 13,
+        "variant": "astra-sim-joint"
+      },
+      {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-wscllm/sh_test_mesh/tests",
+          "-p",
+          "test_config_resolver*.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "libraries": {
+          "DIE_COARSE_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm/lib/libcoarse_die_cabi.so",
+            "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3"
+          },
+          "DIE_MODEL_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm/lib/libdie_model_cabi.so",
+            "sha256": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+          }
+        },
+        "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+        "tests": 20,
+        "variant": "astra-sim-wscllm"
+      },
+      {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "-m",
+          "unittest",
+          "discover",
+          "-s",
+          "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-wscllm-LRU/sh_test_mesh/tests",
+          "-p",
+          "test_config_resolver*.py",
+          "-v"
+        ],
+        "exit_code": 0,
+        "libraries": {
+          "DIE_COARSE_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so",
+            "sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3"
+          },
+          "DIE_MODEL_CABI_PATH": {
+            "path": "/workspace/template/work/integration-input-20261015/build/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so",
+            "sha256": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+          }
+        },
+        "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+        "tests": 15,
+        "variant": "astra-sim-wscllm-LRU"
+      }
+    ],
+    "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+    "results": "/workspace/template/work/integration-input-20261015/config-validation/five-abi-config-results.json",
+    "skipped": 0,
+    "summary": "/workspace/template/work/integration-input-20261015/config-validation/summary.json",
+    "tests": 83
+  },
+  "face_cost_consumer_bug": {
+    "fix": "In both FACE variants, cost-only rows are normalized and appended once, then skip the common append; the legacy/full-report path continues through the common append.",
+    "fixed_source_sha256": {
+      "astra-sim-face": {
+        "online_die_model_oracle": {
+          "path": "astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py",
+          "sha256": "8f41863bdcc34ebfad5318e35a7f247bca7e7b6e2a9fb125c9515f3948fbedb3"
+        },
+        "test_die_model_oracle": {
+          "path": "astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/test_die_model_oracle.py",
+          "sha256": "54b40f6b9baf17c8be9123937e5d9b1f5f837b195a7a74135bb33c4320679026"
+        }
+      },
+      "astra-sim-face-LRU": {
+        "online_die_model_oracle": {
+          "path": "astra-sim-face-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py",
+          "sha256": "8f41863bdcc34ebfad5318e35a7f247bca7e7b6e2a9fb125c9515f3948fbedb3"
+        },
+        "test_die_model_oracle": {
+          "path": "astra-sim-face-LRU/sh_test_mesh/workload/llama2_7b_inference/test_die_model_oracle.py",
+          "sha256": "54b40f6b9baf17c8be9123937e5d9b1f5f837b195a7a74135bb33c4320679026"
+        }
+      }
+    },
+    "post_fix_real_abi_probes": [
+      {
+        "coarse_library_sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+        "command": [
+          "python3",
+          "/workspace/template/die/docs/analysis/analytical-curves-partial-20261015/integration/face_cost_abi_probe.py",
+          "--repo-root",
+          "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face",
+          "--library",
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libcoarse_die_cabi.so",
+          "--expect",
+          "new",
+          "--output",
+          "/workspace/template/work/integration-input-20261015/face-cost-after-fix/astra-sim-face-new.json"
+        ],
+        "exit_code": 0,
+        "source_sha256": "8f41863bdcc34ebfad5318e35a7f247bca7e7b6e2a9fb125c9515f3948fbedb3",
+        "stdout_log": "/workspace/template/work/integration-input-20261015/face-cost-after-fix/astra-sim-face-new.stdout.log",
+        "variant": "astra-sim-face"
+      },
+      {
+        "coarse_library_sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+        "command": [
+          "python3",
+          "/workspace/template/die/docs/analysis/analytical-curves-partial-20261015/integration/face_cost_abi_probe.py",
+          "--repo-root",
+          "/workspace/template/work/integration-input-20261015/stage-root/astra-sim-face-LRU",
+          "--library",
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+          "--expect",
+          "new",
+          "--output",
+          "/workspace/template/work/integration-input-20261015/face-cost-after-fix/astra-sim-face-LRU-new.json"
+        ],
+        "exit_code": 0,
+        "source_sha256": "8f41863bdcc34ebfad5318e35a7f247bca7e7b6e2a9fb125c9515f3948fbedb3",
+        "stdout_log": "/workspace/template/work/integration-input-20261015/face-cost-after-fix/astra-sim-face-LRU-new.stdout.log",
+        "variant": "astra-sim-face-LRU"
+      }
+    ],
+    "pre_fix_evidence": {
+      "coarse_release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+      "results": [
+        {
+          "consumer_source": "/workspace/template/astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py",
+          "consumer_source_sha256": "ec4f47291af91ba8e46f847f61d9fa4328109758b3928b2a7ee3a463a5d458ed",
+          "failure": "face_scheduler estimate path reads total_seconds from a raw cost-only row after duplicate results are interleaved",
+          "frozen_copy": "face-cost/pre-fix-failures/astra-sim-face/online/die_model_oracle.py",
+          "library": "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libcoarse_die_cabi.so",
+          "library_sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "log_sha256": "b69ac4b9c1557a36e190a9900237ee39d2ed2d2c3718ece3877e0b5d5ccefdc5",
+          "probe_exit_code": 1,
+          "variant": "astra-sim-face"
+        },
+        {
+          "consumer_source": "/workspace/template/astra-sim-face-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py",
+          "consumer_source_sha256": "ec4f47291af91ba8e46f847f61d9fa4328109758b3928b2a7ee3a463a5d458ed",
+          "failure": "face_scheduler estimate path reads total_seconds from a raw cost-only row after duplicate results are interleaved",
+          "frozen_copy": "face-cost/pre-fix-failures/astra-sim-face-LRU/online/die_model_oracle.py",
+          "library": "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+          "library_sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "log_sha256": "1297b188f658cfa49792da48faa6c86a25b4558c1e31840a9d5790c452764a5d",
+          "probe_exit_code": 1,
+          "variant": "astra-sim-face-LRU"
+        }
+      ],
+      "scope": "Actual stage-root FACE Python sources and new ABI libraries; direct full-versus-cost query checks completed before scheduler dispatch raised KeyError.",
+      "source_commit": "89c2499c6e61de450291961d800594a8a83eeca7",
+      "status": "failed_before_consumer_fix"
+    },
+    "regression_test": "Each FACE variant tests a 7-task cost-only batch, result count and order against per-task queries and full reports, total_seconds conversion, and forced legacy fallback."
+  },
+  "limits": {
+    "performance_and_busy_accuracy": "Still failed in the separate 30-sample benchmark; this integration run does not retest or certify those model metrics.",
+    "published_or_committed": false
+  },
+  "logs_root": "/workspace/template/work/integration-input-20261015",
+  "python_consumer_suites": {
+    "identity": {
+      "astra-sim-face": {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "-m",
+          "unittest",
+          "-v",
+          "online.test_workspace_capacity_manager",
+          "online.test_workspace_bridge",
+          "online.test_die_model_adapter",
+          "online.test_admission_liveness",
+          "online.test_graph_batch_builder",
+          "online.test_first_token_split",
+          "online.test_train_machinery",
+          "test_die_model_oracle",
+          "test_face_scheduler",
+          "test_face_kv_incremental_invariants",
+          "online.test_future_workspace_manager",
+          "online.test_manifest_workspace_envelope",
+          "online.test_source_release_capacity"
+        ],
+        "library_sha256": {
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libcoarse_die_cabi.so": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+        },
+        "source_sha256": {
+          "sh_test_mesh/workload/llama2_7b_inference/face_scheduler.py": "d121a621a62a15a84384f55aed459b464fb9a8bef525dec529ad42ba6eeaa9eb",
+          "sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py": "859db8f5b8515d9b280f6d1dd4618802b09c8aaa1f08b37158d43a99cb8bb0e3",
+          "sh_test_mesh/workload/llama2_7b_inference/generate_trace.py": "50364eedae66246fb5002708c495d0b597bb6d0ed342d5ce4dbb1be0e8bd9bea",
+          "sh_test_mesh/workload/llama2_7b_inference/metrics_postprocess.py": "87d8a308642b3db3d43733dfaf3b2386c1a8c68c18758a23af42ea1296170873",
+          "sh_test_mesh/workload/llama2_7b_inference/metrics_schema.py": "eaee9460d1e4dd85691577a472a8666f6405b6b84fd8aef7a97c4ed1a3c9a75d",
+          "sh_test_mesh/workload/llama2_7b_inference/online/bridge_request_journal.py": "a7d2fc69421b13179cf55e2cb98063fe629274658605a2269c0365905ad46962",
+          "sh_test_mesh/workload/llama2_7b_inference/online/coarse_workspace_envelope.py": "8fe2675dcfdac309039c6bdf2f8b800ad3006a6aea780916c31570c35da29261",
+          "sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py": "10342ba4b053312ea84e29414e2462727f4d59c757795439847798d9fe2c0345",
+          "sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py": "38758688fc261bd93cc97dc3cfe14183101dd48faa415479d2bf021f72a6a74d",
+          "sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py": "8f41863bdcc34ebfad5318e35a7f247bca7e7b6e2a9fb125c9515f3948fbedb3",
+          "sh_test_mesh/workload/llama2_7b_inference/online/face_online_scheduler.py": "e1db4a4058aa9039ed951002a923ad3ca39cb339afdd00141f811c3ccb90e9c4",
+          "sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py": "0a03114d27b43a0731f773c3ce59681c0c619b42d6f393405852da632a4d9f96",
+          "sh_test_mesh/workload/llama2_7b_inference/online/manifest_workspace_envelope.py": "25c983d70d4620b579e87497e053ce07f8a12ead4f5381e2fd1b3d512d5346fd",
+          "sh_test_mesh/workload/llama2_7b_inference/online/online_scheduler_base.py": "f876713a0ed62d9e47c1f90336d8e59e53fbd6aa2164e392ebd71104bafc6e67",
+          "sh_test_mesh/workload/llama2_7b_inference/online/online_service.py": "5316e1002e1ce724cc32310767a057cd4f3ec6d8655ebf32543c0b8ba903b6df",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_admission_liveness.py": "b707450c7454e1ec540cf826ef6fad52fec24fb591d3ad3551a959857da1d676",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_die_model_adapter.py": "9b5c686bd0270c28ad84d2b3a9997398f4a895af408c0e0a1d3f8fdfa4094108",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_first_token_split.py": "b01f76d53e05c37160755aa6ec52d5e4c565ddb8d8592ed2aa3a932174ac4b7f",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_future_workspace_manager.py": "65c5b72df01daca88036fd7bcbf6f4fbf1948c397c316a9ce04ebb81cabd0986",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_graph_batch_builder.py": "321ec361c21cd5056c4c66ab17db1c64ac8528ac4981cb27a24357decf3b4524",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_graph_batch_rank_ledger.py": "b57b7a9fd626ebc1c2b7f997e828929909f24c66e8e085b92031e144321aecf1",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_manifest_workspace_envelope.py": "cf7b5e9fe275cf4ce318dcd89a1ee76bcbf7945044e52a96a78f97045bbc7f97",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_propagating_tail.py": "fb36b3c1f438fbea7338426800871fe6c889872cbd60302a2541d2b495e55495",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_source_release_capacity.py": "661f9e0ef293626db9405ff8de26ee049f2d6f028b1cea2d169713220c101e35",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_train_machinery.py": "58f238f9c67eff10b8ef247de51ff94cab2fd349df83692a8fa385f7637d76b3",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_weight_passes.py": "79d2283c2de0b9da8d6e2a71fea5ddacb6a773a5c3cc684240042429d1f4e6e6",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_bridge.py": "a55eb82fcee5e7987e420d1b3d13a8fda24c27e65c206292bb9087082fe1eb7b",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_capacity_manager.py": "bae46d5d0e57dbeafb97938fd6e79936fcaa5e2b7616de9b471a1cb9b67df5b2",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_cpp_death_fixture.py": "c3c2ad5d5807c4dd0c01811094af6529f983e4beeda2204a8f320fa7ccbeee72",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_echo.py": "15ec0bd7dfa4f9eb979ec98df2fd5e93135751c69c84117fe54e664cc0d4a1e0",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_streaming_fixture.py": "8de381eb92299ad1c4ce0f0178f397312b8f13e6577fab49fd9fbf720fe297eb",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/diff_explainability.py": "3da41f1cc8d96f1b8ff51d430a6596f69fd49f5a9108f63990a585f01f42a601",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/idempotency_fixture.py": "1aefbe221789323817736abe261c212df3d56def481f5e9284c81368e1896f41",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py": "b10c91a5cb3d57a5688ad2b5ff7769e4e516352254620e1e39ce5e712d0e7172",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/lifecycle_fixture_service.py": "eaa0bc06396ae325ae4ed5d128a789f17dfe65a459e4ce27100213c7219689f9",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/long_run_memory_fixture.py": "fc0782dd0c5f097fbd0fb951d5fd843dd00891a60e68e10012003277a3b47d26",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/profile_scan_audit.py": "2e1eee74cfc2b67156c62fe46d339faa5b1caf10083b41634c3a1e7c9dfc3669",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/same_tick_milestone_fixture_service.py": "cff98574e786aa261966aac5ac764cbc33ddf6e620a3647e94fb4916585b9192",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/test_diff_explainability.py": "547f9afeb8158219cb267cc2e0896c26f7514dbbb3c4aafb5f102ae760d4214c",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/test_ledger_reconcile.py": "b1c98a7f38cafc7840795f31c0e5bfbf901b6b17e2a4371ebdc8dc04c628efd2",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/train_a1_eviction_fixture.py": "4958aac4fae26ee0c89cd076a079b1a3f0de2bdc8d7878193a086b2dd1c0eb68",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/wakeup_guard_fixture_service.py": "776b9364430bed822c2228de307ab1a9e8d9314b322eac8cddd5dfc12854ec1f",
+          "sh_test_mesh/workload/llama2_7b_inference/plan_materializer.py": "ceee4f33ec1173f3dd43ab757904b11527a30114c9c72d775b4ae9e95518e0b8",
+          "sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py": "55d4d2d8bdcc8e6dffa1c3f53bf4aebfeeefba40bf865aecfb527e4cb1e64b38",
+          "sh_test_mesh/workload/llama2_7b_inference/test_die_model_oracle.py": "54b40f6b9baf17c8be9123937e5d9b1f5f837b195a7a74135bb33c4320679026",
+          "sh_test_mesh/workload/llama2_7b_inference/test_face_kv_incremental_invariants.py": "996b95f6d7a52ad4a8787dc73971350d5537b2635e20f5e9a85aa41909030590",
+          "sh_test_mesh/workload/llama2_7b_inference/test_face_scheduler.py": "b613723a6495c1273f4a6899af1c247b5b83fe90e7e5dcaca3bc644a25896348",
+          "sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py": "a7e4dd1f52a4894b2f2639a3c53b7dfdc398c5c87823663df6599fa42f0992e3"
+        }
+      },
+      "astra-sim-face-LRU": {
+        "command": [
+          "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+          "-m",
+          "unittest",
+          "-v",
+          "online.test_workspace_capacity_manager",
+          "online.test_workspace_bridge",
+          "online.test_die_model_adapter",
+          "online.test_admission_liveness",
+          "online.test_graph_batch_builder",
+          "online.test_first_token_split",
+          "online.test_train_machinery",
+          "test_die_model_oracle",
+          "test_face_scheduler",
+          "test_face_kv_incremental_invariants",
+          "online.test_future_workspace_manager",
+          "online.test_manifest_workspace_envelope",
+          "online.test_source_release_capacity",
+          "online.test_store_restore_ordering",
+          "online.test_eviction_side_branch_structure",
+          "online.test_transfer_frontier_neutral"
+        ],
+        "library_sha256": {
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libcoarse_die_cabi.so": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libdie_model_cabi.so": "7b961c60505ce8e37be3520fe3f363d1cadbe7fb8cf99cced50daa6285690d68"
+        },
+        "source_sha256": {
+          "sh_test_mesh/workload/llama2_7b_inference/face_scheduler.py": "7317070e3b42b971fa2563263daa86f59d64cb21df34fe31c75ecedbd82bc1e7",
+          "sh_test_mesh/workload/llama2_7b_inference/generate_face_trace.py": "b4bdcd8717dd67482c3c15648c67298794d2375606bbf47b746e2a1e401b1f33",
+          "sh_test_mesh/workload/llama2_7b_inference/generate_trace.py": "60cc2c88177a28b2e95280d4341613fdc325738b467ea22e0067cbec3f0913e7",
+          "sh_test_mesh/workload/llama2_7b_inference/metrics_postprocess.py": "4f26845ea1e83a456c835c680c9d00fc3546fa10cba917f6f7864f32863ae275",
+          "sh_test_mesh/workload/llama2_7b_inference/metrics_schema.py": "1c050773c8a9bd5d2fbda48a29a3e321e7127144155204b70cea11d3edd01cba",
+          "sh_test_mesh/workload/llama2_7b_inference/online/bridge_request_journal.py": "a7d2fc69421b13179cf55e2cb98063fe629274658605a2269c0365905ad46962",
+          "sh_test_mesh/workload/llama2_7b_inference/online/coarse_workspace_envelope.py": "8fe2675dcfdac309039c6bdf2f8b800ad3006a6aea780916c31570c35da29261",
+          "sh_test_mesh/workload/llama2_7b_inference/online/decision_bridge.py": "836936f42ae7199cdc9a08042af9ebce0e20c1b198c0c950f88af64adbe16299",
+          "sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py": "38758688fc261bd93cc97dc3cfe14183101dd48faa415479d2bf021f72a6a74d",
+          "sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py": "8f41863bdcc34ebfad5318e35a7f247bca7e7b6e2a9fb125c9515f3948fbedb3",
+          "sh_test_mesh/workload/llama2_7b_inference/online/face_online_scheduler.py": "15ef67378b5fac3201b55cbfdb4e7148c973dbe458fcedf09c83fda0e530fd28",
+          "sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py": "fd29906d99fa2ee886ebadd15811541b14c1562450fe51023c4747232f67eac7",
+          "sh_test_mesh/workload/llama2_7b_inference/online/manifest_workspace_envelope.py": "25c983d70d4620b579e87497e053ce07f8a12ead4f5381e2fd1b3d512d5346fd",
+          "sh_test_mesh/workload/llama2_7b_inference/online/online_scheduler_base.py": "d84a63cf6ee01045d125857180cc5fab17d1fcead6382b549a4bda959ff2c31c",
+          "sh_test_mesh/workload/llama2_7b_inference/online/online_service.py": "8b91aec8d93f325cb15fa9a4bcfac8a0e5fe5a66d4ccc3e41f7fe1aefb6a5d7b",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_admission_liveness.py": "51e6a70b3b404ca0fac8070b53a8039bd30059d8795d6ecd122301514ffd5655",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_die_model_adapter.py": "9b5c686bd0270c28ad84d2b3a9997398f4a895af408c0e0a1d3f8fdfa4094108",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_eviction_side_branch_structure.py": "ce1d7287187b95610b864f5ac7bc188cdf67c1d5d9fdc4a84f5fc897d04bfdb5",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_first_token_split.py": "93e35d4cb9a7f2a73e290f9d35f083ecae2ef456686800c1e0ba10f4a3252d0c",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_forward_edge_invariant.py": "42ab906d08c8f73be0fdee1ad9d54d0a51841a37e2b48b896cd181fe9392a937",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_future_workspace_manager.py": "65c5b72df01daca88036fd7bcbf6f4fbf1948c397c316a9ce04ebb81cabd0986",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_graph_batch_builder.py": "39b87f9148303fce400c2729a344b3772f7b42907f6b86f34277111f6f8d7aba",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_graph_batch_rank_ledger.py": "1b51cbd924d629705e57326ccfd3c1faeb4894f8d3d5ca1ad7081582cdb3519a",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_manifest_workspace_envelope.py": "cf7b5e9fe275cf4ce318dcd89a1ee76bcbf7945044e52a96a78f97045bbc7f97",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_propagating_tail.py": "233ee65048070bacf5e28319353a5d91096e318c8d49fb6eaa3880fc9b3ba401",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_source_release_capacity.py": "d1bd74cd4c7a102e0c6439825e002c72a38c5ad7e9d9f417bcccf124bca450d4",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_store_restore_ordering.py": "f87e6e40759b97c8f7c6d1001f9e08626135da8c914866f10279d0cc99941b66",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_train_machinery.py": "36abf3443f0ba2b73c9341d79fe5972dd949510ae3ec099543d52fa52b0610b5",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_transfer_frontier_neutral.py": "eabe5fb7e8d91cfbb35966a25960cc73df19527ef8323acd27a0cd9209a141fa",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_weight_passes.py": "6a862e53011c1d1f7deb3bf74487e244b7e36b6d2500ad4c0f3d51c3f3ac9258",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_bridge.py": "a2c15edef975eb648ccce987c687a9a383622b993f526e62f8ffa5183a43ee64",
+          "sh_test_mesh/workload/llama2_7b_inference/online/test_workspace_capacity_manager.py": "bae46d5d0e57dbeafb97938fd6e79936fcaa5e2b7616de9b471a1cb9b67df5b2",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/bridge_echo.py": "26af7595c8f00d020bf8a5e142780b87a6f73714a835cb1ced988b76c0101e5d",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py": "b1853cc0a218e6d3aab2f65d088faa61eae8b6eb6de6a53f017cc2519e912ceb",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/lifecycle_fixture_service.py": "5134d55d5005a9f1aec9b4901fb3d8f393cea00b2d0b067eda0e7662210120d1",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/long_run_memory_fixture.py": "4d889c2e7d005f5c3cd1fe22b15b65eb86441a094d9f0ed962b3e723bdb7dcdf",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/same_tick_milestone_fixture_service.py": "00ac7b4e558e98cc1130ac9430f642fd9f2734b24bdd3be4523aa6982df063fc",
+          "sh_test_mesh/workload/llama2_7b_inference/online/verify/wakeup_guard_fixture_service.py": "35efd8f1c2832e461d9792e61518c977ad3068a9e90a5ffe6e157ec8278fb4b8",
+          "sh_test_mesh/workload/llama2_7b_inference/plan_materializer.py": "ca9ac5c615072c84162d2a403b27e24eddf8949119a495bae7afac1b7cf83ca7",
+          "sh_test_mesh/workload/llama2_7b_inference/session_kv_manager.py": "f8823202397614a0188471fff32753d6412e85453aa6878736c977d66e5d2058",
+          "sh_test_mesh/workload/llama2_7b_inference/test_die_model_oracle.py": "54b40f6b9baf17c8be9123937e5d9b1f5f837b195a7a74135bb33c4320679026",
+          "sh_test_mesh/workload/llama2_7b_inference/test_face_kv_incremental_invariants.py": "1c652d9a710f8123070eab8ad0ce62bd81355a12c2d4e96b4188cce70cc12a11",
+          "sh_test_mesh/workload/llama2_7b_inference/test_face_scheduler.py": "5aa24c97f6b2cb5bb1cffb99df1e8b1d8b76aeced4b0f76c28991e27439b90ff",
+          "sh_test_mesh/workload/llama2_7b_inference/test_face_tiered_eviction_sequence.py": "3e0462103d451237837a9ddf56719ec4a9598ac51f15d9f4df26b607bdd5df04",
+          "sh_test_mesh/workload/llama2_7b_inference/traces/derive_20_first_30_seconds.py": "b8341d6164baf16548238b1f5e16b2db139528ca0ad8a57db0b13237fe5b8949"
+        }
+      }
+    },
+    "pre_runtime_failure_log": "python-consumers/astra-sim-face-pre-runtime.log (preserved missing google.protobuf import failure; not a product failure)",
+    "protoc_version": "work/protobuf-root/usr/bin/protoc: error while loading shared libraries: libprotoc.so.32: cannot open shared object file: No such file or directory",
+    "python_protobuf_runtime": "4.21.12",
+    "python_userbase": "/workspace/template/work/integration-input-20261015/python-user",
+    "results": [
+      {
+        "command": [
+          "python3",
+          "/workspace/template/die/docs/analysis/face-workspace-20261015/run_python_checks.py",
+          "astra-sim-face",
+          "--repo-root",
+          "/workspace/template/work/integration-input-20261015/stage-root",
+          "--work-dir",
+          "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face",
+          "--legacy-library",
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libdie_model_cabi.so",
+          "--coarse-library",
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face/lib/libcoarse_die_cabi.so",
+          "online.test_workspace_capacity_manager",
+          "online.test_workspace_bridge",
+          "online.test_die_model_adapter",
+          "online.test_admission_liveness",
+          "online.test_graph_batch_builder",
+          "online.test_first_token_split",
+          "online.test_train_machinery",
+          "test_die_model_oracle",
+          "test_face_scheduler",
+          "test_face_kv_incremental_invariants",
+          "online.test_future_workspace_manager",
+          "online.test_manifest_workspace_envelope",
+          "online.test_source_release_capacity"
+        ],
+        "elapsed": "2.832s",
+        "exit_code": 0,
+        "protoc_version": "libprotoc 3.21.12",
+        "python_protobuf": "4.21.12",
+        "ran": 133,
+        "skipped": 0,
+        "stdout_log": "/workspace/template/work/integration-input-20261015/python-consumers/astra-sim-face-after-order.log",
+        "variant": "astra-sim-face",
+        "work_identity": "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face/identity-and-command.json"
+      },
+      {
+        "command": [
+          "python3",
+          "/workspace/template/die/docs/analysis/face-workspace-20261015/run_python_checks.py",
+          "astra-sim-face-LRU",
+          "--repo-root",
+          "/workspace/template/work/integration-input-20261015/stage-root",
+          "--work-dir",
+          "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face-LRU",
+          "--legacy-library",
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+          "--coarse-library",
+          "/workspace/template/work/integration-input-20261015/build/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+          "online.test_workspace_capacity_manager",
+          "online.test_workspace_bridge",
+          "online.test_die_model_adapter",
+          "online.test_admission_liveness",
+          "online.test_graph_batch_builder",
+          "online.test_first_token_split",
+          "online.test_train_machinery",
+          "test_die_model_oracle",
+          "test_face_scheduler",
+          "test_face_kv_incremental_invariants",
+          "online.test_future_workspace_manager",
+          "online.test_manifest_workspace_envelope",
+          "online.test_source_release_capacity",
+          "online.test_store_restore_ordering",
+          "online.test_eviction_side_branch_structure",
+          "online.test_transfer_frontier_neutral"
+        ],
+        "elapsed": "2.607s",
+        "exit_code": 0,
+        "protoc_version": "libprotoc 3.21.12",
+        "python_protobuf": "4.21.12",
+        "ran": 152,
+        "skipped": 0,
+        "stdout_log": "/workspace/template/work/integration-input-20261015/python-consumers/astra-sim-face-LRU-after-order.log",
+        "variant": "astra-sim-face-LRU",
+        "work_identity": "/workspace/template/work/integration-input-20261015/stage-root/work/astra-sim-face-LRU/identity-and-command.json"
+      }
+    ]
+  },
+  "schema": "frozen_89_five_repo_face_consumer_integration_v1",
+  "scope": "Work-only isolated SDK/config/consumer integration; no publish, push, or commit",
+  "snapshot": {
+    "archive": "/workspace/template/work/integration-input-20261015/die-89c2499.tar",
+    "archive_sha256": "388d1ebe4151d9b87afbb2cee65bc37bd39ecc6e448284ddfd36541e9857b120",
+    "commit": "89c2499c6e61de450291961d800594a8a83eeca7",
+    "files_sha256_manifest": "/workspace/template/work/integration-input-20261015/frozen-89-files.sha256",
+    "release_manifest": "RELEASE.json copied into each staged extern/die_model/coarse",
+    "release_source_digest": "74426b866937a077600c76db2d8e94b19329a68e354475d372756f89c58242d6",
+    "staging_summary": "/workspace/template/work/integration-input-20261015/stage-manifest.json"
+  }
+}

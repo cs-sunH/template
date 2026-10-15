@@ -1171,6 +1171,7 @@ void Runtime::allocate() {
   ++generation_;
 
   std::vector<Ref> refs;
+  refs.reserve(3 * std::min<std::size_t>(executions_.size(), 32));
   std::map<std::string, long double> owner_q;
   for (auto& [handle, execution] : executions_) {
     (void)handle;
@@ -1339,12 +1340,10 @@ void Runtime::allocate() {
                     rhs.live->definition.id, rhs.handle);
   });
 
-  struct Constraint {
-    std::vector<double> a;
-    double b = 0.0;
-  };
+  using Constraint = detail::RatioRow;
   const std::size_t count = refs.size();
   std::vector<Constraint> base;
+  base.reserve(resource_count + count + 2 * std::min(count, executions_.size()));
 
   for (std::size_t resource = 0; resource < resource_count; ++resource) {
     Constraint c{std::vector<double>(count, 0.0), capacities_[resource]};
@@ -1396,16 +1395,15 @@ void Runtime::allocate() {
     }
   }
 
-  std::vector<detail::PackingRow> packing;
-  packing.reserve(base.size());
-  bool nonnegative=true;
+  const bool nonnegative=std::all_of(base.begin(),base.end(),[](const auto& row) {
+    return std::all_of(row.a.begin(),row.a.end(),[](double x){return x>=0.0;});
+  });
   const bool curved_allocation=std::any_of(refs.begin(),refs.end(),[](const Ref& ref){
       return !ref.live->definition.credit_curve.empty();});
-  for(const auto& row:base) {
-    if(std::any_of(row.a.begin(),row.a.end(),[](double x){return x<0;})) { nonnegative=false;break; }
-    packing.push_back({row.a,row.b});
-  }
   if(nonnegative) {
+    std::vector<detail::PackingRow> packing;
+    packing.reserve(base.size());
+    for(const auto& row:base)packing.push_back({row.a,row.b});
     std::vector<std::string> owners;std::vector<double> quantities, rates, shares;
     owners.reserve(count);quantities.reserve(count);
     for(const auto& ref:refs) { owners.push_back(ref.owner_key);quantities.push_back(ref.q); }
@@ -1418,16 +1416,13 @@ void Runtime::allocate() {
     }
   }
   if(curved_allocation && count<=3) {
-    std::vector<detail::RatioRow> ratio_rows;
-    ratio_rows.reserve(base.size());
-    for(const auto& row:base)ratio_rows.push_back({row.a,row.b});
     std::vector<std::string> owners;
     std::vector<double> quantities,rates,shares;
     owners.reserve(count);quantities.reserve(count);
     for(const auto& ref:refs) {
       owners.push_back(ref.owner_key);quantities.push_back(ref.q);
     }
-    if(detail::allocate_ratio(ratio_rows,owners,quantities,rates,shares)) {
+    if(detail::allocate_ratio(base,owners,quantities,rates,shares)) {
       last_arbitration_.path=ArbitrationDiagnostics::Path::Ratio;
       last_arbitration_.constraint_rows=base.size();
       for(std::size_t i=0;i<count;++i)publish(refs[i],rates[i],shares[i]);
