@@ -229,32 +229,15 @@ void test_source_table_and_resource_formulas() {
               baseline.derived.at("hbm").at("peak_Bps"),
           "placement must not alter HBM raw peak");
 
-  auto core_first_input = base;
-  auto& core_first_profile = core_first_input["search_profile"];
-  core_first_profile["nx_range"] = {8, 8};
-  core_first_profile["ny_range"] = {11, 11};
-  core_first_profile["hbm_n_range"] = {2, 2};
-  core_first_profile["geometry_search_mode"] = "core_first";
-  const auto core_first_search = search_hardware(core_first_input);
-  require(core_first_search.at("candidate_count").get<std::size_t>() == 1,
-          "single-cell core-first search should produce exactly one candidate");
-  const auto core_first_hw = resolve_hardware(core_first_search.at("best").at("input"));
-
-  auto wafer_first_input = core_first_input;
-  auto& wafer_profile = wafer_first_input["search_profile"];
-  wafer_profile["geometry_search_mode"] = "wafer_first";
-  wafer_profile["wafer_columns_range"] = {9, 9};
-  wafer_profile["wafer_rows_range"] = {4, 4};
-  const auto wafer_first_search = search_hardware(wafer_first_input);
-  require(wafer_first_search.at("candidate_count").get<std::size_t>() == 1,
-          "single-cell wafer-first search should produce exactly one candidate");
-  const auto wafer_first_hw = resolve_hardware(wafer_first_search.at("best").at("input"));
-  for (const char* section : {"core", "die", "hbm", "system", "resources"}) {
-    require(core_first_hw.derived.at(section) == wafer_first_hw.derived.at(section),
-            std::string("search paths must produce the same hardware section: ") + section);
-  }
-  require(core_first_hw.rates == wafer_first_hw.rates,
-          "search path must not alter per-die service rates");
+  auto supplied_input = base;
+  supplied_input["architecture"]["die_geometry"] = "explicit";
+  supplied_input["architecture"]["die_width_mm"] = baseline.derived.at("die").at("width_mm");
+  supplied_input["architecture"]["die_height_mm"] = baseline.derived.at("die").at("height_mm");
+  supplied_input.erase("search_profile");
+  const auto supplied = resolve_hardware(supplied_input);
+  require(supplied.rates == baseline.rates &&
+              supplied.derived.at("core") == baseline.derived.at("core"),
+          "explicit user hardware preserves source resource formulas without a search");
 
   for (const int n : {1, 2, 3}) {
     auto input = base;

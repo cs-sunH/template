@@ -1,12 +1,29 @@
 # Coarse Die v2
 
-> Development checkpoint: read [docs/HANDOFF.md](docs/HANDOFF.md) before continuing. The default public build and 30 CTest tests pass. Production timing accuracy and complete five-repository business integration remain unaccepted.
+> Development checkpoint: read [docs/HANDOFF.md](docs/HANDOFF.md) for the source identity and actual tests. Hardware-input migration is in progress; complete accuracy, speed and five-repository integration remain unaccepted.
 
 `die/` is the canonical source for a coarse architectural model of one Die: a source-derived hardware resolver, a task-to-plan compiler, a shared service runtime, and a C ABI. Results describe a versioned set of engineering assumptions. They are not target-device measurements or a claim of silicon prediction accuracy.
 
 The TX8 reconstruction is a separate reference profile. The workbook has cached values and formulas but no auditable raw timing log; its 246 μs RMSNorm point is a reported anchor, while 3363 μs is a conditional whole-FFN interpretation. The exact reproduction of those source values is accounting verification, not accuracy validation. See [calibration/report.md](calibration/report.md) and [calibration/per_operator.csv](calibration/per_operator.csv).
 
-`configs/engineering_prior.json` records the §9.2 engineering prior for target INT4/FP32 work. The v2 target prior remains separate from the TX8 reference efficiencies. `configs/example_hardware.json` is a complete hardware input; the standalone prior file is metadata and must not be passed as a complete hardware descriptor.
+`configs/engineering_prior.json` records the §9.2 engineering prior for target INT4/FP32 work. The v2 target prior remains separate from the TX8 reference efficiencies. `configs/example_hardware_explicit.json` is the recommended complete single-Die input; `configs/example_hardware.json` remains an old-format compatibility example; the standalone prior file is metadata and must not be passed as a complete hardware descriptor.
+
+## Hardware is supplied by the user
+
+Provide Die width/height and the Core grid (`core_columns_nx`, `core_rows_ny`),
+along with Core type, SRAM, NoC width, HBM and the explicit performance profile.
+The resolver derives area, capacities and the 13 resource rates for that one
+instance. It does not enumerate hardware, choose an area/grid, or recommend a
+Pareto winner. Wafer geometry and `search_profile` are not required. Optional
+`validation_constraints` can reject the supplied instance without changing it.
+Software tile/residency choices within that fixed hardware remain supported.
+
+The current prediction-error target is 10%. After multiple recorded tests and
+reasonable calibration attempts, results within 20% may be accepted with their
+scope and unmet 10% target disclosed. This replaces the historical 3%/5% gates;
+exact work/capacity accounting, the busy definition and speed budgets remain.
+Calibration uses the workbook's correctly decomposed operator data and a small
+number of identifiable parameters; reference data and target priors stay distinct.
 
 ## Build and run
 
@@ -20,7 +37,7 @@ cmake --build build/coarse_die_v2 -j
 ctest --test-dir build/coarse_die_v2 --output-on-failure
 ./die/tools/estimate.py \
   --library build/coarse_die_v2/lib/libcoarse_die_cabi.so \
-  --hardware die/configs/example_hardware.json \
+  --hardware die/configs/example_hardware_explicit.json \
   --tasks die/configs/example_tasks.json \
   --output -
 ```
@@ -69,8 +86,8 @@ Apply the same configure/build/test sequence to `astra-sim-wscllm`, `astra-sim-w
 | Capacity-only compiler bound and LRU admission | `passed` for the finite request-aggregated manifest fixtures; both actual Online runs finished, with all 480/560 typed Plans below their immutable rank bounds |
 | Runtime, endpoints and snapshot semantics | Focused public and adapter tests pass; these do not establish production timing accuracy or every business path |
 | Five-repository v2 adapter integration | `in_progress`; canonical publication and per-variant ABI/config checks are recorded separately from workload/runtime integration |
-| Production timing granularity | `failed`: E5 finish/busy oracle remains outside the original 3%/5% limits; E8/E16 evidence is unavailable |
+| Production timing granularity | Historical 3%/5% reports are retained; reevaluation under the current 10%/20% policy is pending, and existing large busy errors still exceed 20% |
 | Independent target-hardware held-out validation | `not_available`; no eligible target timing samples are present |
-| New active joint | Additive coarse adapter/runtime work uses `astra-sim-joint`; `astra-sim-joint_old` is archival. Current verification scope is in HANDOFF. |
+| New active joint | Additive coarse adapter/runtime work uses `astra-sim-joint`; `astra-sim-joint_old` was removed and must not be restored. Current verification scope is in HANDOFF. |
 
 The engineering project remains incomplete. Follow the design §1.4 formula-first principle: auxiliary details that are not directly tied to hardware design or software task inputs use simple mathematical formulas where sufficient. Necessary parameter coverage, readiness and shared-resource constraints remain required. Current evidence and reproduction instructions are in [docs/evidence/lru-future-workspace-20261014](docs/evidence/lru-future-workspace-20261014/README.md).

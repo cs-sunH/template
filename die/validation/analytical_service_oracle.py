@@ -24,6 +24,66 @@ class UnsupportedScenario(ValueError):
     """The discrete reference's declared fixture coverage does not apply."""
 
 
+PRECISION_POLICY_ID = "die_accuracy_target_10pct_fallback_20pct_v1"
+TARGET_ERROR_LIMIT = 0.10
+FALLBACK_ERROR_LIMIT = 0.20
+
+
+def _normalize_tolerance_evidence(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("tolerance evidence must be a JSON object")
+    source = value.get("source")
+    attempts = value.get("attempts")
+    reason = value.get("reason")
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError("tolerance evidence requires a nonempty source")
+    if (not isinstance(attempts, list) or len(attempts) < 2
+            or any(not isinstance(item, str) or not item.strip() for item in attempts)):
+        raise ValueError("tolerance evidence requires at least two nonempty attempt descriptions")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("tolerance evidence requires a nonempty reason")
+    return {"source": source.strip(),
+            "attempts": [item.strip() for item in attempts],
+            "reason": reason.strip()}
+
+
+def load_tolerance_evidence(path: Path | None) -> dict[str, Any] | None:
+    """Load the concise caller-provided record needed for 10–20% acceptance."""
+    if path is None:
+        return None
+    try:
+        value = json.loads(path.read_text())
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid tolerance evidence JSON: {error}") from error
+    return _normalize_tolerance_evidence(value)
+
+
+def _policy_unassessed(evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+    return {
+        "policy_id": PRECISION_POLICY_ID,
+        "target_relative_error_limits": {
+            "completion": TARGET_ERROR_LIMIT,
+            "hbm_busy": TARGET_ERROR_LIMIT,
+            "shared_hbm_busy": TARGET_ERROR_LIMIT,
+        },
+        "fallback_relative_error_limits": {
+            "completion": FALLBACK_ERROR_LIMIT,
+            "hbm_busy": FALLBACK_ERROR_LIMIT,
+            "shared_hbm_busy": FALLBACK_ERROR_LIMIT,
+        },
+        "target_met": None,
+        "target_unmet": None,
+        "within_fallback_range": None,
+        "fallback_evidence_status": "provided" if evidence else "missing",
+        "fallback_evidence": evidence,
+        "fallback_accepted": False,
+        "serialized_runtime_work_status": "not_assessed",
+        "status": "not_assessed",
+    }
+
+
 def _finite_number(value: Any) -> bool:
     if not isinstance(value, (int, float)) or isinstance(value, bool):
         return False
@@ -296,13 +356,124 @@ def _absolute_errors(comparison: dict[str, Any], actual: dict[str, Any],
 
 def _compare(actual: dict[str, Any], oracle: dict[str, Any], phase: float,
              concurrent: bool) -> dict[str, Any]:
-    result = reference.compare_measurement(actual, oracle, phase, concurrent)
+    result = reference.compare_measurement(
+        actual, oracle, phase, concurrent,
+        completion_limit=TARGET_ERROR_LIMIT,
+        busy_limit=TARGET_ERROR_LIMIT)
     result["absolute_errors_and_shared_reference"] = _absolute_errors(
         result, actual, oracle, concurrent)
+    errors = result["relative_errors"]
+    completion_error = max(errors["finish_by_request"].values(), default=math.inf)
+    shared_required = result["limits"]["shared_hbm_busy"] is not None
+    hbm_busy_error = errors["hbm_busy"]
+    shared_busy_error = errors["shared_hbm_busy"]
+    target_checks = {
+        "completion": completion_error <= TARGET_ERROR_LIMIT,
+        "hbm_busy": hbm_busy_error <= TARGET_ERROR_LIMIT,
+        "shared_hbm_busy": (shared_busy_error <= TARGET_ERROR_LIMIT
+                             if shared_required else True),
+    }
+    fallback_checks = {
+        "completion": completion_error <= FALLBACK_ERROR_LIMIT,
+        "hbm_busy": hbm_busy_error <= FALLBACK_ERROR_LIMIT,
+        "shared_hbm_busy": (shared_busy_error <= FALLBACK_ERROR_LIMIT
+                             if shared_required else True),
+    }
+    target_met = all(target_checks.values())
+    within_fallback = all(fallback_checks.values())
+    result["precision_assessment"] = {
+        "status": ("target_met" if target_met else
+                   "within_fallback_range" if within_fallback else
+                   "outside_fallback_range"),
+        "target_met": target_met,
+        "within_fallback_range": within_fallback,
+        "relative_errors": {
+            "completion": completion_error,
+            "hbm_busy": hbm_busy_error,
+            "shared_hbm_busy": shared_busy_error,
+        },
+        "target_checks": target_checks,
+        "fallback_checks": fallback_checks,
+        "target_limit": TARGET_ERROR_LIMIT,
+        "fallback_limit": FALLBACK_ERROR_LIMIT,
+        "fallback_accepted": False,
+    }
     return result
 
 
-def build_report(raw: dict[str, Any], *, entry_parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+def _serialized_runtime_work_reconciliation(
+        comparisons: list[tuple[str, dict[str, Any]]]) -> dict[str, Any]:
+    """Summarize the exact served-work diagnostic without hiding its absence."""
+    failed_statuses = {
+        "failed", "outside_relative_tolerance", "incomplete_history",
+    }
+    scenarios = []
+    for name, comparison in comparisons:
+        reconciliation = comparison.get(
+            "runtime_cumulative_serialization_reconciliation")
+        if not isinstance(reconciliation, dict):
+            raw_status = "missing"
+            available = None
+        else:
+            raw_status = reconciliation.get("status")
+            available = reconciliation.get("available")
+            if not isinstance(raw_status, str) or not raw_status:
+                raw_status = "missing"
+        if raw_status in failed_statuses:
+            outcome = "failed"
+        elif raw_status == "within_relative_tolerance" and available is True:
+            outcome = "verified"
+        elif raw_status == "not_available" and available is False:
+            outcome = "not_available"
+        elif raw_status == "missing":
+            outcome = "missing"
+        else:
+            # Unknown or internally inconsistent states must not silently count
+            # as an exact-work pass.
+            outcome = "unrecognized_status"
+        scenarios.append({
+            "scenario": name,
+            "status": raw_status,
+            "outcome": outcome,
+            "available": available,
+            "verified": outcome == "verified",
+            "reason": (reconciliation.get("reason")
+                       if isinstance(reconciliation, dict) else None),
+            "missing_counter_fields": (
+                reconciliation.get("missing_counter_fields", [])
+                if isinstance(reconciliation, dict) else []),
+        })
+
+    outcomes = {item["outcome"] for item in scenarios}
+    if outcomes & {"failed", "unrecognized_status"}:
+        status = "failed"
+    elif "missing" in outcomes:
+        status = "missing"
+    elif "not_available" in outcomes:
+        status = "not_available"
+    else:
+        status = "within_relative_tolerance"
+    blocks_acceptance = bool(outcomes & {
+        "failed", "missing", "unrecognized_status",
+    })
+    return {
+        "status": status,
+        "all_available_scenarios_within_tolerance": bool(scenarios) and all(
+            item["verified"] for item in scenarios),
+        "blocks_acceptance": blocks_acceptance,
+        "scenarios": scenarios,
+        "interpretation": (
+            "Serialized Runtime work counters reconcile within the declared tolerance for every scenario."
+            if status == "within_relative_tolerance" else
+            "Serialized Runtime work counters are unavailable; precision results do not verify exact served work."
+            if status == "not_available" else
+            "Serialized Runtime work reconciliation failed or its result is missing or unrecognized."),
+    }
+
+
+def build_report(raw: dict[str, Any], *, entry_parameters: dict[str, Any] | None = None,
+                 tolerance_evidence: dict[str, Any] | None = None) -> dict[str, Any]:
+    tolerance_evidence = _normalize_tolerance_evidence(tolerance_evidence)
     framework = identify_service_framework(raw)
     if framework["status"] != "identified":
         raise UnsupportedScenario("service framework metadata is incomplete or inconsistent: "
@@ -332,10 +503,37 @@ def build_report(raw: dict[str, Any], *, entry_parameters: dict[str, Any] | None
         "actual_concurrent_scenarios_observed": len(actual_concurrent),
         "concurrent_completion_and_shared_busy_compared": bool(concurrent),
     }
-    passed = (scenario_coverage["standalone_scenario_observed"] and bool(concurrent)
-              and ledger["status"] == "passed" and solo["status"] == "passed"
-              and all(item["status"] == "passed" for item in concurrent))
-    status = "passed" if passed else "failed"
+    comparisons = [solo, *concurrent]
+    target_met = all(item["precision_assessment"]["target_met"]
+                     for item in comparisons)
+    within_fallback = all(item["precision_assessment"]["within_fallback_range"]
+                          for item in comparisons)
+    runtime_work_reconciliation = _serialized_runtime_work_reconciliation([
+        ("standalone", solo),
+        *((f"two_comp[{index}]", item)
+          for index, item in enumerate(concurrent)),
+    ])
+    scenario_complete = (scenario_coverage["standalone_scenario_observed"]
+                         and bool(concurrent))
+    work_and_scenario_valid = scenario_complete and ledger["status"] == "passed"
+    exact_work_allows_acceptance = not runtime_work_reconciliation["blocks_acceptance"]
+    passed = (work_and_scenario_valid and exact_work_allows_acceptance
+              and target_met)
+    fallback_accepted = (work_and_scenario_valid and not target_met
+                        and exact_work_allows_acceptance and within_fallback
+                        and tolerance_evidence is not None)
+    status = ("passed" if passed else
+              "accepted_with_fallback" if fallback_accepted else "failed")
+    for item in comparisons:
+        assessment = item["precision_assessment"]
+        assessment["fallback_accepted"] = (
+            fallback_accepted and not assessment["target_met"]
+            and assessment["within_fallback_range"])
+        if assessment["fallback_accepted"]:
+            assessment["status"] = "accepted_with_fallback"
+        elif not assessment["target_met"] and assessment["within_fallback_range"]:
+            assessment["status"] = ("fallback_evidence_missing" if tolerance_evidence is None
+                                     else "fallback_blocked_by_other_checks")
     plan = raw["compiled_plan"]
     summary = plan["summary"]
     available = [{
@@ -346,13 +544,46 @@ def build_report(raw: dict[str, Any], *, entry_parameters: dict[str, Any] | None
         "status": item["status"],
     } for item in framework["observed_frameworks"]]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "oracle": "grouped_gemm_oracle.independent_discrete_k_consumption_waves",
         "status": status,
         "status_scope": "one_actual_compiled_plan_and_cpp_runtime_fixture",
+        "acceptance_scope": (
+            "precision comparison plus compiled-plan work ledger; when serialized Runtime "
+            "work is not_available, acceptance is precision-only and does not validate "
+            "exact served-work counters"),
         "fixture_kind": raw["synthetic_hardware"].get("fixture_kind"),
         "measurement_source": raw.get("measurement_source"),
         "entry_parameters": entry_parameters or {},
+        "precision_policy": {
+            "policy_id": PRECISION_POLICY_ID,
+            "target_relative_error_limits": {
+                "completion": TARGET_ERROR_LIMIT,
+                "hbm_busy": TARGET_ERROR_LIMIT,
+                "shared_hbm_busy": TARGET_ERROR_LIMIT,
+            },
+            "fallback_relative_error_limits": {
+                "completion": FALLBACK_ERROR_LIMIT,
+                "hbm_busy": FALLBACK_ERROR_LIMIT,
+                "shared_hbm_busy": FALLBACK_ERROR_LIMIT,
+            },
+            "target_met": target_met,
+            "target_unmet": not target_met,
+            "within_fallback_range": within_fallback,
+            "fallback_evidence_status": "provided" if tolerance_evidence else "missing",
+            "fallback_evidence": tolerance_evidence,
+            "fallback_accepted": fallback_accepted,
+            "serialized_runtime_work_status": runtime_work_reconciliation["status"],
+            "status": ("target_met" if passed else
+                       "accepted_with_fallback" if fallback_accepted else
+                       "runtime_serialized_work_reconciliation_failed"
+                       if runtime_work_reconciliation["blocks_acceptance"] else
+                       "work_or_scenario_checks_failed"
+                       if not work_and_scenario_valid else
+                       "fallback_not_accepted" if within_fallback and not target_met else
+                       "outside_fallback_range" if not within_fallback else
+                       "work_or_scenario_checks_failed"),
+        },
         "compiled_plan": {
             "fingerprint": plan.get("fingerprint"),
             "compiler_path": plan.get("compiler_path"),
@@ -386,13 +617,14 @@ def build_report(raw: dict[str, Any], *, entry_parameters: dict[str, Any] | None
         },
         "independent_expected_work": expected,
         "compiled_plan_ledger": ledger,
+        "runtime_cumulative_serialization_reconciliation": runtime_work_reconciliation,
         "comparisons": {"standalone": solo, "two_comp": concurrent},
         "scenario_coverage": scenario_coverage,
         "acceptance_limits": {
-            "standalone_finish_relative_error": 0.03,
-            "concurrent_finish_relative_error": 0.05,
-            "hbm_busy_relative_error": 0.05,
-            "shared_hbm_busy_relative_error": 0.05,
+            "standalone_finish_relative_error": TARGET_ERROR_LIMIT,
+            "concurrent_finish_relative_error": TARGET_ERROR_LIMIT,
+            "hbm_busy_relative_error": TARGET_ERROR_LIMIT,
+            "shared_hbm_busy_relative_error": TARGET_ERROR_LIMIT,
         },
         "available_granularity_levels": {
             "source": "actual compiled Plan service_model_provenance.service_curves",
@@ -401,11 +633,28 @@ def build_report(raw: dict[str, Any], *, entry_parameters: dict[str, Any] | None
             "status": "fixture_comparison_only",
             "comparison_status": status,
         },
-        "status_reason": ("all measured scenarios meet the frozen limits" if passed
-                          else "work reconciliation or at least one measured scenario failed its frozen limit"),
+        "status_reason": (
+            "all measured scenarios meet the 10% target, the compiled-plan ledger passed, and serialized Runtime work is within tolerance"
+            if passed and runtime_work_reconciliation[
+                "all_available_scenarios_within_tolerance"] else
+            "precision-only comparison meets the 10% target and the compiled-plan ledger passed; exact serialized Runtime work counters are unavailable"
+            if passed else
+            "serialized Runtime work reconciliation failed or is missing; precision tolerance cannot waive it"
+            if runtime_work_reconciliation["blocks_acceptance"] else
+            "work reconciliation or required scenario coverage failed; precision tolerance cannot waive it"
+            if not work_and_scenario_valid else
+            "20% precision fallback accepted with caller-provided attempts and a reason; exact serialized Runtime work counters are unavailable"
+            if fallback_accepted and runtime_work_reconciliation["status"] == "not_available" else
+            "20% fallback accepted with caller-provided attempts and a reason, and serialized Runtime work was verified"
+            if fallback_accepted else
+            "20% fallback range requires documented attempts and a reason"
+            if within_fallback and not target_met else
+            "work reconciliation, scenario coverage, or at least one error exceeded the 20% range"),
         "notes": [
             "Only actual driver Runtime scenarios are compared; the Python side enumerates the small reference waves.",
             "No new E-level certification or minimum-granularity claim is made.",
+            "The 10% target and 20% fallback are an offline comparison policy; fallback evidence is caller-provided and not independently judged by this tool.",
+            "Runtime serialized work reconciliation is reported separately; not_available means exact served-work counts are unverified, not passed.",
             "A failed precision comparison is a valid tool result and returns CLI status 1.",
         ],
     }
@@ -446,6 +695,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--raw-output", type=Path,
                         help="save actual driver JSON (defaults beside --output when running the driver)")
     parser.add_argument("--output", type=Path, help="save report JSON; stdout when omitted")
+    parser.add_argument("--tolerance-evidence", type=Path,
+                        help="JSON source/attempts/reason record required to accept 10–20% error")
     parser.add_argument("--m", type=int)
     parser.add_argument("--n", type=int)
     parser.add_argument("--k", type=int)
@@ -459,17 +710,21 @@ def main(argv: list[str] | None = None) -> int:
         "raw_input": str(args.raw) if args.raw else None,
         "raw_output": str(args.raw_output) if args.raw_output else None,
         "report_output": str(args.output) if args.output else None,
+        "tolerance_evidence": (str(args.tolerance_evidence)
+                               if args.tolerance_evidence else None),
         "requested_shape": {key: getattr(args, key) for key in ("m", "n", "k")},
         "requested_tiles": {key: getattr(args, key) for key in ("tm", "tn", "tk")},
     }
     raw: dict[str, Any] | None = None
     raw_output = args.raw_output
+    tolerance_evidence = None
     try:
         driver_args = _driver_arguments(args)
         parameters["driver_arguments"] = driver_args
         if (args.raw_output is not None and args.output is not None
                 and args.raw_output.resolve() == args.output.resolve()):
             raise ValueError("--raw-output and --output must use different paths")
+        tolerance_evidence = load_tolerance_evidence(args.tolerance_evidence)
         if args.raw:
             if driver_args:
                 raise ValueError("shape/tile selection belongs to driver runs; omit it with --raw")
@@ -492,33 +747,36 @@ def main(argv: list[str] | None = None) -> int:
         parameters["raw_output"] = str(raw_output) if raw_output else None
         if raw is not None and args.raw:
             parameters["raw_driver_source"] = str(args.raw)
-        report = build_report(raw, entry_parameters=parameters)
+        report = build_report(raw, entry_parameters=parameters,
+                              tolerance_evidence=tolerance_evidence)
     except UnsupportedScenario as error:
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
             "oracle": "grouped_gemm_oracle.independent_discrete_k_consumption_waves",
             "status": "unsupported",
             "status_scope": "no precision comparison performed",
             "reason": str(error),
             "entry_parameters": parameters,
+            "precision_policy": _policy_unassessed(tolerance_evidence),
             "available_granularity_levels": {"observed": [], "minimum_certified_framework": None},
         }
         _write_json(args.output, report)
         return 2
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
         report = {
-            "schema_version": 1,
+            "schema_version": 2,
             "oracle": "grouped_gemm_oracle.independent_discrete_k_consumption_waves",
             "status": "not_run",
             "status_scope": "invalid input or tool execution error",
             "reason": str(error),
             "entry_parameters": parameters,
+            "precision_policy": _policy_unassessed(tolerance_evidence),
         }
         _write_json(args.output, report)
         return 2
 
     _write_json(args.output, report)
-    return 0 if report["status"] == "passed" else 1
+    return 0 if report["status"] in {"passed", "accepted_with_fallback"} else 1
 
 
 if __name__ == "__main__":

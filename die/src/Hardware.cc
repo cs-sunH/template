@@ -115,12 +115,6 @@ double numberField(const Json& object, const char* key,
   return numberValue(requireField(object, key, path), path + "." + key);
 }
 
-bool boolField(const Json& object, const char* key, const std::string& path) {
-  const auto& value = requireField(object, key, path);
-  if (!value.is_boolean()) invalid(path + "." + key, "must be a boolean");
-  return value.get<bool>();
-}
-
 bool optionalBool(const Json& object, const char* key, bool fallback,
                   const std::string& path) {
   const auto it = object.find(key);
@@ -377,105 +371,50 @@ double coreEdgeMm(const std::string& type, double sramMiB) {
   return (a + std::sqrt(radicand)) / 0.3;
 }
 
-struct Range {
-  int minimum;
-  int maximum;
+// Constraints validate one supplied instance; they never generate hardware.
+struct GeometryConstraints {
+  double areaMin = 0.0;
+  double areaMax = std::numeric_limits<double>::infinity();
+  double reticleWidth = std::numeric_limits<double>::infinity();
+  double reticleHeight = std::numeric_limits<double>::infinity();
+  bool allowRotation = true;
+  double maxAspect = std::numeric_limits<double>::infinity();
+  bool requireNonnegativeD2d = false;
+  bool requireHbmWithinDie = false;
 };
 
-Range parseRange(const Json& object, const char* key, const std::string& path,
-                 int maximumAllowed) {
-  const auto& value = requireField(object, key, path);
-  const std::string fieldPath = path + "." + key;
-  Range range{};
-  if (value.is_object()) {
-    range.minimum = positiveIntegerField(value, "min", fieldPath, maximumAllowed);
-    range.maximum = positiveIntegerField(value, "max", fieldPath, maximumAllowed);
-  } else if (value.is_array() && value.size() == 2) {
-    range.minimum = positiveIntegerValue(value[0], fieldPath + "[0]", maximumAllowed);
-    range.maximum = positiveIntegerValue(value[1], fieldPath + "[1]", maximumAllowed);
-  } else {
-    invalid(fieldPath, "must be {min,max} or a two-element [min,max] array");
-  }
-  if (range.minimum > range.maximum) invalid(fieldPath, "min must not exceed max");
-  return range;
-}
-
-struct SearchProfile {
-  double areaMin;
-  double areaMax;
-  double reticleWidth;
-  double reticleHeight;
-  bool allowRotation;
-  double maxAspect;
-  bool requireNonnegativeD2d;
-  bool requireHbmWithinDie;
-  std::string geometryMode;
-  std::string objective;
-  std::vector<std::string> extensionRules;
-};
-
-SearchProfile validateSearchProfile(const Json& p) {
-  SearchProfile profile{};
-  profile.areaMin = positiveNumberField(p, "die_area_min_mm2", "search_profile");
-  profile.areaMax = positiveNumberField(p, "die_area_max_mm2", "search_profile");
-  if (profile.areaMin > profile.areaMax)
-    invalid("search_profile", "die_area_min_mm2 must not exceed die_area_max_mm2");
-  profile.reticleWidth = positiveNumberField(p, "reticle_width_mm", "search_profile");
-  profile.reticleHeight = positiveNumberField(p, "reticle_height_mm", "search_profile");
-  profile.allowRotation = boolField(p, "allow_reticle_rotation", "search_profile");
-  profile.maxAspect = positiveNumberField(p, "die_max_aspect_ratio", "search_profile");
-  if (profile.maxAspect < 1.0) invalid("search_profile.die_max_aspect_ratio", "must be at least one");
-  profile.requireNonnegativeD2d = boolField(p, "require_nonnegative_d2d_budget", "search_profile");
-  profile.requireHbmWithinDie = optionalBool(p, "require_hbm_row_within_die", false, "search_profile");
-
-  profile.geometryMode = "core_first";
-  if (p.contains("geometry_search_mode")) {
-    if (!p["geometry_search_mode"].is_string())
-      invalid("search_profile.geometry_search_mode", "must be a string");
-    profile.geometryMode = p["geometry_search_mode"].get<std::string>();
-  }
-  if (profile.geometryMode != "core_first" && profile.geometryMode != "wafer_first")
-    invalid("search_profile.geometry_search_mode", "must be core_first or wafer_first");
-
-  profile.objective = "compute_peak";
-  if (p.contains("objective")) {
-    if (!p["objective"].is_string()) invalid("search_profile.objective", "must be a string");
-    profile.objective = p["objective"].get<std::string>();
-  }
-  if (profile.objective != "compute_peak" && profile.objective != "hbm_capacity" &&
-      profile.objective != "pareto")
-    invalid("search_profile.objective", "must be compute_peak, hbm_capacity, or pareto");
-
-  profile.extensionRules = {"grow_width", "grow_height", "isotropic"};
-  if (p.contains("area_extension_rules")) {
-    const auto& rules = p["area_extension_rules"];
-    if (!rules.is_array()) invalid("search_profile.area_extension_rules", "must be an array");
-    profile.extensionRules.clear();
-    std::set<std::string> seen;
-    for (std::size_t i = 0; i < rules.size(); ++i) {
-      if (!rules[i].is_string()) invalid("search_profile.area_extension_rules", "entries must be strings");
-      const auto rule = rules[i].get<std::string>();
-      if (rule != "grow_width" && rule != "grow_height" && rule != "isotropic")
-        invalid("search_profile.area_extension_rules", "contains an unknown area extension rule");
-      if (!seen.insert(rule).second) invalid("search_profile.area_extension_rules", "contains a duplicate rule");
-      profile.extensionRules.push_back(rule);
+GeometryConstraints validateConstraints(const Json& p, const std::string& path,
+                                        bool legacy = false) {
+  if (!p.is_object()) invalid(path, "must be an object");
+  GeometryConstraints result;
+  if (!legacy) {
+    for (auto it = p.begin(); it != p.end(); ++it) {
+      if (it.key() != "die_area_min_mm2" && it.key() != "die_area_max_mm2" &&
+          it.key() != "reticle_width_mm" && it.key() != "reticle_height_mm" &&
+          it.key() != "allow_reticle_rotation" && it.key() != "die_max_aspect_ratio" &&
+          it.key() != "require_nonnegative_d2d_budget" &&
+          it.key() != "require_hbm_row_within_die")
+        invalid(path + "." + it.key(), "is not an instance validation constraint");
     }
   }
-  if (p.contains("nx_range")) (void)parseRange(p, "nx_range", "search_profile", 100000);
-  if (p.contains("ny_range")) (void)parseRange(p, "ny_range", "search_profile", 100000);
-  if (p.contains("hbm_n_range")) (void)parseRange(p, "hbm_n_range", "search_profile", 14);
-  const bool hasWaferColumns = p.contains("wafer_columns_range");
-  const bool hasWaferRows = p.contains("wafer_rows_range");
-  if (hasWaferColumns != hasWaferRows)
-    invalid("search_profile", "wafer_columns_range and wafer_rows_range must be provided together");
-  if (hasWaferColumns) {
-    (void)parseRange(p, "wafer_columns_range", "search_profile", 100000);
-    (void)parseRange(p, "wafer_rows_range", "search_profile", 100000);
-  }
-  if (profile.geometryMode == "wafer_first" &&
-      (!hasWaferColumns || !hasWaferRows))
-    invalid("search_profile", "wafer_first requires wafer_columns_range and wafer_rows_range");
-  return profile;
+  const auto number = [&](const char* key, double fallback) {
+    return p.contains(key) ? positiveNumberField(p, key, path) : fallback;
+  };
+  result.areaMin = number("die_area_min_mm2", result.areaMin);
+  result.areaMax = number("die_area_max_mm2", result.areaMax);
+  if (result.areaMin > result.areaMax)
+    invalid(path, "die_area_min_mm2 must not exceed die_area_max_mm2");
+  if (p.contains("reticle_width_mm") != p.contains("reticle_height_mm"))
+    invalid(path, "reticle_width_mm and reticle_height_mm must be supplied together");
+  result.reticleWidth = number("reticle_width_mm", result.reticleWidth);
+  result.reticleHeight = number("reticle_height_mm", result.reticleHeight);
+  result.allowRotation = optionalBool(p, "allow_reticle_rotation", true, path);
+  result.maxAspect = number("die_max_aspect_ratio", result.maxAspect);
+  if (result.maxAspect < 1.0)
+    invalid(path + ".die_max_aspect_ratio", "must be at least one");
+  result.requireNonnegativeD2d = optionalBool(p, "require_nonnegative_d2d_budget", false, path);
+  result.requireHbmWithinDie = optionalBool(p, "require_hbm_row_within_die", false, path);
+  return result;
 }
 
 struct PerformanceProfile {
@@ -573,6 +512,7 @@ struct Architecture {
   std::string placement;
   double regionWidth;
   double regionHeight;
+  bool hasRegion;
 };
 
 Architecture parseArchitecture(const Json& a) {
@@ -597,11 +537,12 @@ Architecture parseArchitecture(const Json& a) {
   nonnegative(arch.pitchY, "architecture.core_pitch_y_mm");
   nonnegative(arch.extraWidth, "architecture.die_extra_width_mm");
   nonnegative(arch.extraHeight, "architecture.die_extra_height_mm");
-  arch.geometry = stringField(a, "die_geometry", "architecture");
-  if (arch.geometry != "minimum_grid" && arch.geometry != "grow_width" &&
+  arch.geometry = a.contains("die_geometry")
+      ? stringField(a, "die_geometry", "architecture") : "explicit";
+  if (arch.geometry != "explicit" && arch.geometry != "minimum_grid" && arch.geometry != "grow_width" &&
       arch.geometry != "grow_height" && arch.geometry != "isotropic" &&
       arch.geometry != "resolved_source_boundary")
-    invalid("architecture.die_geometry", "is not a supported source geometry identity");
+    invalid("architecture.die_geometry", "must be explicit or a supported legacy geometry identity");
   arch.geometryCandidate = arch.geometry;
   if (arch.geometry == "resolved_source_boundary") {
     arch.geometryCandidate = stringField(a, "geometry_candidate", "architecture");
@@ -613,8 +554,11 @@ Architecture parseArchitecture(const Json& a) {
   arch.placement = stringField(a, "hbm_placement_mode", "architecture");
   if (arch.placement != "same_side_two_rows" && arch.placement != "two_sides_one_row_each")
     invalid("architecture.hbm_placement_mode", "must be same_side_two_rows or two_sides_one_row_each");
-  arch.regionWidth = positiveNumberField(a, "system_region_width_mm", "architecture");
-  arch.regionHeight = positiveNumberField(a, "system_region_height_mm", "architecture");
+  if (a.contains("system_region_width_mm") != a.contains("system_region_height_mm"))
+    invalid("architecture", "system region width and height must be supplied together");
+  arch.hasRegion = a.contains("system_region_width_mm");
+  arch.regionWidth = arch.hasRegion ? positiveNumberField(a, "system_region_width_mm", "architecture") : 0.0;
+  arch.regionHeight = arch.hasRegion ? positiveNumberField(a, "system_region_height_mm", "architecture") : 0.0;
   return arch;
 }
 
@@ -644,33 +588,6 @@ std::pair<double, double> sourceGeometry(const std::string& candidate,
     return {minW * scale, minH * scale};
   }
   invalid("architecture.die_geometry", "unsupported source geometry candidate");
-}
-
-void validateGeometryIdentity(const Json& input, const Architecture& arch,
-                              const SearchProfile& search, double minW,
-                              double minH, double areaReq,
-                              double width, double height) {
-  const std::string candidate = arch.geometryCandidate;
-  if (candidate != "minimum_grid" &&
-      std::find(search.extensionRules.begin(), search.extensionRules.end(), candidate) ==
-          search.extensionRules.end())
-    invalid("architecture.die_geometry", "candidate is not enabled by search_profile.area_extension_rules");
-  if (candidate == "minimum_grid" && minW * minH + 1.0e-10 < areaReq)
-    invalid("architecture.die_geometry", "minimum_grid is legal only when A0 meets A_req");
-  if (candidate != "minimum_grid" && minW * minH >= areaReq)
-    invalid("architecture.die_geometry", "extension candidates are legal only when A0 is below A_req");
-  const auto expected = sourceGeometry(candidate, minW, minH, areaReq);
-  if (!nearlyEqual(width, expected.first, 1.0e-10, 1.0e-9) ||
-      !nearlyEqual(height, expected.second, 1.0e-10, 1.0e-9))
-    invalid("architecture.die_width_mm/die_height_mm", "do not equal the identified source boundary geometry");
-  if (arch.geometry == "resolved_source_boundary") {
-    const auto& a = input.at("architecture");
-    const auto upstream = a.find("upstream_search_profile");
-    if (upstream == a.end())
-      invalid("architecture.upstream_search_profile", "is required for resolved_source_boundary");
-    if (!upstream->is_object() || *upstream != input.at("search_profile"))
-      invalid("architecture.upstream_search_profile", "must exactly match the top-level SearchProfile");
-  }
 }
 
 struct ExplicitIngress {
@@ -722,6 +639,8 @@ ExplicitIngress validateExplicitIngress(const Json& p, int nx) {
       const double weight = numberValue(pair[1], "performance_profile.explicit_ingress.source_positions.weight");
       if (weight <= 0.0) invalid("performance_profile.explicit_ingress.source_positions", "position weights must be positive");
       weightSum += weight;
+      if (!std::isfinite(weightSum))
+        invalid("performance_profile.explicit_ingress.source_positions", "position weight sum must be finite");
     }
     if (!nearlyEqual(weightSum, 1.0, 1.0e-10, 1.0e-10))
       invalid("performance_profile.explicit_ingress.source_positions", "weights for each entrance must sum to one");
@@ -757,14 +676,27 @@ Hardware resolve_hardware(const nlohmann::json& input) {
   validateSourceConstants(input);
 
   const auto& aJson = requireField(input, "architecture", "input");
-  const auto& sJson = requireField(input, "search_profile", "input");
   const auto profileIt = input.find("performance_profile");
   if (profileIt == input.end())
     invalid("performance_profile.timing_topology_profile",
             "missing_topology_profile: performance_profile must explicitly select a topology");
   const auto& pJson = *profileIt;
   const Architecture arch = parseArchitecture(aJson);
-  const SearchProfile search = validateSearchProfile(sJson);
+  const bool hasWidth = aJson.contains("die_width_mm");
+  const bool hasHeight = aJson.contains("die_height_mm");
+  if (hasWidth != hasHeight)
+    invalid("architecture.die_width_mm/die_height_mm", "must be supplied together");
+  const bool suppliedOutline = hasWidth && hasHeight;
+  if (!suppliedOutline && arch.geometry == "explicit")
+    invalid("architecture.die_width_mm/die_height_mm", "are required for an explicit single-Die instance");
+  // Existing configs may name one deterministic source geometry without W/H.
+  // This legacy decoding does not enumerate, rank or recommend configurations.
+  const GeometryConstraints legacyConstraints = !suppliedOutline && input.contains("search_profile")
+      ? validateConstraints(input.at("search_profile"), "search_profile", true)
+      : GeometryConstraints{};
+  const GeometryConstraints constraints = input.contains("validation_constraints")
+      ? validateConstraints(input.at("validation_constraints"), "validation_constraints")
+      : legacyConstraints;
   const PerformanceProfile perf = validatePerformanceProfile(pJson);
   const CoreRow& core = findCoreRow(arch.coreType, arch.sramMiB, arch.nocBits);
   const double l0 = coreEdgeMm(arch.coreType, arch.sramMiB);
@@ -775,36 +707,48 @@ Hardware resolve_hardware(const nlohmann::json& input) {
   const double minH = arch.ny * l0 + (arch.ny - 1.0) * arch.pitchY + arch.extraHeight;
   if (!std::isfinite(minW) || !std::isfinite(minH) || minW <= 0.0 || minH <= 0.0)
     invalid("architecture", "Core grid produces an invalid minimum Die outline");
-  const double areaReq = requiredDieArea(search.areaMin, arch.hbmN);
-  const auto expectedGeometry = sourceGeometry(arch.geometryCandidate, minW, minH, areaReq);
-  const double dieW = aJson.contains("die_width_mm")
-                          ? positiveNumberField(aJson, "die_width_mm", "architecture")
-                          : expectedGeometry.first;
-  const double dieH = aJson.contains("die_height_mm")
-                          ? positiveNumberField(aJson, "die_height_mm", "architecture")
-                          : expectedGeometry.second;
-  validateGeometryIdentity(input, arch, search, minW, minH, areaReq, dieW, dieH);
+  const double areaReq = requiredDieArea(legacyConstraints.areaMin, arch.hbmN);
+  const auto outline = suppliedOutline
+      ? std::make_pair(positiveNumberField(aJson, "die_width_mm", "architecture"),
+                       positiveNumberField(aJson, "die_height_mm", "architecture"))
+      : sourceGeometry(arch.geometryCandidate, minW, minH, areaReq);
+  const double dieW = outline.first, dieH = outline.second;
+  if (!std::isfinite(dieW) || !std::isfinite(dieH) || dieW <= 0.0 || dieH <= 0.0)
+    invalid("architecture.die_width_mm/die_height_mm", "must define a finite positive outline");
+  if (dieW < minW - 1.0e-9 || dieH < minH - 1.0e-9)
+    invalid("architecture.die_width_mm/die_height_mm", "do not contain the specified Core grid");
   const double dieArea = dieW * dieH;
-  if (dieArea < search.areaMin - 1.0e-9 || dieArea > search.areaMax + 1.0e-9)
-    invalid("architecture.die_geometry", "candidate falls outside the search-profile die area window");
+  if (!std::isfinite(dieArea) || dieArea <= 0.0)
+    invalid("architecture.die_width_mm/die_height_mm", "produce a nonfinite or nonpositive area");
+  if (aJson.contains("die_area_mm2") &&
+      !nearlyEqual(positiveNumberField(aJson, "die_area_mm2", "architecture"), dieArea))
+    invalid("architecture.die_area_mm2", "must equal the supplied width times height");
+  if (aJson.contains("core_count") &&
+      numberField(aJson, "core_count", "architecture") != static_cast<double>(arch.nx) * arch.ny)
+    invalid("architecture.core_count", "must equal core_columns_nx times core_rows_ny");
+  if (dieArea < constraints.areaMin - 1.0e-9 || dieArea > constraints.areaMax + 1.0e-9)
+    invalid("architecture.die_width_mm/die_height_mm", "fall outside the explicit validation area window");
   const double aspect = std::max(dieW, dieH) / std::min(dieW, dieH);
   const bool fitsReticle =
-      (dieW <= search.reticleWidth && dieH <= search.reticleHeight) ||
-      (search.allowRotation && dieW <= search.reticleHeight && dieH <= search.reticleWidth);
-  if (!fitsReticle) invalid("architecture.die_geometry", "candidate does not fit the allowed reticle orientation");
-  if (aspect > search.maxAspect + 1.0e-12)
-    invalid("architecture.die_geometry", "candidate exceeds die_max_aspect_ratio");
+      (dieW <= constraints.reticleWidth && dieH <= constraints.reticleHeight) ||
+      (constraints.allowRotation && dieW <= constraints.reticleHeight && dieH <= constraints.reticleWidth);
+  if (!fitsReticle)
+    invalid("architecture.die_width_mm/die_height_mm", "do not fit the explicit validation reticle");
+  if (aspect > constraints.maxAspect + 1.0e-12)
+    invalid("architecture.die_width_mm/die_height_mm", "exceed the explicit validation aspect ratio");
 
   const double hbmRowWidth = arch.hbmN * 10.98 + (arch.hbmN - 1.0) * 0.15;
-  if (search.requireHbmWithinDie && hbmRowWidth > dieW + 1.0e-12)
+  if (constraints.requireHbmWithinDie && hbmRowWidth > dieW + 1.0e-12)
     invalid("architecture.hbm_stacks_per_row", "HBM row does not fit within the Die width");
   const double bumpBps = bumpBudgetBytesPerSecond(dieArea);
+  if (!std::isfinite(bumpBps))
+    invalid("architecture.die_width_mm/die_height_mm", "overflow the derived bump budget");
   const double hbmTotalBps = 2.0 * arch.hbmN * 1.1776e12;
   const double rawD2dBiBps = bumpBps - hbmTotalBps;
   const double d2dToleranceBps = std::max(1.0e-6, hbmTotalBps * 1.0e-12);
-  if (search.requireNonnegativeD2d && rawD2dBiBps < -d2dToleranceBps)
+  if (constraints.requireNonnegativeD2d && rawD2dBiBps < -d2dToleranceBps)
     invalid("architecture.hbm_stacks_per_row", "candidate has a negative bump-minus-HBM D2D budget");
-  const double d2dBiBps = search.requireNonnegativeD2d
+  const double d2dBiBps = constraints.requireNonnegativeD2d
                               ? std::max(0.0, rawD2dBiBps)
                               : rawD2dBiBps;
 
@@ -812,8 +756,14 @@ Hardware resolve_hardware(const nlohmann::json& input) {
   const double moduleH = dieH + 22.56;
   const double effectiveW = moduleW / std::sqrt(0.90);
   const double effectiveH = moduleH / std::sqrt(0.90);
-  const int moduleColumns = static_cast<int>(std::floor(arch.regionWidth / effectiveW + 1.0e-12));
-  const int moduleRows = static_cast<int>(std::floor(arch.regionHeight / effectiveH + 1.0e-12));
+  const auto moduleAxis = [](double region, double extent) {
+    const double count = std::floor(region / extent + 1.0e-12);
+    if (!std::isfinite(count) || count < 0.0 || count > std::numeric_limits<int>::max())
+      invalid("architecture.system_region_width_mm/system_region_height_mm", "overflow the optional module count");
+    return static_cast<int>(count);
+  };
+  const int moduleColumns = arch.hasRegion ? moduleAxis(arch.regionWidth, effectiveW) : 0;
+  const int moduleRows = arch.hasRegion ? moduleAxis(arch.regionHeight, effectiveH) : 0;
   const long long moduleCount = static_cast<long long>(moduleColumns) * moduleRows;
   const long long coreCount = static_cast<long long>(arch.nx) * arch.ny;
   if (coreCount <= 0 || moduleCount < 0) invalid("architecture", "resource count overflow");
@@ -905,6 +855,8 @@ Hardware resolve_hardware(const nlohmann::json& input) {
                                 {"unit", resources[i].unit}});
   }
 
+  if (moduleCount > std::numeric_limits<long long>::max() / coreCount)
+    invalid("architecture.system_region_width_mm/system_region_height_mm", "overflow the optional system Core count");
   const long long systemCoreCount = moduleCount * coreCount;
   Json coreDerived{{"core_type", arch.coreType},
                    {"sram_mib_per_core", arch.sramMiB},
@@ -951,7 +903,8 @@ Hardware resolve_hardware(const nlohmann::json& input) {
                                           ? Json::array({nullptr, nullptr})
                                           : Json(rowToIngress)},
                   {"ingress_evidence", ingressEvidence}};
-  Json systemDerived{{"region_width_mm", arch.regionWidth},
+  Json systemDerived;
+  if (arch.hasRegion) systemDerived = Json{{"region_width_mm", arch.regionWidth},
                      {"region_height_mm", arch.regionHeight},
                      {"effective_module_width_mm", effectiveW},
                      {"effective_module_height_mm", effectiveH},
@@ -967,6 +920,8 @@ Hardware resolve_hardware(const nlohmann::json& input) {
                                              (arch.regionWidth * arch.regionHeight)},
                      {"eta_module_region", moduleCount * moduleW * moduleH /
                                                (0.90 * arch.regionWidth * arch.regionHeight)}};
+  else systemDerived = Json{{"status", "not_requested"},
+                         {"eta_core_die", coreCount * l0 * l0 / dieArea}};
   Json hardwareSummary{{"die_core_count", coreCount},
                        {"hbm_capacity_bytes", capacity},
                        {"hbm_row_peak_Bps", Json::array({arch.hbmN * 1.1776e12,
@@ -993,6 +948,7 @@ Hardware resolve_hardware(const nlohmann::json& input) {
   canonical["core_resource_table"] = Json{{"id", kCoreTableId}, {"rows_sha256", kCoreTableSha256}};
   Json fingerprintInput = canonical;
   fingerprintInput.erase("search_profile");
+  fingerprintInput.erase("validation_constraints");
   if (fingerprintInput.contains("architecture"))
     fingerprintInput["architecture"].erase("upstream_search_profile");
   Json fingerprintDerived = derived;
@@ -1003,134 +959,6 @@ Hardware resolve_hardware(const nlohmann::json& input) {
   result.derived = std::move(derived);
   result.rates = rates;
   result.fingerprint = "sha256:" + sha256(fingerprintPayload.dump());
-  return result;
-}
-
-nlohmann::json search_hardware(const nlohmann::json& input) {
-  if (!input.is_object()) invalid("input", "must be a JSON object");
-  const auto& p = requireField(input, "search_profile", "input");
-  const auto profile = validateSearchProfile(p);
-  const Range nxRange = parseRange(p, "nx_range", "search_profile", 100000);
-  const Range nyRange = parseRange(p, "ny_range", "search_profile", 100000);
-  const Range nRange = parseRange(p, "hbm_n_range", "search_profile", 14);
-  const auto baseArch = parseArchitecture(requireField(input, "architecture", "input"));
-  const double l0 = coreEdgeMm(baseArch.coreType, baseArch.sramMiB);
-  const std::size_t candidateUpperBound =
-      static_cast<std::size_t>(nxRange.maximum - nxRange.minimum + 1) *
-      static_cast<std::size_t>(nyRange.maximum - nyRange.minimum + 1) *
-      static_cast<std::size_t>(nRange.maximum - nRange.minimum + 1) * 4;
-  if (candidateUpperBound > 250000)
-    invalid("search_profile", "finite search ranges may generate at most 250000 geometry candidates");
-
-  Range waferColumns{1, std::numeric_limits<int>::max()};
-  Range waferRows{1, std::numeric_limits<int>::max()};
-  const bool useWaferBounds = p.contains("wafer_columns_range");
-  if (useWaferBounds) {
-    waferColumns = parseRange(p, "wafer_columns_range", "search_profile", 100000);
-    waferRows = parseRange(p, "wafer_rows_range", "search_profile", 100000);
-  }
-
-  Json feasible = Json::array();
-  int generated = 0;
-  for (int nx = nxRange.minimum; nx <= nxRange.maximum; ++nx) {
-    for (int ny = nyRange.minimum; ny <= nyRange.maximum; ++ny) {
-      const double minW = nx * l0 + (nx - 1.0) * baseArch.pitchX + baseArch.extraWidth;
-      const double minH = ny * l0 + (ny - 1.0) * baseArch.pitchY + baseArch.extraHeight;
-      for (int n = nRange.minimum; n <= nRange.maximum; ++n) {
-        const double areaReq = requiredDieArea(profile.areaMin, n);
-        std::vector<std::string> geometries;
-        if (minW * minH + 1.0e-10 >= areaReq) geometries.push_back("minimum_grid");
-        else geometries = profile.extensionRules;
-        for (const auto& geometry : geometries) {
-          ++generated;
-          Json candidate = input;
-          auto& a = candidate["architecture"];
-          a["core_columns_nx"] = nx;
-          a["core_rows_ny"] = ny;
-          a["hbm_stacks_per_row"] = n;
-          a["die_geometry"] = geometry;
-          a.erase("geometry_candidate");
-          a.erase("upstream_search_profile");
-          a.erase("die_width_mm");
-          a.erase("die_height_mm");
-          try {
-            Hardware hw = resolve_hardware(candidate);
-            const auto& sys = hw.derived.at("system");
-            if (sys.at("module_count").get<long long>() <= 0) continue;
-            const int availableColumns = sys.at("module_columns").get<int>();
-            const int availableRows = sys.at("module_rows").get<int>();
-            if (useWaferBounds &&
-                (availableColumns < waferColumns.minimum ||
-                 availableColumns > waferColumns.maximum ||
-                 availableRows < waferRows.minimum ||
-                 availableRows > waferRows.maximum))
-              continue;
-            Json rates = Json::array();
-            for (double rate : hw.rates) rates.push_back(rate);
-            Json identity{{"core_columns_nx", nx}, {"core_rows_ny", ny},
-                          {"hbm_stacks_per_row", n}, {"geometry", geometry},
-                          {"search_mode", profile.geometryMode}};
-            if (useWaferBounds) {
-              identity["wafer_columns"] = availableColumns;
-              identity["wafer_rows"] = availableRows;
-            }
-            feasible.push_back(Json{{"candidate_identity", identity},
-                                    {"input", hw.input}, {"derived", hw.derived},
-                                    {"rates", rates}, {"fingerprint", hw.fingerprint}});
-          } catch (const std::invalid_argument&) {
-            // A generated geometry outside the declared DSE filters is infeasible.
-          }
-        }
-      }
-    }
-  }
-  (void)generated;
-  if (feasible.empty()) invalid("search_profile", "no hardware candidate satisfies the geometry and DSE constraints");
-
-  auto metric = [](const Json& candidate, const char* path) {
-    if (std::string(path) == "compute")
-      return candidate.at("derived").at("system").at("peak_int4_ops_per_s").get<double>();
-    if (std::string(path) == "hbm")
-      return candidate.at("derived").at("system").at("hbm_capacity_bytes").get<double>();
-    return candidate.at("derived").at("die").at("d2d_oneway_Bps").get<double>();
-  };
-  auto better = [&](const Json& lhs, const Json& rhs) {
-    const bool computeObjective = profile.objective != "hbm_capacity";
-    const double primaryL = metric(lhs, computeObjective ? "compute" : "hbm");
-    const double primaryR = metric(rhs, computeObjective ? "compute" : "hbm");
-    if (primaryL != primaryR) return primaryL > primaryR;
-    const double secondaryL = metric(lhs, computeObjective ? "hbm" : "compute");
-    const double secondaryR = metric(rhs, computeObjective ? "hbm" : "compute");
-    if (secondaryL != secondaryR) return secondaryL > secondaryR;
-    return metric(lhs, "d2d") > metric(rhs, "d2d");
-  };
-  std::vector<Json> candidates;
-  candidates.reserve(feasible.size());
-  for (const auto& item : feasible) candidates.push_back(item);
-  std::sort(candidates.begin(), candidates.end(), better);
-
-  Json frontier = Json::array();
-  if (profile.objective == "pareto") {
-    double bestCapacity = -1.0;
-    for (const auto& candidate : candidates) {
-      const double capacity = metric(candidate, "hbm");
-      if (capacity > bestCapacity) {
-        frontier.push_back(candidate);
-        bestCapacity = capacity;
-      }
-    }
-  } else {
-    frontier.push_back(candidates.front());
-  }
-  Json result{{"schema", "coarse_die_search_v2"},
-              {"objective", profile.objective},
-              {"geometry_search_mode", profile.geometryMode},
-              {"candidate_count", candidates.size()},
-              {"best", candidates.front()},
-              {"frontier", frontier}};
-  if (profile.geometryMode == "wafer_first" || useWaferBounds)
-    result["wafer_search_bounds"] = {{"columns", {{"min", waferColumns.minimum}, {"max", waferColumns.maximum}},
-                                       "rows", {{"min", waferRows.minimum}, {"max", waferRows.maximum}}}};
   return result;
 }
 

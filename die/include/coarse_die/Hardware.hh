@@ -15,6 +15,5 @@ struct Hardware {
 };
 
 Hardware resolve_hardware(const nlohmann::json& input);
-nlohmann::json search_hardware(const nlohmann::json& input);
 
 }  // namespace coarse_die

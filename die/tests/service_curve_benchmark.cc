@@ -675,6 +675,7 @@ const char* arbitration_path_name(ArbitrationDiagnostics::Path path) {
     case ArbitrationDiagnostics::Path::Singleton: return "singleton";
     case ArbitrationDiagnostics::Path::Packing: return "packing";
     case ArbitrationDiagnostics::Path::SignedLP: return "signed_lp";
+    case ArbitrationDiagnostics::Path::Ratio: return "ratio";
   }
   return "unknown";
 }
@@ -815,7 +816,7 @@ Json measure_capacity_update(const Hardware& hardware,
                            same_clock_noop_each && all_expected_active &&
                            arbitration_complete;
   Json arbitration_path_counts{{"empty", 0}, {"singleton", 0},
-                               {"packing", 0}, {"signed_lp", 0}};
+                               {"packing", 0}, {"signed_lp", 0}, {"ratio", 0}};
   Json arbitration_paths = Json::array();
   Json arbitration_activities = Json::array();
   Json arbitration_rows = Json::array();

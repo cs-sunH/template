@@ -1,0 +1,1396 @@
+{
+  "batch_status": "complete",
+  "cases": [
+    {
+      "acceptance_limits": {
+        "concurrent_finish_relative_error": 0.1,
+        "hbm_busy_relative_error": 0.1,
+        "shared_hbm_busy_relative_error": 0.1,
+        "standalone_finish_relative_error": 0.1
+      },
+      "actual_plan": {
+        "E": 3,
+        "description_count": 3,
+        "fingerprint": "933785aeec927429120317f0d00d875f3829f9b9c472364a9e05e4fc245e0357",
+        "frameworks": [
+          {
+            "description_budget": 5,
+            "description_count": 3,
+            "epoch_count": 3,
+            "input_unit": "one_output_tile_K_consumption",
+            "model": "analytical_cumulative_os_v3",
+            "output_unit": "one_output_tile",
+            "source_epoch_begin": 0,
+            "status": "within_declared_budget"
+          }
+        ],
+        "service_model_provenance": {
+          "actual_plan_description_count": 3,
+          "actual_plan_epoch_count": 3,
+          "issues": [],
+          "observed_frameworks": [
+            {
+              "description_budget": 5,
+              "description_count": 3,
+              "epoch_count": 3,
+              "input_unit": "one_output_tile_K_consumption",
+              "model": "analytical_cumulative_os_v3",
+              "output_unit": "one_output_tile",
+              "source_epoch_begin": 0,
+              "status": "within_declared_budget"
+            }
+          ],
+          "source": "compiled Plan summary.service_curves and Activity.credit_curve",
+          "status": "identified"
+        },
+        "tiles": {
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        }
+      },
+      "available_granularity_levels": {
+        "comparison_status": "passed",
+        "minimum_certified_framework": null,
+        "observed": [
+          {
+            "description_budget": 5,
+            "description_count": 3,
+            "model": "analytical_cumulative_os_v3",
+            "observed_epoch_count": 3,
+            "status": "within_declared_budget"
+          }
+        ],
+        "source": "actual compiled Plan service_model_provenance.service_curves",
+        "status": "fixture_comparison_only"
+      },
+      "concurrent": [
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.002148395,
+            "comp1": 0.002148395
+          },
+          "actual_hbm_busy_s": 0.00049152,
+          "actual_shared_hbm_busy_s": 0.00049152,
+          "allocation_updates": 5,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 8.532638922677249e-10,
+            "comp1": 8.532638922677249e-10
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 3.9716357148152915e-07,
+            "comp1": 3.9716357148152915e-07
+          },
+          "hbm_busy_absolute_error_s": 0.0,
+          "hbm_busy_relative_error": 0.0,
+          "internal_events": 9,
+          "phase_offset_s": 0.0,
+          "reference_finish_s_by_request": {
+            "comp0": 0.0021483941467361077,
+            "comp1": 0.0021483941467361077
+          },
+          "reference_hbm_busy_s": 0.00049152,
+          "reference_shared_hbm_busy_s": 0.00049152,
+          "reference_shared_hbm_duration_s": 0.00049152,
+          "shared_hbm_busy_absolute_error_s": 0.0,
+          "shared_hbm_busy_relative_error": 0.0,
+          "status": "passed"
+        },
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.001074198,
+            "comp1": 0.051074198
+          },
+          "actual_hbm_busy_s": 0.00049152,
+          "actual_shared_hbm_busy_s": 0.0,
+          "allocation_updates": 8,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 9.26631946087525e-10,
+            "comp1": 9.266319447864824e-10
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 8.626275094775199e-07,
+            "comp1": 1.81428587796569e-08
+          },
+          "hbm_busy_absolute_error_s": 0.0,
+          "hbm_busy_relative_error": 0.0,
+          "internal_events": 12,
+          "phase_offset_s": 0.05,
+          "reference_finish_s_by_request": {
+            "comp0": 0.0010741970733680539,
+            "comp1": 0.051074197073368056
+          },
+          "reference_hbm_busy_s": 0.00049152,
+          "reference_shared_hbm_busy_s": 0.0,
+          "reference_shared_hbm_duration_s": 0.0,
+          "shared_hbm_busy_absolute_error_s": 0.0,
+          "shared_hbm_busy_relative_error": 0.0,
+          "status": "passed"
+        }
+      ],
+      "driver_arguments": [
+        "--m",
+        "16",
+        "--n",
+        "64",
+        "--k",
+        "64",
+        "--tm",
+        "16",
+        "--tn",
+        "64",
+        "--tk",
+        "64"
+      ],
+      "driver_identity": {
+        "compiled_oracle_reference_sha256": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+        "driver_binary_sha256": "2a98eb089d6da995d5e1332c4e4214a12b771866baed0376cdf90693368c1baa",
+        "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+        "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+        "oracle_source_sha256": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e"
+      },
+      "driver_identity_consistent": true,
+      "driver_return_code": 0,
+      "driver_stderr_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k64_tm16_tn64_tk64.driver.stderr.txt",
+      "driver_stdout_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k64_tm16_tn64_tk64.driver.stdout.txt",
+      "expected_raw_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k64_tm16_tn64_tk64.raw.json",
+      "fixture_coverage": {
+        "core_count": 1,
+        "coverage_limits": [
+          "single complete 1x1 Core only",
+          "one GEMM shape and selected mapping per report",
+          "FP32 storage and fp32_vec_matrix_assumed_v1 only",
+          "other hardware domains use explicit finite nonbinding fixture capacities"
+        ],
+        "dataflow": "output_stationary_v2",
+        "hardware_scope": "synthetic model-to-model capacities; no silicon evidence",
+        "profile": "fp32_vec_matrix_assumed_v1; FP32 weights/activations/output",
+        "reference": "existing grouped owner Q/alpha discrete wave oracle",
+        "reference_geometry_adapter": "shared discrete geometry helper with legacy E5 guard disabled explicitly; framework metadata validated independently from the actual Plan",
+        "shape": {
+          "k": 64,
+          "m": 16,
+          "n": 64
+        }
+      },
+      "measurement_source": "compiled_plan_and_actual_cpp_runtime",
+      "oracle_return_code": 0,
+      "oracle_stderr_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k64_tm16_tn64_tk64.report.oracle.stderr.txt",
+      "raw_json": "/workspace/template/work/analytical-curves/axis/m16_n64_k64_tm16_tn64_tk64.raw.json",
+      "raw_validation": "validated actual compiled OS Runtime raw",
+      "report_json": "/workspace/template/work/analytical-curves/axis/m16_n64_k64_tm16_tn64_tk64.report.json",
+      "report_status_reason": "all measured scenarios meet the 10% target, the compiled-plan ledger passed, and serialized Runtime work is within tolerance",
+      "requested_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "reuse_source": null,
+      "shape": {
+        "k": 64,
+        "m": 16,
+        "n": 64
+      },
+      "solo": {
+        "actual_finish_s_by_request": {
+          "solo": 0.001074198
+        },
+        "actual_hbm_busy_s": 0.00024576,
+        "actual_shared_hbm_busy_s": 0.0,
+        "allocation_updates": 4,
+        "finish_absolute_error_s_by_request": {
+          "solo": 9.26631946087525e-10
+        },
+        "finish_relative_error_by_request": {
+          "solo": 8.626275094775199e-07
+        },
+        "hbm_busy_absolute_error_s": 0.0,
+        "hbm_busy_relative_error": 0.0,
+        "internal_events": 6,
+        "phase_offset_s": 0.0,
+        "reference_finish_s_by_request": {
+          "comp0": 0.0010741970733680539
+        },
+        "reference_hbm_busy_s": 0.00024576,
+        "reference_shared_hbm_busy_s": 0.0,
+        "reference_shared_hbm_duration_s": 0.0,
+        "shared_hbm_busy_absolute_error_s": 0.0,
+        "shared_hbm_busy_relative_error": 0.0,
+        "status": "passed"
+      },
+      "status": "passed",
+      "status_scope": "one_actual_compiled_plan_and_cpp_runtime_fixture"
+    },
+    {
+      "acceptance_limits": {
+        "concurrent_finish_relative_error": 0.1,
+        "hbm_busy_relative_error": 0.1,
+        "shared_hbm_busy_relative_error": 0.1,
+        "standalone_finish_relative_error": 0.1
+      },
+      "actual_plan": {
+        "E": 3,
+        "description_count": 4,
+        "fingerprint": "75eca1d069235e3b22ae22809f9bd35d209b6ba23d5511477a35c4da3c2a5c6a",
+        "frameworks": [
+          {
+            "description_budget": 5,
+            "description_count": 4,
+            "epoch_count": 3,
+            "input_unit": "one_output_tile_K_consumption",
+            "model": "analytical_cumulative_os_v3",
+            "output_unit": "one_output_tile",
+            "source_epoch_begin": 0,
+            "status": "within_declared_budget"
+          }
+        ],
+        "service_model_provenance": {
+          "actual_plan_description_count": 4,
+          "actual_plan_epoch_count": 3,
+          "issues": [],
+          "observed_frameworks": [
+            {
+              "description_budget": 5,
+              "description_count": 4,
+              "epoch_count": 3,
+              "input_unit": "one_output_tile_K_consumption",
+              "model": "analytical_cumulative_os_v3",
+              "output_unit": "one_output_tile",
+              "source_epoch_begin": 0,
+              "status": "within_declared_budget"
+            }
+          ],
+          "source": "compiled Plan summary.service_curves and Activity.credit_curve",
+          "status": "identified"
+        },
+        "tiles": {
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        }
+      },
+      "available_granularity_levels": {
+        "comparison_status": "failed",
+        "minimum_certified_framework": null,
+        "observed": [
+          {
+            "description_budget": 5,
+            "description_count": 4,
+            "model": "analytical_cumulative_os_v3",
+            "observed_epoch_count": 3,
+            "status": "within_declared_budget"
+          }
+        ],
+        "source": "actual compiled Plan service_model_provenance.service_curves",
+        "status": "fixture_comparison_only"
+      },
+      "concurrent": [
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.106531466,
+            "comp1": 0.106531466
+          },
+          "actual_hbm_busy_s": 0.1032177170976387,
+          "actual_shared_hbm_busy_s": 0.1032177170976387,
+          "allocation_updates": 7,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 6.088892723354888e-10,
+            "comp1": 6.088892723354888e-10
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 5.7155814960402875e-09,
+            "comp1": 5.7155814960402875e-09
+          },
+          "hbm_busy_absolute_error_s": 0.07692139709763873,
+          "hbm_busy_relative_error": 2.9251772528490223,
+          "internal_events": 11,
+          "phase_offset_s": 0.0,
+          "reference_finish_s_by_request": {
+            "comp0": 0.10653146539111073,
+            "comp1": 0.10653146539111073
+          },
+          "reference_hbm_busy_s": 0.026296319999999977,
+          "reference_shared_hbm_busy_s": 0.026296319999999977,
+          "reference_shared_hbm_duration_s": 0.026296319999999977,
+          "shared_hbm_busy_absolute_error_s": 0.07692139709763873,
+          "shared_hbm_busy_relative_error": 2.9251772528490223,
+          "status": "failed"
+        },
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.055546973,
+            "comp1": 0.106285706
+          },
+          "actual_hbm_busy_s": 0.1046288312443748,
+          "actual_shared_hbm_busy_s": 0.002918152676072182,
+          "allocation_updates": 12,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 0.0006630905315782865,
+            "comp1": 6.088887311017643e-10
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 0.011796651523187986,
+            "comp1": 5.7287923043006505e-09
+          },
+          "hbm_busy_absolute_error_s": 0.07833251124437474,
+          "hbm_busy_relative_error": 2.9788392917478395,
+          "internal_events": 16,
+          "phase_offset_s": 0.05,
+          "reference_finish_s_by_request": {
+            "comp0": 0.056210063531578286,
+            "comp1": 0.10628570539111126
+          },
+          "reference_hbm_busy_s": 0.026296320000000064,
+          "reference_shared_hbm_busy_s": 0.0003538873861738818,
+          "reference_shared_hbm_duration_s": 0.0003538873861738818,
+          "shared_hbm_busy_absolute_error_s": 0.0025642652898983003,
+          "shared_hbm_busy_relative_error": 7.245992341299088,
+          "status": "failed"
+        }
+      ],
+      "driver_arguments": [
+        "--m",
+        "16",
+        "--n",
+        "64",
+        "--k",
+        "4096",
+        "--tm",
+        "16",
+        "--tn",
+        "64",
+        "--tk",
+        "64"
+      ],
+      "driver_identity": {
+        "compiled_oracle_reference_sha256": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+        "driver_binary_sha256": "2a98eb089d6da995d5e1332c4e4214a12b771866baed0376cdf90693368c1baa",
+        "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+        "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+        "oracle_source_sha256": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e"
+      },
+      "driver_identity_consistent": true,
+      "driver_return_code": 0,
+      "driver_stderr_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k4096_tm16_tn64_tk64.driver.stderr.txt",
+      "driver_stdout_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k4096_tm16_tn64_tk64.driver.stdout.txt",
+      "expected_raw_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k4096_tm16_tn64_tk64.raw.json",
+      "fixture_coverage": {
+        "core_count": 1,
+        "coverage_limits": [
+          "single complete 1x1 Core only",
+          "one GEMM shape and selected mapping per report",
+          "FP32 storage and fp32_vec_matrix_assumed_v1 only",
+          "other hardware domains use explicit finite nonbinding fixture capacities"
+        ],
+        "dataflow": "output_stationary_v2",
+        "hardware_scope": "synthetic model-to-model capacities; no silicon evidence",
+        "profile": "fp32_vec_matrix_assumed_v1; FP32 weights/activations/output",
+        "reference": "existing grouped owner Q/alpha discrete wave oracle",
+        "reference_geometry_adapter": "shared discrete geometry helper with legacy E5 guard disabled explicitly; framework metadata validated independently from the actual Plan",
+        "shape": {
+          "k": 4096,
+          "m": 16,
+          "n": 64
+        }
+      },
+      "measurement_source": "compiled_plan_and_actual_cpp_runtime",
+      "oracle_return_code": 1,
+      "oracle_stderr_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k4096_tm16_tn64_tk64.report.oracle.stderr.txt",
+      "raw_json": "/workspace/template/work/analytical-curves/axis/m16_n64_k4096_tm16_tn64_tk64.raw.json",
+      "raw_validation": "validated actual compiled OS Runtime raw",
+      "report_json": "/workspace/template/work/analytical-curves/axis/m16_n64_k4096_tm16_tn64_tk64.report.json",
+      "report_status_reason": "work reconciliation, scenario coverage, or at least one error exceeded the 20% range",
+      "requested_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "reuse_source": null,
+      "shape": {
+        "k": 4096,
+        "m": 16,
+        "n": 64
+      },
+      "solo": {
+        "actual_finish_s_by_request": {
+          "solo": 0.053265733
+        },
+        "actual_hbm_busy_s": 0.05160885854881935,
+        "actual_shared_hbm_busy_s": 0.0,
+        "allocation_updates": 6,
+        "finish_absolute_error_s_by_request": {
+          "solo": 3.044446361677444e-10
+        },
+        "finish_relative_error_by_request": {
+          "solo": 5.7155814960402875e-09
+        },
+        "hbm_busy_absolute_error_s": 0.038460698548819366,
+        "hbm_busy_relative_error": 2.9251772528490223,
+        "internal_events": 8,
+        "phase_offset_s": 0.0,
+        "reference_finish_s_by_request": {
+          "comp0": 0.053265732695555366
+        },
+        "reference_hbm_busy_s": 0.013148159999999989,
+        "reference_shared_hbm_busy_s": 0.0,
+        "reference_shared_hbm_duration_s": 0.0,
+        "shared_hbm_busy_absolute_error_s": 0.0,
+        "shared_hbm_busy_relative_error": 0.0,
+        "status": "failed"
+      },
+      "status": "failed",
+      "status_scope": "one_actual_compiled_plan_and_cpp_runtime_fixture"
+    },
+    {
+      "acceptance_limits": {
+        "concurrent_finish_relative_error": 0.1,
+        "hbm_busy_relative_error": 0.1,
+        "shared_hbm_busy_relative_error": 0.1,
+        "standalone_finish_relative_error": 0.1
+      },
+      "actual_plan": {
+        "E": 4,
+        "description_count": 7,
+        "fingerprint": "c555c5b4dc1442ad855180c5c8d7e8735f89a267f6daec0ad043c8d6e6799cbe",
+        "frameworks": [
+          {
+            "description_budget": 8,
+            "description_count": 7,
+            "epoch_count": 4,
+            "input_unit": "one_output_tile_K_consumption",
+            "model": "analytical_cumulative_os_v3",
+            "output_unit": "one_output_tile",
+            "source_epoch_begin": 0,
+            "status": "within_declared_budget"
+          }
+        ],
+        "service_model_provenance": {
+          "actual_plan_description_count": 7,
+          "actual_plan_epoch_count": 4,
+          "issues": [],
+          "observed_frameworks": [
+            {
+              "description_budget": 8,
+              "description_count": 7,
+              "epoch_count": 4,
+              "input_unit": "one_output_tile_K_consumption",
+              "model": "analytical_cumulative_os_v3",
+              "output_unit": "one_output_tile",
+              "source_epoch_begin": 0,
+              "status": "within_declared_budget"
+            }
+          ],
+          "source": "compiled Plan summary.service_curves and Activity.credit_curve",
+          "status": "identified"
+        },
+        "tiles": {
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        }
+      },
+      "available_granularity_levels": {
+        "comparison_status": "failed",
+        "minimum_certified_framework": null,
+        "observed": [
+          {
+            "description_budget": 8,
+            "description_count": 7,
+            "model": "analytical_cumulative_os_v3",
+            "observed_epoch_count": 4,
+            "status": "within_declared_budget"
+          }
+        ],
+        "source": "actual compiled Plan service_model_provenance.service_curves",
+        "status": "fixture_comparison_only"
+      },
+      "concurrent": [
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 1.060890974,
+            "comp1": 1.060890974
+          },
+          "actual_hbm_busy_s": 1.0575772256176368,
+          "actual_shared_hbm_busy_s": 1.0575772256176368,
+          "allocation_updates": 11,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 8.889067260042793e-11,
+            "comp1": 8.889067260042793e-11
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 8.378869722373184e-11,
+            "comp1": 8.378869722373184e-11
+          },
+          "hbm_busy_absolute_error_s": 0.794614025617634,
+          "hbm_busy_relative_error": 3.0217689228668694,
+          "internal_events": 17,
+          "phase_offset_s": 0.0,
+          "reference_finish_s_by_request": {
+            "comp0": 1.0608909739111094,
+            "comp1": 1.0608909739111094
+          },
+          "reference_hbm_busy_s": 0.2629632000000029,
+          "reference_shared_hbm_busy_s": 0.2629632000000029,
+          "reference_shared_hbm_duration_s": 0.2629632000000029,
+          "shared_hbm_busy_absolute_error_s": 0.794614025617634,
+          "shared_hbm_busy_relative_error": 3.0217689228668694,
+          "status": "failed"
+        },
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 1.004084771,
+            "comp1": 1.060645214
+          },
+          "actual_hbm_busy_s": 1.060645213911109,
+          "actual_shared_hbm_busy_s": 0.9487141800331486,
+          "allocation_updates": 20,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 0.0064848010515798915,
+            "comp1": 8.889111668963778e-11
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 0.006416976357614797,
+            "comp1": 8.380853043389834e-11
+          },
+          "hbm_busy_absolute_error_s": 0.7976820139111045,
+          "hbm_busy_relative_error": 3.0334359100858617,
+          "internal_events": 26,
+          "phase_offset_s": 0.05,
+          "reference_finish_s_by_request": {
+            "comp0": 1.01056957205158,
+            "comp1": 1.0606452139111089
+          },
+          "reference_hbm_busy_s": 0.2629632000000046,
+          "reference_shared_hbm_busy_s": 0.0003538873861738818,
+          "reference_shared_hbm_duration_s": 0.0003538873861738818,
+          "shared_hbm_busy_absolute_error_s": 0.9483602926469746,
+          "shared_hbm_busy_relative_error": 2679.8363821337216,
+          "status": "failed"
+        }
+      ],
+      "driver_arguments": [
+        "--m",
+        "80",
+        "--n",
+        "128",
+        "--k",
+        "4096",
+        "--tm",
+        "16",
+        "--tn",
+        "64",
+        "--tk",
+        "64"
+      ],
+      "driver_identity": {
+        "compiled_oracle_reference_sha256": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+        "driver_binary_sha256": "2a98eb089d6da995d5e1332c4e4214a12b771866baed0376cdf90693368c1baa",
+        "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+        "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+        "oracle_source_sha256": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e"
+      },
+      "driver_identity_consistent": true,
+      "driver_return_code": 0,
+      "driver_stderr_path": "/workspace/template/work/analytical-curves/axis/m80_n128_k4096_tm16_tn64_tk64.driver.stderr.txt",
+      "driver_stdout_path": "/workspace/template/work/analytical-curves/axis/m80_n128_k4096_tm16_tn64_tk64.driver.stdout.txt",
+      "expected_raw_path": "/workspace/template/work/analytical-curves/axis/m80_n128_k4096_tm16_tn64_tk64.raw.json",
+      "fixture_coverage": {
+        "core_count": 1,
+        "coverage_limits": [
+          "single complete 1x1 Core only",
+          "one GEMM shape and selected mapping per report",
+          "FP32 storage and fp32_vec_matrix_assumed_v1 only",
+          "other hardware domains use explicit finite nonbinding fixture capacities"
+        ],
+        "dataflow": "output_stationary_v2",
+        "hardware_scope": "synthetic model-to-model capacities; no silicon evidence",
+        "profile": "fp32_vec_matrix_assumed_v1; FP32 weights/activations/output",
+        "reference": "existing grouped owner Q/alpha discrete wave oracle",
+        "reference_geometry_adapter": "shared discrete geometry helper with legacy E5 guard disabled explicitly; framework metadata validated independently from the actual Plan",
+        "shape": {
+          "k": 4096,
+          "m": 80,
+          "n": 128
+        }
+      },
+      "measurement_source": "compiled_plan_and_actual_cpp_runtime",
+      "oracle_return_code": 1,
+      "oracle_stderr_path": "/workspace/template/work/analytical-curves/axis/m80_n128_k4096_tm16_tn64_tk64.report.oracle.stderr.txt",
+      "raw_json": "/workspace/template/work/analytical-curves/axis/m80_n128_k4096_tm16_tn64_tk64.raw.json",
+      "raw_validation": "validated actual compiled OS Runtime raw",
+      "report_json": "/workspace/template/work/analytical-curves/axis/m80_n128_k4096_tm16_tn64_tk64.report.json",
+      "report_status_reason": "work reconciliation, scenario coverage, or at least one error exceeded the 20% range",
+      "requested_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "reuse_source": null,
+      "shape": {
+        "k": 4096,
+        "m": 80,
+        "n": 128
+      },
+      "solo": {
+        "actual_finish_s_by_request": {
+          "solo": 0.530445487
+        },
+        "actual_hbm_busy_s": 0.5287886128088184,
+        "actual_shared_hbm_busy_s": 0.0,
+        "allocation_updates": 10,
+        "finish_absolute_error_s_by_request": {
+          "solo": 4.4445336300213967e-11
+        },
+        "finish_relative_error_by_request": {
+          "solo": 8.378869722373184e-11
+        },
+        "hbm_busy_absolute_error_s": 0.397307012808817,
+        "hbm_busy_relative_error": 3.0217689228668694,
+        "internal_events": 13,
+        "phase_offset_s": 0.0,
+        "reference_finish_s_by_request": {
+          "comp0": 0.5304454869555547
+        },
+        "reference_hbm_busy_s": 0.13148160000000145,
+        "reference_shared_hbm_busy_s": 0.0,
+        "reference_shared_hbm_duration_s": 0.0,
+        "shared_hbm_busy_absolute_error_s": 0.0,
+        "shared_hbm_busy_relative_error": 0.0,
+        "status": "failed"
+      },
+      "status": "failed",
+      "status_scope": "one_actual_compiled_plan_and_cpp_runtime_fixture"
+    },
+    {
+      "acceptance_limits": {
+        "concurrent_finish_relative_error": 0.1,
+        "hbm_busy_relative_error": 0.1,
+        "shared_hbm_busy_relative_error": 0.1,
+        "standalone_finish_relative_error": 0.1
+      },
+      "actual_plan": {
+        "E": 4,
+        "description_count": 7,
+        "fingerprint": "ccf5eca2de4eb10a8d595da26cafa5ccaef92c1f5b758014d4a9a78a955af04b",
+        "frameworks": [
+          {
+            "description_budget": 8,
+            "description_count": 7,
+            "epoch_count": 4,
+            "input_unit": "one_output_tile_K_consumption",
+            "model": "analytical_cumulative_os_v3",
+            "output_unit": "one_output_tile",
+            "source_epoch_begin": 0,
+            "status": "within_declared_budget"
+          }
+        ],
+        "service_model_provenance": {
+          "actual_plan_description_count": 7,
+          "actual_plan_epoch_count": 4,
+          "issues": [],
+          "observed_frameworks": [
+            {
+              "description_budget": 8,
+              "description_count": 7,
+              "epoch_count": 4,
+              "input_unit": "one_output_tile_K_consumption",
+              "model": "analytical_cumulative_os_v3",
+              "output_unit": "one_output_tile",
+              "source_epoch_begin": 0,
+              "status": "within_declared_budget"
+            }
+          ],
+          "source": "compiled Plan summary.service_curves and Activity.credit_curve",
+          "status": "identified"
+        },
+        "tiles": {
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        }
+      },
+      "available_granularity_levels": {
+        "comparison_status": "failed",
+        "minimum_certified_framework": null,
+        "observed": [
+          {
+            "description_budget": 8,
+            "description_count": 7,
+            "model": "analytical_cumulative_os_v3",
+            "observed_epoch_count": 4,
+            "status": "within_declared_budget"
+          }
+        ],
+        "source": "actual compiled Plan service_model_provenance.service_curves",
+        "status": "fixture_comparison_only"
+      },
+      "concurrent": [
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.438034826,
+            "comp1": 0.438034826
+          },
+          "actual_hbm_busy_s": 0.43477126124628074,
+          "actual_shared_hbm_busy_s": 0.43477126124628074,
+          "allocation_updates": 11,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 0.03254690436355301,
+            "comp1": 0.03254690436355301
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 0.06916312781290626,
+            "comp1": 0.06916312781290626
+          },
+          "hbm_busy_absolute_error_s": 0.2853024612462819,
+          "hbm_busy_relative_error": 1.908776020455668,
+          "internal_events": 17,
+          "phase_offset_s": 0.0,
+          "reference_finish_s_by_request": {
+            "comp0": 0.470581730363553,
+            "comp1": 0.470581730363553
+          },
+          "reference_hbm_busy_s": 0.14946879999999882,
+          "reference_shared_hbm_busy_s": 0.14946879999999882,
+          "reference_shared_hbm_duration_s": 0.14946879999999882,
+          "shared_hbm_busy_absolute_error_s": 0.2853024612462819,
+          "shared_hbm_busy_relative_error": 1.908776020455668,
+          "status": "failed"
+        },
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.398097375,
+            "comp1": 0.437829986
+          },
+          "actual_hbm_busy_s": 0.4378299853708854,
+          "actual_shared_hbm_busy_s": 0.34311869578617366,
+          "allocation_updates": 22,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 0.028076500960614925,
+            "comp1": 0.009664331748909794
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 0.06588038954130926,
+            "comp1": 0.02159654629253298
+          },
+          "hbm_busy_absolute_error_s": 0.28836118537088395,
+          "hbm_busy_relative_error": 1.9292399843370733,
+          "internal_events": 28,
+          "phase_offset_s": 0.05,
+          "reference_finish_s_by_request": {
+            "comp0": 0.4261738759606149,
+            "comp1": 0.4474943177489098
+          },
+          "reference_hbm_busy_s": 0.14946880000000146,
+          "reference_shared_hbm_busy_s": 0.02147436258873285,
+          "reference_shared_hbm_duration_s": 0.02147436258873285,
+          "shared_hbm_busy_absolute_error_s": 0.3216443331974408,
+          "shared_hbm_busy_relative_error": 14.978061950309103,
+          "status": "failed"
+        }
+      ],
+      "driver_arguments": [
+        "--m",
+        "65",
+        "--n",
+        "65",
+        "--k",
+        "4097",
+        "--tm",
+        "16",
+        "--tn",
+        "64",
+        "--tk",
+        "64"
+      ],
+      "driver_identity": {
+        "compiled_oracle_reference_sha256": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+        "driver_binary_sha256": "2a98eb089d6da995d5e1332c4e4214a12b771866baed0376cdf90693368c1baa",
+        "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+        "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+        "oracle_source_sha256": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e"
+      },
+      "driver_identity_consistent": true,
+      "driver_return_code": 0,
+      "driver_stderr_path": "/workspace/template/work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.driver.stderr.txt",
+      "driver_stdout_path": "/workspace/template/work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.driver.stdout.txt",
+      "expected_raw_path": "/workspace/template/work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.raw.json",
+      "fixture_coverage": {
+        "core_count": 1,
+        "coverage_limits": [
+          "single complete 1x1 Core only",
+          "one GEMM shape and selected mapping per report",
+          "FP32 storage and fp32_vec_matrix_assumed_v1 only",
+          "other hardware domains use explicit finite nonbinding fixture capacities"
+        ],
+        "dataflow": "output_stationary_v2",
+        "hardware_scope": "synthetic model-to-model capacities; no silicon evidence",
+        "profile": "fp32_vec_matrix_assumed_v1; FP32 weights/activations/output",
+        "reference": "existing grouped owner Q/alpha discrete wave oracle",
+        "reference_geometry_adapter": "shared discrete geometry helper with legacy E5 guard disabled explicitly; framework metadata validated independently from the actual Plan",
+        "shape": {
+          "k": 4097,
+          "m": 65,
+          "n": 65
+        }
+      },
+      "measurement_source": "compiled_plan_and_actual_cpp_runtime",
+      "oracle_return_code": 1,
+      "oracle_stderr_path": "/workspace/template/work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.report.oracle.stderr.txt",
+      "raw_json": "/workspace/template/work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.raw.json",
+      "raw_validation": "validated actual compiled OS Runtime raw",
+      "report_json": "/workspace/template/work/analytical-curves/axis/m65_n65_k4097_tm16_tn64_tk64.report.json",
+      "report_status_reason": "work reconciliation, scenario coverage, or at least one error exceeded the 20% range",
+      "requested_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "reuse_source": null,
+      "shape": {
+        "k": 4097,
+        "m": 65,
+        "n": 65
+      },
+      "solo": {
+        "actual_finish_s_by_request": {
+          "solo": 0.219017413
+        },
+        "actual_hbm_busy_s": 0.21738563062314037,
+        "actual_shared_hbm_busy_s": 0.0,
+        "allocation_updates": 10,
+        "finish_absolute_error_s_by_request": {
+          "solo": 0.016273452181776504
+        },
+        "finish_relative_error_by_request": {
+          "solo": 0.06916312781290626
+        },
+        "hbm_busy_absolute_error_s": 0.14265123062314095,
+        "hbm_busy_relative_error": 1.908776020455668,
+        "internal_events": 13,
+        "phase_offset_s": 0.0,
+        "reference_finish_s_by_request": {
+          "comp0": 0.2352908651817765
+        },
+        "reference_hbm_busy_s": 0.07473439999999941,
+        "reference_shared_hbm_busy_s": 0.0,
+        "reference_shared_hbm_duration_s": 0.0,
+        "shared_hbm_busy_absolute_error_s": 0.0,
+        "shared_hbm_busy_relative_error": 0.0,
+        "status": "failed"
+      },
+      "status": "failed",
+      "status_scope": "one_actual_compiled_plan_and_cpp_runtime_fixture"
+    },
+    {
+      "acceptance_limits": {
+        "concurrent_finish_relative_error": 0.1,
+        "hbm_busy_relative_error": 0.1,
+        "shared_hbm_busy_relative_error": 0.1,
+        "standalone_finish_relative_error": 0.1
+      },
+      "actual_plan": {
+        "E": 4,
+        "description_count": 6,
+        "fingerprint": "6e1b9b5a6ab93a179a3fba27d1fcf326a0cbf3754462445af96282f697b4e5af",
+        "frameworks": [
+          {
+            "description_budget": 8,
+            "description_count": 6,
+            "epoch_count": 4,
+            "input_unit": "one_output_tile_K_consumption",
+            "model": "analytical_cumulative_os_v3",
+            "output_unit": "one_output_tile",
+            "source_epoch_begin": 0,
+            "status": "within_declared_budget"
+          }
+        ],
+        "service_model_provenance": {
+          "actual_plan_description_count": 6,
+          "actual_plan_epoch_count": 4,
+          "issues": [],
+          "observed_frameworks": [
+            {
+              "description_budget": 8,
+              "description_count": 6,
+              "epoch_count": 4,
+              "input_unit": "one_output_tile_K_consumption",
+              "model": "analytical_cumulative_os_v3",
+              "output_unit": "one_output_tile",
+              "source_epoch_begin": 0,
+              "status": "within_declared_budget"
+            }
+          ],
+          "source": "compiled Plan summary.service_curves and Activity.credit_curve",
+          "status": "identified"
+        },
+        "tiles": {
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        }
+      },
+      "available_granularity_levels": {
+        "comparison_status": "failed",
+        "minimum_certified_framework": null,
+        "observed": [
+          {
+            "description_budget": 8,
+            "description_count": 6,
+            "model": "analytical_cumulative_os_v3",
+            "observed_epoch_count": 4,
+            "status": "within_declared_budget"
+          }
+        ],
+        "source": "actual compiled Plan service_model_provenance.service_curves",
+        "status": "fixture_comparison_only"
+      },
+      "concurrent": [
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.027001507,
+            "comp1": 0.027001507
+          },
+          "actual_hbm_busy_s": 0.025344632201041616,
+          "actual_shared_hbm_busy_s": 0.025344632201041616,
+          "allocation_updates": 9,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 6.522222900651187e-10,
+            "comp1": 6.522222900651187e-10
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 2.4155033488300112e-08,
+            "comp1": 2.4155033488300112e-08
+          },
+          "hbm_busy_absolute_error_s": 0.01748031220104162,
+          "hbm_busy_relative_error": 2.2227366385194935,
+          "internal_events": 15,
+          "phase_offset_s": 0.0,
+          "reference_finish_s_by_request": {
+            "comp0": 0.02700150634777771,
+            "comp1": 0.02700150634777771
+          },
+          "reference_hbm_busy_s": 0.007864319999999998,
+          "reference_shared_hbm_busy_s": 0.007864319999999998,
+          "reference_shared_hbm_duration_s": 0.007864319999999998,
+          "shared_hbm_busy_absolute_error_s": 0.01748031220104162,
+          "shared_hbm_busy_relative_error": 2.2227366385194935,
+          "status": "failed"
+        },
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.013500754,
+            "comp1": 0.063500754
+          },
+          "actual_hbm_busy_s": 0.025344632201041616,
+          "actual_shared_hbm_busy_s": 0.0,
+          "allocation_updates": 16,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 8.261111447693814e-10,
+            "comp1": 8.261111933416387e-10
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 6.11900043004358e-08,
+            "comp1": 1.3009470786581654e-08
+          },
+          "hbm_busy_absolute_error_s": 0.017480312201041615,
+          "hbm_busy_relative_error": 2.222736638519492,
+          "internal_events": 22,
+          "phase_offset_s": 0.05,
+          "reference_finish_s_by_request": {
+            "comp0": 0.013500753173888855,
+            "comp1": 0.06350075317388881
+          },
+          "reference_hbm_busy_s": 0.007864320000000001,
+          "reference_shared_hbm_busy_s": 0.0,
+          "reference_shared_hbm_duration_s": 0.0,
+          "shared_hbm_busy_absolute_error_s": 0.0,
+          "shared_hbm_busy_relative_error": 0.0,
+          "status": "failed"
+        }
+      ],
+      "driver_arguments": [
+        "--m",
+        "256",
+        "--n",
+        "64",
+        "--k",
+        "64",
+        "--tm",
+        "16",
+        "--tn",
+        "64",
+        "--tk",
+        "64"
+      ],
+      "driver_identity": {
+        "compiled_oracle_reference_sha256": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+        "driver_binary_sha256": "2a98eb089d6da995d5e1332c4e4214a12b771866baed0376cdf90693368c1baa",
+        "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+        "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+        "oracle_source_sha256": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e"
+      },
+      "driver_identity_consistent": true,
+      "driver_return_code": 0,
+      "driver_stderr_path": "/workspace/template/work/analytical-curves/axis/m256_n64_k64_tm16_tn64_tk64.driver.stderr.txt",
+      "driver_stdout_path": "/workspace/template/work/analytical-curves/axis/m256_n64_k64_tm16_tn64_tk64.driver.stdout.txt",
+      "expected_raw_path": "/workspace/template/work/analytical-curves/axis/m256_n64_k64_tm16_tn64_tk64.raw.json",
+      "fixture_coverage": {
+        "core_count": 1,
+        "coverage_limits": [
+          "single complete 1x1 Core only",
+          "one GEMM shape and selected mapping per report",
+          "FP32 storage and fp32_vec_matrix_assumed_v1 only",
+          "other hardware domains use explicit finite nonbinding fixture capacities"
+        ],
+        "dataflow": "output_stationary_v2",
+        "hardware_scope": "synthetic model-to-model capacities; no silicon evidence",
+        "profile": "fp32_vec_matrix_assumed_v1; FP32 weights/activations/output",
+        "reference": "existing grouped owner Q/alpha discrete wave oracle",
+        "reference_geometry_adapter": "shared discrete geometry helper with legacy E5 guard disabled explicitly; framework metadata validated independently from the actual Plan",
+        "shape": {
+          "k": 64,
+          "m": 256,
+          "n": 64
+        }
+      },
+      "measurement_source": "compiled_plan_and_actual_cpp_runtime",
+      "oracle_return_code": 1,
+      "oracle_stderr_path": "/workspace/template/work/analytical-curves/axis/m256_n64_k64_tm16_tn64_tk64.report.oracle.stderr.txt",
+      "raw_json": "/workspace/template/work/analytical-curves/axis/m256_n64_k64_tm16_tn64_tk64.raw.json",
+      "raw_validation": "validated actual compiled OS Runtime raw",
+      "report_json": "/workspace/template/work/analytical-curves/axis/m256_n64_k64_tm16_tn64_tk64.report.json",
+      "report_status_reason": "work reconciliation, scenario coverage, or at least one error exceeded the 20% range",
+      "requested_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "reuse_source": null,
+      "shape": {
+        "k": 64,
+        "m": 256,
+        "n": 64
+      },
+      "solo": {
+        "actual_finish_s_by_request": {
+          "solo": 0.013500754
+        },
+        "actual_hbm_busy_s": 0.012672316100520808,
+        "actual_shared_hbm_busy_s": 0.0,
+        "allocation_updates": 8,
+        "finish_absolute_error_s_by_request": {
+          "solo": 8.261111447693814e-10
+        },
+        "finish_relative_error_by_request": {
+          "solo": 6.11900043004358e-08
+        },
+        "hbm_busy_absolute_error_s": 0.00874015610052081,
+        "hbm_busy_relative_error": 2.2227366385194935,
+        "internal_events": 11,
+        "phase_offset_s": 0.0,
+        "reference_finish_s_by_request": {
+          "comp0": 0.013500753173888855
+        },
+        "reference_hbm_busy_s": 0.003932159999999999,
+        "reference_shared_hbm_busy_s": 0.0,
+        "reference_shared_hbm_duration_s": 0.0,
+        "shared_hbm_busy_absolute_error_s": 0.0,
+        "shared_hbm_busy_relative_error": 0.0,
+        "status": "failed"
+      },
+      "status": "failed",
+      "status_scope": "one_actual_compiled_plan_and_cpp_runtime_fixture"
+    },
+    {
+      "acceptance_limits": {
+        "concurrent_finish_relative_error": 0.1,
+        "hbm_busy_relative_error": 0.1,
+        "shared_hbm_busy_relative_error": 0.1,
+        "standalone_finish_relative_error": 0.1
+      },
+      "actual_plan": {
+        "E": 3,
+        "description_count": 4,
+        "fingerprint": "d6455eacc5824a4a144ff0dced488115253d66560a6c6304bf58c2a648bdf68c",
+        "frameworks": [
+          {
+            "description_budget": 5,
+            "description_count": 4,
+            "epoch_count": 3,
+            "input_unit": "one_output_tile_K_consumption",
+            "model": "analytical_cumulative_os_v3",
+            "output_unit": "one_output_tile",
+            "source_epoch_begin": 0,
+            "status": "within_declared_budget"
+          }
+        ],
+        "service_model_provenance": {
+          "actual_plan_description_count": 4,
+          "actual_plan_epoch_count": 3,
+          "issues": [],
+          "observed_frameworks": [
+            {
+              "description_budget": 5,
+              "description_count": 4,
+              "epoch_count": 3,
+              "input_unit": "one_output_tile_K_consumption",
+              "model": "analytical_cumulative_os_v3",
+              "output_unit": "one_output_tile",
+              "source_epoch_begin": 0,
+              "status": "within_declared_budget"
+            }
+          ],
+          "source": "compiled Plan summary.service_curves and Activity.credit_curve",
+          "status": "identified"
+        },
+        "tiles": {
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        }
+      },
+      "available_granularity_levels": {
+        "comparison_status": "failed",
+        "minimum_certified_framework": null,
+        "observed": [
+          {
+            "description_budget": 5,
+            "description_count": 4,
+            "model": "analytical_cumulative_os_v3",
+            "observed_epoch_count": 3,
+            "status": "within_declared_budget"
+          }
+        ],
+        "source": "actual compiled Plan service_model_provenance.service_curves",
+        "status": "fixture_comparison_only"
+      },
+      "concurrent": [
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.166178935,
+            "comp1": 0.166178935
+          },
+          "actual_hbm_busy_s": 0.16286518638013855,
+          "actual_shared_hbm_busy_s": 0.16286518638013855,
+          "allocation_updates": 7,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 3.2638908242788034e-10,
+            "comp1": 3.2638908242788034e-10
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 1.964082168831659e-09,
+            "comp1": 1.964082168831659e-09
+          },
+          "hbm_busy_absolute_error_s": 0.12182326638013852,
+          "hbm_busy_relative_error": 2.9682643107373727,
+          "internal_events": 11,
+          "phase_offset_s": 0.0,
+          "reference_finish_s_by_request": {
+            "comp0": 0.16617893467361092,
+            "comp1": 0.16617893467361092
+          },
+          "reference_hbm_busy_s": 0.041041920000000044,
+          "reference_shared_hbm_busy_s": 0.041041920000000044,
+          "reference_shared_hbm_duration_s": 0.041041920000000044,
+          "shared_hbm_busy_absolute_error_s": 0.12182326638013852,
+          "shared_hbm_busy_relative_error": 2.9682643107373727,
+          "status": "failed"
+        },
+        {
+          "actual_finish_s_by_request": {
+            "comp0": 0.115192476,
+            "comp1": 0.165933175
+          },
+          "actual_hbm_busy_s": 0.16427630052687467,
+          "actual_shared_hbm_busy_s": 0.06256562195857206,
+          "allocation_updates": 12,
+          "finish_absolute_error_s_by_request": {
+            "comp0": 0.0006650568140782881,
+            "comp1": 3.2638930447248526e-10
+          },
+          "finish_relative_error_by_request": {
+            "comp0": 0.005740298433124191,
+            "comp1": 1.966992466180983e-09
+          },
+          "hbm_busy_absolute_error_s": 0.12323438052687466,
+          "hbm_busy_relative_error": 3.002646575181537,
+          "internal_events": 16,
+          "phase_offset_s": 0.05,
+          "reference_finish_s_by_request": {
+            "comp0": 0.11585753281407829,
+            "comp1": 0.16593317467361068
+          },
+          "reference_hbm_busy_s": 0.04104192000000001,
+          "reference_shared_hbm_busy_s": 0.0003538873861738818,
+          "reference_shared_hbm_duration_s": 0.0003538873861738818,
+          "shared_hbm_busy_absolute_error_s": 0.062211734572398175,
+          "shared_hbm_busy_relative_error": 175.79528687080858,
+          "status": "failed"
+        }
+      ],
+      "driver_arguments": [
+        "--m",
+        "16",
+        "--n",
+        "64",
+        "--k",
+        "6400",
+        "--tm",
+        "16",
+        "--tn",
+        "64",
+        "--tk",
+        "64"
+      ],
+      "driver_identity": {
+        "compiled_oracle_reference_sha256": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+        "driver_binary_sha256": "2a98eb089d6da995d5e1332c4e4214a12b771866baed0376cdf90693368c1baa",
+        "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+        "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+        "oracle_source_sha256": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e"
+      },
+      "driver_identity_consistent": true,
+      "driver_return_code": 0,
+      "driver_stderr_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.driver.stderr.txt",
+      "driver_stdout_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.driver.stdout.txt",
+      "expected_raw_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.raw.json",
+      "fixture_coverage": {
+        "core_count": 1,
+        "coverage_limits": [
+          "single complete 1x1 Core only",
+          "one GEMM shape and selected mapping per report",
+          "FP32 storage and fp32_vec_matrix_assumed_v1 only",
+          "other hardware domains use explicit finite nonbinding fixture capacities"
+        ],
+        "dataflow": "output_stationary_v2",
+        "hardware_scope": "synthetic model-to-model capacities; no silicon evidence",
+        "profile": "fp32_vec_matrix_assumed_v1; FP32 weights/activations/output",
+        "reference": "existing grouped owner Q/alpha discrete wave oracle",
+        "reference_geometry_adapter": "shared discrete geometry helper with legacy E5 guard disabled explicitly; framework metadata validated independently from the actual Plan",
+        "shape": {
+          "k": 6400,
+          "m": 16,
+          "n": 64
+        }
+      },
+      "measurement_source": "compiled_plan_and_actual_cpp_runtime",
+      "oracle_return_code": 1,
+      "oracle_stderr_path": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.report.oracle.stderr.txt",
+      "raw_json": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.raw.json",
+      "raw_validation": "validated actual compiled OS Runtime raw",
+      "report_json": "/workspace/template/work/analytical-curves/axis/m16_n64_k6400_tm16_tn64_tk64.report.json",
+      "report_status_reason": "work reconciliation, scenario coverage, or at least one error exceeded the 20% range",
+      "requested_tiles": {
+        "tk": 64,
+        "tm": 16,
+        "tn": 64
+      },
+      "reuse_source": null,
+      "shape": {
+        "k": 6400,
+        "m": 16,
+        "n": 64
+      },
+      "solo": {
+        "actual_finish_s_by_request": {
+          "solo": 0.083089468
+        },
+        "actual_hbm_busy_s": 0.08143259319006928,
+        "actual_shared_hbm_busy_s": 0.0,
+        "allocation_updates": 6,
+        "finish_absolute_error_s_by_request": {
+          "solo": 6.631945409507622e-10
+        },
+        "finish_relative_error_by_request": {
+          "solo": 7.981692050840629e-09
+        },
+        "hbm_busy_absolute_error_s": 0.06091163319006926,
+        "hbm_busy_relative_error": 2.9682643107373727,
+        "internal_events": 8,
+        "phase_offset_s": 0.0,
+        "reference_finish_s_by_request": {
+          "comp0": 0.08308946733680546
+        },
+        "reference_hbm_busy_s": 0.020520960000000022,
+        "reference_shared_hbm_busy_s": 0.0,
+        "reference_shared_hbm_duration_s": 0.0,
+        "shared_hbm_busy_absolute_error_s": 0.0,
+        "shared_hbm_busy_relative_error": 0.0,
+        "status": "failed"
+      },
+      "status": "failed",
+      "status_scope": "one_actual_compiled_plan_and_cpp_runtime_fixture"
+    }
+  ],
+  "created_utc": "2026-10-15T13:38:34.438708+00:00",
+  "entry_parameters": {
+    "driver_binary": "/workspace/template/work/build-die/coarse_compiled_gemm_oracle_driver",
+    "final_driver_ready_guard": true,
+    "requested_shapes": [
+      {
+        "k": 64,
+        "m": 16,
+        "n": 64
+      },
+      {
+        "k": 4096,
+        "m": 16,
+        "n": 64
+      },
+      {
+        "k": 4096,
+        "m": 80,
+        "n": 128
+      },
+      {
+        "k": 4097,
+        "m": 65,
+        "n": 65
+      },
+      {
+        "k": 64,
+        "m": 256,
+        "n": 64
+      },
+      {
+        "k": 6400,
+        "m": 16,
+        "n": 64
+      }
+    ],
+    "requested_tiles": {
+      "tk": 64,
+      "tm": 16,
+      "tn": 64
+    },
+    "script": "/workspace/template/die/docs/analysis/analytical-curves-partial-20261015/run_axis.py"
+  },
+  "historical_initial_model_reference": null,
+  "identity": {
+    "batch_baseline": {
+      "compiled_oracle_reference_sha256": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+      "driver_binary_sha256": "2a98eb089d6da995d5e1332c4e4214a12b771866baed0376cdf90693368c1baa",
+      "driver_source_sha256": "36e6c7bed4d56dc21d4d74181d4056a4bb913e57c27cf37d9d2839273269ee19",
+      "grouped_oracle_source_sha256": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+      "oracle_source_sha256": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e"
+    },
+    "driver_binary": "/workspace/template/work/build-die/coarse_compiled_gemm_oracle_driver",
+    "identity_stable_through_batch": true
+  },
+  "readable_report": "/workspace/template/work/analytical-curves/axis/README.md",
+  "requested_tiles": {
+    "tk": 64,
+    "tm": 16,
+    "tn": 64
+  },
+  "schema_version": 1,
+  "scope": {
+    "acceptance_limits_source": "copied from each per-case analytical_service_oracle.py report",
+    "description_count_rule": "per epoch max(1, sum over activities of max(1, credit_curve_points-1) for nonempty curves, otherwise 1)",
+    "fixture": "single-Core 1x1, FP32, synthetic finite capacities",
+    "hardware_measurement": false,
+    "oracle": "analytical_service_oracle.py + existing grouped discrete K-wave oracle",
+    "target_calibration": false
+  },
+  "summary_json": "/workspace/template/work/analytical-curves/axis/summary.json"
+}

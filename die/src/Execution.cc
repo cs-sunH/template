@@ -1,5 +1,6 @@
 #include "coarse_die/Execution.hh"
 #include "PackingAllocation.hh"
+#include "RatioAllocation.hh"
 
 #include <algorithm>
 #include <array>
@@ -1156,6 +1157,7 @@ void Runtime::allocate() {
     double alpha = 0.0;
     std::size_t multiplicity = 1;
     std::vector<LiveActivity*> mirrors;
+    std::array<double, 2> credit_slope{};
   };
 
   for (auto& [handle, execution] : executions_) {
@@ -1173,6 +1175,7 @@ void Runtime::allocate() {
   for (auto& [handle, execution] : executions_) {
     (void)handle;
     if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+    const std::string owner_key = execution.owner.key();
     for (LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done) continue;
       bool has_service = false;
@@ -1186,8 +1189,11 @@ void Runtime::allocate() {
       while (first_resource < resource_count && live.definition.work[first_resource] <= 0.0) {
         ++first_resource;
       }
-      refs.push_back(Ref{&execution, &live, handle, execution.owner.key(),
+      refs.push_back(Ref{&execution, &live, handle, owner_key,
                          first_resource, q, 0.0});
+      // Progress cannot change during allocation. Reuse its exact segment
+      // derivative for symmetry, singleton and tangent rows in this call.
+      refs.back().credit_slope = curve_derivative(live);
     }
   }
   if (refs.empty()) return;
@@ -1207,7 +1213,7 @@ void Runtime::allocate() {
     // Refs are collected contiguously per execution before the stable LP
     // sort. Store block ranges instead of allocating two maps and one vector
     // for each owner on every arbitration update.
-    struct Block { std::size_t begin, end; };
+    struct Block { std::size_t begin, end; unsigned boundary = 0; };
     std::vector<Block> blocks;
     blocks.reserve(refs.size());
     for (std::size_t begin = 0; begin < refs.size();) {
@@ -1233,10 +1239,11 @@ void Runtime::allocate() {
       }
       return mask;
     };
+    for (auto& block : blocks)
+      block.boundary = boundary_mask(*refs[block.begin].execution);
     const auto equivalent_blocks = [&](const Block& lhs, const Block& rhs) {
       if (lhs.end - lhs.begin != rhs.end - rhs.begin ||
-          boundary_mask(*refs[lhs.begin].execution) !=
-          boundary_mask(*refs[rhs.begin].execution)) return false;
+          lhs.boundary != rhs.boundary) return false;
       for (std::size_t i = 0; i < lhs.end - lhs.begin; ++i) {
         const auto& a = refs[lhs.begin + i].live->definition;
         const auto& b = refs[rhs.begin + i].live->definition;
@@ -1247,8 +1254,8 @@ void Runtime::allocate() {
             a.canonical_q != b.canonical_q ||
             a.private_time_s != b.private_time_s ||
             a.credit_delta != b.credit_delta ||
-            curve_derivative(*refs[lhs.begin + i].live) !=
-                curve_derivative(*refs[rhs.begin + i].live)) return false;
+            refs[lhs.begin + i].credit_slope !=
+                refs[rhs.begin + i].credit_slope) return false;
       }
       return true;
     };
@@ -1314,8 +1321,8 @@ void Runtime::allocate() {
     for(std::size_t b=0;b<2;++b) {
       const double tolerance=kCreditTolerance*std::max(1.0,ref.execution->credit_capacity[b]);
       const double credit=ref.execution->credit[b];
-      if((credit<=tolerance&&curve_derivative(*ref.live)[b]<0.0)||
-         (credit>=ref.execution->credit_capacity[b]-tolerance&&curve_derivative(*ref.live)[b]>0.0))
+      if((credit<=tolerance&&ref.credit_slope[b]<0.0)||
+         (credit>=ref.execution->credit_capacity[b]-tolerance&&ref.credit_slope[b]>0.0))
         rate=0.0;
     }
     if(!std::isfinite(rate)||rate<0.0)
@@ -1375,7 +1382,7 @@ void Runtime::allocate() {
         bool used = false;
         for (std::size_t i = 0; i < count; ++i) {
           if (refs[i].execution != execution) continue;
-          const double delta = curve_derivative(*refs[i].live)[buffer];
+          const double delta = refs[i].credit_slope[buffer];
           const double coefficient = lower_boundary ? -delta : delta;
           if (coefficient != 0.0) {
             c.a[i] = coefficient;
@@ -1405,6 +1412,23 @@ void Runtime::allocate() {
     if(detail::allocate_packing(packing,owners,quantities,rates,shares,
                                 curved_allocation)) {
       last_arbitration_.path=ArbitrationDiagnostics::Path::Packing;
+      last_arbitration_.constraint_rows=base.size();
+      for(std::size_t i=0;i<count;++i)publish(refs[i],rates[i],shares[i]);
+      return;
+    }
+  }
+  if(curved_allocation && count<=3) {
+    std::vector<detail::RatioRow> ratio_rows;
+    ratio_rows.reserve(base.size());
+    for(const auto& row:base)ratio_rows.push_back({row.a,row.b});
+    std::vector<std::string> owners;
+    std::vector<double> quantities,rates,shares;
+    owners.reserve(count);quantities.reserve(count);
+    for(const auto& ref:refs) {
+      owners.push_back(ref.owner_key);quantities.push_back(ref.q);
+    }
+    if(detail::allocate_ratio(ratio_rows,owners,quantities,rates,shares)) {
+      last_arbitration_.path=ArbitrationDiagnostics::Path::Ratio;
       last_arbitration_.constraint_rows=base.size();
       for(std::size_t i=0;i<count;++i)publish(refs[i],rates[i],shares[i]);
       return;

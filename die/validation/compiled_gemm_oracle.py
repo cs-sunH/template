@@ -639,8 +639,28 @@ def make_capacities(raw: dict[str, Any]) -> list[float]:
     return capacities
 
 
+def _validate_relative_error_limit(value: float | None, name: str) -> float | None:
+    if value is None:
+        return None
+    if (not isinstance(value, (int, float)) or isinstance(value, bool)
+            or not math.isfinite(float(value)) or not 0.0 <= float(value) <= 1.0):
+        raise ValueError(f"{name} must be a finite relative-error limit in [0, 1]")
+    return float(value)
+
+
 def compare_measurement(actual: dict[str, Any], oracle: dict[str, Any],
-                       phase_offset_s: float, concurrent: bool) -> dict[str, Any]:
+                       phase_offset_s: float, concurrent: bool, *,
+                       completion_limit: float | None = None,
+                       busy_limit: float | None = None) -> dict[str, Any]:
+    """Compare finish and HBM busy metrics using explicit or legacy limits.
+
+    Callers that omit keyword-only limits retain the historical 3% solo,
+    5% concurrent finish and 5% busy diagnostics. The analytical service
+    report passes its current policy thresholds explicitly.
+    """
+    completion_limit = _validate_relative_error_limit(
+        completion_limit, "completion_limit")
+    busy_limit = _validate_relative_error_limit(busy_limit, "busy_limit")
     actual_counters = actual["counters"]
     oracle_finishes = oracle["finish_s_by_request"]
     finish_errors: dict[str, float] = {}
@@ -655,6 +675,9 @@ def compare_measurement(actual: dict[str, Any], oracle: dict[str, Any],
         finish_errors["solo"] = relative_error(actual_finish,
                                                 float(oracle_finishes["comp0"]))
         finish_limit = 0.03
+    if completion_limit is not None:
+        finish_limit = completion_limit
+    hbm_busy_limit = 0.05 if busy_limit is None else busy_limit
     actual_hbm_busy = float(actual_counters["hbm_busy_ns"]) / NS_PER_SECOND
     hbm_error = relative_error(actual_hbm_busy, float(oracle["hbm_busy_s"]))
     actual_shared = float(actual_counters["hbm_shared_ns"]) / NS_PER_SECOND
@@ -757,8 +780,8 @@ def compare_measurement(actual: dict[str, Any], oracle: dict[str, Any],
                          for row in (0, 1)]
     statuses = {
         "completion_time": max(finish_errors.values(), default=math.inf) <= finish_limit,
-        "hbm_busy_time": hbm_error <= 0.05,
-        "shared_hbm_busy_time": (shared_error <= 0.05 if shared_required
+        "hbm_busy_time": hbm_error <= hbm_busy_limit,
+        "shared_hbm_busy_time": (shared_error <= hbm_busy_limit if shared_required
                                  else not shared_required),
     }
     return {
@@ -787,8 +810,8 @@ def compare_measurement(actual: dict[str, Any], oracle: dict[str, Any],
             "row_busy_by_hbm_row": row_busy_errors,
             "row_shared_by_hbm_row": row_shared_errors,
         },
-        "limits": {"completion": finish_limit, "hbm_busy": 0.05,
-                   "shared_hbm_busy": 0.05 if shared_required else None},
+        "limits": {"completion": finish_limit, "hbm_busy": hbm_busy_limit,
+                   "shared_hbm_busy": hbm_busy_limit if shared_required else None},
         "checks": statuses,
         "status": "passed" if all(statuses.values()) else "failed",
     }

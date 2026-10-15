@@ -199,6 +199,45 @@ void private_bound_not_multiplied(json& output) {
   add_sample(output, "private-not-multiplied-runtime", runtime, plans);
 }
 
+void curved_ratio_boundaries(json& output) {
+  const Hardware hardware = manual_hardware(capacities(3.0, 2.0));
+  for (const unsigned count : {2U, 3U}) {
+    auto load = activity(1, Role::Load, HBM0, 2.0);
+    load.canonical_q = 2.0;
+    load.private_time_s = 0.25;
+    load.credit_delta = {1.0, 0.0};
+    auto compute = activity(2, Role::Compute, COMPUTE_GATE, 4.0);
+    compute.canonical_q = 5.0;
+    compute.private_time_s = 0.5;
+    compute.credit_delta = {-1.0, count == 3 ? 1.0 : 0.0};
+    std::vector<Activity> activities{load, compute};
+    if (count == 3) {
+      auto store = activity(3, Role::Store, HBM0, 1.0);
+      store.canonical_q = 3.0;
+      store.private_time_s = 0.125;
+      store.credit_delta = {0.0, -1.0};
+      activities.push_back(store);
+    }
+    for (auto& item : activities)
+      item.credit_curve = {{0.0, {0.0, 0.0}}, {1.0, item.credit_delta}};
+    const auto plan = one_epoch_plan(hardware, "curved-ratio-" +
+        std::to_string(count), std::move(activities), {0.0, 0.0});
+    Runtime runtime(hardware);
+    const auto handle = runtime.submit(plan, owner(count, count, count), 0);
+    require(runtime.last_arbitration().path ==
+                ArbitrationDiagnostics::Path::Ratio,
+            "curved tangent boundary exercises the ratio allocation path");
+    const std::map<std::uint64_t, std::shared_ptr<const Plan>> plans{{handle, plan}};
+    add_sample(output, "curved-ratio-" + std::to_string(count), runtime, plans);
+    auto restored = check_snapshot(hardware, runtime, {handle});
+    add_sample(output, "curved-ratio-restored-" + std::to_string(count),
+               *restored, plans);
+    runtime.update_capacity(HBM0, 0.5, 0);
+    add_sample(output, "curved-ratio-capacity-" + std::to_string(count),
+               runtime, plans);
+  }
+}
+
 void split_fair_owner_request_metadata(json& output) {
   const Hardware hardware = manual_hardware(capacities(6.0));
   Runtime runtime(hardware);
@@ -308,6 +347,7 @@ json run() {
   json output = json::array();
   static_mixed_and_permutation(output);
   private_bound_not_multiplied(output);
+  curved_ratio_boundaries(output);
   split_fair_owner_request_metadata(output);
   arrival_completion_and_restore(output);
   capacity_cancel_and_restore(output);

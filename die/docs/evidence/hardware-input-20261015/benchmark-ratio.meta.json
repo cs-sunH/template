@@ -1,0 +1,7 @@
+{
+  "started_unix": 1792053603.9785976,
+  "cpu_stat_before": "usage_usec 1479897837\nuser_usec 1386749513\nsystem_usec 93148324\nnice_usec 0\nnr_periods 12849\nnr_throttled 5086\nthrottled_usec 498123369\nnr_bursts 0\nburst_usec 0\n",
+  "finished_unix": 1792053604.6262653,
+  "return_code": 1,
+  "cpu_stat_after": "usage_usec 1480545404\nuser_usec 1387395611\nsystem_usec 93149793\nnice_usec 0\nnr_periods 12856\nnr_throttled 5086\nthrottled_usec 498123369\nnr_bursts 0\nburst_usec 0\n"
+}

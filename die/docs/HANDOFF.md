@@ -1,6 +1,6 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-15。当前工作分支 `codex/die-analytical-continue-20261015`，最新已合入main基线 `b7925e2cb711297b5a9a271508ff76da6a46e8e7`。用户授权持续开发；本次先同步硬件输入与10%/20%精度设计，再继续改造。保留全部历史有效成果；下方旧停止/仅文档/3%—5%口径是历史，最新用户决定优先。工程 **NOT ACCEPTED**，新源尚未发布五仓。
+记录日期：2026-10-15。当前工作分支 `codex/die-analytical-continue-20261015`，设计先行基线 `35f4580fdd881c6c5cac37c06c8d4e378f24de61` 已合入main；此前生产恢复基线为 `b7925e2`。用户授权持续开发；本次先同步硬件输入与10%/20%精度设计，再继续改造。保留全部历史有效成果；下方旧停止/仅文档/3%—5%口径是历史，最新用户决定优先。工程 **NOT ACCEPTED**，新源尚未发布五仓。
 
 ## Current Status
 
@@ -8,7 +8,9 @@
 
 用户明确：Die面积/宽高、Core的Nx×Ny排列以及其它硬件参数由用户研究并输入；仿真器只预测给定配置的任务延迟，不承担硬件架构搜索/Pareto推荐，当前不需要Wafer级铺排。删除生产search_hardware和相关搜索入口/要求，保留合法性/资源派生和软件tile映射。目标误差10%；多次有记录的合理测试/超参调整仍难达到时20%以内可接受。该决定替代旧3%/5%硬门槛；busy定义、精确守恒、依赖/公平与速度预算保留，不把10%—20%写成10%达标，>20%仍failed。校准以xlsx正确分解算子及docx/根设计机制为依据，少量可识别超参粗校准即可，参考/先验/目标证据身份继续分开。详见根设计§1.6；优先于下方历史口径。
 
-本次严格先提交/同步这份设计，再实施硬件输入改造。文档提交前的有效源码工作全部保留，尚未合入此文档提交：ratio快路已接入并经过42/42 CTest（27.44s），新增曲线大绝对时钟/快照/容量/取消与真实Runtime Fraction对照；30样本ratio benchmark仍failed（128³冷编译P95 2.393ms、OS bulk J32 P95 82.601μs，hot查询约3—6.5μs）。其后的局部斜率/边界缓存、Mapping错误标签string_view和ratio固定数组优化尚未构建验证，不计入上述42/42。新busy条件界/route限制分析也未发布到五仓。保存这些修改，不能清理或覆盖。
+设计先行提交 `35f4580` 已正常进入main并实核远端，然后才实施硬件改造。现已删除生产search_hardware/API/候选用例，新增显式W/H+NxNy、无search/Wafer配置和可选validation_constraints；旧无W/H固定标记仅兼容解码。旧示例完整derived/rates/fingerprint已与旧archive逐字节相等。补入口权重和可选系统计数溢出拒绝、CAPI硬件命名空间错误分类；原ABI失败输出清零行为保持。ratio快路、调用内斜率/边界缓存、固定3折点及Mapping string_view也已完成一致验证，保留所有此前有效成果。
+
+最终Release及公共CTest **42/42通过，20.40s**，包含新硬件输入/原兼容、精确Fraction、曲线大绝对时钟/快照/容量/取消与Python新误差策略12项。真实explicit配置7个示例经公开C ABI全部ok_assumed。新schema2/10%目标/有据20% fallback的6shape×18场景已跑：全部完成时间指标满足10%，五个shape的busy仍>20%，整体比较failed；原6.9163%完成误差不再是待优化问题。最终30样本速度仍failed：128³冷P95 2.536207ms，OSbulk J32 68.982μs，J1/J8约24.223/40.923μs，hot约2.6—7.2μs；保留全部中间失败与初始CAPI测试错误预期日志。证据见 `analysis/hardware-input-20261015/` /对应evidence verification.json。五仓尚未发布此源/未跑新业务；TX8条件参考与目标先验未改，target raw仍not_available。不是工程ACCEPTED，也不是停止交接。
 
 ### 当前：解析 Runtime 恢复与真实精度/速度失败（持续开发）
 
@@ -224,12 +226,11 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. 先将本次用户设计要求正常提交/同步main并核实远端；只提交文档，保留全部未提交有效源码。完成后才开始本次新要求的代码改造。
-2. 移除生产硬件搜索接口/候选生成；给定显式W/H及Nx×Ny的单Die配置应不依赖search_profile或Wafer字段。保留Core64/资源/容量/几何合法性，以及现有显式配置、五仓ABI/业务兼容；旧搜索字段只作可解释迁移元数据，不再约束用户Die必须落在搜索边界。
-3. 完成当前有效ratio/查询优化的构建验证；上一个一致源码42/42通过，后续局部优化尚未验证。继续精确owner-Q/alpha/13域/PRIVATE/credit认证和速度预算，不以总时间除更新数验收。
-4. 按新10%目标、必要时有多次记录的20%容许范围复评实际Runtime axis与xlsx正确分解算子，报告原始/绝对误差、来源和覆盖域。65×65×4097的6.9163%旧3%失败不是新10%失败；但多数shape的busy误差>20%，仍需如实failed。保留旧报告，另存新指标版本，不用调整eta伪造oracle粒度精度。
-5. 继续有必要的累计曲线/单位/首输出/静态峰值及固定复杂度，5→8→16选择满足新精度/原速度的最小描述；WR/向量/Attention/FFN和OS路由partial限制仍在，不恢复逐K/周期生产方案。
-6. 公共源稳定后五个活动仓双ABI/83配置/FACE新旧符号/完整业务及固定图CPU≤10%，保留JOINT live/sh30保护。TX8条件参考与目标先验分开，无独立目标数据不声称目标实测校准。按有意义检查点继续自主开发和GitHub同步。
+1. 最新设计提交35f4580及其后的本实现是基线。硬件搜索已删除；使用用户给定的explicit单Die输入，保留旧格式确定性兼容，不再做面积/Core/Wafer候选研究。
+2. 以一致42/42为功能基线继续优化：128³冷编译2.536ms、OSbulk J32更新68.982μs仍未达原速度预算。ratio已独立验证接入，先减少剩余固定规模求解/collection开销，不改owner-Q/alpha/13域/PRIVATE/credit正确性。
+3. 新10%/20%实际axis的所有完成时间指标已≤10%，不用为原6.9163%尾shape增加复杂度。五个shape原busy仍>20%，保持failed；按解析分段/固定复杂度路线改表示，不改变busy定义、不用oracle拟合eta，不恢复逐K/周期生产方案。
+4. 新硬件输入与C ABI稳定后先做五个活动仓的隔离新源集成、双ABI/83配置/FACE消费者及完整业务/固定图CPU≤10%，再按实测状态发布。当前vendor仍旧canonical24，不能声称同步或验收通过；JOINT live/sh30保护保持。
+5. WR/向量/Attention/FFN全模板累计单位/首输出/静态峰值、OS路由partial二阶/odd-row限制仍在，按需要处理。基于xlsx正确分解算子做少量可识别超参粗校准；TX8条件参考与目标先验分开，无独立目标数据不声称目标实测校准。有意义阶段继续同步GitHub，自主持续开发。
 
 下方为历史接续记录，冲突时以上为准。
 
@@ -319,6 +320,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Tests
 
+最新硬件输入/ratio/新指标检查点：最终42/42 CTest、真实explicit CABI7/7、旧Hardware完整identity字节比较通过；6shape/18场景完成时间≤10%而5shape busy>20%失败，最终速度仍failed。实际命令/源/ELF/初始失败及最终日志在 `evidence/hardware-input-20261015/verification.json`。旧条目保留历史阈值，不解释为当前新验收。
+
 - 当前恢复检查点：Release all build成功，公共CTest41/41（18.80s）；v3 axis六shape中1过5失败，30样本benchmark failed。全部source/ELF及raw见 `evidence/analytical-runtime-recovery-20261015/verification.json`。没有五仓新源publisher/83配置/新Online或目标校准结果。
 
 ### 本轮最终记录（不得外推）
@@ -367,6 +370,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 未跑新的目标held-out、sanitizer、malloc fault、当前host预算或完整五仓业务。既存GCC __int128/JSON helper dangling-reference warnings保留：已读helper返回persistent JSON引用，未把警告直接断言成UB，也未声称完整内存安全审查。
 
 ## Blocking Issues
+
+当前：原busy在五个shape仍>20%，常规冷编译与J32更新仍超预算；全模板/路由限制及五仓新源业务/CPU预算未完成，无独立目标raw。新硬件直接输入/搜索删除及其兼容回归已经完成，原尾shape6.9163%完成误差已满足新10%目标。下方旧门槛/未实现描述是历史。
 
 ### 当前新增限制
 

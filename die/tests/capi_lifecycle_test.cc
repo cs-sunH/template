@@ -33,6 +33,29 @@ int main() {
     json cfg;
     in >> cfg;
 
+    // Structural hardware errors use the same status at namespace roots and
+    // leaf fields, and a rejected model must not publish a handle.
+    for (unsigned kind=0; kind<7; ++kind) {
+      auto invalid_cfg=cfg;
+      if(kind==0)invalid_cfg["architecture"].erase("system_region_height_mm");
+      if(kind==1)invalid_cfg["performance_profile"]=json::array();
+      if(kind==2)invalid_cfg["core_resource_table"]["rows_sha256"]="incorrect";
+      if(kind==3)invalid_cfg["source_revision"]="incorrect";
+      if(kind==4)invalid_cfg["source_constants"]=json::array();
+      if(kind==5)invalid_cfg["validation_constraints"]={{"objective","pareto"}};
+      if(kind==6)invalid_cfg.erase("architecture");
+      DieHandle rejected=123456;
+      check(die_coarse_create_model_v2(invalid_cfg.dump().c_str(), &rejected)==
+                DIE_INVALID_HARDWARE,
+            "invalid hardware namespace/leaf must have the hardware status: "+
+                std::string(die_coarse_last_error_v2()));
+      check(rejected==0,"invalid hardware clears the output without publishing a model handle");
+      const auto error=json::parse(die_coarse_last_error_v2());
+      check(error.at("status_code")==DIE_INVALID_HARDWARE &&
+                !error.at("field_path").get<std::string>().empty(),
+            "hardware rejection retains a field diagnostic");
+    }
+
     DieHandle model = 0;
     DieHandle runtime = 0;
     DieHandle execution = 0;

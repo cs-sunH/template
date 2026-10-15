@@ -2,7 +2,7 @@
 
 > This is an implementation description, not an acceptance certificate. [HANDOFF.md](HANDOFF.md) is the current progress and defect ledger. Described intentions below must not be read as passed features.
 
-This page describes the files currently under `die/`, including what the implementation consumes and what its reported results mean. The v2 resolver and runtime use the fixed source revision in `configs/example_hardware.json`; changing the architecture source table, task template, event ordering, or rounding contract requires a version change and corresponding evidence.
+This page describes the canonical files currently under `die/`, including what the implementation consumes and what its reported results mean. The v2 resolver validates the fixed source revision and Core table recorded in `configs/example_hardware.json`; changing the architecture source table, task template, event ordering, or rounding contract requires a version change and corresponding evidence. This is not a build, accuracy, or release claim. The five Astra-Sim vendored copies have not yet been synchronized to the current hardware-input changes.
 
 ## Build and verification commands
 
@@ -21,7 +21,7 @@ ctest --test-dir build/coarse_die_v2 --output-on-failure
   --output -
 ```
 
-The static target is `coarse_die`; the shared C ABI target is `coarse_die_cabi`, emitted at `build/coarse_die_v2/lib/libcoarse_die_cabi.so`. Tests are enabled by default. CMake registers whichever of `source_golden_test`, `hardware_search_test`, `compile_execution_test`, `runtime_semantics_test`, `oracle_granularity_test`, and `capi_lifecycle_test` exist in the source snapshot; the benchmark is a separate `coarse_die_benchmark` target. A CMake configure that silently skips an expected test is not evidence that the skipped contract passed.
+The static target is `coarse_die`; the shared C ABI target is `coarse_die_cabi`, emitted at `build/coarse_die_v2/lib/libcoarse_die_cabi.so`. Tests are enabled by default. CMake registers only test sources present in the checkout; a test omitted because its source is absent has not been run. The benchmark is a separate `coarse_die_benchmark` target.
 
 `tools/estimate.py` is the user-facing offline path through the public ABI. `--tasks` accepts a single task object, a task array, or `{"specs":[...]}`. It prints one result/status per input item, writes to stdout by default (`--output -`) or to the selected path, returns nonzero when an item fails, and frees both the result buffer and model handle on every exit path. It does not compute timing formulas in Python.
 
@@ -36,7 +36,11 @@ The first verifies the workbook cache and reference reconstruction. The second c
 
 ## Hardware input contract and field consumers
 
-The descriptor is a JSON object with `schema: "coarse_die_v2"`, the immutable `source_revision`, and required `architecture`, `search_profile`, and `performance_profile` objects. `core_resource_table` and `source_constants` are optional mirrors; if supplied, they must match the compiled source exactly. The canonical resolved descriptor includes these mirrors and a content fingerprint.
+The descriptor is a JSON object with `schema: "coarse_die_v2"`, the immutable `source_revision`, and required `architecture` and `performance_profile` objects. The architecture describes one supplied Die: `core_columns_nx` and `core_rows_ny` identify the Core grid, and `die_width_mm` plus `die_height_mm` identify its outline. These values are validated and used to derive resources; the resolver does not generate or rank hardware candidates, require Wafer inputs, or change the supplied hardware. `core_resource_table` and `source_constants` are optional mirrors; if supplied, they must match the compiled source exactly. The canonical resolved descriptor includes these mirrors and a content fingerprint.
+
+`validation_constraints` is an optional instance check. It can impose an area interval, a reticle outline and rotation rule, a maximum aspect ratio, nonnegative bump-minus-HBM D2D budget, or an HBM-row-within-Die check. It accepts only the corresponding `die_area_min_mm2`, `die_area_max_mm2`, `reticle_width_mm`, `reticle_height_mm`, `allow_reticle_rotation`, `die_max_aspect_ratio`, `require_nonnegative_d2d_budget`, and `require_hbm_row_within_die` keys. A failing constraint rejects that supplied instance; it never selects, resizes, or replaces it. New descriptors should use this field when they need such checks.
+
+For compatibility, an existing descriptor without W/H may still be decoded when it names a supported deterministic legacy `die_geometry` (`minimum_grid`, `grow_width`, `grow_height`, `isotropic`, or `resolved_source_boundary`; the last also identifies its legacy `geometry_candidate`). This path decodes a specific old outline; it does not generate candidates. Legacy `search_profile` values are not required for a new descriptor and do not constrain a supplied W/H outline; old fields are read only on the no-W/H compatibility path. `configs/example_hardware.json` still uses that legacy form, so new descriptors should provide explicit W/H. The five vendored copies remain pending synchronization.
 
 | Input field | Accepted values / units | Consumer and effect |
 |---|---|---|
@@ -46,24 +50,18 @@ The descriptor is a JSON object with `schema: "coarse_die_v2"`, the immutable `s
 | `architecture.core_type` | `small` or `large` | Selects Core-edge formula and one of the two source table families. |
 | `architecture.sram_mib_per_core` | One of 0.25–2.00 MiB in 0.25 MiB steps | Selects the Core table row, SRAM capacity, and Core L0 edge. MiB uses 2²⁰ bytes. |
 | `architecture.noc_width_bits` | 64, 128, 256, or 512 | Selects the source table row and per-link/local-bus width used by resource-rate formulas. |
-| `architecture.core_columns_nx`, `core_rows_ny` | Positive integer counts | Set the rectangular Core grid, core count, mesh directions, edge count, and minimum Die outline. Core assignment and routing profiles use this shape. |
+| `architecture.core_columns_nx`, `core_rows_ny` | Positive integer counts | User-supplied rectangular Core grid. Sets core count, mesh directions, edge count, and the minimum outline that the supplied Die must contain. Core assignment and routing profiles use this shape. |
 | `architecture.core_pitch_x_mm`, `core_pitch_y_mm` | Non-negative mm | Add inter-Core spacing to the minimum width and height. |
 | `architecture.die_extra_width_mm`, `die_extra_height_mm` | Non-negative mm | Add the declared peripheral allowance to the minimum grid dimensions. |
-| `architecture.die_geometry` | `minimum_grid`, `grow_width`, `grow_height`, `isotropic`, or `resolved_source_boundary` | Chooses the identified source geometry boundary and validates it against the derived minimum grid / required area. |
-| `architecture.geometry_candidate`, `upstream_search_profile` | Required for `resolved_source_boundary` | Record which permitted boundary and upstream search profile produced a resolved outline. |
-| `architecture.die_width_mm`, `die_height_mm` | Optional positive mm | If given, must equal the identified source-boundary geometry; they are checked, not arbitrary tuning knobs. |
+| `architecture.die_width_mm`, `die_height_mm` | Required together for a new explicit instance; positive mm | User-supplied Die outline. It must contain the derived Core grid; optional `die_area_mm2` and `core_count` mirrors must match the supplied dimensions and grid. |
+| `architecture.die_area_mm2`, `architecture.core_count` | Optional | When present, must equal `die_width_mm × die_height_mm` and `core_columns_nx × core_rows_ny`, respectively. |
+| `architecture.die_geometry` | `explicit` for a new descriptor; old deterministic labels only for compatibility | `explicit` uses the supplied W/H. Old labels are accepted for legacy decoding and do not enumerate geometries or alter supplied W/H. |
+| `architecture.geometry_candidate` | Legacy only for `resolved_source_boundary` | Identifies the specific old deterministic boundary to decode; it does not request candidate generation. |
 | `architecture.hbm_stacks_per_row` | 1–14 | Sets two-row HBM capacity and raw row bandwidth; each row has `n` stacks. |
 | `architecture.hbm_placement_mode` | `same_side_two_rows` or `two_sides_one_row_each` | Controls row-to-ingress mapping for bounded ingress profiles; it does not change HBM capacity or raw bandwidth. |
-| `architecture.system_region_width_mm`, `system_region_height_mm` | Positive mm | Determine the number of source-derived modules that fit in the system region and system capacity/peak totals. |
-| `search_profile.die_area_min_mm2`, `die_area_max_mm2` | Positive mm² | Filter the Die outline and determine the minimum source-area requirement. |
-| `search_profile.reticle_width_mm`, `reticle_height_mm`, `allow_reticle_rotation`, `die_max_aspect_ratio` | mm / boolean / ratio ≥ 1 | Filter candidates against reticle bounds and maximum aspect ratio. |
-| `search_profile.require_nonnegative_d2d_budget` | Boolean | Rejects a Die whose bump-area budget minus two-row HBM peak is negative. |
-| `search_profile.require_hbm_row_within_die` | Optional boolean, default false | Adds an HBM row width fit check. |
-| `search_profile.geometry_search_mode` | `core_first` or `wafer_first` | Selects the source search procedure. `wafer_first` also consumes wafer column/row ranges. |
-| `search_profile.area_extension_rules` | Any unique subset of `grow_width`, `grow_height`, `isotropic` | Bounds which area-extension geometries the search can try. |
-| `search_profile.nx_range`, `ny_range`, `hbm_n_range` | `{min,max}` or two-element integer range | Set finite search candidates for grid dimensions and stacks per row. |
-| `search_profile.wafer_columns_range`, `wafer_rows_range` | Required for `wafer_first` | Bound the selected module columns and rows after geometry filtering. |
-| `search_profile.objective` | `compute_peak`, `hbm_capacity`, or `pareto` | Sorts feasible hardware candidates by source-derived aggregate compute, capacity, and D2D tie-breaks. It is not a performance fit. |
+| `architecture.system_region_width_mm`, `system_region_height_mm` | Optional positive mm pair | If supplied, derives module-fit and system capacity/peak summaries. They are not required to resolve or simulate one Die and do not represent a Wafer search. |
+| `validation_constraints.*` | Optional instance-only checks listed above | Rejects an invalid supplied outline without generating or selecting a different one. |
+| Legacy `search_profile` | Optional only for old no-W/H descriptors | Compatibility input for decoding a named old outline. Its candidate ranges, search mode, Wafer ranges, and objective do not invoke hardware search. Prefer `validation_constraints` for current instance checks. |
 | `performance_profile.execution_profile`, `calibration_status` | Version/profile labels | Record the assumed compute templates and evidence status. `assumed` is not promoted by a successful estimate. |
 | `performance_profile.timing_topology_profile` | Required explicit choice: `distributed_ideal_v2`, `edge_single_word_v2`, `explicit_ingress_v2` | Chooses whether aggregate HBM ingress is ideal/unlimited, edge-word bounded, or supplied explicitly. No choice is inferred as physical truth. |
 | `performance_profile.routing_profile` | `mapped_uniform_sources_v2`, `uniform_grid_v2`, `edge_uniform_v2`, `uniform_proxy_v2` | Chooses the declared source/destination distribution model for route work. |
@@ -75,7 +73,13 @@ The descriptor is a JSON object with `schema: "coarse_die_v2"`, the immutable `s
 | `kappa_quant_eqops`, `kappa_acc_convert_eqops` | Non-negative equivalent operations per item | Price the fixed target quantization/packing and accumulator-conversion templates. They are not universal instruction counts. |
 | `performance_profile.explicit_ingress` | Required only for `explicit_ingress_v2` | Supplies source identity, two raw B/s rates, row→ingress mapping, shared-group IDs, enabled flags, and weighted source columns. Shared resources must agree on their declared rate. |
 
-The 64 Core rows are compiled from the source architecture document and checked against the `core64_v2` digest. The resolver derives `N_core=Nx×Ny`, `L0`, INT4 and Vec peaks, SRAM capacity, Die geometry, two HBM rows, bump/D2D budgets, module fit, and system-region totals. For the current source formulas, one HBM stack contributes 36×10⁹ bytes and 1.1776×10¹² B/s; `n` stacks per row means `2n` stacks total. The source Vec rate is 3.9554×10⁹ FP32-equivalent operations/s per lane. These are source inputs, not measured target rates.
+The 64 Core rows are compiled from the source architecture document and checked against the `core64_v2` digest. The resolver derives `N_core=Nx×Ny`, `L0`, INT4 and Vec peaks, SRAM capacity, metrics for the supplied Die geometry, two HBM rows, and bump/D2D budgets. If a system region is supplied, it also derives module-fit and system totals. For the current source formulas, one HBM stack contributes 36×10⁹ bytes and 1.1776×10¹² B/s; `n` stacks per row means `2n` stacks total. The source Vec rate is 3.9554×10⁹ FP32-equivalent operations/s per lane. These are source inputs, not measured target rates.
+
+## Accuracy and busy reporting
+
+The root design §1.6 target is 10% relative error for delay predictions and existing-model comparisons. After multiple documented reasonable tests and calibration adjustments, results within 20% may be accepted with the target shortfall and coverage clearly disclosed; errors above 20% remain failures. This policy supersedes the former 3% isolated and 5% concurrent/busy thresholds. It is a target policy, not evidence that the current code has met it.
+
+Keep the original busy definition: positive-service time is reported as the interval union/shared integral, not as average utilization. Compare the same isolated latency, per-request concurrent completion, and busy quantities; report absolute error, reference shared duration, and covered cases. A zero reference is reported by absolute error and coverage, without manufacturing a relative-error denominator. This page records no validation run or release; the five vendored copies remain pending synchronization.
 
 The runtime exposes thirteen shared service domains in this stable order:
 

@@ -22,6 +22,29 @@ void drain(Runtime& r) {
     r.advance_to(*next);require(++guard<30,"fixed description uses bounded event count");
   }
 }
+json curve_clock_result(const Hardware& hw, std::uint64_t units,
+                        std::uint64_t start, unsigned mode) {
+  Runtime runtime(hw);
+  const auto handle=runtime.submit(delayed_output(hw,units),owner(10,10,10),start);
+  runtime.advance_to(start);
+  runtime.advance_to(*runtime.next_event()+12345);
+  auto resumed=Runtime::import_snapshot(hw,runtime.export_snapshot());
+  require(resumed->export_snapshot()==runtime.export_snapshot(),
+          "translated partial curve snapshot preserves its published allocation");
+  if(mode==1) {
+    runtime.update_capacity(COMPUTE_GATE,0.5,runtime.now_ns());
+    resumed->update_capacity(COMPUTE_GATE,0.5,resumed->now_ns());
+  } else if(mode==2) {
+    runtime.cancel(handle,runtime.now_ns());
+    resumed->cancel(handle,resumed->now_ns());
+  }
+  drain(runtime);drain(*resumed);
+  require(runtime.export_snapshot()==resumed->export_snapshot(),
+          "translated curve import/capacity/cancel continuation agrees exactly");
+  auto counters=runtime.counters();counters.erase("now_ns");
+  return {{"finish_ns",*runtime.terminal_finish_ns(handle)-start},
+          {"stats",runtime.export_snapshot().at("stats")},{"counters",counters}};
+}
 void verify() {
   std::array<double,resource_count> rates{};rates[COMPUTE_GATE]=1;rates[HBM0]=1;
   const auto hw=manual_hardware(rates);
@@ -174,6 +197,15 @@ void verify() {
   require(rejected_tangent,
           "one-ulp rate increase cannot point outside a large finite-credit tangent");
   require(max_events>0,"event growth fixture exercised actual Runtime");
+  for(const auto units:{1000ULL,1000000ULL}) {
+    for(unsigned mode=0;mode<3;++mode) {
+      const auto reference=curve_clock_result(hw,units,0,mode);
+      for(const auto start:{9007199254740991ULL,9223372036854775808ULL,
+          std::numeric_limits<std::uint64_t>::max()-3000000000000000ULL})
+        require(curve_clock_result(hw,units,start,mode)==reference,
+                "curve terminal, served and exact busy are invariant under absolute clock translation");
+    }
+  }
 }
 }
 int main(){return run_test("service_curve_runtime_test",verify);}

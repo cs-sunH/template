@@ -92,9 +92,17 @@ int code_for(const std::string& m) {
     if(m.find("unsupported")!=std::string::npos && m.find("dtype")!=std::string::npos) return DIE_UNSUPPORTED_DTYPE;
     if(m.find("unsupported")!=std::string::npos && (m.find("op_kind")!=std::string::npos || m.find("unsupported_op")!=std::string::npos)) return DIE_UNSUPPORTED_OP;
     if(m.find("unsupported")!=std::string::npos) return DIE_UNSUPPORTED;
-    if(m.find("hardware")!=std::string::npos || m.find("architecture.")==0 ||
-       m.find("performance_profile.")==0 || m.find("search_profile.")==0 ||
-       m.find("source_constants.")==0) return DIE_INVALID_HARDWARE;
+    auto field=m.substr(0,m.find(':'));
+    if(field.find("input.")==0)field.erase(0,6);
+    const auto hardware_field=[&](const char* prefix) {
+        const std::string name=prefix;
+        return field==name || field.find(name+".")==0 || field.find(name+"[")==0;
+    };
+    if(m.find("hardware")!=std::string::npos || hardware_field("architecture") ||
+       hardware_field("performance_profile") || hardware_field("search_profile") ||
+       hardware_field("validation_constraints") || hardware_field("source_constants") ||
+       hardware_field("source_revision") || hardware_field("core_resource_table"))
+        return DIE_INVALID_HARDWARE;
     return DIE_INVALID_INPUT;
 }
 int fail(const std::exception& e) {

@@ -58,7 +58,7 @@ struct ServedCounters {
 // Ephemeral diagnostics of the most recent arbitration call. These describe
 // solver cost, not physical simulation state, and are not snapshot counters.
 struct ArbitrationDiagnostics {
-    enum class Path { Empty, Singleton, Packing, SignedLP };
+    enum class Path { Empty, Singleton, Packing, SignedLP, Ratio };
     Path path=Path::Empty;
     std::size_t activities=0, constraint_rows=0, pivots=0, tangent_rounds=0;
 };

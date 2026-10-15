@@ -15,6 +15,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -30,23 +31,23 @@ using EqWork = equivalent_work::Work;
   throw std::invalid_argument(message);
 }
 
-u128 add128(u128 a, u128 b, const std::string& field) {
+u128 add128(u128 a, u128 b, std::string_view field) {
   constexpr u128 max = ~u128{0};
-  if (b > max - a) fail("overflow: " + field);
+  if (b > max - a) fail("overflow: " + std::string(field));
   return a + b;
 }
 
-u128 mul128(u128 a, u128 b, const std::string& field) {
+u128 mul128(u128 a, u128 b, std::string_view field) {
   constexpr u128 max = ~u128{0};
-  if (a && b > max / a) fail("overflow: " + field);
+  if (a && b > max / a) fail("overflow: " + std::string(field));
   return a * b;
 }
 
-EqWork add128(const EqWork& a, const EqWork& b, const std::string&) {
+EqWork add128(const EqWork& a, const EqWork& b, std::string_view) {
   return a + b;
 }
 
-EqWork weighted_ops(u128 elements, double coefficient, const std::string&) {
+EqWork weighted_ops(u128 elements, double coefficient, std::string_view) {
   return EqWork::weighted(elements, coefficient);
 }
 
@@ -76,24 +77,24 @@ void publish_eqops(nlohmann::json& summary, const EqWork& value) {
   }
 }
 
-u64 as_u64(u128 value, const std::string& field) {
+u64 as_u64(u128 value, std::string_view field) {
   if (value > std::numeric_limits<u64>::max())
-    fail("overflow: " + field + " exceeds uint64 output range");
+    fail("overflow: " + std::string(field) + " exceeds uint64 output range");
   return static_cast<u64>(value);
 }
 
-double as_double(long double value, const std::string& field) {
+double as_double(long double value, std::string_view field) {
   if (!std::isfinite(value) || value < 0.0L ||
       value > static_cast<long double>(std::numeric_limits<double>::max()))
-    fail("overflow: " + field + " cannot be represented as a finite double");
+    fail("overflow: " + std::string(field) + " cannot be represented as a finite double");
   return static_cast<double>(value);
 }
 
-double as_signed_double(long double value, const std::string& field) {
+double as_signed_double(long double value, std::string_view field) {
   const long double limit =
       static_cast<long double>(std::numeric_limits<double>::max());
   if (!std::isfinite(value) || value < -limit || value > limit)
-    fail("overflow: " + field + " cannot be represented as a finite double");
+    fail("overflow: " + std::string(field) + " cannot be represented as a finite double");
   return static_cast<double>(value);
 }
 
@@ -702,7 +703,7 @@ void add_hbm(Flow& flow, const Hardware& hw, const Topology& topo,
 }
 
 void add_bytes_work(Flow& flow, std::size_t resource, u128 amount,
-                    const std::string& field) {
+                    std::string_view field) {
   flow.work[resource] += static_cast<long double>(as_u64(amount, field));
 }
 

@@ -1,0 +1,9 @@
+{
+  "started_unix": 1792071223.261805,
+  "cpu_stat_before": "usage_usec 2003308039\nuser_usec 1872205231\nsystem_usec 131102808\nnice_usec 0\nnr_periods 49382\nnr_throttled 5700\nthrottled_usec 502208096\nnr_bursts 0\nburst_usec 0\n",
+  "binary_sha256": "169328ec28f6cff64c51892ab3bd0136439772943ea7ec2dc44a1347d5b206f0",
+  "scope": "30 samples per metric; actual single public updates and cold/hot query measurements",
+  "finished_unix": 1792071223.838039,
+  "return_code": 1,
+  "cpu_stat_after": "usage_usec 2003886114\nuser_usec 1872783306\nsystem_usec 131102808\nnice_usec 0\nnr_periods 49388\nnr_throttled 5700\nthrottled_usec 502208096\nnr_bursts 0\nburst_usec 0\n"
+}

@@ -1,0 +1,10 @@
+{
+  "started_unix": 1792071699.0123186,
+  "cpu_stat_before": "usage_usec 2099691091\nuser_usec 1963184668\nsystem_usec 136506423\nnice_usec 0\nnr_periods 50972\nnr_throttled 5738\nthrottled_usec 502486465\nnr_bursts 0\nburst_usec 0\n",
+  "binary_sha256": "877f1378ed6033aa21269fee63fb335c9ea7ff9e9a8d4cd021a8fb68ae8c50a9",
+  "cabi_sha256": "e2cfaf612642e4ebf2e07a235a68004eea9ad056a1eb76061105be31615510c3",
+  "scope": "final source; 30 samples per metric; each arbitration sample is one public update",
+  "finished_unix": 1792071699.5902498,
+  "return_code": 1,
+  "cpu_stat_after": "usage_usec 2100269071\nuser_usec 1963762648\nsystem_usec 136506423\nnice_usec 0\nnr_periods 50978\nnr_throttled 5738\nthrottled_usec 502486465\nnr_bursts 0\nburst_usec 0\n"
+}
