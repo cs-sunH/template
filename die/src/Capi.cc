@@ -3,6 +3,7 @@
 #include "coarse_die/Memory.hh"
 #include "CompilerInternal.hh"
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -42,9 +43,9 @@ struct Model {
     };
     std::map<std::string, CacheEntry> cache;
     std::list<std::string> lru;
-    // A single verified raw batch may bypass JSON parsing and normalization.
+    // Two recent verified raw batches bypass JSON parsing and normalization.
     // Pointers refer only to current map nodes; cache structure changes clear it.
-    std::unique_ptr<BatchMemo> batch_memo;
+    std::array<std::unique_ptr<BatchMemo>,2> batch_memos;
     std::size_t cache_bytes=0;
 };
 struct CachedPlan {
@@ -206,10 +207,14 @@ std::size_t retained_cache_entry_bytes(const Plan& plan, const std::string& key,
     add_cache_bytes(bytes,retained_response_template_bytes(response));
     return bytes;
 }
-void invalidate_batch_memo(Model& model) {
-    if(!model.batch_memo) return;
-    model.cache_bytes-=model.batch_memo->bytes;
-    model.batch_memo.reset();
+void discard_batch_memo(Model& model,std::size_t index) {
+    auto& memo=model.batch_memos[index];
+    if(!memo) return;
+    model.cache_bytes-=memo->bytes;
+    memo.reset();
+}
+void invalidate_batch_memos(Model& model) {
+    for(std::size_t i=0;i<model.batch_memos.size();++i) discard_batch_memo(model,i);
 }
 std::size_t retained_batch_memo_bytes(const Model::BatchMemo& memo) {
     // Account the owned memo object and the capacities of both retained buffers,
@@ -224,9 +229,17 @@ constexpr std::size_t kBatchMemoMaxRawBytes=64u*1024u;
 constexpr std::size_t kBatchMemoMaxRows=256;
 constexpr std::size_t kCacheByteLimit=64u*1024u*1024u;
 constexpr std::size_t kCacheEntryLimit=4096;
-const Model::BatchMemo* matching_batch_memo(const Model& model,const char* input) {
-    if(!input || !model.batch_memo) return nullptr;
-    return model.batch_memo->raw_request==input ? model.batch_memo.get() : nullptr;
+const Model::BatchMemo* matching_batch_memo(Model& model,const char* input) {
+    if(!input) return nullptr;
+    const std::string_view request(input);
+    for(std::size_t i=0;i<model.batch_memos.size();++i) {
+        const auto& memo=model.batch_memos[i];
+        if(memo && std::string_view(memo->raw_request)==request) {
+            if(i) std::swap(model.batch_memos[0],model.batch_memos[i]);
+            return model.batch_memos[0].get();
+        }
+    }
+    return nullptr;
 }
 void install_batch_memo(Model& model,const char* input,
                         const std::vector<std::string>& keys) {
@@ -247,12 +260,19 @@ void install_batch_memo(Model& model,const char* input,
     }
     memo->bytes=retained_batch_memo_bytes(*memo);
 
-    // The memo is one retained cache item and shares both existing limits.
-    invalidate_batch_memo(model);
-    if(model.cache.size()>=kCacheEntryLimit || memo->bytes>kCacheByteLimit-model.cache_bytes)
-        return;
+    // Each memo shares the existing retained-item and byte limits. Keep Plan
+    // entries intact: only evict older memos to make room for this shortcut.
+    if(model.cache.size()>=kCacheEntryLimit) return;
+    std::size_t retained_memos=0;
+    for(const auto& old:model.batch_memos) if(old) add_cache_bytes(retained_memos,old->bytes);
+    const auto plan_bytes=model.cache_bytes-retained_memos;
+    if(memo->bytes>kCacheByteLimit-plan_bytes) return;
+    discard_batch_memo(model,1);
+    if(model.cache.size()+2>kCacheEntryLimit || memo->bytes>kCacheByteLimit-model.cache_bytes)
+        discard_batch_memo(model,0);
     add_cache_bytes(model.cache_bytes,memo->bytes);
-    model.batch_memo=std::move(memo);
+    model.batch_memos[1]=std::move(model.batch_memos[0]);
+    model.batch_memos[0]=std::move(memo);
 }
 CachedPlan cached(Model& m, const json& task) {
     const auto normalized=detail::normalize_task(m.hardware,task);
@@ -273,7 +293,7 @@ CachedPlan cached(Model& m, const json& task) {
     if(bytes<=kCacheByteLimit) {
         // A map insertion can invalidate cached node references through later
         // eviction, so discard the shortcut before changing cache structure.
-        invalidate_batch_memo(m);
+        invalidate_batch_memos(m);
         m.lru.push_front(key);
         const auto recency=m.lru.begin();
         std::map<std::string,Model::CacheEntry>::iterator inserted;

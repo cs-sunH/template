@@ -411,6 +411,69 @@ void cache_capacity_lru_accounting_and_evicted_batch_rows() {
   const auto hit_for_m2 = estimate_without_memo(gemm_task(2));
   require(hit_for_m2.at("cache_accounted_bytes") == expected_after_m2,
           "reinserted entry becomes a cache hit without changing retained accounting");
+  // Optional raw memos must not displace Plans at the byte boundary. A
+  // maximum-sized valid raw request cannot fit beside this retained suffix;
+  // rejecting that memo must also retain any smaller valid shortcut.
+  const auto request=json{{"specs",json::array({gemm_task(1)})}}.dump();
+  const auto small_memo=take_json(die_coarse_compile_batch_v2(model.get(),request.c_str()),"small memo at byte cap");
+  handles.track(small_memo);
+  require(small_memo.at("cache_entries")==entries_after_boundary &&
+      small_memo.at("cache_accounted_bytes").get<std::size_t>()>=expected_after_m2 &&
+      small_memo.at("cache_accounted_bytes").get<std::size_t>()<=byte_limit &&
+      expected_after_m2>byte_limit-64u*1024u,
+      "memo installation respects both Plan retention and the actual byte cap");
+  const auto padded=std::string(64u*1024u-request.size(),' ')+request;
+  const auto oversized_memo=take_json(die_coarse_compile_batch_v2(model.get(),padded.c_str()),"unaffordable memo at byte cap");
+  handles.track(oversized_memo);
+  require(oversized_memo.at("cache_entries")==entries_after_boundary &&
+      oversized_memo.at("cache_accounted_bytes")==small_memo.at("cache_accounted_bytes"),
+      "an unaffordable raw memo must preserve valid Plans and smaller retained memos");
+}
+
+void alternating_raw_batches_keep_two_bounded_memos() {
+  const Hardware hardware=example_hardware();const auto task=gemm_task(17,5,3);
+  const auto expected_hash=compile(hardware,task)->fingerprint;
+  const json batch={{"specs",json::array({task})}};
+  const std::array<std::string,3> requests{{batch.dump(),batch.dump(2),batch.dump(4)}};
+  const auto plan_bytes=one_entry_bytes(hardware,task);
+  const auto memo_bytes=[&](const std::string& request) {
+    CModel isolated(hardware);PlanHandles isolated_handles;
+    const auto response=take_json(die_coarse_compile_batch_v2(isolated.get(),request.c_str()),"isolated raw memo");
+    isolated_handles.track(response);
+    return response.at("cache_accounted_bytes").get<std::size_t>()-plan_bytes;
+  };
+  const std::array<std::size_t,3> footprints{{memo_bytes(requests[0]),memo_bytes(requests[1]),memo_bytes(requests[2])}};
+  CModel model(hardware);PlanHandles handles;std::set<DieHandle> seen;
+  const auto call=[&](std::size_t index) {
+    const auto response=take_json(die_coarse_compile_batch_v2(model.get(),requests[index].c_str()),"alternating raw memo");
+    handles.track(response);
+    const auto& row=response.at("results").at(0);
+    require(seen.insert(row.at("plan_handle").get<DieHandle>()).second,
+        "every raw-memo occurrence owns a fresh handle");
+    require(row.at("plan_hash")==expected_hash && response.at("cache_entries")==1,
+        "different raw encodings must share one canonical Plan");
+    return response.at("cache_accounted_bytes").get<std::size_t>();
+  };
+  require(call(0)==plan_bytes+footprints[0],"first raw memo is fully accounted");
+  const auto both=plan_bytes+footprints[0]+footprints[1];
+  require(call(1)==both,"two validated raw batches must both remain accounted");
+  for(unsigned i=0;i<20;++i)
+    require(call(i%2)==both,"alternating memo hits must retain a stable bounded footprint");
+  call(0);  // Make compact MRU; the pretty-2 memo must be the next victim.
+  require(call(2)==plan_bytes+footprints[0]+footprints[2],
+      "third raw batch must replace only the least-recent memo");
+  call(0);
+  require(call(1)==both,"memo hits must update recency before replacement");
+  const json invalid={{"op_kind","cache_response_test_unsupported"}};
+  const auto failed=compile_batch(model.get(),json::array({task,invalid}));handles.track(failed);
+  require(failed.at("cache_accounted_bytes")==both && failed.at("results").at(1).is_null(),
+      "a failed sibling must not install a memo or discard valid memo hits");
+  const auto other=gemm_task(19,5,3);
+  const auto inserted=compile_batch(model.get(),json::array({other,invalid}));handles.track(inserted);
+  require(inserted.at("cache_accounted_bytes")==plan_bytes+one_entry_bytes(hardware,other) &&
+      inserted.at("cache_entries")==2,
+      "cache structure mutation must invalidate both pointer-bearing memos before insertion");
+  submit_and_cancel_plan(model.get(),handles.at(0));
 }
 
 void body() {
@@ -418,6 +481,7 @@ void body() {
           "response writer optimization preserves C ABI version 2");
   estimate_prefill_mixed_rows_and_fractional_marker();
   raw_batch_memo_hit_invalidation_and_failed_siblings();
+  alternating_raw_batches_keep_two_bounded_memos();
   cache_capacity_lru_accounting_and_evicted_batch_rows();
 }
 

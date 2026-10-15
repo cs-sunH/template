@@ -20,7 +20,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
-2026-10-16当前源码检查点：在已合入4b逐Core FIFO修复基础上，R1长序列新增固定九描述首段/稳态/排空（含ready十/16预算），聚合middle不随Core/cohort/repeat创建事件；真实Last Compute与倒二Store独立，每Core各保留尾输入/待写输出槽。Release45/45（18.49s）、376,176项独立槽位网格通过，最大内部事件15。长16case/48场景完成全部≤10%（max0.449866%），完成+原busy从0改善至24目标/24failed；首输出47目标/1个11.379%未接受。原17及两cohort9新源真实raw与4b逐byte一致（SHA引用清单），原17仍27联合失败，R>1非服务窗口仍not_available。最新30样本GEMM alias热编译25.037μs failed；cold128³1.671591ms、hot cost4.206—4.607μs、OS J1/J8/J32 12.959/23.224/35.192μs本次通过，历史失败全部保留。旧Plan/快照不自动升级；TX8/目标先验冻结，target数据缺失，正式五仓未publisher/CPU未测。详见HANDOFF和elementwise-bounded-prefix-20261016。当前持续开发，工程NOT ACCEPTED。
+2026-10-16当前源码检查点：在已合入412固定九描述R1长曲线基础上，CABI保留最近两份已验证raw请求LRU memo，计入原64MiB/4096总项上限，失败兄弟/结构变更/新handle语义完整保留；大候选不适合时不淘汰Plan/小memo。最终Release45/45（18.71s），真实8任务完整public对象与改前全等，模型静态库byte-identical；不重复无影响精度oracle。交替GEMM1/128³/attention P95从27.300/29.193/32.148μs降至2.534/2.904/2.193μs，最新30样本全部所测预算通过：cold128³1.903321ms、hot cost4.517—8.173μs、OS J1/J8/J32 15.213/24.296/39.779μs；全部历史尾部失败保留。模型仍长16/48完成全10%但24busy failed、首输出一项11.379%未接受，原17仍27联合failed，R>1时序not_available。旧Plan/快照不自动升级；TX8/目标先验冻结、target数据缺失，正式五仓未publisher/CPU未测。下一步核查not_available消费者与隔离集成，详见HANDOFF和batch-memo-20261016。持续自主开发，工程NOT ACCEPTED。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
 

@@ -402,6 +402,7 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
                     expected_cost &&
                 full_row.at("status") == expected_status,
             name + " full estimate differs from the cached selected cost");
+    const Json steady_cache = cache_stats(warm_full);
 
     const auto hot_compile = measure_capi(
         count, kHotQueryGateNs, "fixed_20us_hot_cache_query_gate",
@@ -448,6 +449,22 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
         });
     result["metrics"]["cabi_hot_semantic_alias_compile_batch"] = hot_alias;
 
+    // Switching between already validated representations must reuse the same
+    // canonical Plan, including when the raw-batch shortcut has been displaced.
+    std::size_t alternating_index=0;
+    result["metrics"]["cabi_hot_alternating_alias_compile_batch"] = measure_capi(
+        count,kHotQueryGateNs,"fixed_20us_hot_cache_query_gate",
+        [&] { return die_coarse_compile_batch_v2(model.handle,
+            (++alternating_index%2 ? canonical_request : alias_request).c_str()); },
+        [&](const Json& response) {
+          const auto& row=successful_row(response,"alternating semantic alias");
+          release_row_plan(row,"alternating semantic alias");
+          require(row.at("plan_hash")==expected_hash &&
+              response.at("cache_entries")==1 &&
+              response.at("cache_accounted_bytes").get<std::size_t>()<=cache_byte_limit,
+              name+" alternating aliases changed Plan identity or exceeded the cache bound");
+        });
+
     const auto full_estimate = measure_capi(
         count, kCompileGateNs, "fixed_2ms_full_estimate_comparison_gate",
         [&] { return die_coarse_estimate_batch_v2(
@@ -471,8 +488,8 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
                         model.handle, canonical_request.c_str()),
                     "final cache diagnostics"));
     const bool final_cache_stable =
-        final_cache.at("entries") == initial_cache.at("entries") &&
-        final_cache.at("accounted_bytes") == initial_cache.at("accounted_bytes") &&
+        final_cache.at("entries") == steady_cache.at("entries") &&
+        final_cache.at("accounted_bytes") == steady_cache.at("accounted_bytes") &&
         final_cache.at("accounted_bytes").get<std::size_t>() > plan_only_bytes &&
         final_cache.at("accounted_bytes").get<std::size_t>() <= cache_byte_limit;
     if (!final_cache_stable)
@@ -483,6 +500,7 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
     result["cache"] = {{"plan_only_baseline", plan_only_cache},
                         {"after_canonical_memo", initial_cache},
                         {"after_semantic_alias_memo", alias_cache},
+                        {"after_all_request_warmups", steady_cache},
                         {"after_all_samples", final_cache},
                         {"alias_same_plan_hash", alias_same_hash},
                         {"canonical_memo_accounted_and_bounded", canonical_memo_accounted},
@@ -491,7 +509,8 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
     for (const char* metric : {"cpp_cold_compile_uncached",
                                "cabi_hot_compile_batch",
                                "cabi_hot_cost_only",
-                               "cabi_hot_semantic_alias_compile_batch"}) {
+                               "cabi_hot_semantic_alias_compile_batch",
+                               "cabi_hot_alternating_alias_compile_batch"}) {
       if (!result.at("metrics").at(metric).value("acceptance_applies",true))continue;
       if (!result.at("metrics").at(metric).at("passed").get<bool>()) {
         metric_gates_passed = false;
@@ -509,6 +528,7 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
         {"semantic_alias_same_plan_hash", alias_same_hash},
         {"canonical_memo_counted_and_bounded", canonical_memo_accounted},
         {"semantic_alias_plan_shared_and_bytes_bounded", alias_one_entry},
+        {"alternating_semantic_aliases_measured", true},
         {"final_cache_entries_and_bytes_stable", final_cache_stable},
         {"full_estimate_cost_matches_cost_only", true},
         {"samples_per_metric", count}};

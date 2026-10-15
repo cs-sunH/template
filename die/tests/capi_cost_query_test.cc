@@ -215,9 +215,19 @@ void legacy_trace_fields_share_a_canonical_entry() {
           "separate legacy request_id wires share a canonical Plan and fresh handles");
   require(first.at("results").at(0).at("summary") ==
                   second.at("results").at(0).at("summary") &&
-              first.at("cache_accounted_bytes") ==
-                  second.at("cache_accounted_bytes"),
-          "replacing the legacy raw memo preserves its footprint for equal-length trace IDs");
+              first.at("cache_accounted_bytes").get<std::size_t>() <
+                  second.at("cache_accounted_bytes").get<std::size_t>() &&
+              second.at("cache_accounted_bytes").get<std::size_t>() <= 64u*1024u*1024u,
+          "two legacy raw encodings share one Plan and account both retained memos");
+  const auto first_again=compile_batch(model.get(),json::array({legacy_norm_task("request-a")}));
+  handles.track(first_again);
+  const auto third=compile_batch(model.get(),json::array({legacy_norm_task("request-c")}));
+  handles.track(third);
+  require(first_again.at("cache_accounted_bytes")==second.at("cache_accounted_bytes") &&
+      third.at("cache_accounted_bytes")==second.at("cache_accounted_bytes") &&
+      third.at("results").at(0).at("summary")==first.at("results").at(0).at("summary") &&
+      third.at("results").at(0).at("plan_handle")!=first_again.at("results").at(0).at("plan_handle"),
+      "legacy memo hits and a third equal-length replacement keep two bounded memos and fresh handles");
   require(handles.release_all() == DIE_OK,
           "legacy canonical-hit handles release normally");
 }

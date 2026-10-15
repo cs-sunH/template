@@ -1,10 +1,21 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前已普通push/fetch/ls-remote实核HEAD与main均为 `4b52b57be6815eb3b5153826ecec174835ef4efc`，这是已合入的逐Core FIFO修复检查点。包含本页的Git提交是R1长序列固定首段/稳态/排空检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前已普通push/fetch/ls-remote实核HEAD与main均为 `41254718c03433c0786aad9f5de9b259f3738fdb`，这是已合入的R1长曲线检查点。包含本页的Git提交是双raw请求LRU memo优化检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
 
 ## Current Status
 
-### 当前有效检查点：固定九描述首段/稳态/排空与实际精度收益
+### 当前有效检查点：双raw请求memo与交替查询性能
+
+- 仅生产Capi.cc改动：最近两份已验证raw batch固定array/LRU保留，canonical/alias交替不再反复JSON规范化。每份仍≤64KiB/256行，空/失败/未缓存Plan不建memo；Plan+memo≤4096、字节全计入64MiB。新候选先完整分配/node核验/plan-only容量预检，仅淘汰memo，不逐出Plan；cache结构变更前清空两份指针，命中LRU splice/交换安全，fresh handle及错误隔离不变。只读审查无阻塞。
+- 同一新增交替基准旧412真实GEMM1/128³与attention P95 27.300/29.193/32.148μs failed；旧新回归在单memo生产真实failed。最终双份精确计账、20次交替/LRU/失败兄弟/插入清空/handle生存通过；原真实64MiB Plan pool边界增加64KiB padded memo不可容纳时保留小memo/Plan，原4096输入/淘汰行等测试保留。
+- 初轮44/45仅旧legacy single-memo等footprint断言失败，日志保留；改为第二份真实正增量、随后A/B命中与第三等长替换双份稳定计账，不放宽字节门槛。最终一致Release **45/45通过，18.71s**。
+- 实际改前/改后8任务完整hardware/compile/estimate逐字段全等，含R3 not_available/hash/handle/summary/缓存字节；改前生产源与Git412全等，**公共模型静态库byte-identical**。不重跑无影响的42case oracle，沿412绑定源码精度证据，不虚称新accuracy运行；曲线/候选/校准/ABI/公平模型未变。两种raw并存的公开缓存字节诊断合法增加。
+- 最新独立30样本本次所测全通过：交替GEMM1/128³/attention 2.534/2.904/2.193μs，所有交替2.193—3.295μs，单alias2.263—3.656μs，hot cost4.517—8.173μs，cold128³ **1.903321ms**，OS J1/J8/J32 **15.213/24.296/39.779μs**。原所有cold/alias/J32尾部失败保留，不称稳定全负载，OS/GEMM路径未改不归因memo。
+- 完整日志/构建/源/ELF/CPU、前后public与sample在analysis/evidence的batch-memo-20261016，summarize核Git源/静态库/输出；新增交替指标不替代旧指标，未删慢样本。正式五仓旧canonical24未publisher/CPU not_run；下一步核查not_available消费者并隔离接入。
+- 模型限制仍412：长16/48完成≤10%但24busy失败、首输出一项11.379%未接受，原17仍27联合失败，R>1非服务窗口not_available。TX8/目标先验冻结、target raw缺失；工程NOT ACCEPTED，继续自主开发。
+
+
+### 已合入4125471：固定九描述首段/稳态/排空与实际精度收益
 
 - 仅R1且rounds≥3新编译Plan升级v5：Lfirst → (Cfirst∥Lsecond) → (Lremaining∥Cmiddle∥StorePrefix) → (Clast∥Spenultimate) → Slast。稳态聚合任意多个cohort，不按wave/K/repeat创建状态或切换；九描述+ready十、16预算。旧single/两cohortv3和R>1v4不变，R>1时序仍not_available。
 - 每Core middle输入1+(T−3)pL−(T−2)pC、可见输出1+(T−3)pC−(T−2)pS各在[0,1]；分别保留Last输入与倒二输出槽。bulk终态显式转移Last input=1，输入守恒仅补该一次seed，审计记录单位/终态转移和物理总块数。First/Second可同时占两输入槽；T3零credit的真实活动仍保留。Flow字节/运算/route及Q/alpha/13域/PRIVATE定义保持，独立只读审查无阻塞问题。
@@ -308,12 +319,12 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本页的main/HEAD，读elementwise-bounded-prefix README/summary/identity及引用清单。当前45/45功能18.49s；新R1长曲线固定九描述、每Core槽位、真实首输出、显式硬件与轻量去重已完成，不重复旧待办。
-2. 优先调查semantic-alias热查询：最新GEMM128³ P95 25.037μs failed，前4b attention alias24.917μs也失败；cold/OS本次通过不构成稳定尾部证书。检查规范化memo/缓存命中及响应构造实际热路径，保持完整候选、validation、ABI及fresh-handle语义，避免靠反复抽样选最好。
-3. 继续R>1真实非服务窗口与其它公共模板。当前长16/48完成均≤10%，但1025/4097仍24busy failed，首输出1项11.379%未接受；原17仍27联合失败。任何进一步5/8/16表示须有输入/物理依据，保持每Core槽位/守恒/公平和实际first-output终态；不得改busy定义、恢复逐wave/K/repeat或周期路线，不前置总R×wait。
-4. 公共模型稳定后隔离SDK验证not_available消费者，重建五仓双ABI/配置/业务及CPU预算才正式publisher。旧Plan/快照不自动升级，JOINT旧before-guard SDK不是最终源；provider/live/sh30保护保留。保留全部有效部分和失败，不以未最终验收为由丢弃。
-5. XLSX13组去重/条件参考与公开Residual工作量核对已完成，缺当前Runtime同合同TX8硬件入口；无独立数据不造profile/重拟目标效率。target raw/heldout仍not_available，参考/目标先验冻结。
-6. WR/Norm/softmax/Attention/FFN曲线及OS二阶/odd-row按真实依赖继续；有意义检查点安全同步GitHub，持续自主开发。
+1. fetch核实包含本页的main/HEAD，读batch-memo README/summary/identity。45/45功能18.71s，双raw memo/交替查询已完成，本次所测预算通过；模型沿412静态库完全相同，不重复硬件移除、槽位、九描述曲线及缓存已完成项。
+2. 当前调查五仓生产消费者对status=not_available的处理。R>1仍有body numeric值，只能诊断，不能当完整延迟执行；只读追踪公共薄适配/实际调用链后，必要时最小共享修复并隔离SDK验证。正式旧vendor不受新模型修复，尚未publisher；不得无验证同步公共版本到五仓。
+3. 按真实依赖继续R>1非服务窗口与WR/Norm/softmax/Attention/FFN、OS二阶/odd-row。长16/48完成全10%但仍24busy failed/首输出1项11.379%未接受；原17仍27联合失败。新的5/8/16表示保持每Core槽位/守恒/公平及真实first终态，不改busy、不恢复逐wave/K/repeat或周期，不前置总R×wait。
+4. 模型稳定后重建五仓双ABI/配置/业务及CPU预算才正式publisher。JOINT旧before-guard SDK不冒充新源，provider/live/sh30保护保留；旧Plan/快照不自动升级。热路径只在有实测/模型或消费者变更时复验，不反复抽样挑最佳；历史失败仍有效。
+5. XLSX13组去重/条件参考和公开Residual工作量核对已完成，缺当前Runtime同合同TX8硬件入口；target raw/heldout仍not_available，不造profile/重拟目标效率。参考/目标先验冻结。
+6. 保留有效部分与全部失败/原始证据；有意义检查点安全提交同步GitHub，持续自主开发。
 
 下方为历史接续记录，冲突时以上为准。
 
