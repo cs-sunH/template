@@ -119,6 +119,10 @@ Hardware hardware_for_grid(std::uint64_t nx, std::uint64_t ny) {
   architecture["core_columns_nx"] = nx;
   architecture["core_rows_ny"] = ny;
   architecture["die_geometry"] = "isotropic";
+  // This fixture fixes active service at the arrival tick; region ready-time
+  // behavior is covered separately by region_overhead_test.
+  config["performance_profile"]["launch_ns_per_macro"]=0;
+  config["performance_profile"]["memory_setup_ns_per_macro"]=0;
   return coarse_die::resolve_hardware(config);
 }
 

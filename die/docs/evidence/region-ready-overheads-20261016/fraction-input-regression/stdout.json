@@ -1,0 +1,35 @@
+{
+  "stage": "pre_fraction_fix_rerun_after_audit_and_owner_key_deferrals",
+  "library_sha256": "aa3e68b2a8d871cf63f12500e6391e49f8c7b2ad60d2d2163e611ac6a5bc602a",
+  "sources_unchanged_during_probe": true,
+  "cases": [
+    {
+      "case": "control-half-ns",
+      "model_create_status": 0,
+      "expected_integer_ready_delay_ns": 1,
+      "errors": [
+        null
+      ]
+    },
+    {
+      "case": "fraction-sum-regression",
+      "model_create_status": 0,
+      "expected_integer_ready_delay_ns": 1,
+      "errors": [
+        {
+          "field_path": "overflow",
+          "reason": "overflow: equivalent work fractional sum is not exactly representable",
+          "status_code": 5
+        }
+      ]
+    },
+    {
+      "case": "control-three-quarter-ns",
+      "model_create_status": 0,
+      "expected_integer_ready_delay_ns": 1,
+      "errors": [
+        null
+      ]
+    }
+  ]
+}

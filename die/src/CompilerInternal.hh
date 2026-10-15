@@ -16,4 +16,8 @@ nlohmann::json normalize_task(const Hardware& hardware,
 std::shared_ptr<const Plan> compile_normalized(
     const Hardware& hardware, const nlohmann::json& normalized_task);
 
+// Materialize the selected GEMM trial's region audit without changing its
+// ready delay, resource work, availability status, or description budget.
+void finalize_region_overhead_audit(const Hardware& hardware, Plan& plan);
+
 }  // namespace coarse_die::detail

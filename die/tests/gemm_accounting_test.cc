@@ -335,8 +335,14 @@ void verify_activity_ledger(const json& task, const Hardware& hardware,
 
   if (!verify_served) return;
   const auto estimate = estimate_alone(hardware, plan);
-  if (estimate.at("status") != "ok_assumed")
-    throw std::runtime_error(context + " estimate status is not ok_assumed");
+  const auto instances=plan.task.at("layer_instances").get<u64>()*
+      plan.task.at("weight_passes").get<u64>();
+  const bool incomplete=instances>1;
+  if(estimate.at("status")!=(incomplete ? "not_available" : "ok_assumed"))
+    throw std::runtime_error(context + " incorrect completeness of fixed region overhead timing");
+  if(incomplete)require(plan.summary.at("fixed_region_overheads").at("modeled_instances")==0&&
+      plan.summary.at("fixed_region_overheads").at("instances")==instances,
+      "repeated GEMM body accounting must disclose missing instance startup windows");
   const auto& served = estimate.at("execution").at("served");
   const auto& served_hbm = served.at("hbm_bytes_by_row_direction");
   const double served_reads = served_hbm[0][0].get<double>() +

@@ -1,6 +1,7 @@
 #include "coarse_die/Plan.hh"
 #include "GemmTailBudget.hh"
 #include "EquivalentWork.hh"
+#include "RegionDelay.hh"
 #include "GemmOSGeometry.hh"
 #include "GemmOSResourceFacts.hh"
 #include "ElementwiseGeometry.hh"
@@ -2856,14 +2857,143 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
   finalize_summary(*p,m,hardware);p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();return {p};
 }
 
+namespace {
+
+struct RegionReadyOverheads {
+  double launch=0,setup=0;
+  u64 instances=0,required=0,applied=0;
+  std::size_t first_hbm=0;
+  bool has_hbm=false,complete=false;
+  region_delay::Result per_instance,total;
+};
+
+std::optional<RegionReadyOverheads> region_ready_overheads(
+    const Hardware& hw,const Plan& p) {
+  RegionReadyOverheads f;
+  f.launch=perf(hw,"launch_ns_per_macro",0);
+  f.setup=perf(hw,"memory_setup_ns_per_macro",0);
+  if(f.launch==0 && f.setup==0)return std::nullopt;
+  f.instances=as_u64(mul128(getu(p.task,"layer_instances",1),
+      getu(p.task,"weight_passes",1),"region overhead instances"),"region overhead instances");
+  f.first_hbm=p.epochs.size();
+  for(std::size_t e=0;e<p.epochs.size()&&f.first_hbm==p.epochs.size();++e)
+    for(const auto& a:p.epochs[e].activities)
+      for(const auto& row:a.hbm_bytes)
+        if(row[0]||row[1])f.first_hbm=e;
+  f.has_hbm=f.first_hbm!=p.epochs.size();
+  const bool independent_first_load=f.has_hbm && f.first_hbm==0 && std::all_of(
+      p.epochs.front().activities.begin(),p.epochs.front().activities.end(),
+      [](const Activity& a){return a.role==Role::Load;});
+  const double applicable_setup=f.has_hbm ? f.setup : 0;
+  if(f.launch==0 && applicable_setup==0)return std::nullopt;
+  f.per_instance=region_delay::sum(f.launch,applicable_setup,1);
+  f.total=region_delay::sum(f.launch,applicable_setup,f.instances);
+  f.required=f.total.ceil;
+  // Aggregated repeats do not retain each invocation's idle windows. Keep
+  // their previous body timing, but explicitly withhold a complete estimate.
+  // Charging R*delay at the front would alter real competition/readiness.
+  f.complete=f.instances==1 && (!f.has_hbm||f.setup==0||independent_first_load);
+  f.applied=f.complete ? f.per_instance.ceil : 0;
+  return f;
+}
+
+nlohmann::json region_ready_overhead_audit(const RegionReadyOverheads& f) {
+  nlohmann::json audit={{"model","region_ready_overheads_v1"},{"instances",f.instances},
+      {"launch_ns_per_instance",f.launch},{"memory_setup_ns_per_hbm_instance",f.setup},
+      {"hbm_instances",f.has_hbm ? f.instances : 0},
+      {"required_total_delay_ns_whole",f.total.whole},
+      {"required_total_delay_ns_ceil",f.required},
+      {"modeled_instances",f.complete ? f.instances : 0},
+      {"applied_ready_delay_ns",f.applied},
+      {"timing_status",f.complete ? "modeled_integer_ns_ready_gate" : "not_available"},
+      {"scope","one_complete_source_region_not_internal_kernel_or_tile"},
+      {"quantization","ceil_combined_region_delay_once_to_public_integer_ns"}};
+  // Timing needs only exact integer floor/ceil. Optional scalar audit
+  // fractions must not reject legal binary64 inputs spanning many exponents.
+  try {
+    const auto per_instance=EqWork::weighted(1,f.launch)+
+        EqWork::weighted(1,f.has_hbm ? f.setup : 0);
+    const auto total=per_instance.multiply(f.instances);
+    if(!total.integral())audit["required_total_delay_ns_fraction"]=equivalent_fraction_to_json(total.fraction());
+    if(f.complete) {
+      const double error=per_instance.integral() ? 0.0 :
+          as_double(1-per_instance.fraction(),"region delay quantization");
+      if(error<1)audit["quantization_error_ns"]=error;
+      else audit["quantization_error_ns_interval"]=
+          {{"lower_inclusive",0},{"upper_exclusive",1}};
+    }
+  } catch(const std::overflow_error&) {
+    // The exact expression is retained by the two input coefficients,
+    // HBM-instance count and multiplier. No arbitrary precision state.
+    audit["fraction_representation"]="exact_binary64_input_terms_times_instances";
+    if(f.complete)audit["quantization_error_ns_interval"]=
+        {{"lower_inclusive",0},{"upper_exclusive",1}};
+  }
+  if(f.has_hbm)audit["first_hbm_epoch"]=f.first_hbm;
+  if(!f.complete)audit["limitation"]=f.instances>1 ? "aggregate_bulk_does_not_retain_per_instance_ready_windows" :
+      "first_HBM_is_not_an_independent_initial_Load_epoch";
+  audit["ready_gate_description_count"]=f.applied ? 1 : 0;
+  return audit;
+}
+
+// Apply region-level nonservice time only after composing internal kernels.
+// The supported first HBM visit is an independent Load-first epoch; the
+// existing Plan ready gate needs no new activity, resource, or state.
+void apply_region_ready_overheads(const Hardware& hw,
+    std::vector<std::shared_ptr<Plan>>& plans,bool defer_gemm_diagnostics) {
+  for(auto& p:plans) {
+    const auto facts=region_ready_overheads(hw,*p);
+    if(!facts)continue;  // Preserve zero-overhead wire/hash exactly.
+    const auto& f=*facts;
+    if(p->launch_ns!=0)fail("mapping_invariant: region ready delay already applied");
+    p->launch_ns=f.applied;
+    if(!f.complete) {
+      p->summary["prediction_status"]="not_available";
+      p->summary["prediction_scope"]="body_timing_only_fixed_region_overheads_unmodeled";
+    }
+    p->summary["service_description_count"]=service_description_count(*p);
+    if(f.applied && p->summary.contains("service_curves")) {
+      for(auto& curve:p->summary["service_curves"]) {
+        if(curve.at("epoch_begin")!=0)continue;
+        const u64 descriptions=getu(curve,"description_count")+1;
+        if(descriptions>16)fail("mapping_invariant: region ready gate exceeds curve budget");
+        curve["description_count"]=descriptions;
+        curve["description_budget"]=descriptions<=5 ? 5 : descriptions<=8 ? 8 : 16;
+        curve["region_ready_gate_descriptions"]=1;
+        break;
+      }
+    }
+    // Internal GEMM trials keep all timing, availability, and budget checks.
+    // Only the winner's diagnostic JSON and fingerprint need materializing.
+    const bool defer=defer_gemm_diagnostics && gets(p->task,"op_kind")=="gemm";
+    if(!defer)p->summary["fixed_region_overheads"]=region_ready_overhead_audit(f);
+    p->fingerprint.clear();
+    if(!defer)p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
+  }
+}
+
+}  // namespace
+
+void finalize_region_overhead_audit(const Hardware& hw,Plan& plan) {
+  const auto facts=region_ready_overheads(hw,plan);
+  if(!facts)return;
+  if(plan.launch_ns!=facts->applied)
+    fail("mapping_invariant: final region delay differs from candidate timing");
+  plan.summary["fixed_region_overheads"]=region_ready_overhead_audit(*facts);
+}
+
 std::vector<std::shared_ptr<Plan>> enumerate_mappings(
     const Hardware& hardware, const nlohmann::json& task) {
-  return enumerate_mappings_impl(hardware,task,false);
+  auto result=enumerate_mappings_impl(hardware,task,false);
+  apply_region_ready_overheads(hardware,result,false);
+  return result;
 }
 
 std::vector<std::shared_ptr<Plan>> enumerate_mappings_for_compile(
     const Hardware& hardware, const nlohmann::json& task) {
-  return enumerate_mappings_impl(hardware,task,true);
+  auto result=enumerate_mappings_impl(hardware,task,true);
+  apply_region_ready_overheads(hardware,result,true);
+  return result;
 }
 
 }  // namespace coarse_die::detail

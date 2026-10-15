@@ -50,9 +50,11 @@ void large_logits_gemm_keeps_credit_feasible() {
     // by four orders of magnitude across L/C/S.
     const auto plan = compile(hw, task);
     const auto estimate = estimate_alone(hw, *plan);
-    require(estimate.at("status") == "ok_assumed" &&
+    require(estimate.at("status") == "not_available" &&
+                plan->summary.at("fixed_region_overheads").at("instances")==8 &&
+                plan->summary.at("fixed_region_overheads").at("modeled_instances")==0 &&
                 estimate.at("estimated_latency_ns").get<std::uint64_t>() > 0,
-            "actual large logits TP extent completes without crossing finite credit");
+            "large logits body preserves finite credit while repeated startup timing remains unavailable");
   }
 }
 

@@ -1,0 +1,285 @@
+diff --git a/die/include/coarse_die/Plan.hh b/die/include/coarse_die/Plan.hh
+index ec66ff2..42fdb69 100644
+--- a/die/include/coarse_die/Plan.hh
++++ b/die/include/coarse_die/Plan.hh
+@@ -89,6 +89,7 @@ struct Plan {
+ // Count every independent activity's affine pieces, including its terminal
+ // switch; an empty epoch contributes one closure. Different activities do not
+ // share a budget entry merely because their progress endpoints are equal.
++// A nonzero initial ready delay adds one independent gate/switch.
+ std::size_t service_description_count(const Plan&);
+ 
+ inline bool has_credit_curves(const Plan& plan) {
+diff --git a/die/src/Compiler.cc b/die/src/Compiler.cc
+index 1ba9ef4..daaa645 100644
+--- a/die/src/Compiler.cc
++++ b/die/src/Compiler.cc
+@@ -613,7 +613,8 @@ std::shared_ptr<const Plan> compile_normalized_impl(
+         ? detail::estimate_candidate_latency_ns(immutable_hardware, candidate)
+         : detail::estimate_latency_ns(immutable_hardware, candidate);
+     candidate->summary["estimated_latency_ns"] = latency;
+-    candidate->summary["alone_estimate_status"] = "ok_assumed";
++    candidate->summary["alone_estimate_status"] =
++        candidate->summary.value("prediction_status",std::string("ok_assumed"));
+     // These are still private mutable builders. Seal only the winner after
+     // ranking; losing candidates never escape or enter a cache/runtime again.
+     Ranked r;
+@@ -646,6 +647,7 @@ std::shared_ptr<const Plan> compile_normalized_impl(
+   selected->summary["activity_work_semantics"] = "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1";
+   selected->summary["granularity_validation"] = "not_run";
+   selected->summary["evidence_flags"] = {"engineering_assumption", "hardware_source_derived"};
++  if(gemm_candidates_are_unsealed)detail::finalize_region_overhead_audit(hardware,*selected);
+   selected->fingerprint.clear();
+   selected->fingerprint = plan_to_json(*selected).at("fingerprint").get<std::string>();
+   return selected;
+diff --git a/die/src/CompilerInternal.hh b/die/src/CompilerInternal.hh
+index 76d30bb..fd0d79c 100644
+--- a/die/src/CompilerInternal.hh
++++ b/die/src/CompilerInternal.hh
+@@ -16,4 +16,8 @@ nlohmann::json normalize_task(const Hardware& hardware,
+ std::shared_ptr<const Plan> compile_normalized(
+     const Hardware& hardware, const nlohmann::json& normalized_task);
+ 
++// Materialize the selected GEMM trial's region audit without changing its
++// ready delay, resource work, availability status, or description budget.
++void finalize_region_overhead_audit(const Hardware& hardware, Plan& plan);
++
+ }  // namespace coarse_die::detail
+diff --git a/die/src/Execution.cc b/die/src/Execution.cc
+index 1363c94..3733ee1 100644
+--- a/die/src/Execution.cc
++++ b/die/src/Execution.cc
+@@ -1176,7 +1176,6 @@ void Runtime::allocate() {
+   for (auto& [handle, execution] : executions_) {
+     (void)handle;
+     if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+-    const std::string owner_key = execution.owner.key();
+     for (LiveActivity& live : execution.activities) {
+       if (live.epoch_index != execution.epoch || live.done) continue;
+       bool has_service = false;
+@@ -1190,7 +1189,7 @@ void Runtime::allocate() {
+       while (first_resource < resource_count && live.definition.work[first_resource] <= 0.0) {
+         ++first_resource;
+       }
+-      refs.push_back(Ref{&execution, &live, handle, owner_key,
++      refs.push_back(Ref{&execution, &live, handle, {},
+                          first_resource, q, 0.0});
+       // Progress cannot change during allocation. Reuse its exact segment
+       // derivative for symmetry, singleton and tangent rows in this call.
+@@ -1208,8 +1207,14 @@ void Runtime::allocate() {
+   // gain multiplicity; each owner's PRIVATE/credit constraints and alpha are
+   // retained. No progress/phase epsilon is used. Owners split across multiple
+   // executions remain on the full path to preserve their Q denominator.
++  const auto same_fair_owner = [](const Ref& a, const Ref& b) {
++    const auto& lhs=a.execution->owner;
++    const auto& rhs=b.execution->owner;
++    return std::tie(lhs.node_id,lhs.execution_id,lhs.generation)==
++           std::tie(rhs.node_id,rhs.execution_id,rhs.generation);
++  };
+   const bool multiple_owners = std::any_of(refs.begin(), refs.end(),
+-      [&](const Ref& ref) { return ref.owner_key != refs.front().owner_key; });
++      [&](const Ref& ref) { return !same_fair_owner(ref,refs.front()); });
+   if (multiple_owners) {
+     // Refs are collected contiguously per execution before the stable LP
+     // sort. Store block ranges instead of allocating two maps and one vector
+@@ -1223,12 +1228,6 @@ void Runtime::allocate() {
+       blocks.push_back({begin, end});
+       begin = end;
+     }
+-    const auto same_fair_owner = [](const Ref& a, const Ref& b) {
+-      const auto& lhs = a.execution->owner;
+-      const auto& rhs = b.execution->owner;
+-      return std::tie(lhs.node_id, lhs.execution_id, lhs.generation) ==
+-             std::tie(rhs.node_id, rhs.execution_id, rhs.generation);
+-    };
+     const auto boundary_mask = [](const Execution& execution) {
+       unsigned mask = 0;
+       for (std::size_t b = 0; b < 2; ++b) {
+@@ -1331,6 +1330,10 @@ void Runtime::allocate() {
+     publish(ref, rate, rate>0.0?1.0:0.0);
+     return;
+   }
++  // Identity comparisons above use the exact owner tuple. Materialize the
++  // original string keys only for surviving solver variables, preserving
++  // the solver's established key ordering and Q aggregation semantics.
++  for(auto& ref:refs)ref.owner_key=ref.execution->owner.key();
+   std::sort(refs.begin(), refs.end(), [](const Ref& lhs, const Ref& rhs) {
+     return std::tie(lhs.first_resource, lhs.execution->owner.node_id,
+                     lhs.execution->owner.execution_id, lhs.execution->owner.generation,
+@@ -3180,7 +3183,7 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
+       std::make_shared<const Hardware>(hardware), std::move(shared_plan), true);
+   const std::uint64_t finish = estimate.finish_ns;
+   nlohmann::json result = plan.summary.is_object() ? plan.summary : nlohmann::json::object();
+-  result["status"] = "ok_assumed";
++  result["status"] = plan.summary.value("prediction_status",std::string("ok_assumed"));
+   result["estimated_latency_ns"] = finish;
+   result["hardware_fingerprint"] = hardware.fingerprint;
+   result["plan_fingerprint"] = serialized_plan.at("fingerprint");
+@@ -3222,7 +3225,7 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
+       {"profile", profile_string("pipeline_profile")},
+       {"status", "assumed"}};
+   result["granularity_identity"] = {
+-      {"schema", has_fractional_work(plan) ? "coarse_die_plan_v3" : "coarse_die_plan_v2"},
++      {"schema", serialized_plan.at("schema")},
+       {"epoch_count", plan.epochs.size()},
+       {"activity_limit_per_epoch", 3},
+       {"repeat_count_semantics", "audit_metadata_only"},
+@@ -3230,8 +3233,9 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
+       {"validation_status", "not_run"},
+       {"heldout_status", "not_available"},
+       {"ranking_status", "not_tested"}};
++  if (has_credit_curves(plan) || has_fractional_work(plan))
++    result["plan_schema"] = serialized_plan.at("schema");
+   if (has_fractional_work(plan)) {
+-    result["plan_schema"] = "coarse_die_plan_v3";
+     result["equivalent_work_schema"] = "dyadic_equivalent_work_v1";
+   }
+   result["granularity_validation"] = "not_run";
+diff --git a/die/src/Mapping.cc b/die/src/Mapping.cc
+index 8a79d3e..8096084 100644
+--- a/die/src/Mapping.cc
++++ b/die/src/Mapping.cc
+@@ -2856,14 +2856,128 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
+   finalize_summary(*p,m,hardware);p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();return {p};
+ }
+ 
++namespace {
++
++struct RegionReadyOverheads {
++  double launch=0,setup=0;
++  u64 instances=0,required=0,applied=0;
++  std::size_t first_hbm=0;
++  bool has_hbm=false,complete=false;
++  EqWork per_instance,total;
++};
++
++std::optional<RegionReadyOverheads> region_ready_overheads(
++    const Hardware& hw,const Plan& p) {
++  RegionReadyOverheads f;
++  f.launch=perf(hw,"launch_ns_per_macro",0);
++  f.setup=perf(hw,"memory_setup_ns_per_macro",0);
++  if(f.launch==0 && f.setup==0)return std::nullopt;
++  f.instances=as_u64(mul128(getu(p.task,"layer_instances",1),
++      getu(p.task,"weight_passes",1),"region overhead instances"),"region overhead instances");
++  f.first_hbm=p.epochs.size();
++  for(std::size_t e=0;e<p.epochs.size()&&f.first_hbm==p.epochs.size();++e)
++    for(const auto& a:p.epochs[e].activities)
++      for(const auto& row:a.hbm_bytes)
++        if(row[0]||row[1])f.first_hbm=e;
++  f.has_hbm=f.first_hbm!=p.epochs.size();
++  const bool independent_first_load=f.has_hbm && f.first_hbm==0 && std::all_of(
++      p.epochs.front().activities.begin(),p.epochs.front().activities.end(),
++      [](const Activity& a){return a.role==Role::Load;});
++  f.per_instance=EqWork::weighted(1,f.launch)+
++      EqWork::weighted(1,f.has_hbm ? f.setup : 0);
++  if(f.per_instance.integral() && f.per_instance.whole()==0)return std::nullopt;
++  f.total=f.per_instance.multiply(f.instances);
++  const auto ceil_ns=[](const EqWork& n) {
++    return as_u64(add128(n.whole(),n.integral() ? 0 : 1,"region delay ceil"),"region delay ns");
++  };
++  f.required=ceil_ns(f.total);
++  // Aggregated repeats do not retain each invocation's idle windows. Keep
++  // their previous body timing, but explicitly withhold a complete estimate.
++  // Charging R*delay at the front would alter real competition/readiness.
++  f.complete=f.instances==1 && (!f.has_hbm||f.setup==0||independent_first_load);
++  f.applied=f.complete ? ceil_ns(f.per_instance) : 0;
++  return f;
++}
++
++nlohmann::json region_ready_overhead_audit(const RegionReadyOverheads& f) {
++  nlohmann::json audit={{"model","region_ready_overheads_v1"},{"instances",f.instances},
++      {"launch_ns_per_instance",f.launch},{"memory_setup_ns_per_hbm_instance",f.setup},
++      {"hbm_instances",f.has_hbm ? f.instances : 0},
++      {"required_total_delay_ns_whole",f.total.checked_u64_whole()},
++      {"required_total_delay_ns_ceil",f.required},
++      {"modeled_instances",f.complete ? f.instances : 0},
++      {"applied_ready_delay_ns",f.applied},
++      {"timing_status",f.complete ? "modeled_integer_ns_ready_gate" : "not_available"},
++      {"scope","one_complete_source_region_not_internal_kernel_or_tile"},
++      {"quantization","ceil_combined_region_delay_once_to_public_integer_ns"}};
++  if(!f.total.integral())audit["required_total_delay_ns_fraction"]=equivalent_fraction_to_json(f.total.fraction());
++  if(f.has_hbm)audit["first_hbm_epoch"]=f.first_hbm;
++  if(f.complete)audit["quantization_error_ns"]=f.per_instance.integral() ? 0.0 :
++      as_double(1-f.per_instance.fraction(),"region delay quantization");
++  else audit["limitation"]=f.instances>1 ? "aggregate_bulk_does_not_retain_per_instance_ready_windows" :
++      "first_HBM_is_not_an_independent_initial_Load_epoch";
++  audit["ready_gate_description_count"]=f.applied ? 1 : 0;
++  return audit;
++}
++
++// Apply region-level nonservice time only after composing internal kernels.
++// The supported first HBM visit is an independent Load-first epoch; the
++// existing Plan ready gate needs no new activity, resource, or state.
++void apply_region_ready_overheads(const Hardware& hw,
++    std::vector<std::shared_ptr<Plan>>& plans,bool defer_gemm_diagnostics) {
++  for(auto& p:plans) {
++    const auto facts=region_ready_overheads(hw,*p);
++    if(!facts)continue;  // Preserve zero-overhead wire/hash exactly.
++    const auto& f=*facts;
++    if(p->launch_ns!=0)fail("mapping_invariant: region ready delay already applied");
++    p->launch_ns=f.applied;
++    if(!f.complete) {
++      p->summary["prediction_status"]="not_available";
++      p->summary["prediction_scope"]="body_timing_only_fixed_region_overheads_unmodeled";
++    }
++    p->summary["service_description_count"]=service_description_count(*p);
++    if(f.applied && p->summary.contains("service_curves")) {
++      for(auto& curve:p->summary["service_curves"]) {
++        if(curve.at("epoch_begin")!=0)continue;
++        const u64 descriptions=getu(curve,"description_count")+1;
++        if(descriptions>16)fail("mapping_invariant: region ready gate exceeds curve budget");
++        curve["description_count"]=descriptions;
++        curve["description_budget"]=descriptions<=5 ? 5 : descriptions<=8 ? 8 : 16;
++        curve["region_ready_gate_descriptions"]=1;
++        break;
++      }
++    }
++    // Internal GEMM trials keep all timing, availability, and budget checks.
++    // Only the winner's diagnostic JSON and fingerprint need materializing.
++    const bool defer=defer_gemm_diagnostics && gets(p->task,"op_kind")=="gemm";
++    if(!defer)p->summary["fixed_region_overheads"]=region_ready_overhead_audit(f);
++    p->fingerprint.clear();
++    if(!defer)p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
++  }
++}
++
++}  // namespace
++
++void finalize_region_overhead_audit(const Hardware& hw,Plan& plan) {
++  const auto facts=region_ready_overheads(hw,plan);
++  if(!facts)return;
++  if(plan.launch_ns!=facts->applied)
++    fail("mapping_invariant: final region delay differs from candidate timing");
++  plan.summary["fixed_region_overheads"]=region_ready_overhead_audit(*facts);
++}
++
+ std::vector<std::shared_ptr<Plan>> enumerate_mappings(
+     const Hardware& hardware, const nlohmann::json& task) {
+-  return enumerate_mappings_impl(hardware,task,false);
++  auto result=enumerate_mappings_impl(hardware,task,false);
++  apply_region_ready_overheads(hardware,result,false);
++  return result;
+ }
+ 
+ std::vector<std::shared_ptr<Plan>> enumerate_mappings_for_compile(
+     const Hardware& hardware, const nlohmann::json& task) {
+-  return enumerate_mappings_impl(hardware,task,true);
++  auto result=enumerate_mappings_impl(hardware,task,true);
++  apply_region_ready_overheads(hardware,result,true);
++  return result;
+ }
+ 
+ }  // namespace coarse_die::detail
+diff --git a/die/src/Plan.cc b/die/src/Plan.cc
+index 44937bb..74b41eb 100644
+--- a/die/src/Plan.cc
++++ b/die/src/Plan.cc
+@@ -466,7 +466,7 @@ double next_credit_breakpoint(const Activity& activity, double progress) {
+ }
+ 
+ std::size_t service_description_count(const Plan& plan) {
+-  std::size_t count=0;
++  std::size_t count=plan.launch_ns>0 ? 1 : 0;
+   for(const auto& epoch:plan.epochs) {
+     std::size_t pieces=0;
+     for(const auto& activity:epoch.activities) {

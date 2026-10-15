@@ -1,8 +1,21 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-15（用户时区Asia/Shanghai）。当前用户授权持续自主开发，历史停止指令不适用。干净旧分支从b7925e2安全快进至远端main `5c2de289bc5744e5c252d782901cdba8b6f62459`，工作分支 `codex/die-explicit-continue-20261015`。本检查点提交以包含本页的Git提交为准，普通push/fetch实核；未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch实核HEAD与main均为 `f4d576bc4c066b7afdae6699bc377e9a0ff628a7`，这是已合入的上一检查点。包含本页的Git提交是本次ready修复检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
 
 ## Current Status
+
+### 当前有效检查点：单region启动/首访响应与合法小数时间
+
+- 完整region组合后复用Plan.launch_ns：R=layer_instances×weight_passes=1且首次HBM为独立初始Load时，launch+一次setup合并为整数ready等待。FFN/attention/QKV+RoPE不按内部kernel多收；无HBM不收setup。等候不占owner Q/alpha、13资源域、PRIVATE、busy/served；ready切换计入描述预算。没有新Runtime状态、周期或逐repeat回放。
+- **R>1仍not_available**：旧bulk没有逐实例ready/materialization窗口，保留body数值与物理账本，audit modeled_instances=0；Compiler/full estimate/cost-only都传播不可用。不能前置R×delay冒充竞争语义正确。公共Runtime可运行body用于诊断；正式五仓新发布前必须检查消费者不把不可用数值当完整预测。
+- 固定uint128/指数算术精确计算两项binary64开销×R的floor/ceil，次数不控制循环/状态；真正uint64溢出拒绝。初版EqWork审计曾错误拒绝0.5+2^-65ns，失败raw/source patch/库SHA保留；最终解耦时序与可选分数审计，原始输入表达式保留。37手算+独立Python Fraction 21,435项0 mismatch，UBSan同套通过；不是校准证据。
+- 最终一致Release公共CTest **45/45通过，19.20s**，真实source/ELF/命令绑定。首次36/43七项旧ready/status/hash预期失败已保存；修测试采样与诊断预期，未删body byte/ops守恒。真实冻结5c2de28生成的attention/norm旧Plan wire import仍保持原hash；新编译合法增加1000ns并改hash。full report按实际v4 wire报schema，不再误报v2/v3。
+- 最终公开CABI：residual257/norm257零开销81/75ns，launch=1ms或setup=1ms均1000081/1000075ns；原fraction反例与两个control均成功。小数合并仅ceil一次，单region量化误差[0,1)ns。
+- 性能保留全部30样本尝试：首版cold128³ P95 3.587180ms、J32 174.228μs failed；延后GEMM losing audit后cold2.115387ms failed；再延后owner key后cold2.498182ms/J32 254.326μs failed。最终固定宽度版本本次所测通过：cold128³ **1.649707ms**，residual/SwiGLU冷0.281055/0.452618ms，hot cost **4.156—7.331μs**，OS J1/J8/J32 **13.981/28.923/49.703μs**。不能挑最后一次当稳定全负载证书，历史尾部波动仍有效，五仓E2E CPU not_run。
+- 优化只延后losing GEMM audit至胜者、延后owner key至精确tuple对称合并之后；保留全部合法软件候选、Runtime试跑、validation、原solver字符串顺序与公平定义。stage probe胜者hash前后全等，不宣称无关OS尾部因GEMM变快。
+- 本轮只改die/，正式五仓旧canonical24仍为23160c…7e9b，未publisher、未重跑新native/Online/五仓CPU。TX8/reference与目标先验未重拟，target raw/heldout仍not_available。详情/复现/全部失败见 `analysis/region-ready-overheads-20261016/README.md` 和同名evidence。此前elementwise oracle误差属于当时绑定源码；body未变，但不能用旧raw冒充最终源验收。
+
+以下逐元素检查点已合入f4d576b，是历史有效证据；其“启动无消费者/43项测试/最终速度”状态由上方本次记录更新。
 
 ### 当前有效检查点：逐元素曲线、真实失败与继续开发
 
@@ -252,12 +265,12 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. 核实包含本检查点的远端main与实际分支/HEAD，读取elementwise-service README、oracle与各source identity。当前43/43为功能基线；硬件搜索移除已完成，不重复恢复/改写。正常同步检查点后继续，不按阶段停止。
-2. 优先修已实测launch/setup无消费者：根设计§8.1/9.2为每真实region实例（不是内部tile、不是FFN四子kernel自动×4）。保留外部ready、纯等待不占13共享域/Q、首访只收费一次、取消/容量/snapshot及整数时间溢出；repeat计账/固定复杂度一起处理，不能总delay盲目前置或逐repeat事件。缺口probe可直接复现，先不拟合eta。
-3. 继续逐元素预取/尾块与多inv物化依赖固定曲线表示。当前6描述/8预算有精度failed，不能以守恒/单次speed pass宣称工程验收；全部51场景raw/原busy定义保留，10%—20%尚未自动接受。不得逐K/wave/周期恢复，或自由拟合曲线贴时间。
-4. 最终源速度本次pass但冻结基线尾部failed仍有效；只有真实变更或明确未解问题才再测，保存全部样本与身份。热点仍为软件候选构造/真实Runtime试跑、owner仲裁，不删合法软件映射求速度。新模型变更时同时测复杂度、精度、速度。
-5. 公共源稳定后更新隔离SDK身份，继续当前JOINT已解决依赖的native/真实coarse接入。before-guard SDK的4+6+13+45及legacy tiny不是最新source/五仓证书。正式publisher前重建双ABI/配置/实际消费者；三profile固定流replay尚未实现、真实sh30外部CSV缺失、coarse provider/live guard保留。E2E预算不能以tiny或CABI替代。
-6. WR/Norm/softmax/Attention/FFN其余曲线、OS二阶及odd-row服务分组限制继续按真实依赖推进；有独立可识别新数据才重校准。TX8/reference与目标先验冻结，target raw缺失就not_available。保存源码/raw和有意义GitHub检查点，继续自主开发。
+1. fetch核实包含本检查点的main与分支/HEAD；读取region-ready README/最终identity。45/45是当前功能基线。显式硬件搜索移除、R1启动/首次HBM响应和合法fraction修复已完成，不重复历史待办；正常同步后继续开发。
+2. 优先处理R>1真实region间materialization依赖与每实例ready/setup的固定数量解析表示。当前明确not_available，不前置总等待、不逐repeat/wave/K回放、不恢复周期/Program。由shape/实际循环推导曲线，工作/容量/依赖及原公平约束不按10%/20%放宽。
+3. 继续逐元素预取/尾块及多inv依赖误差。f4d绑定51场景有25%/33.33%完成、99.61% compute busy反例；当前没有宣称修复。用最终真实driver重跑适用小规模oracle，分报首输出/完成/原busy；10%—20%未自动接受，不拿历史raw当新源证书。
+4. 最终30样本速度本次所测通过，所有先前尾部失败保留；模型变更时同步测精度、复杂度和速度。不要删合法软件候选或validation求速度。可评估已只读识别的重复SRAM峰值计算/loser结果JSON/ready时空refs reserve，但只有真实收益和完整语义验证才保留，不无故重跑挑最好一次。
+5. 公共源稳定后，在隔离SDK检查not_available真实消费者，再重建五仓双ABI/配置/业务和CPU预算，最后才正式publisher。JOINT依赖路径已解决，before-guard SDK旧4+6+13+45/legacy tiny不是最终源证书；provider/live/sh30保护保留，E2E不能以tiny或CABI代替。
+6. WR/Norm/softmax/Attention/FFN其余曲线、OS二阶/odd-row限制按真实依赖推进；无可识别独立数据不重新拟合TX8或目标效率，target raw保持not_available。持续保存有效源码/raw并在有意义检查点安全同步GitHub，不按阶段停工。
 
 下方为历史接续记录，冲突时以上为准。
 
@@ -349,6 +362,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Tests
 
+当前：region-ready最终Release45/45（19.20s），独立delay Fraction21,435零差异及UBSan、真实CABI参数响应与fraction修复均通过；最终30样本常规预算本次通过，历史失败仍有效。范围、命令/source/ELF及全部raw见region-ready-overheads-20261016，未跑最终五仓业务/CPU或目标校准。下方旧结果按各自源码范围复用，不是当前最终源全验收。
+
 本次最终：公共42/42（22.34s）、隔离双ABI五仓、配置83/83、FACE133/133与152/152均已执行通过，范围与源码版本见本页最上方及explicit-input-integration证据。新native仅构建，Online链接failed；新native/Python/Online/E2E预算及最终行省略性能均not_run。收到停止指令后未新增测试。
 
 最新硬件输入/ratio/新指标检查点：最终42/42 CTest、真实explicit CABI7/7、旧Hardware完整identity字节比较通过；6shape/18场景完成时间≤10%而5shape busy>20%失败，最终速度仍failed。实际命令/源/ELF/初始失败及最终日志在 `evidence/hardware-input-20261015/verification.json`。旧条目保留历史阈值，不解释为当前新验收。
@@ -402,6 +417,10 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Blocking Issues
 
+当前有效：R>1固定region延迟/物化窗口not_available，逐元素及其它模板busy/精度缺口未修完，所有历史性能尾部失败保留；正式五仓未发布/最终源业务及CPU预算未验收，目标raw缺失。R1启动已修，vector已实现，protobuf环境已修，最终性能已测；下面旧“未启动/缺路径/未计时”是历史，不再执行为当前待办。
+
+以下为历史限制，冲突时以上方最新检查点为准。
+
 交接新增：Online配置指向不存在的protobuf库路径，尚未修复；vector实现未启动；正式vendor未同步当前公共源；最后allocator未计时。均保留为下一任务，不因本次合入而消失。
 
 当前：原busy在五个shape仍>20%，常规冷编译与J32更新仍超预算；全模板/路由限制及五仓新源业务/CPU预算未完成，无独立目标raw。新硬件直接输入/搜索删除及其兼容回归已经完成，原尾shape6.9163%完成误差已满足新10%目标。下方旧门槛/未实现描述是历史。
@@ -419,6 +438,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 生产 e73a378、K诊断修正c13e9a7及先前源码检查点均已进入main并实核。本次时钟修复按普通git同步main并实核；精确SHA由包含本文的Git提交确定。工程NOT ACCEPTED与代码检查点安全分开，不能隐瞒未通过项。
 
 ## Handoff Notes
+
+当前为持续开发检查点，不是用户停止交接。源码/测试/有效原始失败与复现资料保存至GitHub；普通push main后须fetch/ls-remote实核。下方旧停止/未实施记录仅为历史，不取消用户的继续开发授权，也不表明当前新源已正式发布五仓。
 
 ### 本次停止/交接
 

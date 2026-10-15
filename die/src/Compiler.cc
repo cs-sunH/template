@@ -613,7 +613,8 @@ std::shared_ptr<const Plan> compile_normalized_impl(
         ? detail::estimate_candidate_latency_ns(immutable_hardware, candidate)
         : detail::estimate_latency_ns(immutable_hardware, candidate);
     candidate->summary["estimated_latency_ns"] = latency;
-    candidate->summary["alone_estimate_status"] = "ok_assumed";
+    candidate->summary["alone_estimate_status"] =
+        candidate->summary.value("prediction_status",std::string("ok_assumed"));
     // These are still private mutable builders. Seal only the winner after
     // ranking; losing candidates never escape or enter a cache/runtime again.
     Ranked r;
@@ -646,6 +647,7 @@ std::shared_ptr<const Plan> compile_normalized_impl(
   selected->summary["activity_work_semantics"] = "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1";
   selected->summary["granularity_validation"] = "not_run";
   selected->summary["evidence_flags"] = {"engineering_assumption", "hardware_source_derived"};
+  if(gemm_candidates_are_unsealed)detail::finalize_region_overhead_audit(hardware,*selected);
   selected->fingerprint.clear();
   selected->fingerprint = plan_to_json(*selected).at("fingerprint").get<std::string>();
   return selected;

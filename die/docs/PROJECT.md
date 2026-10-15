@@ -20,7 +20,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
-2026-10-15当前源码检查点：standalone residual/SwiGLU/GELU已加入256元素full/tail解析曲线、精确打包/槽位/credit检查、每核PRIVATE和字节加权前缀/尾点路由；公共Release43/43通过。17组独立oracle/51场景守恒通过但严格invocation barrier及busy仍failed，不称精度验收；最终30样本常规cold/hot/J32本次通过，冻结基线J32尾部失败保留。实测launch/setup参数尚未影响延迟，优先修每真实region实例的ready/首次HBM消费者。JOINT依赖路径已修，旧冻结SDK隔离native/legacy tiny通过但coarse Online仍按provider guard拒绝；正式五仓未publisher。源码/失败/速度和复现见HANDOFF及analysis/evidence的elementwise-service、continue-performance、continue-native-20261015。TX8与目标先验未重拟，target raw仍not_available；当前持续开发，工程NOT ACCEPTED。
+2026-10-16当前源码检查点：完整单region R1的launch/首次HBM setup已通过现有ready门生效，纯等待无物理服务；额外切换计入预算。R>1缺逐实例窗口明确not_available，不以bulk body冒充完整预测。新增固定uint128/指数运算保证合法小数开销精确floor/ceil，独立Fraction21,435及UBSan通过；最终Release45/45通过19.20s。公开CABI residual/norm从81/75ns对1ms开销响应为1000081/1000075ns。优化losing audit/owner key构造，最后30样本cold128³1.649707ms、hot4.156—7.331μs、OS J32 49.703μs本次所测通过；此前cold/J32尾部失败全部保留，未称稳定全负载验收。逐元素body/route此前已实现，但多inv依赖/原busy误差未修，不能用旧oracle冒充最终源证书。正式五仓未publisher/新源CPU未测，TX8和目标先验未重拟、target raw仍not_available。详见HANDOFF及analysis/evidence的region-ready-overheads-20261016；当前持续开发，工程NOT ACCEPTED。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
 

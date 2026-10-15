@@ -1,0 +1,270 @@
+{
+  "epochs": [
+    {
+      "activities": [
+        {
+          "canonical_q": 1280.0,
+          "credit_delta": [
+            1.0,
+            0.0
+          ],
+          "hbm_bytes": [
+            [
+              640,
+              0
+            ],
+            [
+              640,
+              0
+            ]
+          ],
+          "id": 1,
+          "int4_ops": 0,
+          "private_time_s": 2.5e-09,
+          "role": "load",
+          "vec_eqops": 0,
+          "work": [
+            0.0,
+            0.0,
+            1280.0,
+            0.0,
+            914.2857142857143,
+            914.2857142857143,
+            0.0,
+            0.0,
+            0.0,
+            640.0,
+            0.0,
+            698.1818181818181,
+            9760.0
+          ]
+        }
+      ],
+      "credit_capacity": [
+        2.0,
+        2.0
+      ],
+      "credit_initial": [
+        0.0,
+        0.0
+      ],
+      "name": "norm_vec_v2_load_first",
+      "repeat_count": 1
+    },
+    {
+      "activities": [
+        {
+          "canonical_q": 2304.0,
+          "credit_delta": [
+            -1.0,
+            1.0
+          ],
+          "hbm_bytes": [
+            [
+              0,
+              0
+            ],
+            [
+              0,
+              0
+            ]
+          ],
+          "id": 5,
+          "int4_ops": 0,
+          "private_time_s": 2.5714285714285718e-08,
+          "role": "compute",
+          "vec_eqops": 3072,
+          "work": [
+            9.76193761038902e-10,
+            1280.0,
+            1024.0,
+            2304.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "credit_capacity": [
+        2.0,
+        2.0
+      ],
+      "credit_initial": [
+        1.0,
+        0.0
+      ],
+      "name": "norm_vec_v2_compute_last",
+      "repeat_count": 1
+    },
+    {
+      "activities": [
+        {
+          "canonical_q": 1024.0,
+          "credit_delta": [
+            0.0,
+            -1.0
+          ],
+          "hbm_bytes": [
+            [
+              0,
+              512
+            ],
+            [
+              0,
+              512
+            ]
+          ],
+          "id": 9,
+          "int4_ops": 0,
+          "private_time_s": 2e-09,
+          "role": "store",
+          "vec_eqops": 0,
+          "work": [
+            0.0,
+            1024.0,
+            0.0,
+            0.0,
+            731.4285714285714,
+            731.4285714285714,
+            0.0,
+            0.0,
+            512.0,
+            0.0,
+            558.5454545454545,
+            0.0,
+            7808.0
+          ]
+        }
+      ],
+      "credit_capacity": [
+        2.0,
+        2.0
+      ],
+      "credit_initial": [
+        0.0,
+        1.0
+      ],
+      "name": "norm_vec_v2_store_last",
+      "repeat_count": 1
+    }
+  ],
+  "fingerprint": "945af35e59d26f58bda279450c6d53a35b25d8d8578d348a928c63a43cb4e2b0",
+  "hardware_fingerprint": "sha256:2d339f036871f33cde4a036de30a46ac2fc8d29ce35c6238f4319c274bc0b139",
+  "launch_ns": 0,
+  "schema": "coarse_die_plan_v2",
+  "summary": {
+    "active_cores": 4,
+    "activity_units": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]",
+    "activity_work_semantics": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1",
+    "alone_estimate_status": "ok_assumed",
+    "candidate_count": 1,
+    "candidate_estimate_source": "estimate_alone(shared_runtime_engine)",
+    "consumption_wave_count": 1,
+    "conversion_elements": 0,
+    "dataflow_id": "none",
+    "estimated_latency_ns": 33,
+    "evidence_flags": [
+      "engineering_assumption",
+      "hardware_source_derived"
+    ],
+    "executed_int4_ops": 0,
+    "executed_matrix_ops": 0,
+    "executed_score_slots": 0,
+    "granularity_validation": "not_run",
+    "hbm_read_bytes_total": 1280,
+    "hbm_workspace_peak_bytes": 0,
+    "hbm_write_bytes_total": 1024,
+    "int4_input_bytes": 0,
+    "kind": "norm",
+    "local_bus_bytes": 2304,
+    "logical_tensor_bytes": 2304,
+    "mapping_assumptions": [
+      "engineering_assumption",
+      "fixed_equivalent_operation_template"
+    ],
+    "output_round_count": 1,
+    "physical_transfer_bytes": 2304,
+    "probability_bytes": 0,
+    "recompute_matrix_ops": 0,
+    "recomputed_matrix_ops": 0,
+    "routing_evidence": {
+      "profile": "distributed_ideal_v2",
+      "status": "engineering_assumption"
+    },
+    "score_bytes": 0,
+    "selected_template": "norm_vec_v2",
+    "selection_rule": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th",
+    "source_matrix_ops": 0,
+    "source_vec_ops": 3072,
+    "sram_capacity_bytes_per_core": 262144,
+    "sram_peak_bytes_per_core": 3584,
+    "sram_read_bytes": 2304,
+    "sram_write_bytes": 2304,
+    "template_id": "norm_vec_v2",
+    "tf": 0,
+    "th": 0,
+    "tk": 0,
+    "tm": 0,
+    "tn": 0,
+    "valid_score_pairs": 0,
+    "vec_equivalent_ops": 3072,
+    "wave_count": 1
+  },
+  "task": {
+    "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+    "fusion_policy": "auto",
+    "kv_identity": "local",
+    "layer_instances": 1,
+    "op_kind": "norm",
+    "phase": "prefill",
+    "schema": "coarse_die_task_v2",
+    "spans": [
+      {
+        "count": 1,
+        "kv_start_pos": 0,
+        "kv_start_stride": 0,
+        "kv_stride": 0,
+        "kv_tokens": 16,
+        "q_start_pos": 12,
+        "q_start_stride": 0,
+        "q_tokens": 4
+      }
+    ],
+    "storage_dtype": {
+      "accumulator": "fp32",
+      "activations": "bf16",
+      "kv": "bf16",
+      "output": "bf16",
+      "parameters": "bf16",
+      "scores": "fp32",
+      "weights": "bf16"
+    },
+    "tensor_shapes": {
+      "ffn": 256,
+      "head_dim": 32,
+      "hidden": 128,
+      "kv_heads": 2,
+      "m": 4,
+      "mlp_variant": "swiglu",
+      "norm_type": "rmsnorm",
+      "position_encoding": "rope",
+      "q_heads": 4,
+      "vocab": 512
+    },
+    "tp_slice": {
+      "ffn_local": 256,
+      "kv_heads_local": 2,
+      "q_heads_local": 4,
+      "tensor_parallel": 1,
+      "tensor_parallel_rank": 0,
+      "vocab_local": 512
+    },
+    "weight_passes": 1
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "scope": "checkpoint source validation, not project acceptance",
+  "tests": {
+    "ctest_passed": 45,
+    "ctest_failed": 0,
+    "seconds": 19.2,
+    "independent_fraction_cases": 21435,
+    "fraction_mismatches": 0,
+    "ubsan": "passed"
+  },
+  "performance_latest": "passed_for_measured_fixtures_30_samples",
+  "performance_prior_attempts": "failed_retained",
+  "repeat_overheads": "not_available",
+  "hardware_calibration": "not_available",
+  "five_repository_publication": "not_run",
+  "five_repository_cpu_budget": "not_run",
+  "source_matches_final_ctest": true
+}

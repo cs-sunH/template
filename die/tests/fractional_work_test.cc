@@ -94,6 +94,7 @@ void body() {
     rejected([&]{plan_to_json(bad);},"invalid fractional remainder rejected");
   }
   Runtime r(hw);const auto h=r.submit(p,owner(1,1,1),0);
+  r.advance_to(p->launch_ns);
   // Stop after the load, then inside compute, before completion correction.
   r.advance_to(r.next_event().value());
   auto end=r.next_event().value();

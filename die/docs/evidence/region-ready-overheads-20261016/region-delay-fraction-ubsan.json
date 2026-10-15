@@ -1,0 +1,25 @@
+{
+  "status": "passed",
+  "scope": "exact binary64 arithmetic only, not timing calibration",
+  "reference": "Python Fraction.from_float independently evaluates (a+b)*count",
+  "seed": 2026101507,
+  "cases": 21435,
+  "classes": {
+    "finite_result": 15501,
+    "overflow": 5904,
+    "invalid_input": 30
+  },
+  "driver_returncode": 0,
+  "driver_output_lines": 21435,
+  "mismatch_count": 0,
+  "first_mismatches": [],
+  "sha256": {
+    "work/region-ready/region_delay_math_ubsan": "cd28490ff73c4d78390baebdfe7c9f9b3992ffd8af55207f226c2273c4fb2370",
+    "die/src/RegionDelay.hh": "778db1de98fdd8c8782890ca343cad897efc9b6b5f67952b8235caf30c1e6c95",
+    "die/tests/region_delay_math_test.cc": "3834606812762ecbb91290f4b13a8302b2c755b3e790a8f9d30a4d974ead22a9",
+    "/workspace/template/work/region-ready/region_delay_fraction_probe.py": "d74ed4850c7d37f0c44f98d9f1ec0320a7f7f8ff288b7f39f48d7157c8cf497b",
+    "work/region-ready/region-delay-fraction-ubsan.input.txt": "2c9223b2c1586e844f8129767f7b919ded449366899bd0642707066e073576e2",
+    "work/region-ready/region-delay-fraction-ubsan.output.txt": "9334d91fa3290361fbd83831e71044b72461c8c187136aa0bfc0839a42048bd1",
+    "work/region-ready/region-delay-fraction-ubsan.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

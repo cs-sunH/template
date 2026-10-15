@@ -1176,7 +1176,6 @@ void Runtime::allocate() {
   for (auto& [handle, execution] : executions_) {
     (void)handle;
     if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
-    const std::string owner_key = execution.owner.key();
     for (LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done) continue;
       bool has_service = false;
@@ -1190,7 +1189,7 @@ void Runtime::allocate() {
       while (first_resource < resource_count && live.definition.work[first_resource] <= 0.0) {
         ++first_resource;
       }
-      refs.push_back(Ref{&execution, &live, handle, owner_key,
+      refs.push_back(Ref{&execution, &live, handle, {},
                          first_resource, q, 0.0});
       // Progress cannot change during allocation. Reuse its exact segment
       // derivative for symmetry, singleton and tangent rows in this call.
@@ -1208,8 +1207,14 @@ void Runtime::allocate() {
   // gain multiplicity; each owner's PRIVATE/credit constraints and alpha are
   // retained. No progress/phase epsilon is used. Owners split across multiple
   // executions remain on the full path to preserve their Q denominator.
+  const auto same_fair_owner = [](const Ref& a, const Ref& b) {
+    const auto& lhs=a.execution->owner;
+    const auto& rhs=b.execution->owner;
+    return std::tie(lhs.node_id,lhs.execution_id,lhs.generation)==
+           std::tie(rhs.node_id,rhs.execution_id,rhs.generation);
+  };
   const bool multiple_owners = std::any_of(refs.begin(), refs.end(),
-      [&](const Ref& ref) { return ref.owner_key != refs.front().owner_key; });
+      [&](const Ref& ref) { return !same_fair_owner(ref,refs.front()); });
   if (multiple_owners) {
     // Refs are collected contiguously per execution before the stable LP
     // sort. Store block ranges instead of allocating two maps and one vector
@@ -1223,12 +1228,6 @@ void Runtime::allocate() {
       blocks.push_back({begin, end});
       begin = end;
     }
-    const auto same_fair_owner = [](const Ref& a, const Ref& b) {
-      const auto& lhs = a.execution->owner;
-      const auto& rhs = b.execution->owner;
-      return std::tie(lhs.node_id, lhs.execution_id, lhs.generation) ==
-             std::tie(rhs.node_id, rhs.execution_id, rhs.generation);
-    };
     const auto boundary_mask = [](const Execution& execution) {
       unsigned mask = 0;
       for (std::size_t b = 0; b < 2; ++b) {
@@ -1331,6 +1330,10 @@ void Runtime::allocate() {
     publish(ref, rate, rate>0.0?1.0:0.0);
     return;
   }
+  // Identity comparisons above use the exact owner tuple. Materialize the
+  // original string keys only for surviving solver variables, preserving
+  // the solver's established key ordering and Q aggregation semantics.
+  for(auto& ref:refs)ref.owner_key=ref.execution->owner.key();
   std::sort(refs.begin(), refs.end(), [](const Ref& lhs, const Ref& rhs) {
     return std::tie(lhs.first_resource, lhs.execution->owner.node_id,
                     lhs.execution->owner.execution_id, lhs.execution->owner.generation,
@@ -3180,7 +3183,7 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
       std::make_shared<const Hardware>(hardware), std::move(shared_plan), true);
   const std::uint64_t finish = estimate.finish_ns;
   nlohmann::json result = plan.summary.is_object() ? plan.summary : nlohmann::json::object();
-  result["status"] = "ok_assumed";
+  result["status"] = plan.summary.value("prediction_status",std::string("ok_assumed"));
   result["estimated_latency_ns"] = finish;
   result["hardware_fingerprint"] = hardware.fingerprint;
   result["plan_fingerprint"] = serialized_plan.at("fingerprint");
@@ -3222,7 +3225,7 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
       {"profile", profile_string("pipeline_profile")},
       {"status", "assumed"}};
   result["granularity_identity"] = {
-      {"schema", has_fractional_work(plan) ? "coarse_die_plan_v3" : "coarse_die_plan_v2"},
+      {"schema", serialized_plan.at("schema")},
       {"epoch_count", plan.epochs.size()},
       {"activity_limit_per_epoch", 3},
       {"repeat_count_semantics", "audit_metadata_only"},
@@ -3230,8 +3233,9 @@ nlohmann::json estimate_alone(const Hardware& hardware, const Plan& plan) {
       {"validation_status", "not_run"},
       {"heldout_status", "not_available"},
       {"ranking_status", "not_tested"}};
+  if (has_credit_curves(plan) || has_fractional_work(plan))
+    result["plan_schema"] = serialized_plan.at("schema");
   if (has_fractional_work(plan)) {
-    result["plan_schema"] = "coarse_die_plan_v3";
     result["equivalent_work_schema"] = "dyadic_equivalent_work_v1";
   }
   result["granularity_validation"] = "not_run";

@@ -1,0 +1,1 @@
+See ../../analysis/region-ready-overheads-20261016/README.md for decisions, source-stage table, failures and replay commands. No ELF binaries are committed. Raw SHA records referring to work/ are identities of the actual local measurements, not promises that those local artifacts are on GitHub.

@@ -155,7 +155,8 @@ std::size_t compare_compiled_gemm_with_sealed_enumerator(
   // an implementation-private candidate object.
   Plan expected = winner;
   expected.summary["estimated_latency_ns"] = ranked.front().latency;
-  expected.summary["alone_estimate_status"] = "ok_assumed";
+  expected.summary["alone_estimate_status"] =
+      winner.summary.value("prediction_status",std::string("ok_assumed"));
   expected.summary["candidate_count"] = static_cast<u64>(candidates.size());
   expected.summary["selected_template"] = expected.summary.value("template_id", std::string());
   expected.summary["selection_rule"] =

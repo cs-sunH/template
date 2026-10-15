@@ -204,8 +204,12 @@ void verify_plan_and_estimate_conservation(const Hardware& hw,
           "summary SRAM and LOCAL bytes include the same Plan activity work");
 
   const auto estimate = estimate_alone(hw, plan);
-  require(estimate.at("status") == "ok_assumed",
-          "compiled fused plan completes a standalone estimate");
+  const auto instances=plan.task.at("layer_instances").get<u64>()*
+      plan.task.at("weight_passes").get<u64>();
+  require(estimate.at("status") == (instances>1 ? "not_available" : "ok_assumed"),
+          "fused body completes; missing repeated region startup is explicitly unavailable");
+  if(instances>1)require(plan.summary.at("fixed_region_overheads").at("modeled_instances")==0,
+      "fused repeat body timing is not mislabeled as complete startup timing");
   const auto& served =
       estimate.at("execution").at("served").at("hbm_bytes_by_row_direction");
   require(served[0][0].get<double>() + served[1][0].get<double>() ==

@@ -1,0 +1,18 @@
+{
+  "frozen_source_commit": "5c2de289bc5744e5c252d782901cdba8b6f62459",
+  "scope": "Actual old compiler-generated Plans; imports preserve historical hash, while recompiling now legitimately changes ready timing/hash.",
+  "files": {
+    "work/performance-baseline/source/die/src/Mapping.cc": "1445a3a4db18403996c7de35f68d7df53374d34336f65966d9e6ca03a206c871",
+    "work/performance-baseline/build/libcoarse_die.a": "4ecc27aceb6aa5f4f5dface3f9c80e1fd9a963d3300cf48a56e7f704b705c0af",
+    "work/region-ready/dump_legacy.cc": "fccf4ae50d6c0efec508121a15e6ba47b3f5be11920ab9d986783a3aa3e44da9",
+    "work/region-ready/dump_legacy": "da043d5c9e222aa35f5bffff7b943987a09bca3916e6f1a467904211de1b69f0",
+    "die/tests/fixtures/pre_region_ready_attention.json": "85c9340be3dd0239f8fdde72f9f029db762f7a698c7a840e1652e0f229cd3e6b",
+    "die/tests/fixtures/pre_region_ready_norm.json": "e9b31eadb8759b1d9f653504c8595dea7114947ba78c4bd37d025690ba61d7e9"
+  },
+  "generator_args": [
+    "die/configs/example_hardware.json",
+    "die/configs/example_tasks.json",
+    "attention_fixture.json",
+    "norm_fixture.json"
+  ]
+}

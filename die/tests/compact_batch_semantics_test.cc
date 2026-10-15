@@ -218,17 +218,27 @@ void batch_does_not_change_single_request_capacity_or_stable_hashes() {
   };
   const auto no_batch = hash_fixture(false);
   const auto batch_one = hash_fixture(true);
+  const auto old_attention_wire=read_json(fixture("pre_region_ready_attention.json"));
+  const auto old_attention=plan_from_json(old_attention_wire);
+  require(old_attention->fingerprint==
+              "138de6613111411b3ebd6c43ae5a59500e205d7b4809c979d97c2edd32491e1f"&&
+              plan_to_json(*old_attention)==old_attention_wire,
+          "frozen pre-ready Plan retains its original canonical wire/hash on import");
   require(no_batch->fingerprint == batch_one->fingerprint &&
-              no_batch->fingerprint ==
-                  "138de6613111411b3ebd6c43ae5a59500e205d7b4809c979d97c2edd32491e1f",
-          "batch=1 compact plans retain the pre-change canonical fingerprint");
+              no_batch->launch_ns==1000&&no_batch->fingerprint!=old_attention->fingerprint,
+          "batch=1 aliases agree; modeled region ready delay intentionally changes new Plan identity");
 
   const json examples = read_json(std::string(COARSE_DIE_SOURCE_DIR) +
                                   "/configs/example_tasks.json");
   const auto legacy = compile(hw, examples.at("specs").at(1));
-  require(legacy->fingerprint ==
-              "945af35e59d26f58bda279450c6d53a35b25d8d8578d348a928c63a43cb4e2b0",
-          "legacy v1 Plan identity is unchanged");
+  const auto old_norm_wire=read_json(fixture("pre_region_ready_norm.json"));
+  const auto old_norm=plan_from_json(old_norm_wire);
+  require(old_norm->fingerprint==
+              "945af35e59d26f58bda279450c6d53a35b25d8d8578d348a928c63a43cb4e2b0"&&
+              plan_to_json(*old_norm)==old_norm_wire,
+          "historic legacy-normalized Plan wire/hash stays canonical on import");
+  require(legacy->launch_ns==1000&&legacy->fingerprint!=old_norm->fingerprint,
+          "legacy v1 task compilation also consumes the declared region startup");
   const json default_gemm{{"op_kind", "gemm"},
       {"tensor_shapes", {{"m", 3}, {"n", 5}, {"k", 7}}},
       {"storage_dtype", {{"weights", "bf16"}, {"activations", "bf16"},

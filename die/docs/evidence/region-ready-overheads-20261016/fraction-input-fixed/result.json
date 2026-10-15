@@ -1,0 +1,498 @@
+{
+  "scope": "correctness/input-domain regression; no timing or performance measurement",
+  "stage": "final-fixed-width-ready-delay",
+  "recorded_utc": "2026-10-15T16:45:49.482847+00:00",
+  "git_head": "f4d576bc4c066b7afdae6699bc377e9a0ff628a7",
+  "git_worktree_status": " M die/CMakeLists.txt\n M die/include/coarse_die/Plan.hh\n M die/src/Compiler.cc\n M die/src/CompilerInternal.hh\n M die/src/Execution.cc\n M die/src/Mapping.cc\n M die/src/Plan.cc\n M die/tests/compact_batch_semantics_test.cc\n M die/tests/estimate_driver_test.cc\n M die/tests/fractional_work_test.cc\n M die/tests/fused_ffn_accounting_test.cc\n M die/tests/gemm_accounting_test.cc\n M die/tests/os_service_scaling_test.cc\n M die/tests/runtime_credit_scale_test.cc\n?? die/docs/analysis/region-ready-overheads-20261016/\n?? die/docs/evidence/region-ready-overheads-20261016/\n?? die/src/RegionDelay.hh\n?? die/tests/fixtures/pre_region_ready_attention.json\n?? die/tests/fixtures/pre_region_ready_norm.json\n?? die/tests/region_delay_math_test.cc\n?? die/tests/region_overhead_test.cc\n",
+  "public_library_source_path": "/workspace/template/work/build-die-continue/lib/libcoarse_die_cabi.so",
+  "frozen_public_library_sha256": "3e4bdbed09e5fe99b631d832981f9ba573409e9b12d70f570a90949f4505656c",
+  "source_library_sha256_after_probe": "3e4bdbed09e5fe99b631d832981f9ba573409e9b12d70f570a90949f4505656c",
+  "frozen_library_sha256_after_probe": "3e4bdbed09e5fe99b631d832981f9ba573409e9b12d70f570a90949f4505656c",
+  "source_identity_qualification": "Sources copied at rerun; this probe does not rebuild or independently attest build provenance. Stage explicitly follows the observed current source, rather than attributing this rerun to the initial baseline library.",
+  "observed_source": {
+    "die/src/Mapping.cc": {
+      "sha256": "4df0258f36b5475afc2ff0e7e62f29c14b0e0fca1f4ad2e3fdfd5826a06aedb0",
+      "source_mtime_ns": 1792082597639333183
+    },
+    "die/src/Compiler.cc": {
+      "sha256": "e5d7749ad7c60046440ab75fbac029936b6d66d761f09a3df259767c9eaa5c65",
+      "source_mtime_ns": 1792082207159514114
+    },
+    "die/src/CompilerInternal.hh": {
+      "sha256": "d86c099d47a92cdafe484bac9d0e33eda0fdb0be90f9d3ba2d9312291897f885",
+      "source_mtime_ns": 1792082207159124528
+    },
+    "die/src/Execution.cc": {
+      "sha256": "1a3a2a8004d04909afcb10026ffb99d5b7f4fd6cef05604135b208f025314fe3",
+      "source_mtime_ns": 1792082377127953154
+    },
+    "die/src/Plan.cc": {
+      "sha256": "c80c34afa81196b83cbf79284c982c4273d0e3d9ad7bc2fe1eab26189282a872",
+      "source_mtime_ns": 1792076054944615541
+    },
+    "die/src/EquivalentWork.hh": {
+      "sha256": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+      "source_mtime_ns": 1792069426268194398
+    },
+    "die/src/Capi.cc": {
+      "sha256": "51e8470ef14d23e2fefb42e294fdeb3d89f0386b8161cf8d1e64ae6514067590",
+      "source_mtime_ns": 1792073788434562324
+    },
+    "die/include/coarse_die/Plan.hh": {
+      "sha256": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+      "source_mtime_ns": 1792076055348611927
+    },
+    "die/include/coarse_die/Execution.hh": {
+      "sha256": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea",
+      "source_mtime_ns": 1792073788434562324
+    }
+  },
+  "sources_unchanged_during_probe": true,
+  "task": {
+    "op_kind": "residual",
+    "tensor_shapes": {
+      "m": 1,
+      "hidden": 1
+    },
+    "storage_dtype": "bf16",
+    "layer_instances": 1,
+    "weight_passes": 1
+  },
+  "cases": [
+    {
+      "case": "control-half-ns",
+      "launch_ns": 0.5,
+      "setup_ns": 0.0,
+      "launch_hex": "0x1.0000000000000p-1",
+      "setup_hex": "0x0.0p+0",
+      "model_create_status": 0,
+      "exact_required_delay_expression": "1/2",
+      "expected_integer_ready_delay_ns": 1,
+      "actual_compile_response": {
+        "cache_accounted_bytes": 28546,
+        "cache_accounting": "retained_container_capacities_with_allocator_allowances",
+        "cache_entries": 1,
+        "errors": [
+          null
+        ],
+        "results": [
+          {
+            "plan_handle": 2,
+            "plan_hash": "e1ed83b22975ce8e1eef470c27cab1e48656800d01ffefc2ce62ff8ec10feaec",
+            "plan_schema": "coarse_die_plan_v4",
+            "summary": {
+              "active_cores": 1,
+              "activity_units": "physical work/bytes/ops are epoch totals; each service_curves entry defines separate input/output credit units; credit_curve overrides affine delta*p; final output released only at compute terminal",
+              "activity_work_semantics": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1",
+              "alone_estimate_status": "ok_assumed",
+              "candidate_count": 1,
+              "candidate_estimate_source": "estimate_alone(shared_runtime_engine)",
+              "consumption_wave_count": 1,
+              "conversion_elements": 0,
+              "dataflow_id": "none",
+              "estimated_latency_ns": 2,
+              "evidence_flags": [
+                "engineering_assumption",
+                "hardware_source_derived"
+              ],
+              "executed_int4_ops": 0,
+              "executed_matrix_ops": 0,
+              "executed_score_slots": 0,
+              "fixed_region_overheads": {
+                "applied_ready_delay_ns": 1,
+                "first_hbm_epoch": 0,
+                "hbm_instances": 1,
+                "instances": 1,
+                "launch_ns_per_instance": 0.5,
+                "memory_setup_ns_per_hbm_instance": 0.0,
+                "model": "region_ready_overheads_v1",
+                "modeled_instances": 1,
+                "quantization": "ceil_combined_region_delay_once_to_public_integer_ns",
+                "quantization_error_ns": 0.5,
+                "ready_gate_description_count": 1,
+                "required_total_delay_ns_ceil": 1,
+                "required_total_delay_ns_fraction": {
+                  "exponent": -1,
+                  "significand": 1
+                },
+                "required_total_delay_ns_whole": 0,
+                "scope": "one_complete_source_region_not_internal_kernel_or_tile",
+                "timing_status": "modeled_integer_ns_ready_gate"
+              },
+              "granularity_validation": "not_run",
+              "hbm_read_bytes_total": 4,
+              "hbm_workspace_peak_bytes": 0,
+              "hbm_write_bytes_total": 2,
+              "int4_input_bytes": 0,
+              "kind": "residual",
+              "local_bus_bytes": 6,
+              "logical_tensor_bytes": 6,
+              "mapping_assumptions": [
+                "engineering_assumption",
+                "fixed_equivalent_operation_template",
+                "fixed_256_elementwise_blocks_exact_storage_packing_v1"
+              ],
+              "output_round_count": 1,
+              "physical_transfer_bytes": 6,
+              "probability_bytes": 0,
+              "recompute_matrix_ops": 0,
+              "recomputed_matrix_ops": 0,
+              "routing_evidence": {
+                "profile": "distributed_ideal_v2",
+                "status": "engineering_assumption"
+              },
+              "score_bytes": 0,
+              "selected_template": "residual_vec_v3",
+              "selection_rule": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th",
+              "service_curves": [
+                {
+                  "allocated_input_slots_per_core": 1,
+                  "allocated_output_slots_per_core": 1,
+                  "block_elements": 256,
+                  "blocks_per_invocation": 1,
+                  "description_budget": 5,
+                  "description_count": 4,
+                  "epoch_begin": 0,
+                  "epoch_count": 3,
+                  "executions": 1,
+                  "final_drain_units": 1,
+                  "first_load_elements": 1,
+                  "first_load_units": 1,
+                  "first_output_compute_work_s": 1.271085626352737e-12,
+                  "first_output_epoch": 1,
+                  "first_output_input_bytes": 4,
+                  "first_output_release": "first_cohort_compute_terminal",
+                  "full_blocks_per_invocation": 0,
+                  "hbm_row_striping": "input_streams_concatenated_per_block_invocation_restarts_row0",
+                  "input_capacity_units": 1,
+                  "input_streams": 2,
+                  "input_unit": "one_elementwise_input_block_all_streams",
+                  "input_units": 1,
+                  "mapping": "invocation_local_round_robin_256_element_blocks",
+                  "model": "analytical_cumulative_elementwise_v1",
+                  "output_capacity_units": 1,
+                  "output_unit": "one_elementwise_output_block",
+                  "output_units": 1,
+                  "readiness_approximation": "aggregate_bulk_affine_including_invocation_boundaries",
+                  "region_ready_gate_descriptions": 1,
+                  "routing": "byte_weighted_full_prefix_and_tail_point_v1",
+                  "sram_allocation": "fixed_max_block_slots_plus_one_fp32_work_block",
+                  "tail_elements": 1
+                }
+              ],
+              "service_description_count": 4,
+              "service_model_revision": "analytical_cumulative_elementwise_v1",
+              "source_matrix_ops": 0,
+              "source_vec_ops": 1,
+              "sram_capacity_bytes_per_core": 262144,
+              "sram_peak_bytes_per_core": 10,
+              "sram_read_bytes": 6,
+              "sram_write_bytes": 6,
+              "template_id": "residual_vec_v3",
+              "tf": 0,
+              "th": 0,
+              "tk": 0,
+              "tm": 0,
+              "tn": 0,
+              "valid_score_pairs": 0,
+              "vec_equivalent_ops": 1,
+              "wave_count": 1
+            }
+          }
+        ],
+        "schema_version": 2
+      },
+      "model_destroy_status": 9
+    },
+    {
+      "case": "fraction-sum-regression",
+      "launch_ns": 0.5,
+      "setup_ns": 2.710505431213761e-20,
+      "launch_hex": "0x1.0000000000000p-1",
+      "setup_hex": "0x1.0000000000000p-65",
+      "model_create_status": 0,
+      "exact_required_delay_expression": "18446744073709551617/36893488147419103232",
+      "expected_integer_ready_delay_ns": 1,
+      "actual_compile_response": {
+        "cache_accounted_bytes": 28653,
+        "cache_accounting": "retained_container_capacities_with_allocator_allowances",
+        "cache_entries": 1,
+        "errors": [
+          null
+        ],
+        "results": [
+          {
+            "plan_handle": 4,
+            "plan_hash": "c7457790e22395a2825bc162e922489f6475b1bf9f2393fbf7d5e97ef8b75db2",
+            "plan_schema": "coarse_die_plan_v4",
+            "summary": {
+              "active_cores": 1,
+              "activity_units": "physical work/bytes/ops are epoch totals; each service_curves entry defines separate input/output credit units; credit_curve overrides affine delta*p; final output released only at compute terminal",
+              "activity_work_semantics": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1",
+              "alone_estimate_status": "ok_assumed",
+              "candidate_count": 1,
+              "candidate_estimate_source": "estimate_alone(shared_runtime_engine)",
+              "consumption_wave_count": 1,
+              "conversion_elements": 0,
+              "dataflow_id": "none",
+              "estimated_latency_ns": 2,
+              "evidence_flags": [
+                "engineering_assumption",
+                "hardware_source_derived"
+              ],
+              "executed_int4_ops": 0,
+              "executed_matrix_ops": 0,
+              "executed_score_slots": 0,
+              "fixed_region_overheads": {
+                "applied_ready_delay_ns": 1,
+                "first_hbm_epoch": 0,
+                "fraction_representation": "exact_binary64_input_terms_times_instances",
+                "hbm_instances": 1,
+                "instances": 1,
+                "launch_ns_per_instance": 0.5,
+                "memory_setup_ns_per_hbm_instance": 2.710505431213761e-20,
+                "model": "region_ready_overheads_v1",
+                "modeled_instances": 1,
+                "quantization": "ceil_combined_region_delay_once_to_public_integer_ns",
+                "quantization_error_ns_interval": {
+                  "lower_inclusive": 0,
+                  "upper_exclusive": 1
+                },
+                "ready_gate_description_count": 1,
+                "required_total_delay_ns_ceil": 1,
+                "required_total_delay_ns_whole": 0,
+                "scope": "one_complete_source_region_not_internal_kernel_or_tile",
+                "timing_status": "modeled_integer_ns_ready_gate"
+              },
+              "granularity_validation": "not_run",
+              "hbm_read_bytes_total": 4,
+              "hbm_workspace_peak_bytes": 0,
+              "hbm_write_bytes_total": 2,
+              "int4_input_bytes": 0,
+              "kind": "residual",
+              "local_bus_bytes": 6,
+              "logical_tensor_bytes": 6,
+              "mapping_assumptions": [
+                "engineering_assumption",
+                "fixed_equivalent_operation_template",
+                "fixed_256_elementwise_blocks_exact_storage_packing_v1"
+              ],
+              "output_round_count": 1,
+              "physical_transfer_bytes": 6,
+              "probability_bytes": 0,
+              "recompute_matrix_ops": 0,
+              "recomputed_matrix_ops": 0,
+              "routing_evidence": {
+                "profile": "distributed_ideal_v2",
+                "status": "engineering_assumption"
+              },
+              "score_bytes": 0,
+              "selected_template": "residual_vec_v3",
+              "selection_rule": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th",
+              "service_curves": [
+                {
+                  "allocated_input_slots_per_core": 1,
+                  "allocated_output_slots_per_core": 1,
+                  "block_elements": 256,
+                  "blocks_per_invocation": 1,
+                  "description_budget": 5,
+                  "description_count": 4,
+                  "epoch_begin": 0,
+                  "epoch_count": 3,
+                  "executions": 1,
+                  "final_drain_units": 1,
+                  "first_load_elements": 1,
+                  "first_load_units": 1,
+                  "first_output_compute_work_s": 1.271085626352737e-12,
+                  "first_output_epoch": 1,
+                  "first_output_input_bytes": 4,
+                  "first_output_release": "first_cohort_compute_terminal",
+                  "full_blocks_per_invocation": 0,
+                  "hbm_row_striping": "input_streams_concatenated_per_block_invocation_restarts_row0",
+                  "input_capacity_units": 1,
+                  "input_streams": 2,
+                  "input_unit": "one_elementwise_input_block_all_streams",
+                  "input_units": 1,
+                  "mapping": "invocation_local_round_robin_256_element_blocks",
+                  "model": "analytical_cumulative_elementwise_v1",
+                  "output_capacity_units": 1,
+                  "output_unit": "one_elementwise_output_block",
+                  "output_units": 1,
+                  "readiness_approximation": "aggregate_bulk_affine_including_invocation_boundaries",
+                  "region_ready_gate_descriptions": 1,
+                  "routing": "byte_weighted_full_prefix_and_tail_point_v1",
+                  "sram_allocation": "fixed_max_block_slots_plus_one_fp32_work_block",
+                  "tail_elements": 1
+                }
+              ],
+              "service_description_count": 4,
+              "service_model_revision": "analytical_cumulative_elementwise_v1",
+              "source_matrix_ops": 0,
+              "source_vec_ops": 1,
+              "sram_capacity_bytes_per_core": 262144,
+              "sram_peak_bytes_per_core": 10,
+              "sram_read_bytes": 6,
+              "sram_write_bytes": 6,
+              "template_id": "residual_vec_v3",
+              "tf": 0,
+              "th": 0,
+              "tk": 0,
+              "tm": 0,
+              "tn": 0,
+              "valid_score_pairs": 0,
+              "vec_equivalent_ops": 1,
+              "wave_count": 1
+            }
+          }
+        ],
+        "schema_version": 2
+      },
+      "model_destroy_status": 9
+    },
+    {
+      "case": "control-three-quarter-ns",
+      "launch_ns": 0.25,
+      "setup_ns": 0.5,
+      "launch_hex": "0x1.0000000000000p-2",
+      "setup_hex": "0x1.0000000000000p-1",
+      "model_create_status": 0,
+      "exact_required_delay_expression": "3/4",
+      "expected_integer_ready_delay_ns": 1,
+      "actual_compile_response": {
+        "cache_accounted_bytes": 28546,
+        "cache_accounting": "retained_container_capacities_with_allocator_allowances",
+        "cache_entries": 1,
+        "errors": [
+          null
+        ],
+        "results": [
+          {
+            "plan_handle": 6,
+            "plan_hash": "0784ca05f2c700d5ee52cb163582cd9056ba09c0fca4a7d68b16eb5ec001154b",
+            "plan_schema": "coarse_die_plan_v4",
+            "summary": {
+              "active_cores": 1,
+              "activity_units": "physical work/bytes/ops are epoch totals; each service_curves entry defines separate input/output credit units; credit_curve overrides affine delta*p; final output released only at compute terminal",
+              "activity_work_semantics": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1",
+              "alone_estimate_status": "ok_assumed",
+              "candidate_count": 1,
+              "candidate_estimate_source": "estimate_alone(shared_runtime_engine)",
+              "consumption_wave_count": 1,
+              "conversion_elements": 0,
+              "dataflow_id": "none",
+              "estimated_latency_ns": 2,
+              "evidence_flags": [
+                "engineering_assumption",
+                "hardware_source_derived"
+              ],
+              "executed_int4_ops": 0,
+              "executed_matrix_ops": 0,
+              "executed_score_slots": 0,
+              "fixed_region_overheads": {
+                "applied_ready_delay_ns": 1,
+                "first_hbm_epoch": 0,
+                "hbm_instances": 1,
+                "instances": 1,
+                "launch_ns_per_instance": 0.25,
+                "memory_setup_ns_per_hbm_instance": 0.5,
+                "model": "region_ready_overheads_v1",
+                "modeled_instances": 1,
+                "quantization": "ceil_combined_region_delay_once_to_public_integer_ns",
+                "quantization_error_ns": 0.25,
+                "ready_gate_description_count": 1,
+                "required_total_delay_ns_ceil": 1,
+                "required_total_delay_ns_fraction": {
+                  "exponent": -2,
+                  "significand": 3
+                },
+                "required_total_delay_ns_whole": 0,
+                "scope": "one_complete_source_region_not_internal_kernel_or_tile",
+                "timing_status": "modeled_integer_ns_ready_gate"
+              },
+              "granularity_validation": "not_run",
+              "hbm_read_bytes_total": 4,
+              "hbm_workspace_peak_bytes": 0,
+              "hbm_write_bytes_total": 2,
+              "int4_input_bytes": 0,
+              "kind": "residual",
+              "local_bus_bytes": 6,
+              "logical_tensor_bytes": 6,
+              "mapping_assumptions": [
+                "engineering_assumption",
+                "fixed_equivalent_operation_template",
+                "fixed_256_elementwise_blocks_exact_storage_packing_v1"
+              ],
+              "output_round_count": 1,
+              "physical_transfer_bytes": 6,
+              "probability_bytes": 0,
+              "recompute_matrix_ops": 0,
+              "recomputed_matrix_ops": 0,
+              "routing_evidence": {
+                "profile": "distributed_ideal_v2",
+                "status": "engineering_assumption"
+              },
+              "score_bytes": 0,
+              "selected_template": "residual_vec_v3",
+              "selection_rule": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th",
+              "service_curves": [
+                {
+                  "allocated_input_slots_per_core": 1,
+                  "allocated_output_slots_per_core": 1,
+                  "block_elements": 256,
+                  "blocks_per_invocation": 1,
+                  "description_budget": 5,
+                  "description_count": 4,
+                  "epoch_begin": 0,
+                  "epoch_count": 3,
+                  "executions": 1,
+                  "final_drain_units": 1,
+                  "first_load_elements": 1,
+                  "first_load_units": 1,
+                  "first_output_compute_work_s": 1.271085626352737e-12,
+                  "first_output_epoch": 1,
+                  "first_output_input_bytes": 4,
+                  "first_output_release": "first_cohort_compute_terminal",
+                  "full_blocks_per_invocation": 0,
+                  "hbm_row_striping": "input_streams_concatenated_per_block_invocation_restarts_row0",
+                  "input_capacity_units": 1,
+                  "input_streams": 2,
+                  "input_unit": "one_elementwise_input_block_all_streams",
+                  "input_units": 1,
+                  "mapping": "invocation_local_round_robin_256_element_blocks",
+                  "model": "analytical_cumulative_elementwise_v1",
+                  "output_capacity_units": 1,
+                  "output_unit": "one_elementwise_output_block",
+                  "output_units": 1,
+                  "readiness_approximation": "aggregate_bulk_affine_including_invocation_boundaries",
+                  "region_ready_gate_descriptions": 1,
+                  "routing": "byte_weighted_full_prefix_and_tail_point_v1",
+                  "sram_allocation": "fixed_max_block_slots_plus_one_fp32_work_block",
+                  "tail_elements": 1
+                }
+              ],
+              "service_description_count": 4,
+              "service_model_revision": "analytical_cumulative_elementwise_v1",
+              "source_matrix_ops": 0,
+              "source_vec_ops": 1,
+              "sram_capacity_bytes_per_core": 262144,
+              "sram_peak_bytes_per_core": 10,
+              "sram_read_bytes": 6,
+              "sram_write_bytes": 6,
+              "template_id": "residual_vec_v3",
+              "tf": 0,
+              "th": 0,
+              "tk": 0,
+              "tm": 0,
+              "tn": 0,
+              "valid_score_pairs": 0,
+              "vec_equivalent_ops": 1,
+              "wave_count": 1
+            }
+          }
+        ],
+        "schema_version": 2
+      },
+      "model_destroy_status": 9
+    }
+  ]
+}

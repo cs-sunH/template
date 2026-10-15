@@ -466,7 +466,7 @@ double next_credit_breakpoint(const Activity& activity, double progress) {
 }
 
 std::size_t service_description_count(const Plan& plan) {
-  std::size_t count=0;
+  std::size_t count=plan.launch_ns>0 ? 1 : 0;
   for(const auto& epoch:plan.epochs) {
     std::size_t pieces=0;
     for(const auto& activity:epoch.activities) {

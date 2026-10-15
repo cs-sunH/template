@@ -89,6 +89,7 @@ struct Plan {
 // Count every independent activity's affine pieces, including its terminal
 // switch; an empty epoch contributes one closure. Different activities do not
 // share a budget entry merely because their progress endpoints are equal.
+// A nonzero initial ready delay adds one independent gate/switch.
 std::size_t service_description_count(const Plan&);
 
 inline bool has_credit_curves(const Plan& plan) {
