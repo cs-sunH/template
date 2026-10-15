@@ -1,0 +1,35 @@
+{
+  "base_commit": "0f56921b9830961101d241899fd1ebda1ed3d43d",
+  "status": "partial_not_accepted_not_published",
+  "tracked_paths": [
+    "die/CMakeLists.txt",
+    "die/include/coarse_die/Execution.hh",
+    "die/include/coarse_die/Plan.hh",
+    "die/src/Compiler.cc",
+    "die/src/Execution.cc",
+    "die/src/Mapping.cc",
+    "die/src/Plan.cc"
+  ],
+  "new_paths": [
+    "die/src/GemmOSProgram.hh",
+    "die/tests/gemm_os_program_runtime_driver.cc",
+    "die/tests/gemm_os_program_runtime_test.cc",
+    "die/tests/gemm_os_program_schema_test.cc"
+  ],
+  "source_sha256": {
+    "die/CMakeLists.txt": "cb9f14da8403b3e42a6720360f0d8c0a082d7f5dc11b95499dae23694c59a3d6",
+    "die/include/coarse_die/Execution.hh": "7d16e3eacaa972a9a42a614f41bf3df8821811552ebfffab7ec07dcadce1a273",
+    "die/include/coarse_die/Plan.hh": "59d651acbbb320d43a2162723ea52e48474b220b32024b9e9d4c222fc18cfa89",
+    "die/src/Compiler.cc": "16d454e91fe50115fc0af03ec52edc19aea5173ec54f94b99193836c29ce8b5a",
+    "die/src/Execution.cc": "de4863440460fd9b358ccb71651dc4d4e016bf6fe57c4c7811d872821f3e871f",
+    "die/src/Mapping.cc": "fc09826eebe3bf61f38c44ac04d61df69da5fb72fb03c624f1c3ab447e8ff734",
+    "die/src/Plan.cc": "cdd4a4d82f0614b218f8f34ec9d13fae5aec175aa51af600f8c722351a94f386",
+    "die/src/GemmOSProgram.hh": "a7f4ebd084de4c94f6f1102392e04e7050ee72e84a7e123d2b63775787a65e67",
+    "die/tests/gemm_os_program_runtime_driver.cc": "1b69d82ae9cb82784cfbf7437be1b9565cbb5550300638d93c12a8f1271e8fb6",
+    "die/tests/gemm_os_program_runtime_test.cc": "675cad541cbf7ac577d9747255c62768a678068bd5b294638d3e7135fcea77a1",
+    "die/tests/gemm_os_program_schema_test.cc": "fac19aab654d12760844156ea471148db0cf04e17aa3e6897fb79ea9bd7be8f7"
+  },
+  "patch_sha256": "0efd3bc93b1eee5398cbd405a94518c4661071e27ac3f3864f56f354ef363b17",
+  "patch_file": "implementation.patch.gz",
+  "compressed_patch_sha256": "d08946fbf3bdc5ce9d33daf42ccda2ed7f06e8e5beebf5b0443215715342b14c"
+}

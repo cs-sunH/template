@@ -16,9 +16,11 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 建模复杂度遵守用户 2026-10-14 新增要求：与硬件设计参数、软件任务输入参数不直接相关的细节，能用简单数学公式直接计算时，采用公式，不深入建模。优先闭式/解析计数和固定数量分段表达；内部状态只为必要的参数响应、容量/工作量守恒和外部可观察的就绪/竞争保留。新增复杂机制须指出简单公式不足的具体证据和运行成本；硬件自变量与任务输入的正确覆盖继续是硬约束。
 
-持续开发以有意义的验证检查点同步 GitHub，不按阶段结束自动停工。检查点同步不等于模型精度或五仓工程验收。
+开发以有意义的验证检查点同步 GitHub。用户最新要求本Session迅速交接，main实核后立即停止；下一账号按HANDOFF接续。检查点同步不等于模型精度或五仓工程验收。
 
 ## 当前代码与运行方式
+
+- 2026-10-15最终交接：已完成K参考/Cursor c13e9a7、clock b22e065、新JOINT取消0f56921均在main并实核。未验收单Core OS Program全部源码patch/新文件/测试/SHA/真实构建记录保存在 `analysis/gemm-os-program-partial-20261015/`，默认公共源保留已验证clock版，五仓canonical24不混入半成品。下一账号先恢复该片段完成定向测试及新oracle来源识别，再周期/精度/效率；TX8与目标先验不变，整体NOT ACCEPTED。最终归档/文档提交main实核后本Session停止。
 
 - 2026-10-15新JOINT known cancel：冻结可选coarse_cancel_events复用Domain/Runtime，same-tick终态优先、pending取消不造handle、partial served保留、重复事件幂等；不传播success/依赖，不猜测gate/barrier lease释放。snapshot消费前缀、双向终态绑定和原子非法拒绝通过；真实clock版native/window/Domain4/4+Python6/6无skip，portable重放通过。旧wire/完整liveworld与sh30 guard保留，生产Sys采集/graph/lease回放仍待接；公共Program开发不混入该检查点。证据native-world-cancel-20261015。
 
@@ -55,7 +57,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 每轮以已合并 main 为起点，记录真实 SHA、PR 和测试结果。推送/合并失败、测试阻塞或远端未确认时标 **NOT READY FOR HANDOFF**；代码检查点同步与正式工程验收分开，不让两个独立 Session 并行推冲突内容，不 force-push 或丢弃有效修改。
 
-当前持续开发分支 `codex/die-k-readiness-20261015`，从远端 `main` 的 `d1151179d2a3c3246e0b7a896db9e3dacef52885` 恢复。用户最新要求持续自主推进；历史停止/交接说明已由本轮继续指令覆盖，以HANDOFF当前状态为准。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。已修 attention sequential layer/pass workspace peak（v3 template、workspace revision v2）、native fresh local-domain bridge 和同冻结输入 native session wire 恢复，并形成真实 E5 shape-axis 失败证据；生产 Sys/ledger/network/pool live 输入与 sh30 guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
+当前持续开发分支 `codex/die-k-readiness-20261015`，从远端 `main` 的 `d1151179d2a3c3246e0b7a896db9e3dacef52885` 恢复。用户最新要求迅速完成本轮交接并停止，以HANDOFF最上方最终交接为准。仅使用新活动 JOINT；已有 LRU finite-manifest/source-release 接线不重做。已修 attention sequential layer/pass workspace peak（v3 template、workspace revision v2）、native fresh local-domain bridge 和同冻结输入 native session wire 恢复，并形成真实 E5 shape-axis 失败证据；生产 Sys/ledger/network/pool live 输入与 sh30 guard 仍是后续依赖。GitHub同步状态、精确实跑及限制见 HANDOFF，不将 fixture parity 或发布 digest 冒充五仓工程验收。
 
 ## 重要决定及变更记录
 
@@ -88,7 +90,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 2026-10-13 最终交接：用户明确要求停止，保存 GEMM slowest-cohort 预算和 typed task 校验，公共库 17/17 CTest；五仓最新 19 文件固定源。完整计划/失败 oracle/工程边界及关键 scratch 已写 HANDOFF 与 analysis，最终 GitHub 状态须核对交接 PR。
 
 - 2026-10-13 接续开发：PR #3 已合并并核对 ancestry。实现 compact progression 独立 batch、fractional κ exact whole/dyadic 账本、strict INT4 转换成本、Plan v3/旧 v2 兼容和极小计数快照；公共 20/20、五仓最新 20 文件同 digest，所选 17/17 与配置 83/83 通过。默认 7 个 task hash/summary 保持。
-- 本轮真实 K-wave oracle 仍 failed；固定双 owner exact 周期研究不能替代生产证书，有限 C++ 原型仍 O(R)，后续继续真实有界生命周期。30 样本 true cache-hit 探针已保存，128³ cold P95 4.012ms、hit P95 34–42μs，预算仍未满足；TX8 reference/目标先验未重新拟合。当前是持续开发检查点，没有本轮停工指令。
+- 本轮真实 K-wave oracle 仍 failed；固定双 owner exact 周期研究不能替代生产证书，有限 C++ 原型仍 O(R)，后续继续真实有界生命周期。30 样本 true cache-hit 探针已保存，128³ cold P95 4.012ms、hit P95 34–42μs，预算仍未满足；TX8 reference/目标先验未重新拟合。该项为历史持续开发检查点；当前停止/交接状态以本页最上方及HANDOFF为准。
 
 - 2026-10-14持续开发：PR #4已merged，缓存immutable escaped hash/summary响应，保持JSON合同/fresh handles，新增内存计入原双上限；公共22/22、五仓20文件digest `05c3f91c…e755`，本阶段两ABI增量构建与选定17/17/配置83/83通过，Online executable未重建。n30 same-model hit P95降至10.426/14.292/18.788μs，128³ cold仍约3.8ms。原样保留旧样本及新尾延迟，不外推全域。
 - 独立compiled参考改为设计owner Q/α及真实GEMM LOCAL-Q，legacy equal-progress并列保留；生产E5 finish/busy仍failed，门槛不变。whole-output exact scratch已在solo R=10⁶跳过输出周期；双owneroffset仍fail-closed且大整数增长。520-event严格affine contraction proof只覆盖固定full-MN区段，未接入生产、不引入GMP、不证明flat256发现。下一步合成有界piecewise affine表示与workspace显式v2容量桥接；TX8reference和target priors继续冻结。

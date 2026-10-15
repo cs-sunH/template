@@ -1,0 +1,90 @@
+{
+  "scope": "partial archived implementation, not activated or published",
+  "base_commit": "0f56921b9830961101d241899fd1ebda1ed3d43d",
+  "core_library_build": "succeeded after factory shared_ptr compile fix",
+  "program_driver_build": "succeeded after namespace compile fix",
+  "schema_test_build": "succeeded after JSON increment compile fix",
+  "runtime_test_build": "failed: nested driver main macro leaves conflicting main declarations",
+  "test_runs": [
+    {
+      "command": [
+        "work/build-program/coarse_gemm_os_program_schema_test"
+      ],
+      "exit_code": 1
+    },
+    {
+      "command": [
+        "work/build-program/coarse_gemm_os_program_runtime_driver",
+        "--m",
+        "80",
+        "--n",
+        "128",
+        "--k",
+        "4096"
+      ],
+      "exit_code": 1
+    }
+  ],
+  "known_runtime_rejection": "valid Program currently rejected: invalid_program_summary: mapping_assumptions differs from canonical reconstruction",
+  "independent_new_program_oracle": "not_run; metadata branch not implemented",
+  "full_public_suite_for_program": "not_run",
+  "five_repository_program_publish": "not_run; validated clock release retained",
+  "archive_exactness": "reverse patch check on original dirty source; forward patch check on restored base; new file byte equality checked",
+  "log_artifacts": [
+    {
+      "file": "logs/program-Execution-syntax.log.gz",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "file": "logs/program-configure.log.gz",
+      "raw_sha256": "ff8d0d28c2a0fd9354efce7a9603a39726899882b30b0e559eb5e5c7479c6c34",
+      "sha256": "26a2eabc82fd1cc6ccac0cbb2dbb26e8e974815fe038f6f9cd07a7cc1a80c0da"
+    },
+    {
+      "file": "logs/program-driver-build.log.gz",
+      "raw_sha256": "ccec736e4682f3dbfe856f0339429fc4dee46be675d156566346ba5c627e4b82",
+      "sha256": "d9b28f1e26c7552eb60b7df314449bf2feba9b955502195720072f3abfa00d95"
+    },
+    {
+      "file": "logs/program-final-build-2.log.gz",
+      "raw_sha256": "609b73b0f4118de70e134523d1a075b93765c9eb5981a8a5d4b6a2e5dd8babd5",
+      "sha256": "c7ea3a43e6d644d31f1776507cd1176e7b8da7ddac50e4b3b9c3703ea4164dbf"
+    },
+    {
+      "file": "logs/program-final-build.log.gz",
+      "raw_sha256": "371aff1c66c8278086b3ef0be5501ea0ec73889f1a4f975b21b815a43471cca8",
+      "sha256": "01f34f088d23ade09b6f30852be1205b684f65f2ef5395bc680767bd81d66a24"
+    },
+    {
+      "file": "logs/program-final-configure.log.gz",
+      "raw_sha256": "60fe0cfbdffdf4b78a29ecbad3c544f78def5751cd9e80e999bd370ccfaa8778",
+      "sha256": "462d0a0a1e4f76d495eccf43fcdf9db5a7b27b0f67edfa90224449b3725e830a"
+    },
+    {
+      "file": "logs/program-handoff-build.log.gz",
+      "raw_sha256": "acb9c910d967cc31b96c5548cb3f0250500e21fa95d73f6e9bd314259f660812",
+      "sha256": "86cf48c8213d991ee4136165c65a0024986aa7b6d79e2017dcd3510976b4a4ac"
+    },
+    {
+      "file": "logs/program-handoff-driver-status.json.gz",
+      "raw_sha256": "f46b14458e8203eb37c24cf58f4cc9f0b6cfd302be774c41bad70723ee1e3b69",
+      "sha256": "72c2d584a1b583b2a36e618ede7055ec16af755b037004e70770dc9a885486b1"
+    },
+    {
+      "file": "logs/program-handoff-driver.stderr.log.gz",
+      "raw_sha256": "d3bf4c248129ec64da8c1d2ca5b0494dcf0bf269795cfad959585a1abf7a3b6c",
+      "sha256": "e84a290453df01dec466c61be499f39de7b690eecaeb2bc8eb6c3f1950d27d02"
+    },
+    {
+      "file": "logs/program-handoff-driver.stdout.json.gz",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "file": "logs/program-handoff-schema-test.log.gz",
+      "raw_sha256": "084a9cf0f9ef22b7625a7b86b05e6655330c4329e9eecc1d199f9265c0572eac",
+      "sha256": "e967d29c6b43c1a28d50975fbcbae89527f986803abf38e108399bb64beab79f"
+    }
+  ]
+}

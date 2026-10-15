@@ -1,8 +1,22 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-15（Asia/Shanghai；既有20261014证据目录保留原标识）。用户最新指令为继续自主开发；上轮停止/最终交接仅为历史记录，不约束本轮。本轮继续使用新活动 `astra-sim-joint`，`astra-sim-joint_old` 仅供历史查询，未修改。工程整体 **NOT ACCEPTED**；检查点同步不等于模型精度、全部五仓业务或目标测量验收。
+记录日期：2026-10-15（Asia/Shanghai；既有20261014证据目录保留原标识）。用户最新指令为停止新任务、迅速完成GitHub交接，并在main同步实核后立即停止。本轮仅使用新活动 `astra-sim-joint`，`astra-sim-joint_old` 仅供历史查询，未修改。工程整体 **NOT ACCEPTED**；代码可接棒不等于模型精度、全部五仓业务或目标测量验收。
 
 ## Current Status
+
+### 本轮最终交接（2026-10-15）
+
+本轮已验证成果按顺序合入并实核main：K就绪参考/紧凑Cursor `c13e9a7`，绝对时钟修复 `b22e0654ed5894322f1474b20a42f85f63631196`，新JOINT冻结已知取消 `0f56921b9830961101d241899fd1ebda1ed3d43d`。工作分支 `codex/die-k-readiness-20261015`。最终归档/文档提交以包含本段的Git提交为准，须再次push/fetch/远端exact SHA确认；无新PR/CI可核实，采用普通git fast-forward main，不force-push。
+
+新Program正在实现时收到停止指令。为不将未经完整验证的Runtime/wire更改发布五仓，全部七个tracked文件diff和四个新源码/测试已逐字节归档到 `analysis/gemm-os-program-partial-20261015/`（patch、new-files、SHA、实际构建/检查日志）；默认公共源恢复已验证clock版，五仓canonical24仍 `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`。这不是删除或丢弃部分成果。恢复入口和精确实现/API/依赖/未完成项在该README与verification.json；不得将研究源码头部的production字样当作验收声明。
+
+部分实现已写：显式小预算单Core OS task/Plan v4、共享Descriptor工厂及capacity/ledger核验、Runtime三个动态stage槽/六游标/终态服务修正、固定类前缀累计、snapshot v4/cancel/estimate、两项新测试与实际v4 driver。它仍O(events)，没有周期skip；完整编译测试和独立精度验收以归档verification为准，未通过项保留。初次编译发现factory shared_ptr赋值及driver命名空间问题，已修当前源码并保存初始日志；不为交接扩展新功能或重复全量测试。独立grouped oracle的新Program来源识别尚未落盘，下一账号先补此项，不能让通用报告冒称E5/最小E证书。
+
+归档前最小检查的明确结果：新公共库/Program driver/schema test编译成功；runtime test因嵌套driver main宏冲突编译失败。schema与actual full-shape driver均exit1，合法Plan在factory重建summary的 `mapping_assumptions` 比较被拒绝。先统一重建Metrics的assumptions与原候选，再处理测试helper入口宏；不能为求通过去掉capacity/ledger防伪。未跑新Program独立oracle或全量回归，也没有五仓Program发布。这些是部分代码的未完成问题，已验证main默认源未受影响。
+
+已完成部分的真实结果：公共Release all build/33项CTest通过；clock72种平移/取消/容量/import及旧库负回归通过（旧实现确实失败）；full/tail诊断九场景通过；五仓两ABI重建+配置83/83无skip；新JOINT native/window/Domain4/4及Python6/6无skip，portable重放通过。没有新全Online/压力、生产E5/E8/E16、host预算或目标heldout结果。TX8没有重新拟合，conditional reference与目标先验见下方Important Decisions，目标raw仍not_available。
+
+接手优先级已经固定：恢复并完成归档Program定向测试/兼容审阅 → 新来源独立oracle九场景 → 有界周期/批量累计与开销 → 原门限生产粒度选择；再推进新JOINT生产Sys known事件采集/graph/ledger/lease回放及其他五仓业务压力。先前通过未修改部分直接复用，不重做。完整live world前继续保留sh30和`live_world_import_supported=false`；无独立目标数据不重新拟合TX8或目标效率。完成本次main同步实核即停止。
 
 ### 新JOINT已知取消检查点（2026-10-15）
 
@@ -86,6 +100,8 @@ WS兼容修复 `ca604f5e49dc6df387888a33c75b0134642d42f3` 已正常推送main并
 
 ## Completed
 
+- 本轮已验：c13e9a7的K参考修正/六计数器基础、b22e065的绝对时钟修复和五仓dual ABI/config、0f56921的新JOINT冻结known cancel；详细真实结果及边界见Current Status。未验收Program全部源码/测试与失败记录已归档，默认源未启用。
+
 ### Attention workspace 生命周期修复
 
 `die/src/Mapping.cc` 在乘 `layer_instances * weight_passes` 之前保存一次 invocation 的 materialized score/query counts。workspace 和 candidate-independent capacity bound 使用该生命周期峰值；真实 slots/ops/读写/转换/计时工作仍按顺序重复次数计量。compact span count/batch 仍属于本次物化的请求集，不被擅自改成峰值 max。
@@ -148,7 +164,7 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Next Step
 
-当前为持续开发，不按检查点自动停止。K参考门控修正、独立反例和三组full/tail九场景诊断已完成，不重复。
+以下供下一账号接续；本Session按用户最新交接指令在main实核后停止。先恢复 `analysis/gemm-os-program-partial-20261015/` 中未验收片段，按其verification修复，不重新规划或默认启用。K参考门控修正、独立反例、clock和三组full/tail九场景诊断已完成，不重复。
 
 1. **有界生产生命周期。** 时钟原点1ns漂移已修并验证，不重复。下一片为显式opt-in单Core OS程序，旧Plan默认路径保持；复用Descriptor/六计数器Cursor、原Geometry/Counter/13域facts和公共LP，最多三个当前stage槽。先用明确小展开预算验证真实Runtime的取消、完整快照、ready/busy/工作量守恒；该受限O(events)入口只作诊断，不能默认部署到五仓或认证效率。随后实现同输出非final middle-K同步零进度窄周期：Store/输出为空、一个owner、同事实/容量；还需覆盖horizon、busy/served bulk累加和实际探测计数，其余fail closed。再考虑输出行/multiCore cohorts/WR，不照搬GMP/Fraction/fixed-phase研究。完整生命周期和开销通过后，才重跑原3%/5%并选最小有效E。
 2. **新JOINT生产接线。** domain/native-session wire、实际Sys只读sample→Domain、known capacity、无gate/barrier副作用的冻结known cancel已完成，不重复。下一步Sys已知事件采集、真实graph/ledger/lease/active-leg与回放，再扩有唯一lease ownership证据的取消；保留四项busy ±1e-16ns严格差异记录。使用现有native session、唯一local endpoint，不能将scalar伪装恢复；完整world前保留 `live_world_import_supported=false` 与sh30 guard。Sys export_snapshot(now)会推进/回调，只读用Runtime副本。
@@ -156,6 +172,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 4. **性能和校准。** 生命周期结构稳定后实测source cold/hit/update/J32/Online CPU/RSS/cache/event/LP。没有独立目标raw/heldout，不重新拟合TX8或目标效率，不将BF16/DDR结果代替INT4/HBM。reference/target参数继续冻结。
 
 ## Important Decisions
+
+- 快速交接时保留未完成Program为可重放patch+新文件快照，恢复默认源到已验证clock release；不将未验收wire/Runtime发布五仓。归档逐字节及前向/反向patch检查通过，源码有效成果未丢失。
 
 - 新JOINT known cancel首片是native冻结事件能力：取消为终态阻塞，不作为自然成功传播依赖；无确定lease ownership不释放gate。保持默认旧wire，完整生产live world/sh30仍未开放。
 
@@ -178,6 +196,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Files to Continue
 
+- 下一账号首先读 `analysis/gemm-os-program-partial-20261015/{README.md,verification.json,source-identity.json}`，解压patch后恢复new-files；当前两个具体阻塞为factory mapping_assumptions不一致、runtime test嵌套main宏冲突。grouped oracle新来源分支还未实现，不把通用E5标签当证书。
+
 - known cancel：新JOINT `NativeProjection.cc`、对应两项native/C API C++ tests与Python `joint/{resource_projection,native_projection,test_native_coarse_projection}.py`；重放 `analysis/native-world-cancel-20261015/run_checks.sh`。实际使用的vendor clock与公共Program在途版本分开识别。
 
 - 时钟：`die/src/Execution.cc`、`include/coarse_die/Execution.hh`、`tests/runtime_clock_translation_test.cc`；实际重放 `analysis/runtime-clock-20261015/replay_pair.py`。单Core opt-in的Plan/Compiler/Mapping与Runtime分工在继续，未完成前不可发布为新默认模型。
@@ -196,6 +216,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 - 当前 native wire：`analysis/native-world-snapshot-20261014/`；真实 Sys 只读 ownership：`analysis/sys-local-sample-20261014/`；实际样本桥接：`analysis/local-sample-domain-20261014/`及对应evidence，含portable replay源与脚本。WSCLLM两仓保护证据：`evidence/ws-lease-hardening-20261014/`。
 
 ## Tests
+
+- 最终归档：7个tracked diff+4个新源码/测试逐字节保留、gzip/raw SHA和patch前向/反向检查通过；恢复后的五仓canonical24 check通过。归档Program库/driver/schema编译成功，runtime test编译失败；schema与full driver均exit1（mapping_assumptions重建不一致），未跑新Program oracle/全回归。此失败属于未启用片段，不能计入默认源33项通过结果。
 
 - 新JOINT取消：实际canonical clock版native/window/Domain4/4 CTest、Python6/6无skip，portable脚本再跑亦通过；source/import/fork、直接Domain、同tick前缀/terminal wins和非法导入原子拒绝均覆盖。详情见native-world-cancel证据，不能外推完整Online或生产Sys live回放。
 
@@ -222,14 +244,16 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Blocking Issues
 
+归档Program尚未验收：上述factory metadata/test入口错误、完整snapshot/cancel/capacity/前缀累计审查、新来源oracle、周期批量累计/效率及默认兼容还需完成；现有明确恢复顺序见Next Step和归档README。
+
 工程验收缺口：sh30/完整native live world、network/pool/ledger/cancel回放，E5精度/最小有效E，其他容量/拓扑/端口竞争压力、完整GQA/FACE future/source-release全业务验收、成本余项和host预算。目标测量not_available。以上不应由merge、fixture或条件reference数字冒充通过。
 
 生产 e73a378、K诊断修正c13e9a7及先前源码检查点均已进入main并实核。本次时钟修复按普通git同步main并实核；精确SHA由包含本文的Git提交确定。工程NOT ACCEPTED与代码检查点安全分开，不能隐瞒未通过项。
 
 ## Handoff Notes
 
-当前用户要求持续自主开发，仅在明确停止/关键必需决策/客观阻塞时结束。上一轮停止指令属于历史；本轮canonical24含未启用内部基础及绝对时钟修复，校准冻结。所有新诊断成功/失败与源码身份随证据保存。没有修改old、覆盖其他人提交或丢弃有效修改。
+当前用户明确要求迅速交接并停止。本轮canonical24含未启用内部基础及绝对时钟修复，校准冻结；未验收Program整片归档而不发布。所有有效修改、成功/失败与源码身份随证据保存，没有修改old、覆盖其他人提交或丢弃有效修改。最终main实核后本Session立即停止，不启动后续任务。
 
-实际工具来自 `/workspace/cloud-setup/activate.sh`：CMake3.31.10/GCC14.2/protoc3.21.12/Python3.12 protobuf6.33.5，无PROTOBUF_FROM_SOURCE。work内依赖、build、ELF、stage不跨账号交付；复现入口明确需要重建。`work/build-joint` 的CMake源是 `work/joint-reproduction/aggregate`，不要在旧cache换源重配；新账号优先新目录。公共库入口 `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release`；K replay入口见新README。其他真实业务入口/日志在各analysis/evidence，未改且通过的结果直接复用。
+本轮新环境的CMake3.31.10在Python venv `work/tool-env`，GCC14.2/Python3.12.14；新JOINT真实protobuf3.21.12开发依赖隔离在work/protobuf-root，精确包/命令见native-world-cancel。旧 `/workspace/cloud-setup/activate.sh` 说明属于之前环境，不能假定新账号存在。work内依赖、build、ELF、stage不跨账号交付；复现入口明确需要重建。`work/build-joint` 的旧CMake源是 `work/joint-reproduction/aggregate`，不要在旧cache换源重配；新账号优先新目录。公共库入口 `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release`；K/clock/JOINT及归档Program各见对应README。其他未改且通过的结果直接复用。
 
 GitHub API/gh受Forbidden限制，没有新PR链接或可核实CI；本轮采用普通git同步工作分支并fast-forward main，最终以远端相同HEAD/祖先关系验证，不force-push。最终提交SHA由Git历史与交接最终报告确认；如果main有新增外部提交，必须保留并先整合，不能强推。下个账号基于含本交接文件的最新main接棒；工程未验收项按本文继续，不能因代码合入标成通过。
