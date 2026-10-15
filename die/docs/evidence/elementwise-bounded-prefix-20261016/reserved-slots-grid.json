@@ -1,0 +1,13 @@
+{
+  "scope": "offline physical slot invariants; not latency/hardware calibration",
+  "cores": [
+    1,
+    8
+  ],
+  "blocks": "2*cores+1 through 6*cores",
+  "executions": 1,
+  "progress_grid_denominator": 20,
+  "checks": 376176,
+  "violations": [],
+  "passed": true
+}

@@ -69,10 +69,20 @@ void physical_ledger_and_prefix() {
           const auto b=[&](u64 n){return std::string(dt)=="int4" ? n/2+n%2 : n*(std::string(dt)=="bf16" ? 2 : 4);};
           const u64 read=streams*b(count)*repeats,write=b(count)*repeats;
           const auto& s=p->summary;
+          const auto& audit=s.at("service_curves")[0];
           require(s.at("hbm_read_bytes_total")==read&&s.at("hbm_write_bytes_total")==write&&
               s.at("source_vec_ops")==count*ops*repeats,
               "actual tensors are packed independently before repetition");
-          u64 actual_read=0,actual_write=0,vec=0;long double in=0,out=0;
+          u64 actual_read=0,actual_write=0,vec=0;
+          // Last input has its own reserved physical slot in the bounded
+          // prefix/drain template. Its completed Load terminal transfers one
+          // unit into Last Compute; ordinary middle credit omits that slot.
+          long double in=audit.value("reserved_input_terminal_transfer_units",0),out=0;
+          if(in) {
+            const auto transfer=audit.at("reserved_input_terminal_transfer_epoch").get<u64>();
+            require(in==1 && p->epochs.at(transfer).credit_initial[0]==1,
+                "reserved Last input must be explicitly transferred at its Load terminal");
+          }
           for(const auto& e:p->epochs) {
             out+=e.credit_initial[1];
             for(const auto& a:e.activities) {
@@ -82,8 +92,7 @@ void physical_ledger_and_prefix() {
           }
           require(actual_read==read&&actual_write==write&&vec==count*ops*repeats&&in==0&&out==0,
               "physical work and independent input/output unit ledgers must close");
-          const auto& audit=s.at("service_curves")[0];
-          require(service_description_count(*p)<=8&&audit.at("description_count")==service_description_count(*p),
+          require(service_description_count(*p)<=16&&audit.at("description_count")==service_description_count(*p),
               "all activity terminal switches count in the fixed budget");
           const u64 first_elements=std::min<u64>(count,2*256);
           require(payload(p->epochs[0].activities[0])==streams*b(first_elements),
@@ -233,7 +242,8 @@ void independent_two_cohort_compute_drain() {
 
 void per_core_credit_capacities_under_pause() {
   struct Case {u64 cores,blocks,repeats;};
-  for(const auto c:std::array<Case,4>{{{2,7,1},{2,5,3},{8,31,1},{8,17,2}}}) {
+  for(const auto c:std::array<Case,7>{{{2,7,1},{2,5,3},{8,31,1},{8,17,2},
+                                    {1,3,1},{2,5,1},{8,17,1}}}) {
     const auto hw=hardware(c.cores);const auto p=compile(hw,task(c.blocks*256,"residual","bf16",c.repeats));
     Runtime runtime(hw);const auto h=runtime.submit(p,owner(1,1,1),0);
     unsigned steps=0;
@@ -256,9 +266,13 @@ void per_core_credit_capacities_under_pause() {
       for(u64 b=0;b<c.blocks;++b)++blocks_per_core[b%active];
     for(u64 core=0;core<active;++core) {
       const auto n=blocks_per_core[core];const u64 final_on_core=core<last;
-      const long double input=(n-1)*(load-compute);
-      const long double visible_output=1+(n-1-final_on_core)*compute-(n-final_on_core)*store;
-      const long double output=visible_output+final_on_core*compute;
+      const bool prefix_drain=c.repeats==1 && (c.blocks+active-1)/active>=3;
+      const long double input=prefix_drain
+          ? 1+(n-2)*load-(n-1-final_on_core)*compute : (n-1)*(load-compute);
+      const long double visible_output=prefix_drain
+          ? 1+(n-2-final_on_core)*compute-(n-1-final_on_core)*store
+          : 1+(n-1-final_on_core)*compute-(n-final_on_core)*store;
+      const long double output=visible_output+(prefix_drain ? 1 : final_on_core)*compute;
       require(input>=-1e-10L && input<=2+1e-10L,
           "every Core must retain its own two input slots during a compute pause");
       require(visible_output>=-1e-10L && output<=2+1e-10L,
@@ -291,7 +305,7 @@ void snapshots_and_scaling() {
     const auto grid=hardware(cores);const auto p=compile(grid,task(count));
     Runtime scaled(grid);scaled.submit(p,owner(1,1,1),0);bounded_drain(scaled);
     const auto events=scaled.counters().at("internal_events").get<u64>();
-    require(events<100&&service_description_count(*p)<=8,
+    require(events<100&&service_description_count(*p)<=16,
         "Core count and block amplification must preserve fixed events/descriptions");
     max_service_events=std::max(max_service_events,events);
   }

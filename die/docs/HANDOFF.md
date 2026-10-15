@@ -1,10 +1,21 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前已普通push/fetch/ls-remote实核HEAD与main均为 `a3c74d860586ec8e7717c38e2c9629ce1909096d`，这是已合入的编译/仲裁去重检查点。包含本页的Git提交是本次逐Core FIFO容量修复检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前已普通push/fetch/ls-remote实核HEAD与main均为 `4b52b57be6815eb3b5153826ecec174835ef4efc`，这是已合入的逐Core FIFO修复检查点。包含本页的Git提交是R1长序列固定首段/稳态/排空检查点；必须以实际fetch/ls-remote和祖先关系确认共享状态，不以本地提交冒充远端。没有不明修改，未覆盖外部成果。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源。
 
 ## Current Status
 
-### 当前有效检查点：每Core槽位硬修与长曲线失败证据
+### 当前有效检查点：固定九描述首段/稳态/排空与实际精度收益
+
+- 仅R1且rounds≥3新编译Plan升级v5：Lfirst → (Cfirst∥Lsecond) → (Lremaining∥Cmiddle∥StorePrefix) → (Clast∥Spenultimate) → Slast。稳态聚合任意多个cohort，不按wave/K/repeat创建状态或切换；九描述+ready十、16预算。旧single/两cohortv3和R>1v4不变，R>1时序仍not_available。
+- 每Core middle输入1+(T−3)pL−(T−2)pC、可见输出1+(T−3)pC−(T−2)pS各在[0,1]；分别保留Last输入与倒二输出槽。bulk终态显式转移Last input=1，输入守恒仅补该一次seed，审计记录单位/终态转移和物理总块数。First/Second可同时占两输入槽；T3零credit的真实活动仍保留。Flow字节/运算/route及Q/alpha/13域/PRIVATE定义保持，独立只读审查无阻塞问题。
+- 最终一致Release **45/45通过，18.49s**；新增1/2/8 Core、T3及R1/2/3暂停、独立物理槽位、snapshot/import与恢复终态通过，离线376,176项槽位网格零违规。公开2Core/1792BF16探针最繁忙输入约1.00833块≤2。静态峰值/工作量不变，浮点byte残差4.44089209850062616169e-16非严格整数全等，放大最大内部事件15。
+- 新实际长16case/48场景：完成全部≤10%，max相对0.449866%、max绝对4.532095ms（不同case）；完成+原busy从0目标/48failed改善至24目标/24failed。513/768四profile×三场景全部联合≤10%；1025/4097仍24busy failed，max busy相对9305.86倍/绝对2.735027s，全部原始零参考/共享时长保留。首输出47目标，local4097 offset为11.379475%/2.275926ms **未接受**，不能称整体精度通过。
+- 新源真实重跑原17/51与两cohort9/27，完整raw全部与4b逐byte一致，参考oracle/数值未改；52份相同raw/report用SHA清单引用Git已有内容，真实运行源/ELF/命令另存。原17仍27完成+busy失败、完成27目标/9在20%内未接受/15failed，两cohort9/27仍全10%。仅测试补T3后重跑final45，生产Mapping/库/driver未改。
+- 最新无并行构建30样本仍 **failed**：128³semantic-alias热编译P95 25.037μs>20μs。本次cold128³1.671591ms、residual/SwiGLU0.278192/0.471718ms、hot cost4.206—4.607μs、OS J1/J8/J32 12.959/23.224/35.192μs；所有历史cold/alias/J32尾部失败保留，不挑最佳。五仓CPU not_run、正式vendor未publisher。
+- 证据/证明/复现见analysis/evidence的elementwise-bounded-prefix-20261016，完整new长raw和source identities可用。旧Plan/快照不自动获得v5；保守epoch屏障、其它模板、R>1窗口、busy和五仓业务仍未验收。TX8/目标先验冻结，target raw缺失；独立模型对拍不冒称硬件校准。继续自主开发。
+
+
+### 已合入4b52b57：每Core槽位硬修与长曲线失败证据
 
 - 新增长cohort oracle发现已有生产槽位问题：2 Core、1792 BF16 residual，首cohort后暂停Compute，原bulk允许最繁忙Core积压2.4块/2457.6B，超过明确分配的两输入槽/2048B。真实公共CABI和修复前回归均复现，不以总SRAM剩余空间借槽掩盖。
 - 原bulk改为v4 max-Core credit：T=executions×rounds，输入(T−1)(pL−pC)∈[0,2]；可见输出1+(T−2)pC−(T−1)pS∈[0,1]，另一槽保留给隐藏Last。每Core凸组合/字节上界证明及精确整数网格1,176,240项零违规；prefix/body/final和audit统一换单位，实际物理块总数另列。所有原物理端点和新T/T−1/T−2精确表示检查保留。
@@ -297,12 +308,12 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本页的main/HEAD，读取elementwise-prefix-drain README/summary/identity。当前45/45功能基线18.99s；显式硬件、R1 ready、R1两cohort预取、编译/仲裁去重及本次新编译bulk逐Core槽位修复已完成，不机械重复历史待办。
-2. 优先研究更长cohort的首尾独立服务与R>1真实非服务窗口：长16/48完成+busy全failed，原17/51仍27failed，R>1 ready/setup not_available。任何8/16描述扩展须保持每Core输入/输出槽位硬约束及物理守恒，简单解析式不足再增加固定状态；不能退回全Core总槽位共享、逐K/wave/repeat或周期路线，不能前置R×wait。
-3. 速度尾部仍failed：最新cold128³2.153300ms、attention alias24.917μs、J32更新83.834μs，原GEMM/attention/Runtime路径本轮未改。针对真实热路径优化并保留全部候选/validation/公平定义，模型变化时联合验精度、复杂度和速度；不无故反复计时挑最佳一次。
-4. 公共模型稳定后隔离SDK验证not_available消费者，重建五仓双ABI/配置/业务及CPU预算后才正式publisher。旧Plan/快照保留旧时间模型，不当作新槽位证书；JOINT旧before-guard SDK也不是最终源，provider/live/sh30保护保留。未测五仓CPU不能以tiny/CABI替代。
-5. XLSX13组去重/条件参考与公开Residual工作量核对已完成，缺当前Runtime可比TX8硬件合同；无完整硬件/独立数据不造TX8 profile、不重拟目标效率。target raw/heldout仍not_available，TX8/目标先验冻结。
-6. WR/Norm/softmax/Attention/FFN其它曲线、OS二阶/odd-row按真实依赖继续。保留全部部分成果/失败raw，在有意义检查点安全同步GitHub，不按阶段停工。
+1. fetch核实包含本页的main/HEAD，读elementwise-bounded-prefix README/summary/identity及引用清单。当前45/45功能18.49s；新R1长曲线固定九描述、每Core槽位、真实首输出、显式硬件与轻量去重已完成，不重复旧待办。
+2. 优先调查semantic-alias热查询：最新GEMM128³ P95 25.037μs failed，前4b attention alias24.917μs也失败；cold/OS本次通过不构成稳定尾部证书。检查规范化memo/缓存命中及响应构造实际热路径，保持完整候选、validation、ABI及fresh-handle语义，避免靠反复抽样选最好。
+3. 继续R>1真实非服务窗口与其它公共模板。当前长16/48完成均≤10%，但1025/4097仍24busy failed，首输出1项11.379%未接受；原17仍27联合失败。任何进一步5/8/16表示须有输入/物理依据，保持每Core槽位/守恒/公平和实际first-output终态；不得改busy定义、恢复逐wave/K/repeat或周期路线，不前置总R×wait。
+4. 公共模型稳定后隔离SDK验证not_available消费者，重建五仓双ABI/配置/业务及CPU预算才正式publisher。旧Plan/快照不自动升级，JOINT旧before-guard SDK不是最终源；provider/live/sh30保护保留。保留全部有效部分和失败，不以未最终验收为由丢弃。
+5. XLSX13组去重/条件参考与公开Residual工作量核对已完成，缺当前Runtime同合同TX8硬件入口；无独立数据不造profile/重拟目标效率。target raw/heldout仍not_available，参考/目标先验冻结。
+6. WR/Norm/softmax/Attention/FFN曲线及OS二阶/odd-row按真实依赖继续；有意义检查点安全同步GitHub，持续自主开发。
 
 下方为历史接续记录，冲突时以上为准。
 

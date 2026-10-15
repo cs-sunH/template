@@ -1,0 +1,12 @@
+{
+  "die/src/Mapping.cc": "f64b4d2fface854afc6964b5e14168d6748f64e9a16fc798c2829e05a449f4ba",
+  "die/tests/elementwise_service_test.cc": "d383064a2961064463f7de3f77ec5a8a4fb14949954632f3375181454e80d0eb",
+  "die/tests/elementwise_oracle_driver.cc": "45ae5bf32825c0f5e4b8a4ce6a7e2d1a00e066429a5c7a215c9df8637c44c4ea",
+  "die/validation/elementwise_service_oracle.py": "38534eaa90b2540fe1b7926197445694d89e057429f851807e5822daed5e1447",
+  "die/validation/cabi.py": "2af22b989595b24d0b97ca8e27ca527db8b6c51f802ad7c2f0ec2e4d436469f7",
+  "work/build-die-continue/coarse_elementwise_oracle_driver": "183e6875c06dd7256467c4f70bb6b0e7d1bc894c886704ee6ab648e9d1431a42",
+  "work/build-die-continue/lib/libcoarse_die_cabi.so": "e55f4c67f7a6c2d9879c2ea41dae5a9eb9f2b98a113dd8dd8ddf13eee1264480",
+  "die/docs/analysis/elementwise-bounded-prefix-20261016/probe_reserved_slots.py": "0a7704cb63407eb17c4605e7c8ca5989420bb8ee96c9703492780473a7b49548",
+  "die/docs/analysis/elementwise-bounded-prefix-20261016/collect_results.py": "4348ba7685df8f614ce13534cb1611188a7956454bb9464d622ef20da0762fce",
+  "die/docs/analysis/elementwise-bounded-prefix-20261016/validate_reserved_slots.py": "bc1e0d499c97d5319f693f637e5cb08dc618c3ea525ea0def2c7375442a5e6e6"
+}

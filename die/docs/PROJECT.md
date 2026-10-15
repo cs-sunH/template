@@ -20,7 +20,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
-2026-10-16当前源码检查点：在已合入a3编译/仲裁轻量去重基础上，修复原elementwise bulk按全Core总槽位约束导致繁忙Core越界的问题。新编译v4用解析max-Core输入两槽/可见输出一槽+隐藏Last保留槽，无新状态/事件/物理工作或公平变化；旧Plan/快照/五仓vendor不自动修复，R>1时序仍not_available。公开2 Core/1792 BF16暂停反例从2.4块降至2块，独立槽位枚举1,176,240项零违规，Release45/45（18.99s）。当前42case账本通过，但长16/48完成+busy全部failed、原17/51仍27failed，两cohort9/27全10%仅限已测范围。最新30样本cold128³2.153300ms、attention alias24.917μs、OS J32 83.834μs failed；J1/J8 17.095/33.770μs和hot cost4.126—6.880μs。全部历史/当前失败保留，不挑最佳一次。XLSX可比硬件延迟及target实测缺失，参考/先验冻结；正式五仓未publisher/CPU未测。详见HANDOFF和elementwise-prefix-drain-20261016。当前持续开发，工程NOT ACCEPTED。
+2026-10-16当前源码检查点：在已合入4b逐Core FIFO修复基础上，R1长序列新增固定九描述首段/稳态/排空（含ready十/16预算），聚合middle不随Core/cohort/repeat创建事件；真实Last Compute与倒二Store独立，每Core各保留尾输入/待写输出槽。Release45/45（18.49s）、376,176项独立槽位网格通过，最大内部事件15。长16case/48场景完成全部≤10%（max0.449866%），完成+原busy从0改善至24目标/24failed；首输出47目标/1个11.379%未接受。原17及两cohort9新源真实raw与4b逐byte一致（SHA引用清单），原17仍27联合失败，R>1非服务窗口仍not_available。最新30样本GEMM alias热编译25.037μs failed；cold128³1.671591ms、hot cost4.206—4.607μs、OS J1/J8/J32 12.959/23.224/35.192μs本次通过，历史失败全部保留。旧Plan/快照不自动升级；TX8/目标先验冻结，target数据缺失，正式五仓未publisher/CPU未测。详见HANDOFF和elementwise-bounded-prefix-20261016。当前持续开发，工程NOT ACCEPTED。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
 

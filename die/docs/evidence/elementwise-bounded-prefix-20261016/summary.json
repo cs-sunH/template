@@ -1,0 +1,1201 @@
+{
+  "scope": "independent synthetic single-Core oracle; not hardware calibration",
+  "suites": {
+    "longer": {
+      "counts": {
+        "ledger": {
+          "passed": 16
+        },
+        "completion_busy": {
+          "failed": 24,
+          "passed_target_10_percent": 24
+        },
+        "completion": {
+          "target_10": 48
+        },
+        "first_output": {
+          "target_10": 47,
+          "within_20_unaccepted": 1
+        }
+      },
+      "maxima": {
+        "completion:relative_error": {
+          "value": 0.004498656190110956,
+          "case": "residual-e4097-i1-local-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": 0,
+          "actual_s": 0.316496473,
+          "reference_s": 0.3150790407230769
+        },
+        "completion:absolute_error_s": {
+          "value": 0.00453209470817173,
+          "case": "residual-e4097-i1-compute-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": 0,
+          "actual_s": 3.225555745,
+          "reference_s": 3.221023650291828
+        },
+        "first_output_readiness:relative_error": {
+          "value": 0.11379474965568485,
+          "case": "residual-e4097-i1-local-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": 1,
+          "actual_s": 0.017724346999999998,
+          "reference_s": 0.020000273066666668
+        },
+        "first_output_readiness:absolute_error_s": {
+          "value": 0.0022759260666666697,
+          "case": "residual-e4097-i1-local-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": 1,
+          "actual_s": 0.017724346999999998,
+          "reference_s": 0.020000273066666668
+        },
+        "busy_original_definition:relative_error": {
+          "value": 9305.862548816212,
+          "case": "residual-e4097-i1-local-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": "hbm_busy_s",
+          "actual_s": 0.30504172690000003,
+          "reference_s": 3.2775999999999986e-05
+        },
+        "busy_original_definition:absolute_error_s": {
+          "value": 2.7350272710349257,
+          "case": "residual-e4097-i1-compute-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": "hbm_shared_s",
+          "actual_s": 3.040329991094196,
+          "reference_s": 0.30530272005927
+        }
+      },
+      "before_after": [
+        {
+          "case": "residual-e1025-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e1025-i1-compute-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e1025-i1-local-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e1025-i1-memory-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e4097-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e4097-i1-compute-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e4097-i1-local-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e4097-i1-memory-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e513-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e513-i1-compute-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e513-i1-local-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e513-i1-memory-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e768-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e768-i1-compute-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e768-i1-local-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e768-i1-memory-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": false,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        }
+      ]
+    },
+    "original": {
+      "counts": {
+        "ledger": {
+          "passed": 17
+        },
+        "completion_busy": {
+          "failed": 27,
+          "passed_target_10_percent": 24
+        },
+        "completion": {
+          "failed": 15,
+          "within_20_unaccepted": 9,
+          "target_10": 27
+        },
+        "first_output": {
+          "target_10": 51
+        }
+      },
+      "maxima": {
+        "completion:relative_error": {
+          "value": 0.3333333333333333,
+          "case": "gelu-e1-i3-balanced-int4-int4.report.json",
+          "scene": "offset",
+          "metric": 0,
+          "actual_s": 0.00015625,
+          "reference_s": 0.000234375
+        },
+        "completion:absolute_error_s": {
+          "value": 0.05999999999999997,
+          "case": "gelu-e256-i4-balanced-fp32-fp32.report.json",
+          "scene": "sync",
+          "metric": 0,
+          "actual_s": 0.18,
+          "reference_s": 0.23999999999999996
+        },
+        "first_output_readiness:relative_error": {
+          "value": 0.08333336666666685,
+          "case": "gelu-e256-i4-balanced-fp32-fp32.report.json",
+          "scene": "offset",
+          "metric": 1,
+          "actual_s": 0.032500001,
+          "reference_s": 0.029999999999999995
+        },
+        "first_output_readiness:absolute_error_s": {
+          "value": 0.002500001000000005,
+          "case": "gelu-e256-i4-balanced-fp32-fp32.report.json",
+          "scene": "offset",
+          "metric": 1,
+          "actual_s": 0.032500001,
+          "reference_s": 0.029999999999999995
+        },
+        "busy_original_definition:relative_error": {
+          "value": 0.9990253411306045,
+          "case": "gelu-e513-i2-balanced-fp32-fp32.report.json",
+          "scene": "solo",
+          "metric": "compute_busy_s",
+          "actual_s": 0.0801171875,
+          "reference_s": 0.040078125
+        },
+        "busy_original_definition:absolute_error_s": {
+          "value": 0.08007812500000001,
+          "case": "gelu-e513-i2-balanced-fp32-fp32.report.json",
+          "scene": "sync",
+          "metric": "compute_busy_s",
+          "actual_s": 0.160234375,
+          "reference_s": 0.08015625
+        }
+      },
+      "before_after": [
+        {
+          "case": "gelu-e1-i3-balanced-int4-int4.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "gelu-e256-i4-balanced-fp32-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "gelu-e257-i1-balanced-fp32-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "gelu-e257-i1-local-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "gelu-e513-i2-balanced-fp32-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e1-i3-balanced-int4-int4.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e256-i4-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "residual-e257-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e257-i1-compute-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e257-i1-local-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e257-i1-memory-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e513-i2-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "swiglu-e1-i3-balanced-int4-int4.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "swiglu-e256-i4-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        },
+        {
+          "case": "swiglu-e257-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "swiglu-e257-i1-local-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "swiglu-e513-i2-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "solo",
+              "before": "failed",
+              "after": "failed"
+            },
+            {
+              "scene": "sync",
+              "before": "failed",
+              "after": "failed"
+            }
+          ]
+        }
+      ]
+    },
+    "two-cohort": {
+      "counts": {
+        "ledger": {
+          "passed": 9
+        },
+        "completion_busy": {
+          "passed_target_10_percent": 27
+        },
+        "completion": {
+          "target_10": 27
+        },
+        "first_output": {
+          "target_10": 27
+        }
+      },
+      "maxima": {
+        "completion:relative_error": {
+          "value": 0.00011382297259694457,
+          "case": "residual-e321-i1-memory-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": 0,
+          "actual_s": 0.045156251,
+          "reference_s": 0.0451613914038162
+        },
+        "completion:absolute_error_s": {
+          "value": 5.140403816196459e-06,
+          "case": "residual-e321-i1-memory-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": 0,
+          "actual_s": 0.045156251,
+          "reference_s": 0.0451613914038162
+        },
+        "first_output_readiness:relative_error": {
+          "value": 0.0017304666666669024,
+          "case": "residual-e511-i1-balanced-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": 1,
+          "actual_s": 0.030051914000000002,
+          "reference_s": 0.029999999999999995
+        },
+        "first_output_readiness:absolute_error_s": {
+          "value": 5.1914000000007066e-05,
+          "case": "residual-e511-i1-balanced-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": 1,
+          "actual_s": 0.030051914000000002,
+          "reference_s": 0.029999999999999995
+        },
+        "busy_original_definition:relative_error": {
+          "value": 0.00012801856799481777,
+          "case": "residual-e321-i1-memory-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": "hbm_shared_s",
+          "actual_s": 0.04015625,
+          "reference_s": 0.04016139140381619
+        },
+        "busy_original_definition:absolute_error_s": {
+          "value": 5.141403816195933e-06,
+          "case": "residual-e321-i1-memory-bf16-fp32.report.json",
+          "scene": "offset",
+          "metric": "hbm_shared_s",
+          "actual_s": 0.04015625,
+          "reference_s": 0.04016139140381619
+        }
+      },
+      "before_after": [
+        {
+          "case": "residual-e321-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e321-i1-compute-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e321-i1-memory-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e511-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e511-i1-compute-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e511-i1-memory-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e512-i1-balanced-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e512-i1-compute-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        },
+        {
+          "case": "residual-e512-i1-memory-bf16-fp32.report.json",
+          "all_references_equal": true,
+          "all_report_metrics_equal": true,
+          "completion_busy_changes": [
+            {
+              "scene": "offset",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "solo",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            },
+            {
+              "scene": "sync",
+              "before": "passed_target_10_percent",
+              "after": "passed_target_10_percent"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "performance": {
+    "status": "failed",
+    "failures": [
+      {
+        "case": "gemm_128x128x128.cabi_hot_semantic_alias_compile_batch",
+        "reason": "fixed percentile latency gate was exceeded"
+      }
+    ],
+    "query_p95_ns": {
+      "gemm_1x128x128": {
+        "cabi_hot_compile_batch": 2614,
+        "cabi_hot_cost_only": 4206,
+        "cabi_hot_full_estimate_report": 561129,
+        "cabi_hot_semantic_alias_compile_batch": 2784,
+        "cpp_cold_compile_uncached": 426811
+      },
+      "gemm_128x128x128": {
+        "cabi_hot_compile_batch": 2884,
+        "cabi_hot_cost_only": 4326,
+        "cabi_hot_full_estimate_report": 479439,
+        "cabi_hot_semantic_alias_compile_batch": 25037,
+        "cpp_cold_compile_uncached": 1671591
+      },
+      "residual_257": {
+        "cabi_hot_compile_batch": 2935,
+        "cabi_hot_cost_only": 4267,
+        "cabi_hot_full_estimate_report": 453450,
+        "cabi_hot_semantic_alias_compile_batch": 2925,
+        "cpp_cold_compile_uncached": 278192
+      },
+      "swiglu_16x4097": {
+        "cabi_hot_compile_batch": 2984,
+        "cabi_hot_cost_only": 4246,
+        "cabi_hot_full_estimate_report": 736909,
+        "cabi_hot_semantic_alias_compile_batch": 2985,
+        "cpp_cold_compile_uncached": 471718
+      },
+      "example_attention": {
+        "cabi_hot_compile_batch": 2514,
+        "cabi_hot_cost_only": 4607,
+        "cabi_hot_full_estimate_report": 417487,
+        "cabi_hot_semantic_alias_compile_batch": 2154,
+        "cpp_cold_compile_uncached": 535251
+      }
+    },
+    "update_p95_ns": {
+      "homogeneous_j1": 571,
+      "homogeneous_j8": 2183,
+      "homogeneous_j32": 4607,
+      "heterogeneous_j1": 501,
+      "heterogeneous_j8": 5488,
+      "heterogeneous_j32": 7761,
+      "endpoint_hbm_j1": 450,
+      "endpoint_hbm_j8": 2443,
+      "endpoint_hbm_j32": 4747,
+      "multi_domain_j1": 471,
+      "multi_domain_j8": 5759,
+      "multi_domain_j32": 8903,
+      "compiled_os_credit_curve_bulk_j1": 12959,
+      "compiled_os_credit_curve_bulk_j8": 23224,
+      "compiled_os_credit_curve_bulk_j32": 35192
+    }
+  }
+}

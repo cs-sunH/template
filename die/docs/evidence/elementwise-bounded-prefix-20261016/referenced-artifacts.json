@@ -1,0 +1,262 @@
+{
+  "original/gelu-e1-i3-balanced-int4-int4.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e1-i3-balanced-int4-int4.raw.json",
+    "sha256": "0a4bb4245818d0dbb72cc89e2fef5d2c21f532b22038e3792ab3b198c09c49d6",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e1-i3-balanced-int4-int4.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e1-i3-balanced-int4-int4.report.json",
+    "sha256": "24993864cfe18bc6debe5bcb074e4da6bd2b0bcb48d5660a022e4659b83f267b",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e256-i4-balanced-fp32-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e256-i4-balanced-fp32-fp32.raw.json",
+    "sha256": "e16535d94fa3f3fd232e46f9a7b764755b0f09cf615e482eac4ff8ff34c0a00d",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e256-i4-balanced-fp32-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e256-i4-balanced-fp32-fp32.report.json",
+    "sha256": "367e9aefff6c1704d2acaffcf4f1ce97c9c7668fe75a163ea5e33320bf262568",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e257-i1-balanced-fp32-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e257-i1-balanced-fp32-fp32.raw.json",
+    "sha256": "f1db27e74aea00a6b9e85d0fe385b0f0f1364b862a19d6b35729afb7a98a120d",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e257-i1-balanced-fp32-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e257-i1-balanced-fp32-fp32.report.json",
+    "sha256": "d6c25e0cc8ff8cc18a46bc119d73eef94e747bb9010b82efbe2866cad1139f4b",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e257-i1-local-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e257-i1-local-bf16-fp32.raw.json",
+    "sha256": "3baacb81e061ec8c1a07b9fa15c2eceb7dab7b742bc37c6b07082ce36a3b198c",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e257-i1-local-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e257-i1-local-bf16-fp32.report.json",
+    "sha256": "ff62eb7e5d34173a92e03d47698bf223fd032ef8cf574c6e93cc0bd3c92efc5f",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e513-i2-balanced-fp32-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e513-i2-balanced-fp32-fp32.raw.json",
+    "sha256": "fd77c7182b774ba1caddcb46e3b4d12d1dd777519b910b1f4bf2e78b64130946",
+    "actual_rerun_byte_identical": true
+  },
+  "original/gelu-e513-i2-balanced-fp32-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/gelu-e513-i2-balanced-fp32-fp32.report.json",
+    "sha256": "5a7701ae07bfed9674df5464eff2f388a2aae58f155ed28101931a3ae69c1fa1",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e1-i3-balanced-int4-int4.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e1-i3-balanced-int4-int4.raw.json",
+    "sha256": "5ed8cc65f0efb4ff8b11ea3d19fa06e0bc769ece983edcf161c01392f7397f99",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e1-i3-balanced-int4-int4.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e1-i3-balanced-int4-int4.report.json",
+    "sha256": "cd753a7065db5ca024069694e85df49a554fdbd03b3106d4e6b3c5913a93dc25",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e256-i4-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e256-i4-balanced-bf16-fp32.raw.json",
+    "sha256": "122ed9eda4806b597ab3b938e63ba79de093fa74c00f8cfd150c78b07856385a",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e256-i4-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e256-i4-balanced-bf16-fp32.report.json",
+    "sha256": "8a357f0d5d1a0221343589404545ddd6924797632b8f02c6d64a0964a5ad4ccb",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e257-i1-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e257-i1-balanced-bf16-fp32.raw.json",
+    "sha256": "64e496d4a128c5d4f08b1bdf7842418d685bbeea0be5873e3453690eed7c4258",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e257-i1-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e257-i1-balanced-bf16-fp32.report.json",
+    "sha256": "188ab82d7b966a9a8b8574e4392cac15d7863fd5db9c8649f7dd1fe96e2b515d",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e257-i1-compute-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e257-i1-compute-bf16-fp32.raw.json",
+    "sha256": "6dbc080448e1c9c994afa2e32afa459a50109d4d453afb649c23537f4fd106d5",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e257-i1-compute-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e257-i1-compute-bf16-fp32.report.json",
+    "sha256": "8b6d7cf52b8ec07beaa30e0b1ef1846d1acd9af1c5f128f1e96e17851528f0bb",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e257-i1-local-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e257-i1-local-bf16-fp32.raw.json",
+    "sha256": "cf1150784da60f0f4cc617fa4991ebdc31c83e84dde057c6fc897f552348f9cc",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e257-i1-local-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e257-i1-local-bf16-fp32.report.json",
+    "sha256": "ddd47dca73c42844db60260b2d7b7238a47741aaae1acb80e53af65f9c69c671",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e257-i1-memory-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e257-i1-memory-bf16-fp32.raw.json",
+    "sha256": "1117594bd2857234c4fbc4492eac91a15faacaa1a8d2a7a5b9031e340234b6ca",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e257-i1-memory-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e257-i1-memory-bf16-fp32.report.json",
+    "sha256": "c9a3446f6c990a1c456554ea31e582aef6b445d667d3cf0e49e68f6b7bd67431",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e513-i2-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e513-i2-balanced-bf16-fp32.raw.json",
+    "sha256": "b7e2dd1e4a7986222108b2932f5636a097d767a9a9dce0c77c594edaa79cc816",
+    "actual_rerun_byte_identical": true
+  },
+  "original/residual-e513-i2-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/residual-e513-i2-balanced-bf16-fp32.report.json",
+    "sha256": "916fe3f15da05cb918d6290e6e142b10d54f48706cad36a8b468bc5624e3e06f",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e1-i3-balanced-int4-int4.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e1-i3-balanced-int4-int4.raw.json",
+    "sha256": "63b99aee2e50f4fd41bdf26785c525a3ad12bf88c152b7e479a4dce022c83de4",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e1-i3-balanced-int4-int4.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e1-i3-balanced-int4-int4.report.json",
+    "sha256": "e52a745c004a8ff97c5d5e112d990ec117b1f00281fe595e55f944108fcc77d0",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e256-i4-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e256-i4-balanced-bf16-fp32.raw.json",
+    "sha256": "a75f780bc6e0fe8f22bd72b80c4b813431f75e8ec7a5cedc633c8d265730712e",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e256-i4-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e256-i4-balanced-bf16-fp32.report.json",
+    "sha256": "cc53733b2a66642b61f43696a6aff5fb1543bec8977747690e7cbe43b2d0f808",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e257-i1-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e257-i1-balanced-bf16-fp32.raw.json",
+    "sha256": "8db852c1a6521f0d9d2e0b87ba320b1ed3ef2b735fa9ecac84b5ebcb29e43a4f",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e257-i1-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e257-i1-balanced-bf16-fp32.report.json",
+    "sha256": "066d66e67da05c734e0a8b99e22987781215264de269c4afec4fb2bca542e71c",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e257-i1-local-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e257-i1-local-bf16-fp32.raw.json",
+    "sha256": "4b0ac420d18e8668f8748629ad348b59f6694e13adff9b3f8dd72ddaf21b6b18",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e257-i1-local-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e257-i1-local-bf16-fp32.report.json",
+    "sha256": "92251f469a0588e80c42241ceba0bf42c174d168bfb3234e062f54e0788eca24",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e513-i2-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e513-i2-balanced-bf16-fp32.raw.json",
+    "sha256": "aa7c3b71f7c913a8f99fd615180d469f888b7ffc653ab0448d2e253a9898de7c",
+    "actual_rerun_byte_identical": true
+  },
+  "original/swiglu-e513-i2-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/original-after-fix/swiglu-e513-i2-balanced-bf16-fp32.report.json",
+    "sha256": "78cc470a80b0e71dbfa13ff9f0e906f72b75478ad6076831991dd7bf766f7495",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e321-i1-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e321-i1-balanced-bf16-fp32.raw.json",
+    "sha256": "10aa18ca19e7aaf460358e5101d04805e2a9d9a902e2db27e4fdadc480d574c0",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e321-i1-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e321-i1-balanced-bf16-fp32.report.json",
+    "sha256": "4ab422eeecee6f94c2119bee1ef430be473a09ad8480542b75772a0f59e63d57",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e321-i1-compute-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e321-i1-compute-bf16-fp32.raw.json",
+    "sha256": "6a7a2f6c1d1c3acd7ae64def8aaa8456e74bfcaf57d3a27f2247e96195e82b9c",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e321-i1-compute-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e321-i1-compute-bf16-fp32.report.json",
+    "sha256": "30a867c260626c9d3cab3ba79df08aa62e8daf248b2dd946152e3b355d7adf0c",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e321-i1-memory-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e321-i1-memory-bf16-fp32.raw.json",
+    "sha256": "83529c5ee05acbbd6c165f014abb59bc4a7cd462e6365eceb22035f00e323969",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e321-i1-memory-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e321-i1-memory-bf16-fp32.report.json",
+    "sha256": "4d469ba639921c9b15b81e73c4d08a0307bee907f048eeb2887b438a2e81c08d",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e511-i1-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e511-i1-balanced-bf16-fp32.raw.json",
+    "sha256": "0bd15e093011e396aaf5e565c5879b59b3674a5f3bdf78b78280e43e711535be",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e511-i1-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e511-i1-balanced-bf16-fp32.report.json",
+    "sha256": "8be68206c0631cbdf8d236a295738e535ebb94e35e1479505cb470f9c3103b3e",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e511-i1-compute-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e511-i1-compute-bf16-fp32.raw.json",
+    "sha256": "01fdc91021d232011a3125eb1b2f8bac63c0ba14d979c8b887dd662ce83c7b40",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e511-i1-compute-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e511-i1-compute-bf16-fp32.report.json",
+    "sha256": "e4e5cdb45ea049468e521fc74a7d362cdf2973c2a6717b36d356a26b1418cf9e",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e511-i1-memory-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e511-i1-memory-bf16-fp32.raw.json",
+    "sha256": "7fa85b82446ba01278242e77a81c2d78c2821ded72757a0f59ae020b2d6e29fc",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e511-i1-memory-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e511-i1-memory-bf16-fp32.report.json",
+    "sha256": "0a1cc531e35f59c4722d24e0b27b836daa94f6feed3d27cae4590d086f1102dc",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e512-i1-balanced-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e512-i1-balanced-bf16-fp32.raw.json",
+    "sha256": "351fbe09d78733f0e0d6bb7939c7b25bfbedfb39ccea9ee0ebe2e7f6f9770978",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e512-i1-balanced-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e512-i1-balanced-bf16-fp32.report.json",
+    "sha256": "52ee02aeb62f639ce3dc724b69ee55b53c8bf8898a86f0062c188731d0829590",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e512-i1-compute-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e512-i1-compute-bf16-fp32.raw.json",
+    "sha256": "11d653fd8e8221cbf152baa829e54525e0de252747f8a8fa23d0f6ac2274a044",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e512-i1-compute-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e512-i1-compute-bf16-fp32.report.json",
+    "sha256": "35dc52071050c03b148022ba4738e708e30b2f370c6a99689b34675a5387a16a",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e512-i1-memory-bf16-fp32.raw.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e512-i1-memory-bf16-fp32.raw.json",
+    "sha256": "ce3bd744b047d96e5d72a35ad4188800ccfac845ae0f359d6d3d360a92455f23",
+    "actual_rerun_byte_identical": true
+  },
+  "two-cohort/residual-e512-i1-memory-bf16-fp32.report.json": {
+    "reference": "die/docs/evidence/elementwise-prefix-drain-20261016/two-cohort-after-fix/residual-e512-i1-memory-bf16-fp32.report.json",
+    "sha256": "627bae3074cb82935b7c9fb2bfc0c11d4d447f133b3803dc317fafa7406c005d",
+    "actual_rerun_byte_identical": true
+  }
+}

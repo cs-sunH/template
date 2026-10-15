@@ -1388,7 +1388,8 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
   const u64 slots=g.total_rounds==1 ? 1 : 2;
   const bool single=g.total_blocks==g.first_blocks;
   const bool separate_two_cohort_drain=executions==1 && g.rounds==2;
-  const bool per_core_fifo=!single && !separate_two_cohort_drain;
+  const bool separate_prefix_drain=executions==1 && g.rounds>=3;
+  const bool per_core_fifo=!single && !separate_two_cohort_drain && !separate_prefix_drain;
   const u128 peak=add128(add128(mul128(slots,input_bytes(max_tile),"elementwise input slots"),
       mul128(slots,bytes(max_tile,od),"elementwise output slots"),"elementwise slots"),
       mul128(max_tile,4,"elementwise FP32 work block"),"elementwise SRAM peak");
@@ -1400,7 +1401,8 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
                         g.total_blocks==g.first_blocks ? u64{0} :
                             g.total_blocks-g.first_blocks-g.last_blocks,
                         g.total_rounds,g.total_rounds-1,
-                        per_core_fifo ? g.total_rounds-2 : u64{0}})
+                        per_core_fifo || separate_prefix_drain ? g.total_rounds-2 : u64{0},
+                        separate_prefix_drain ? g.total_rounds-3 : u64{0}})
     if(static_cast<long double>(static_cast<double>(units))!=static_cast<long double>(units))
       fail("overflow: elementwise cumulative credit endpoint is not exactly representable");
 
@@ -1491,11 +1493,12 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
   // 1+(T-2)*pC-(T-1)*pS in [0,1], reserving the other slot for withheld Last.
   // Every other Core's visible occupancy is a convex combination of this
   // value and 1-pS; hence it too is in [0,1]. No per-Core runtime state is used.
-  const u64 first_credit=per_core_fifo ? 1 : g.first_blocks;
-  const u64 last_credit=per_core_fifo ? 1 : g.last_blocks;
-  const u64 credit_blocks=per_core_fifo ? g.total_rounds : g.total_blocks;
-  const u64 input_capacity=per_core_fifo ? 2 : slots*g.active;
-  const u64 output_capacity=per_core_fifo ? 1 : slots*g.active;
+  const bool core_units=per_core_fifo || separate_prefix_drain;
+  const u64 first_credit=core_units ? 1 : g.first_blocks;
+  const u64 last_credit=core_units ? 1 : g.last_blocks;
+  const u64 credit_blocks=core_units ? g.total_rounds : g.total_blocks;
+  const u64 input_capacity=separate_prefix_drain ? 1 : per_core_fifo ? 2 : slots*g.active;
+  const u64 output_capacity=core_units ? 1 : slots*g.active;
   const auto append=[&](const char* suffix,Flow l,Flow c,Flow s,
       std::array<double,2> initial,u64 active) {
     Epoch e; e.name=label+suffix; e.credit_initial=initial;
@@ -1512,7 +1515,34 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
   first_load.credit={{static_cast<long double>(first_credit),0}};
   append("_load_first",first_load,{}, {},{{0,0}},g.active);
   first_compute.credit={{-static_cast<long double>(first_credit),0}};
-  if(separate_two_cohort_drain) {
+  if(separate_prefix_drain) {
+    // Fixed prefix, aggregate middle and drain, independent of cohort count.
+    // All R1 middle cohorts are full on every active Core. Reserve one input
+    // slot for Last and one output slot for Penultimate while the middle
+    // consumes/produces the remaining slots. No wave cursor is introduced.
+    Flow second_load=first_load;
+    append("_first_output_work_and_second_load",second_load,first_compute,{},{{1,0}},g.active);
+    // First and Second may coexist in both physical input slots. Only the
+    // aggregate middle below reserves a slot for the independently held Last.
+    plan.epochs.back().credit_capacity[0]=2;
+    const u64 last_max=tail_only_last ? g.tail : 256;
+    Flow last_compute=compute_for(input_bytes(g.last_elements),bytes(g.last_elements,od),
+        g.last_elements,last_max,tail_only_last ? 0 : 1,tail_only_last ? 1 : 0);
+    Flow penultimate_store=io_for(g.active,0,1,true,bytes(256,od));
+    Flow remaining_load=subtract_io_flow(subtract_io_flow(load,first_load),second_load);
+    Flow middle_compute=subtract_compute_flow(subtract_compute_flow(compute,first_compute),last_compute);
+    Flow prefix_store=subtract_io_flow(subtract_io_flow(store,final_store),penultimate_store);
+    remaining_load.credit={{static_cast<long double>(g.rounds-3),0}};
+    middle_compute.credit={{-static_cast<long double>(g.rounds-2),
+        static_cast<long double>(g.rounds-3)}};
+    prefix_store.credit={{0,-static_cast<long double>(g.rounds-2)}};
+    append("_middle_service_with_reserved_tail",remaining_load,middle_compute,prefix_store,{{1,1}},g.active);
+    // The preceding Load terminal materializes reserved Last, omitted from
+    // middle credit. Transfer that one slot explicitly into the drain epoch.
+    last_compute.credit={{-1,0}};
+    penultimate_store.credit={{0,-1}};
+    append("_last_compute_and_penultimate_store",{},last_compute,penultimate_store,{{1,1}},g.active);
+  } else if(separate_two_cohort_drain) {
     // Fixed first/last cohorts: the second input slot supports this bounded
     // prefetch during First Compute. Last Compute then has independent
     // progress, so it can finish before First Store without a fluid load tie.
@@ -1532,7 +1562,7 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
     append("_first_output_work",{},first_compute,{},
         {{static_cast<double>(first_credit),0}},g.active);
   }
-  if(!single && !separate_two_cohort_drain) {
+  if(per_core_fifo) {
     Flow remaining_load=subtract_io_flow(load,first_load);
     Flow remaining_compute=subtract_compute_flow(compute,first_compute);
     Flow early_store=subtract_io_flow(store,final_store);
@@ -1546,21 +1576,23 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
   final_store.credit={{0,-static_cast<long double>(last_credit)}};
   append("_store_last",{}, {},final_store,{{0,static_cast<double>(last_credit)}},g.last_blocks);
   const auto descriptions=service_description_count(plan)-description_begin;
-  if(descriptions>8)fail("mapping_invariant: elementwise description budget exceeded");
+  if(descriptions>(separate_prefix_drain ? 16 : 8))
+    fail("mapping_invariant: elementwise description budget exceeded");
   const auto& first_epoch=plan.epochs.at(begin+1);
   const auto first_compute_activity=std::find_if(first_epoch.activities.begin(),
       first_epoch.activities.end(),[](const Activity& a){return a.role==Role::Compute;});
   if(first_compute_activity==first_epoch.activities.end())
     fail("mapping_invariant: first elementwise Compute is absent");
   plan.summary["service_curves"].push_back({
-      {"model",per_core_fifo ? "analytical_cumulative_elementwise_v4_per_core_fifo" :
+      {"model",separate_prefix_drain ? "analytical_cumulative_elementwise_v5_bounded_prefix_drain" :
+          per_core_fifo ? "analytical_cumulative_elementwise_v4_per_core_fifo" :
           separate_two_cohort_drain ? "analytical_cumulative_elementwise_v3_two_cohort_prefetch" :
           "analytical_cumulative_elementwise_v1"},{"epoch_begin",begin},
       {"epoch_count",plan.epochs.size()-begin},{"description_count",descriptions},
-      {"description_budget",descriptions<=5 ? 5 : 8},
-      {"input_unit",per_core_fifo ? "one_input_block_at_the_most_loaded_core" :
+      {"description_budget",descriptions<=5 ? 5 : descriptions<=8 ? 8 : 16},
+      {"input_unit",core_units ? "one_input_block_at_the_most_loaded_core" :
           "one_elementwise_input_block_all_streams"},
-      {"output_unit",per_core_fifo ? "one_visible_output_block_at_the_most_loaded_core" :
+      {"output_unit",core_units ? "one_visible_output_block_at_the_most_loaded_core" :
           "one_elementwise_output_block"},
       {"input_units",credit_blocks},{"output_units",credit_blocks},
       {"block_elements",256},{"blocks_per_invocation",g.blocks},
@@ -1578,14 +1610,22 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
       {"mapping","invocation_local_round_robin_256_element_blocks"},
       {"routing","byte_weighted_full_prefix_and_tail_point_v1"},
       {"hbm_row_striping","input_streams_concatenated_per_block_invocation_restarts_row0"},
-      {"readiness_approximation",separate_two_cohort_drain
+      {"readiness_approximation",separate_prefix_drain
+          ? "fixed_prefetch_middle_affine_reserved_last_input_and_penultimate_output"
+          : separate_two_cohort_drain
           ? "last_input_prefetch_during_first_compute_epoch_barrier_before_first_store"
           : "aggregate_bulk_affine_including_invocation_boundaries"}});
-  if(per_core_fifo) {
+  if(core_units) {
     auto& audit=plan.summary["service_curves"].back();
     audit["physical_input_blocks"]=g.total_blocks;
     audit["physical_output_blocks"]=g.total_blocks;
-    audit["reserved_last_output_slots_per_core"]=1;
+    if(separate_prefix_drain) {
+      audit["reserved_last_input_slots_per_core"]=1;
+      audit["reserved_penultimate_output_slots_per_core"]=1;
+      audit["reserved_input_terminal_transfer_units"]=1;
+      audit["reserved_input_terminal_transfer_epoch"]=begin+3;
+      audit["input_capacity_scope"]="middle_slot_excludes_reserved_last;prefix_prefetch_uses_two_slots";
+    } else audit["reserved_last_output_slots_per_core"]=1;
   }
   m.logical=add128(m.logical,add128(in,out,"elementwise logical bytes"),"logical bytes");
   m.hbm_read=add128(m.hbm_read,in,"elementwise reads");
