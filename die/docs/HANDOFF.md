@@ -1,5 +1,18 @@
 # Codex Cloud 开发交接状态
 
+## 最新有效停止交接（2026-10-17；覆盖下方全部持续开发状态）
+
+用户已要求立即停止；没有启动新开发、实验或回归。检查时已无构建/测试进程，子代理亦已停止。**本节为恢复入口，下方“继续开发”及旧停止章节均为历史。**
+
+- **远端保存 / Current Status：** `codex/die-runtime-continue-20261016@8bc3cab4f25d73a402d51c50a6b4a30b498e2ed9` 已 push 并 `ls-remote` 实核，包含全部新增研究源码、脚本、原始日志及499项text归档；随后本页纯文档提交也应取该分支最终远端HEAD。生产仍为已验证A+B，停止前源码提交 `fe2569abe532c610da8901b98949ee24697625a2`；Execution.cc SHA256 `6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e`，未采用研究候选。
+- **Completed / Tests：** 当前A+B fresh Release **53/53**，两个新回归在fresh main真实red；公共API/快照范围见[公共检查点](evidence/runtime-continue-20261016/public-ab/checkpoint-summary.json)。严格矩阵仍78/84，六个精确舍入断言失败；两配置正常30样本速度均failed。五仓本轮冻结SDK10库/98配置通过，Python384pass/1原optional skip，严格runner保留失败；本轮新native **JOINT 10/10 C++ + 6/6 Python通过，FACE 3/4 C++、R4 Lifecycle guard失败**。FACE-LRU configure通过但build无完成identity，不算通过；其消费者及WS/WSLRU本轮native未完成/未运行。不得套历史22/4结果。
+- **Remaining / Important Decisions：** Norm候选2因快照篡改与service_curve失败被拒绝。time-only C1虽六项mixed旧回归及subepsilon探针通过，独立审查实际发现提前ready服务错误，不能采用；审查driver v2仍链接C1且保留duplicate-ID工具失败。time-only C2只生成source/patch，**未编译、未测试、未采用**。capacity1 Norm、数值/每角色可表示性、busy、长行/R>1及性能仍未完成；10%/有据20%、正确性与速度要求未放宽。
+- **Files / 证据：** [停止详情及复现](analysis/runtime-continue-20261016/STOP-HANDOFF-20261017.md)，[499项归档manifest](evidence/runtime-continue-20261016/stop-handoff-20261017/manifest.json)，同目录`existing-text.tar.gz` SHA256 `9fab29d3201924697f6785ce9e22787b69efc8568e9b2a36740814b52d2a6a23`。恢复条目位于`work/`，不覆盖生产；此前Norm checkpoint1/2另存`evidence/runtime-continue-20261016/norm-capacity1/`。所有归档逐项hash及解包roundtrip已核验，没有ELF；下账号fresh构建。
+- **main / SDK / 验收：** 截止源码保存实核main为`94d197820ad92d7671913e353e1977b0d54a99e2`，A+B未集成；随后只同步本停止入口到main，不合入未验收源码。正式五仓SDK仍canonical24/digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`，publisher未运行，工程 **NOT ACCEPTED**。归档远端保存不等于发布/验收。
+
+**下一账号最优先：** fetch核实main共享入口与上述恢复分支最终HEAD，从恢复分支安全接续并保留main其他修改；阅读当前单Core DOCX、AGENTS/PROJECT及停止详情。先审查C1 ready真实反例、修审查driver重复ID，再决定如何验证未编译C2（定向通过后才fresh全源/API/性能）；随后续剩余native与Norm，保留全部原失败。当前没有必须由用户决定的阻碍。本账号交接完成后立即停止。
+
+
 ## 当前持续开发：A+B联合功能验证完成，继续Norm与五仓（2026-10-16）
 
 用户已重新授权持续自主开发，下方停止记录仅为历史。已 fetch 全部远端 heads，核实 `main@94d197820ad92d7671913e353e1977b0d54a99e2` 与恢复分支 `codex/die-core-resume-20261016@2750e2413b030524a56466da5e8c9b02a9d029c2`。二者实际树仅差 Execution.cc、私有声明和 tiny 测试三个文件；全部远端 heads 均为新分支祖先。新分支 `codex/die-runtime-continue-20261016` 普通 merge 保留 main，恢复 checkpoint `18de6809ca8134d3e4503b5fc89f6fe8922ed439`，没有 reset/force 或恢复旧架构。
