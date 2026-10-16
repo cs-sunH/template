@@ -636,7 +636,7 @@ fair_owner固定为(rank,outer_node_id,execution_generation)，request/session I
 
 ### 8.5 容量支持与外部路径
 
-双输入缓冲以外仍须计当前累加、待写输出和状态。最小合法候选仍不能装入，返回unsupported_workspace及所需/可用容量；不能漏算中间段或转回Roofline补时。W=1可合法顺序执行而不申请第二份输入。全部64种源Core及支持的常规shape须在工程验收中覆盖。
+双输入缓冲以外仍须计当前累加、待写输出和状态。最小合法候选仍不能装入，返回unsupported_workspace及所需/可用容量；不能漏算中间段或转回Roofline补时。W=1可合法顺序执行而不申请第二份输入。当前单Core的全部32组SRAM/NoC资源配置及支持的常规shape须在工程验收中覆盖。
 
 COMP、COMM、RESTORE、POOL的本地HBM端点共用同一仲裁域。HBM↔Core按profile收费排/入口/Mesh以及实际SRAM落地；HBM↔D2D-edge只在图声明需经过时收费内部互连；remote-pool-only由原池模型处理；NoC-only不增加HBM byte。恢复写与随后kernel读是两次访问；restore、recv和计划不能重复拥有同一写端点。网络由原后端推进。
 
@@ -755,7 +755,7 @@ Norm 两次、Residual 两次；Q/K/V/O 分列；RoPE 和 softmax 组分别合�
 4. 当前最多放开两个reference有效量；目标参数无数据时全部冻结。补数据后按INT4矩阵、Vec/SFU、HBM读写/排与入口、本核总线/SRAM/Mesh、启动/转换的资源路径分组逐步解开，避免一次拟合全部。
 5. 在拟合集上使用事先固定的相对/log误差目标和有界优化；派生组拟合权重0，conditional单独报告。保存每次真正的新库输出、plan hash、参数、残差与模型身份。
 6. 留出未参与拟合的shape/配置/资源受限类别，预先确定用途所需的误差门槛，再测偏差、p50/p95、分层误差与排序；重复测量估计噪声。近于测量/模型误差的配置差别标undetermined，不能强排名。
-7. 只有通过的精度、设备、shape、配置区间升级为calibrated_subset/validated_subset。TX8一个profile通过不能代表全部64种Core或假想HBM3E硬件。改变模板/topology后旧校准证书不自动有效。
+7. 只有通过的精度、设备、shape、配置区间升级为calibrated_subset/validated_subset。TX8一个profile通过不能代表当前单Core的全部32组SRAM/NoC资源配置或假想HBM3E硬件。改变模板/topology后旧校准证书不自动有效。
 
 | 验证层 | 证明什么 | 当前证据或实施状态 |
 |---|---|---|
