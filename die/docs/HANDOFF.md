@@ -1,6 +1,24 @@
 # Codex Cloud 开发交接状态
 
-## 当前有效交接：唯一 Core 迁移部分成果，用户要求立即停止（2026-10-16）
+## 当前开发恢复：唯一 Core 最终验证进行中（2026-10-16）
+
+用户已明确恢复持续自主开发；下方停止交接段落只记录此前状态。已实际 fetch/ls-remote 核实 main=`d3a64a6c4cb23b8ce437438ed68217d7cee4af1f`、唯一迁移分支=`b8ddbcfd62e03738b0c3996444355cbbe2e99b80`。本次从迁移提交建立独立工作树/分支 `codex/die-core-resume-20261016`，安全合入 main 独有交接资料，保留新版 AGENTS、PROJECT、设计文档及全部实现；没有从旧 main 重写硬件或复用任何旧 ELF。
+
+- Current Status / Completed：完成远端和干净工作区核验、DOCX/解析合同阅读及分叉恢复。当前提交为恢复检查点，不表示最终工程验收。
+- Next Step / Tests：从全新 work/build-core-final 配置并构建最终公共源码，51项、DOCX/32行/192对照与两套配置正常30样本性能均待本次运行；随后补齐五仓最终 W/H ABI/配置和隔离新 SDK 真实消费者，再安全集成。
+- Important Decisions：仅 Core、core32_v1、L0=a；旧字段严格拒绝；解析固定分段路线、10%/有据20%及原 busy/速度门槛保持。TX8工程对照点不是通用强制硬件或目标实测校准。
+- Files to Continue：die/src、configs、tests、tools；single-core-20261016 和 single-core-handoff-20261016 归档；五仓最终配置及 canonical24 隔离验证入口。
+- Blocking Issues / Handoff Notes：尚无环境阻碍；最终验证/正式新 SDK 发布仍未完成，工程 NOT ACCEPTED。本恢复分支尚未合入共享 main；不将推送检查点当作集成或验收完成。Norm/Runtime/R>1/busy 未解项目按真实依赖继续。
+
+## 此前已保存交接记录（保留原始验证范围）
+
+## 当前有效交接：唯一Core迁移已安全保存，未激活（2026-10-16）
+
+交接归档分支`codex/die-core-handoff-20261016`；写入前HEAD/远端main均`41f119135fd2d4cc87292f59b4b00adc918eece0`。
+全部迁移源码已推送远端`codex/die-single-core-20261016`，实现`96c4e9475792293814608c93b2dc383a6c1cb09e`，
+最后证据提交`b8ddbcfd62e03738b0c3996444355cbbe2e99b80`。本main交接提交只增加可恢复归档及当前状态，生产源仍为原基线，
+没有将未完成W/H/五仓验证的实现强行合并。无PR；以包含本节的main提交及远端查询为最终归档身份。
+恢复入口：[完整归档](analysis/single-core-handoff-20261016/README.md)。
 
 - 工作分支 `codex/die-single-core-20261016`，独立工作树；接手及交接fetch确认main为 `41f119135fd2d4cc87292f59b4b00adc918eece0`。原 `codex/die-continue-20261016` 的未提交长行/数值实验没有覆盖，全部有效新增源码、patch和raw已归档 `analysis/pre-core-migration-20261016/`（656文件、manifest）。
 - 最新硬件权威为根 `架构建模_单Core版_严格复核修订.docx`，SHA `b4382bc7a655b7a3bf9a531b583ce8b52f8d1036883796db8a52b26b4cae4ad3`；旧MD已由用户删除。已写唯一Core32行/L0=a、删除类型分支及型号设计、公共旧字段明确拒绝、相关文档迁移。解析路线/10%目标与有据20%规则/速度合同保留。

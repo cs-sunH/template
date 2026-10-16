@@ -1,10 +1,20 @@
 # die 子项目：项目说明与验收标准
 
+## 2026-10-16当前交接指针
+
+用户新DOCX`架构建模_单Core版_严格复核修订.docx`只有一种Core设计。唯一Core迁移、32行/L0=a、移除类型选择及文档更新已完整保存至远端`codex/die-single-core-20261016`，最后提交`b8ddbcfd62e03738b0c3996444355cbbe2e99b80`。用户进一步授权10×10、25×32mm/800mm²、0.75MiB/B512作为TX8矩阵操作率工程对照；126.6INT4TOPS只数值接近128BF16TFLOPS参考，不等效实测，Vec/存储未匹配，不改变先验或校准身份。
+
+用户随后要求立即停止。最终公共元数据/工程点fixture及三仓最新W/H范围未验完，不激活到main、不发布五仓SDK。完整源码/测试/raw在main的`analysis/single-core-handoff-20261016`可恢复归档中，已核对补丁可在41f1191应用。请先读[HANDOFF](HANDOFF.md)并按其有效Next Step继续；下方历史设计/验收记录不代表本次硬件迁移已完成或当前实现已验收。
+
 ## 仓库与范围
 
 - GitHub：`cs-sunH/template`；公共仿真源 `die/`；共享集成基线 `main`。
 - 两个独立 Codex Cloud 账号按 AGENTS 接力，以已合并代码与 HANDOFF 为共享状态，不共享原始 Session。
 - 原用户需求包含五仓薄适配（wscllm、wscllm-LRU、face、face-LRU、joint），接入按公共源验证、固定版本发布、逐仓构建及业务回归推进；跨目录修改须说明必要性并验证各仓业务差异。
+
+## 当前恢复状态（2026-10-16）
+
+用户已恢复持续开发。从已推送迁移 b8ddbcf 建立 codex/die-core-resume-20261016，安全整合 main d3a64a6 独有交接资料；最终公共源码与五仓迁移验证进行中，正式 SDK 未发布，工程 NOT ACCEPTED。下方带日期停止/检查点均按历史范围阅读，最新操作以 HANDOFF 顶部为准。
 
 ## 项目目标
 
