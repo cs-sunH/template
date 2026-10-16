@@ -1,0 +1,10 @@
+Internal ctest changing into directory: /workspace/template/work/build-runtime-ab-release
+Test project /workspace/template/work/build-runtime-ab-release
+    Start 1: coarse_runtime_subunit_credit_test
+1/2 Test #1: coarse_runtime_subunit_credit_test .........   Passed    0.08 sec
+    Start 2: coarse_runtime_snapshot_split_owner_test
+2/2 Test #2: coarse_runtime_snapshot_split_owner_test ...   Passed    1.43 sec
+
+100% tests passed, 0 tests failed out of 2
+
+Total Test time (real) =   1.52 sec

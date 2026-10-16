@@ -1,0 +1,7 @@
+{
+  "no_hint_feasible_4ulp_low_rejection": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=9.999999999999995559108e-01 rebuilt_rate=1.000000000000000000000e+00 saved_alpha=1.000000000000000000000e+00 rebuilt_alpha=1.000000000000000000000e+00",
+  "no_hint_parent_unchanged": true,
+  "owner_limit_rejection": "invalid_snapshot: redundant-row witness exceeds 32 fair owners",
+  "passed": true,
+  "row_limit_rejection": "invalid_snapshot: redundant-row witness exceeds 64 extra rows"
+}
