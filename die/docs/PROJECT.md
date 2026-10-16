@@ -1,5 +1,10 @@
 # die 子项目：项目说明与验收标准
 
+## 当前持续开发（2026-10-16）
+
+用户已恢复持续自主开发。`codex/die-runtime-continue-20261016` 从恢复分支2750e24安全接续并普通合并main94d1978，A+B全新Release完整53/53通过，fresh main两新测试实际red；公开API/8真实轨迹除修复的fork外逐字段相同。严格矩阵78/84保留六舍入失败，两套正常30性能均failed；新组合五仓验证和当前Core七epoch Norm数值修复仍进行中。有效状态以[HANDOFF顶部](HANDOFF.md)为准，下方停止状态均为历史。正式SDK仍canonical24，工程NOT ACCEPTED。
+
+
 ## 最新停止交接指针（2026-10-16）
 
 用户已要求立即停止。未验收 Runtime A+B 源码已远端保存于 `codex/die-core-resume-20261016@6f01a6af1dc8976a8124d754e40446edbcd0b443`，后续纯归档提交保存全部部分成果；组合源码 fresh构建/CTest/API/预算均not_run。main已激活唯一Core，未激活此次Runtime组合；正式SDK未发布，工程NOT ACCEPTED。恢复入口为[HANDOFF最新停止章节](HANDOFF.md)。下方持续研发描述均为停止前历史状态。

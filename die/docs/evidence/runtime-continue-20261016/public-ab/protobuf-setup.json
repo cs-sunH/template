@@ -1,0 +1,27 @@
+[
+  {
+    "url": "https://deb.debian.org/debian/pool/main/p/protobuf/protobuf-compiler_3.21.12-11+deb13u1_amd64.deb",
+    "sha256": "62c6085aeeb8cbcb16747fcf7170aaddcff344874a3aa60a272e423cbeb89b3a",
+    "status": "extracted"
+  },
+  {
+    "url": "https://deb.debian.org/debian/pool/main/p/protobuf/libprotobuf-dev_3.21.12-11+deb13u1_amd64.deb",
+    "sha256": "c0328550b6ccd7b09d4e50bc2b325a43638bf8fa5f74148ab6e63d49af7543f3",
+    "status": "extracted"
+  },
+  {
+    "url": "https://deb.debian.org/debian/pool/main/p/protobuf/libprotoc32t64_3.21.12-11+deb13u1_amd64.deb",
+    "sha256": "8a96715498f10f8e166411248164448c9a892fa1d5b25f1e02a93ea668fa72aa",
+    "status": "extracted"
+  },
+  {
+    "url": "https://deb.debian.org/debian/pool/main/p/protobuf/libprotobuf-lite32t64_3.21.12-11+deb13u1_amd64.deb",
+    "sha256": "74ed82b17475a1411ac79b27bd8b0223b3727d55660f77b8a5f6d5598e2dd7c2",
+    "status": "extracted"
+  },
+  {
+    "url": "https://deb.debian.org/debian/pool/main/p/protobuf/libprotobuf32t64_3.21.12-11+deb13u1_amd64.deb",
+    "sha256": "38c43ec79a043d2b2659fed321725049a7e457096a66691cf6eb0d3a1a8f0e85",
+    "status": "extracted"
+  }
+]

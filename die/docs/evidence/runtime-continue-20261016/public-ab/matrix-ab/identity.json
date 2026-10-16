@@ -1,0 +1,186 @@
+{
+  "build": "/workspace/template/work/build-runtime-ab-release",
+  "scope": "actual explicit-library synthetic probes; no hardware calibration",
+  "source_sha256": {
+    "/workspace/template/work/build-runtime-ab-release/libcoarse_die.a": "2555dff153b393a303a6a0899638993bd439e84ec15247f46b4fb2014e74f19c",
+    "/workspace/template/die/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+    "/workspace/template/die/docs/analysis/runtime-continue-20261016/run_matrix.py": "95787896b2aa059a14b5fe284f133f67b3efded53ca86aecc130dddef0ff5bca",
+    "/workspace/template/die/include/coarse_die/Prediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "/workspace/template/die/include/coarse_die/Memory.hh": "0a3fc4aa58d1ecd2fedb8248d55080b9d30a12b7a476864a37f9b44d6e20022c",
+    "/workspace/template/die/include/coarse_die/Execution.hh": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+    "/workspace/template/die/include/coarse_die/Plan.hh": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+    "/workspace/template/die/include/coarse_die/Hardware.hh": "629892410d0b77172fedb13f8eaf1633204eea5f9650ca2bf7469cbf20f0011c",
+    "/workspace/template/die/configs/tx8_compute_matched_hardware.json": "90941cc259673d144c2d17c1ee44d08837270de802d99a9307d426afee81bb5c",
+    "/workspace/template/die/configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+    "/workspace/template/die/configs/example_hardware.json": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a",
+    "/workspace/template/die/configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+    "/workspace/template/die/configs/core32.json": "e89d353e29ffec23c50590d81344f44dd5b0d424c8361521ddf79fbe32c70986",
+    "/workspace/template/die/configs/example_hardware_explicit.json": "b275a326cceec297073a291ba230a9f0c8aeee21fbeb61454cebff8679ca4b3e",
+    "/workspace/template/die/configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+    "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/tests/coupled_credit_driver.cc": "dd84ef2076390cecfd0c0b07ed9ff68d46317e00d979e2e1dc13eed639700127",
+    "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/tests/asymmetric_credit_driver.cc": "e39e0627e50bf0cbe9bad5ae253e353307fa6cd4dead7c4a2f1c59a7b034a778",
+    "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/runners/coupled_credit_oracle.py": "aa7bb6051f91e037b255f76c5212a1f72b847dc5940cc526d60f500beec5fb9a",
+    "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/runners/asymmetric_credit_oracle.py": "ec1370d145d41d40954aeae9a20b96a9b835c37c2e42d6538137e458288a3685",
+    "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/runners/assess_coupled.py": "6e3c2be36417cd4dec0a3fecfcc07e839c8b410ec42dbad38424890a67cb1c08",
+    "/workspace/template/die/docs/analysis/core-resume-20261016/snapshot-import/guards.cc": "24f01a9fb055aa66544657b1860b7ad6a644629411d474885f1e83be43ab99ce"
+  },
+  "steps": [
+    {
+      "label": "coupled-compile",
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-O3",
+        "-DNDEBUG",
+        "-I",
+        "/workspace/template/die/tests",
+        "-I",
+        "/workspace/template/die/include",
+        "-I",
+        "/workspace/template/astra-sim-wscllm/extern/helper",
+        "-DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/die\"",
+        "-DCOARSE_DIE_ROOT_DIR=\"/workspace/template\"",
+        "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/tests/coupled_credit_driver.cc",
+        "/workspace/template/work/build-runtime-ab-release/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/runtime-continue/matrix-ab/coupled_driver"
+      ],
+      "started_unix": 1792159414.2878466,
+      "return_code": 0,
+      "finished_unix": 1792159421.9388428,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "coupled-driver",
+      "command": [
+        "/workspace/template/work/runtime-continue/matrix-ab/coupled_driver"
+      ],
+      "started_unix": 1792159421.9414005,
+      "return_code": 0,
+      "finished_unix": 1792159422.6084776,
+      "stdout_sha256": "1eec5bda3c0e9a7d43655fb053ac9ce2c44fb063ba07dfc80fcbe8c7942d070f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "coupled-oracle",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/runners/coupled_credit_oracle.py",
+        "/workspace/template/work/runtime-continue/matrix-ab/coupled-driver.stdout.log",
+        "/workspace/template/work/runtime-continue/matrix-ab/coupled-results.json"
+      ],
+      "started_unix": 1792159422.622342,
+      "return_code": 1,
+      "finished_unix": 1792159423.0382714,
+      "stdout_sha256": "c9578520211e7abcb0a0e5f24aee5b3aff0d2636d1c70f3b6650233ef42b1621",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "asymmetric-compile",
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-O3",
+        "-DNDEBUG",
+        "-I",
+        "/workspace/template/die/tests",
+        "-I",
+        "/workspace/template/die/include",
+        "-I",
+        "/workspace/template/astra-sim-wscllm/extern/helper",
+        "-DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/die\"",
+        "-DCOARSE_DIE_ROOT_DIR=\"/workspace/template\"",
+        "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/tests/asymmetric_credit_driver.cc",
+        "/workspace/template/work/build-runtime-ab-release/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/runtime-continue/matrix-ab/asymmetric_driver"
+      ],
+      "started_unix": 1792159423.0387256,
+      "return_code": 0,
+      "finished_unix": 1792159430.1810274,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "asymmetric-driver",
+      "command": [
+        "/workspace/template/work/runtime-continue/matrix-ab/asymmetric_driver"
+      ],
+      "started_unix": 1792159430.1832058,
+      "return_code": 0,
+      "finished_unix": 1792159431.3508322,
+      "stdout_sha256": "a2d3ffac0f1020a451c5a28c36ebf875b5687c36c1313e77accd814a0e28db04",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "asymmetric-oracle",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/template/die/docs/analysis/core-resume-20261016/runtime-subunit/runners/asymmetric_credit_oracle.py",
+        "/workspace/template/work/runtime-continue/matrix-ab/asymmetric-driver.stdout.log",
+        "/workspace/template/work/runtime-continue/matrix-ab/asymmetric-results.json"
+      ],
+      "started_unix": 1792159431.3649893,
+      "return_code": 0,
+      "finished_unix": 1792159431.881345,
+      "stdout_sha256": "ac2564147c5561c130fdceedce0eb215030bff3a9a7f0c639b5eb0755b55f40f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "layered-assessment",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "/workspace/template/work/runtime-continue/matrix-ab/assess_coupled.py"
+      ],
+      "started_unix": 1792159431.8824582,
+      "return_code": 0,
+      "finished_unix": 1792159435.3308609,
+      "stdout_sha256": "e53c6a976b470ef49e50fd3a50914e673741f6f270e01fcede83cd509b2c9386",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "snapshot-guards-compile",
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-O3",
+        "-DNDEBUG",
+        "-I",
+        "/workspace/template/die/tests",
+        "-I",
+        "/workspace/template/die/include",
+        "-I",
+        "/workspace/template/astra-sim-wscllm/extern/helper",
+        "-DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/die\"",
+        "-DCOARSE_DIE_ROOT_DIR=\"/workspace/template\"",
+        "/workspace/template/die/docs/analysis/core-resume-20261016/snapshot-import/guards.cc",
+        "/workspace/template/work/build-runtime-ab-release/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/runtime-continue/matrix-ab/snapshot_guards"
+      ],
+      "started_unix": 1792159435.3317978,
+      "return_code": 0,
+      "finished_unix": 1792159441.0130773,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "snapshot-guards",
+      "command": [
+        "/workspace/template/work/runtime-continue/matrix-ab/snapshot_guards"
+      ],
+      "started_unix": 1792159441.0147498,
+      "return_code": 0,
+      "finished_unix": 1792159441.0471754,
+      "stdout_sha256": "77bed59721340554289d08232ca2190eb0c745769b09a961c1e7e195d62078a4",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "executable_sha256": {
+    "coupled": "21e2e43c2313f9bff33f4c0705f712e30ef354da535df444cf02a3eedfc7a631",
+    "asymmetric": "4ac682eb78141a81ed4be58944b4983bd95502c7fa83d678b04fe976a88ad556",
+    "snapshot_guards": "aa45d9efb10d107720602f06bdf71213950ea72ba28a3fccf3b6f26c77204b61"
+  },
+  "inputs_unchanged": true
+}

@@ -1,0 +1,98 @@
+{
+  "scope": "fresh main baseline; unchanged new tests; failures retained",
+  "sha256": {
+    "/workspace/template/work/build-runtime-baseline-release/libcoarse_die.a": "e12c029d3a574b234a2bbcd52139d7ab94dccb040e281cfe71ab85fe31afa599",
+    "/workspace/template/work/build-runtime-baseline-release/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "/workspace/template/die/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+    "/workspace/template/work/runtime-baseline-source/die/include/coarse_die/Execution.hh": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea",
+    "/workspace/template/die/tests/fixtures/snapshot_split_owner.json": "1a18afa4add09566c626ec12896f7bd7bb367f451023d316509e24dc990ee286",
+    "/workspace/template/die/docs/analysis/runtime-continue-20261016/run_baseline_red.py": "ea0e50ade307749b8eb6632979e4abe8ba2a48890adf533312ef1cdd8da6e33f",
+    "/workspace/template/die/tests/runtime_subunit_credit_test.cc": "20dbbbab2d0568aba148b22e63d1e519d5925b61ad1d0e1b2fc435335c41fb9b",
+    "/workspace/template/die/tests/runtime_snapshot_split_owner_test.cc": "651baa3ff8b9e3d00f85382049a748c7135f905f3ff36cec6fb98451a24df7d3"
+  },
+  "steps": [
+    {
+      "label": "runtime_subunit_credit_test-compile",
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-O3",
+        "-DNDEBUG",
+        "-I",
+        "/workspace/template/die/tests",
+        "-I",
+        "/workspace/template/work/runtime-baseline-source/die/include",
+        "-I",
+        "/workspace/template/astra-sim-wscllm/extern/helper",
+        "-DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/die\"",
+        "-DCOARSE_DIE_ROOT_DIR=\"/workspace/template\"",
+        "/workspace/template/die/tests/runtime_subunit_credit_test.cc",
+        "/workspace/template/work/build-runtime-baseline-release/libcoarse_die.a",
+        "/workspace/template/work/build-runtime-baseline-release/lib/libcoarse_die_cabi.so",
+        "-Wl,-rpath,/workspace/template/work/build-runtime-baseline-release/lib",
+        "-o",
+        "/workspace/template/work/runtime-continue/baseline-red/runtime_subunit_credit_test"
+      ],
+      "return_code": 0,
+      "started_unix": 1792159192.6804204,
+      "finished_unix": 1792159206.3795667,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "runtime_subunit_credit_test-test",
+      "command": [
+        "/workspace/template/work/runtime-continue/baseline-red/runtime_subunit_credit_test"
+      ],
+      "return_code": 1,
+      "started_unix": 1792159206.3796742,
+      "finished_unix": 1792159206.4283016,
+      "log_sha256": "6490dcb33ae3fddde24199ca765f9802bf35aa15b9a00b489ae39188d31c5195"
+    },
+    {
+      "label": "runtime_snapshot_split_owner_test-compile",
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-O3",
+        "-DNDEBUG",
+        "-I",
+        "/workspace/template/die/tests",
+        "-I",
+        "/workspace/template/work/runtime-baseline-source/die/include",
+        "-I",
+        "/workspace/template/astra-sim-wscllm/extern/helper",
+        "-DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/die\"",
+        "-DCOARSE_DIE_ROOT_DIR=\"/workspace/template\"",
+        "/workspace/template/die/tests/runtime_snapshot_split_owner_test.cc",
+        "/workspace/template/work/build-runtime-baseline-release/libcoarse_die.a",
+        "/workspace/template/work/build-runtime-baseline-release/lib/libcoarse_die_cabi.so",
+        "-Wl,-rpath,/workspace/template/work/build-runtime-baseline-release/lib",
+        "-o",
+        "/workspace/template/work/runtime-continue/baseline-red/runtime_snapshot_split_owner_test"
+      ],
+      "return_code": 0,
+      "started_unix": 1792159206.446357,
+      "finished_unix": 1792159228.9878426,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "runtime_snapshot_split_owner_test-test",
+      "command": [
+        "/workspace/template/work/runtime-continue/baseline-red/runtime_snapshot_split_owner_test"
+      ],
+      "return_code": 1,
+      "started_unix": 1792159228.9879878,
+      "finished_unix": 1792159229.0790403,
+      "log_sha256": "610cbf04134b46327aaf34acd4a353373a9bcc60cf681c7557ef195d274db133"
+    }
+  ],
+  "executable_sha256": {
+    "runtime_subunit_credit_test": "17f2604c2e91ff14fd191378c68f9c2b38d4f1db35e602baaf216fe18f24d3fa",
+    "runtime_snapshot_split_owner_test": "804dbde416a9997631d25395c209ffb7faf7506432dbdbfa38e9cf54505e359a"
+  },
+  "ldd": {
+    "runtime_subunit_credit_test": "\tlinux-vdso.so.1 (0x00007fb2d12b7000)\n\tlibstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007fb2d0f66000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fb2d0e76000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fb2d0e49000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fb2d0c55000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007fb2d12b9000)\n",
+    "runtime_snapshot_split_owner_test": "\tlinux-vdso.so.1 (0x00007f7ee0ba8000)\n\tlibcoarse_die_cabi.so => /workspace/template/work/build-runtime-baseline-release/lib/libcoarse_die_cabi.so (0x00007f7ee095b000)\n\tlibstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007f7ee06d2000)\n\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f7ee05e2000)\n\tlibgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007f7ee05b5000)\n\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f7ee03bf000)\n\t/lib64/ld-linux-x86-64.so.2 (0x00007f7ee0baa000)\n"
+  },
+  "inputs_unchanged": true
+}

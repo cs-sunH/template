@@ -1,0 +1,78 @@
+{
+  "schema": "runtime_ab_current_checkpoint_v1",
+  "scope": "fresh public A+B only; SDK/engineering not accepted",
+  "source_head_before_docs": "18de6809ca8134d3e4503b5fc89f6fe8922ed439",
+  "public_tests": {
+    "passed": 53,
+    "failed": 0,
+    "seconds": 29.65
+  },
+  "baseline_new_regressions": {
+    "compiled": 2,
+    "failed_as_expected": 2
+  },
+  "exact_matrix": [
+    {
+      "family": "coupled",
+      "count": 48,
+      "passed": 42,
+      "failed": 6
+    },
+    {
+      "family": "asymmetric",
+      "count": 36,
+      "passed": 36,
+      "failed": 0
+    }
+  ],
+  "api": {
+    "configs": 2,
+    "inputs_per_config": 28,
+    "real_traces": 8,
+    "ordinary_differences": 0,
+    "repaired_fork": 1,
+    "unchanged_cabi_symbols": 28
+  },
+  "performance": {
+    "example": [
+      {
+        "case": "gemm_128x128x128.cpp_cold_compile_uncached",
+        "reason": "fixed percentile latency gate was exceeded"
+      },
+      {
+        "case": "residual_257.cpp_cold_compile_uncached",
+        "reason": "fixed percentile latency gate was exceeded"
+      },
+      {
+        "case": "residual_257.cabi_hot_cost_only",
+        "reason": "fixed percentile latency gate was exceeded"
+      },
+      {
+        "case": "heterogeneous_j8",
+        "reason": "fixed 50us single-update percentile gate was exceeded"
+      }
+    ],
+    "tx8": [
+      {
+        "case": "gemm_128x128x128.cpp_cold_compile_uncached",
+        "reason": "fixed percentile latency gate was exceeded"
+      },
+      {
+        "case": "swiglu_16x4097.cpp_cold_compile_uncached",
+        "reason": "fixed percentile latency gate was exceeded"
+      },
+      {
+        "case": "swiglu_16x4097.cabi_hot_cost_only",
+        "reason": "fixed percentile latency gate was exceeded"
+      },
+      {
+        "case": "compiled_os_credit_curve_bulk_j8",
+        "reason": "fixed 50us single-update percentile gate was exceeded"
+      }
+    ]
+  },
+  "static_library_sha256": "2555dff153b393a303a6a0899638993bd439e84ec15247f46b4fb2014e74f19c",
+  "cabi_library_sha256": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+  "formal_sdk": "unchanged canonical24; publisher not_run",
+  "engineering_status": "NOT ACCEPTED"
+}
