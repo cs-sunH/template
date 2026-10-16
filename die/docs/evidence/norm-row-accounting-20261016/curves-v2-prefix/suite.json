@@ -1,0 +1,935 @@
+{
+  "scope": "32 small offline cases/96 scenarios, cached BF16 row model, no calibration",
+  "driver_sha256": "d57654824057ccc9eb8a10ddb3bab319a7b92a820bef8c060eecd8f756bb1c48",
+  "runner_sha256": "fa9202eca45fbf3f78ca0222e4ae61de918a44ab5cded8f6af789b86945bb5ea",
+  "cases": [
+    {
+      "case": "rmsnorm-rows1-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "1",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows1-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows1-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows1-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "1",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows1-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows1-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows1-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "1",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows1-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows1-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows1-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "1",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows1-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows1-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows2-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "2",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows2-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows2-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows2-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "2",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows2-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows2-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows2-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "2",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows2-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows2-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows2-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "2",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows2-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows2-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows3-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "3",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows3-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows3-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows3-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "3",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows3-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows3-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows3-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "3",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows3-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows3-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows3-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "3",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows3-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows3-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "rmsnorm-rows5-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "5",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows5-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows5-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows5-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "5",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows5-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows5-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows5-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "5",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows5-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows5-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows5-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "5",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows5-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows5-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows17-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "17",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows17-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows17-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows17-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "17",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows17-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows17-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows17-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "17",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows17-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows17-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows17-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "17",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows17-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows17-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows65-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "65",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows65-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows65-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows65-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "65",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows65-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows65-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows65-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "65",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows65-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows65-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows65-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "65",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows65-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows65-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows257-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "257",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows257-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows257-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows257-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "257",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows257-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows257-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows257-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "257",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows257-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows257-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-rows257-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "257",
+        "--hidden",
+        "257",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows257-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/rmsnorm-rows257-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "layernorm-rows2-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "2",
+        "--hidden",
+        "257",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/layernorm-rows2-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/layernorm-rows2-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "layernorm-rows2-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "2",
+        "--hidden",
+        "257",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/layernorm-rows2-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/layernorm-rows2-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "passed_target_10_percent",
+        "solo": "passed_target_10_percent",
+        "sync": "passed_target_10_percent"
+      }
+    },
+    {
+      "case": "layernorm-rows17-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "17",
+        "--hidden",
+        "257",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/layernorm-rows17-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/layernorm-rows17-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "layernorm-rows17-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+        "--rows",
+        "17",
+        "--hidden",
+        "257",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_row_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/layernorm-rows17-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-row-accounting-20261016/curves-v2-prefix/layernorm-rows17-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    }
+  ]
+}

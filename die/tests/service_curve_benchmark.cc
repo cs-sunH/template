@@ -312,7 +312,7 @@ Json compile_query_fixture(const Hardware& hardware, const Json& config,
     result["metrics"]["cpp_cold_compile_uncached"]["same_plan_hash_each_call"] =
         cpp_hash_stable;
     const auto op=task.value("op_kind",std::string());
-    const bool regular=op=="gemm"||op=="residual"||op=="mlp_activation";
+    const bool regular=op=="gemm"||op=="norm"||op=="residual"||op=="mlp_activation";
     result["metrics"]["cpp_cold_compile_uncached"]["acceptance_applies"] = regular;
     result["metrics"]["cpp_cold_compile_uncached"]["scope"] =
         regular ? "regular_compile" : "composite_kernel_reported_separately_per_design_13";
@@ -951,6 +951,10 @@ int main(int argc, char** argv) {
         {"residual_257", {{"op_kind","residual"},{"tensor_shapes",{{"m",1},{"hidden",257}}},
             {"storage_dtype","int4"},{"execution_profile",profile}}},
         {"swiglu_16x4097", {{"op_kind","mlp_activation"},{"tensor_shapes",{{"m",16},{"ffn",4097}}},
+            {"storage_dtype","bf16"},{"execution_profile",profile}}},
+        {"norm_8x4096_cached", {{"op_kind","norm"},{"tensor_shapes",{{"m",8},{"hidden",4096}}},
+            {"storage_dtype","bf16"},{"execution_profile",profile}}},
+        {"norm_128x19569_streamed_parameters", {{"op_kind","norm"},{"tensor_shapes",{{"m",128},{"hidden",19569}}},
             {"storage_dtype","bf16"},{"execution_profile",profile}}},
         {"example_attention", attention}};
 

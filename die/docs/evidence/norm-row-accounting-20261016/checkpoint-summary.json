@@ -1,0 +1,201 @@
+{
+  "observed_git_head": "089c7db92a74d29dcd924e4f2a8d25d08eaa1663",
+  "scope": "Norm one-pass row-resident accounting and bounded curves, not independent hardware calibration or five-consumer release",
+  "collector_sha256": "36aeb5576d72457d7913e633f3be16fd2e8a9d8c119c038ee26358c149c50562",
+  "current_mapping_sha256": "e834fc504c621fd3629920d9e1b709c65b216bb67f1d0f2e039bf1d8fbf6d52a",
+  "public_full_tests": {
+    "return_code": 0,
+    "tests_run": 48
+  },
+  "current_expanded_norm_test": {
+    "return_code": 0,
+    "tests_run": 1,
+    "current_fixture_matches": true
+  },
+  "model_source_matches_test_benchmark_oracle": true,
+  "public_full_other_test_sources_still_match": true,
+  "scope_of_test_changes_after_full_48": "only Norm fixture strengthened (54 odd/streamed cases and per-Core physical slot grids), and separate benchmark gained two Norm cases; unchanged 47 suites reused with source checks",
+  "old_model_final_same_test_return_code": 1,
+  "accuracy": {
+    "curves-v1": {
+      "completion_and_original_busy": {
+        "failed": 78,
+        "passed_target_10_percent": 18
+      },
+      "completion_scenarios": {
+        "target_10": 88,
+        "within20_unaccepted": 8
+      },
+      "first_output_observations": {
+        "target_10": 153,
+        "within20_unaccepted": 7
+      },
+      "max_cpp_event_advances": 16,
+      "error_maxima": {
+        "completion": {
+          "relative": 0.1956521913043478,
+          "absolute_s": 0.020000000777908866
+        },
+        "first_output": {
+          "relative": 0.18887406515787125,
+          "absolute_s": 0.005000000363636362
+        },
+        "busy": {
+          "relative": 19359.814797325507,
+          "absolute_s": 46.32026207717964
+        }
+      },
+      "calibration": "model_to_model_only_not_hardware",
+      "within20_accepted": false
+    },
+    "curves-v2-prefix": {
+      "completion_and_original_busy": {
+        "failed": 54,
+        "passed_target_10_percent": 42
+      },
+      "completion_scenarios": {
+        "target_10": 96
+      },
+      "first_output_observations": {
+        "target_10": 160
+      },
+      "max_cpp_event_advances": 20,
+      "error_maxima": {
+        "completion": {
+          "relative": 0.014801172093023366,
+          "absolute_s": 0.0031822520000000243
+        },
+        "first_output": {
+          "relative": 0.07269458305244475,
+          "absolute_s": 0.0020769233636363515
+        },
+        "busy": {
+          "relative": 19303.15291459616,
+          "absolute_s": 46.14853259226274
+        }
+      },
+      "calibration": "model_to_model_only_not_hardware",
+      "within20_accepted": false
+    }
+  },
+  "benchmark_status": "failed",
+  "benchmark_failures": [
+    {
+      "case": "gemm_128x128x128.cpp_cold_compile_uncached",
+      "reason": "fixed percentile latency gate was exceeded"
+    },
+    {
+      "case": "gemm_128x128x128.cabi_hot_cost_only",
+      "reason": "fixed percentile latency gate was exceeded"
+    },
+    {
+      "case": "compiled_os_credit_curve_bulk_j32",
+      "reason": "fixed 50us single-update percentile gate was exceeded"
+    }
+  ],
+  "norm_performance": {
+    "norm_8x4096_cached": {
+      "cabi_hot_alternating_alias_compile_batch": {
+        "p95_ns": 3115,
+        "fixed_threshold_ns": 20000,
+        "passed": true
+      },
+      "cabi_hot_compile_batch": {
+        "p95_ns": 2984,
+        "fixed_threshold_ns": 20000,
+        "passed": true
+      },
+      "cabi_hot_cost_only": {
+        "p95_ns": 4256,
+        "fixed_threshold_ns": 20000,
+        "passed": true
+      },
+      "cabi_hot_semantic_alias_compile_batch": {
+        "p95_ns": 2974,
+        "fixed_threshold_ns": 20000,
+        "passed": true
+      },
+      "cpp_cold_compile_uncached": {
+        "p95_ns": 365339,
+        "fixed_threshold_ns": 2000000,
+        "passed": true
+      }
+    },
+    "norm_128x19569_streamed_parameters": {
+      "cabi_hot_alternating_alias_compile_batch": {
+        "p95_ns": 2934,
+        "fixed_threshold_ns": 20000,
+        "passed": true
+      },
+      "cabi_hot_compile_batch": {
+        "p95_ns": 2984,
+        "fixed_threshold_ns": 20000,
+        "passed": true
+      },
+      "cabi_hot_cost_only": {
+        "p95_ns": 4426,
+        "fixed_threshold_ns": 20000,
+        "passed": true
+      },
+      "cabi_hot_semantic_alias_compile_batch": {
+        "p95_ns": 3365,
+        "fixed_threshold_ns": 20000,
+        "passed": true
+      },
+      "cpp_cold_compile_uncached": {
+        "p95_ns": 428994,
+        "fixed_threshold_ns": 2000000,
+        "passed": true
+      }
+    }
+  },
+  "formal_sdk": {
+    "astra-sim-face": {
+      "digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+      "files": 24,
+      "actual_files_match_manifest": true
+    },
+    "astra-sim-face-LRU": {
+      "digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+      "files": 24,
+      "actual_files_match_manifest": true
+    },
+    "astra-sim-wscllm": {
+      "digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+      "files": 24,
+      "actual_files_match_manifest": true
+    },
+    "astra-sim-wscllm-LRU": {
+      "digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+      "files": 24,
+      "actual_files_match_manifest": true
+    },
+    "astra-sim-joint": {
+      "digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+      "files": 24,
+      "actual_files_match_manifest": true
+    }
+  },
+  "fresh_final_oracle_raw_content_matches_retained_v2": true,
+  "final_oracle_actual_files": 128,
+  "os_update_p95_ns": {
+    "compiled_os_credit_curve_bulk_j1": 30696,
+    "compiled_os_credit_curve_bulk_j8": 48862,
+    "compiled_os_credit_curve_bulk_j32": 57145
+  },
+  "unaffected_actual_public_cases": {
+    "count": 7,
+    "complete_objects_exactly_equal": true
+  },
+  "v1_patch_reconstructs_actual_tested_source": true,
+  "public_library_sha256": {
+    "libcoarse_die_cabi.so": "95e02c551a971fe92367e16df782969371202d36b1ac7ae1725d34b6fdd4d588",
+    "libcoarse_die.a": "1509ff3019327b36e4d2b7c755000e4a6d564cdaf75c797f12e800401468333c"
+  },
+  "current_libraries_still_match_full_tests": true,
+  "five_consumer_new_model_tests": "not_run_not_published",
+  "five_workload_cpu_budget": "not_run",
+  "independent_target_measurements": "not_available",
+  "tx8_priors": "unchanged_conditional_reference_not_target_calibration",
+  "engineering_acceptance": "NOT ACCEPTED"
+}

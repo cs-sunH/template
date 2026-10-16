@@ -1,0 +1,287 @@
+{
+  "scope": "Offline discrete rows, cached BF16 gamma/beta, one Core, one region.\n\nRow input/parameter packing, conversion visits and SRAM/LOCAL use are derived\nindependently of production curves. Reuses the previously tested 13-domain\nnonnegative grouped allocator and finite-slot row scheduling engine. Within a\nrow, statistics/apply are one serial Compute budget, the same declared macro\nassumption; this does not validate real SFU/hardware timing or long-row passes.\n",
+  "ledger_matches": true,
+  "independent_read_bytes": 2056,
+  "independent_write_bytes": 1542,
+  "scenarios": {
+    "offset": {
+      "reference": {
+        "finish_s": [
+          0.13499999999999998,
+          0.13999999999999999
+        ],
+        "first_output_ready_s": [
+          0.05198412698412698,
+          0.057222222222222216
+        ],
+        "counters": {
+          "hbm_busy_s": 0.13999999999999999,
+          "hbm_shared_s": 0.13,
+          "compute_busy_s": 0.06222222222222222,
+          "row_busy_s": [
+            0.13999999999999999,
+            0.13999999999999999
+          ],
+          "row_shared_s": [
+            0.13,
+            0.13
+          ]
+        },
+        "discrete_events": 19,
+        "invocation_materialization_barrier": true,
+        "buffer_semantics": "input_reserved_load_start_through_compute_end; output_reserved_compute_start_through_store_end"
+      },
+      "comparison": {
+        "status": "failed",
+        "completion": [
+          {
+            "actual_s": 0.133538012,
+            "reference_s": 0.13499999999999998,
+            "absolute_error_s": 0.0014619879999999696,
+            "relative_error": 0.010829540740740518,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          {
+            "actual_s": 0.14722222299999999,
+            "reference_s": 0.13499999999999998,
+            "absolute_error_s": 0.012222223000000004,
+            "relative_error": 0.09053498518518523,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "first_output_readiness": [
+          {
+            "actual_s": 0.052222223,
+            "reference_s": 0.05198412698412698,
+            "absolute_error_s": 0.00023809601587301832,
+            "relative_error": 0.004580167633587834,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          {
+            "actual_s": 0.056959065,
+            "reference_s": 0.05222222222222222,
+            "absolute_error_s": 0.004736842777777785,
+            "relative_error": 0.09070550000000013,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "busy_original_definition": {
+          "hbm_busy_s": {
+            "actual_s": 0.14,
+            "reference_s": 0.13999999999999999,
+            "absolute_error_s": 2.7755575615628914e-17,
+            "relative_error": 1.9825411154020654e-16,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "hbm_shared_s": {
+            "actual_s": 0.10157894736842105,
+            "reference_s": 0.13,
+            "absolute_error_s": 0.028421052631578958,
+            "relative_error": 0.21862348178137658,
+            "target_10_percent": false,
+            "within_20_percent": false
+          },
+          "compute_busy_s": {
+            "actual_s": 0.10722222222222222,
+            "reference_s": 0.06222222222222222,
+            "absolute_error_s": 0.045,
+            "relative_error": 0.7232142857142857,
+            "target_10_percent": false,
+            "within_20_percent": false
+          }
+        },
+        "completion_target_10_percent": true,
+        "completion_within_20_percent": true,
+        "reference_shared_hbm_s": 0.13,
+        "note": "20% is diagnostic coverage, not automatic acceptance; no calibration attempts were made"
+      }
+    },
+    "solo": {
+      "reference": {
+        "finish_s": [
+          0.07111111111111111
+        ],
+        "first_output_ready_s": [
+          0.03111111111111111
+        ],
+        "counters": {
+          "hbm_busy_s": 0.07,
+          "hbm_shared_s": 0.0,
+          "compute_busy_s": 0.03111111111111111,
+          "row_busy_s": [
+            0.07,
+            0.07
+          ],
+          "row_shared_s": [
+            0.0,
+            0.0
+          ]
+        },
+        "discrete_events": 7,
+        "invocation_materialization_barrier": true,
+        "buffer_semantics": "input_reserved_load_start_through_compute_end; output_reserved_compute_start_through_store_end"
+      },
+      "comparison": {
+        "status": "failed",
+        "completion": [
+          {
+            "actual_s": 0.081111112,
+            "reference_s": 0.07111111111111111,
+            "absolute_error_s": 0.010000000888888888,
+            "relative_error": 0.14062501249999998,
+            "target_10_percent": false,
+            "within_20_percent": true
+          }
+        ],
+        "first_output_readiness": [
+          {
+            "actual_s": 0.031111112,
+            "reference_s": 0.03111111111111111,
+            "absolute_error_s": 8.888888895774993e-10,
+            "relative_error": 2.857142859356248e-08,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "busy_original_definition": {
+          "hbm_busy_s": {
+            "actual_s": 0.07,
+            "reference_s": 0.07,
+            "absolute_error_s": 0.0,
+            "relative_error": 0.0,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "hbm_shared_s": {
+            "actual_s": 0.0,
+            "reference_s": 0.0,
+            "absolute_error_s": 0.0,
+            "relative_error": 0.0,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "compute_busy_s": {
+            "actual_s": 0.051111111111111114,
+            "reference_s": 0.03111111111111111,
+            "absolute_error_s": 0.020000000000000004,
+            "relative_error": 0.642857142857143,
+            "target_10_percent": false,
+            "within_20_percent": false
+          }
+        },
+        "completion_target_10_percent": false,
+        "completion_within_20_percent": true,
+        "reference_shared_hbm_s": 0.0,
+        "note": "20% is diagnostic coverage, not automatic acceptance; no calibration attempts were made"
+      }
+    },
+    "sync": {
+      "reference": {
+        "finish_s": [
+          0.14222222222222222,
+          0.14222222222222222
+        ],
+        "first_output_ready_s": [
+          0.06222222222222222,
+          0.06222222222222222
+        ],
+        "counters": {
+          "hbm_busy_s": 0.14,
+          "hbm_shared_s": 0.14,
+          "compute_busy_s": 0.06222222222222222,
+          "row_busy_s": [
+            0.14,
+            0.14
+          ],
+          "row_shared_s": [
+            0.14,
+            0.14
+          ]
+        },
+        "discrete_events": 7,
+        "invocation_materialization_barrier": true,
+        "buffer_semantics": "input_reserved_load_start_through_compute_end; output_reserved_compute_start_through_store_end"
+      },
+      "comparison": {
+        "status": "failed",
+        "completion": [
+          {
+            "actual_s": 0.162222223,
+            "reference_s": 0.14222222222222222,
+            "absolute_error_s": 0.020000000777777777,
+            "relative_error": 0.14062500546874998,
+            "target_10_percent": false,
+            "within_20_percent": true
+          },
+          {
+            "actual_s": 0.162222223,
+            "reference_s": 0.14222222222222222,
+            "absolute_error_s": 0.020000000777777777,
+            "relative_error": 0.14062500546874998,
+            "target_10_percent": false,
+            "within_20_percent": true
+          }
+        ],
+        "first_output_readiness": [
+          {
+            "actual_s": 0.062222223,
+            "reference_s": 0.06222222222222222,
+            "absolute_error_s": 7.777777796813545e-10,
+            "relative_error": 1.2500000030593198e-08,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          {
+            "actual_s": 0.062222223,
+            "reference_s": 0.06222222222222222,
+            "absolute_error_s": 7.777777796813545e-10,
+            "relative_error": 1.2500000030593198e-08,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "busy_original_definition": {
+          "hbm_busy_s": {
+            "actual_s": 0.14,
+            "reference_s": 0.14,
+            "absolute_error_s": 0.0,
+            "relative_error": 0.0,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "hbm_shared_s": {
+            "actual_s": 0.14,
+            "reference_s": 0.14,
+            "absolute_error_s": 0.0,
+            "relative_error": 0.0,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "compute_busy_s": {
+            "actual_s": 0.10222222222222223,
+            "reference_s": 0.06222222222222222,
+            "absolute_error_s": 0.04000000000000001,
+            "relative_error": 0.642857142857143,
+            "target_10_percent": false,
+            "within_20_percent": false
+          }
+        },
+        "completion_target_10_percent": false,
+        "completion_within_20_percent": true,
+        "reference_shared_hbm_s": 0.14,
+        "note": "20% is diagnostic coverage, not automatic acceptance; no calibration attempts were made"
+      }
+    }
+  },
+  "classification_scope": "completion plus original busy; first output reported separately",
+  "hardware_calibration": "not_available",
+  "parameters_fitted": false,
+  "raw_sha256": "c7559dda3e111673c8bf238384f3c5c7b78a6c982dead9339d27d64ecc0ad397",
+  "oracle_sha256": "829c5074a683579179b185e83888b78abd62af7c17e77093d0a877a9fdf443e3",
+  "shared_reference_sha256": "38534eaa90b2540fe1b7926197445694d89e057429f851807e5822daed5e1447"
+}

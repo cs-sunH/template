@@ -1342,20 +1342,12 @@ void add_vector(Plan& plan, Metrics& m, const Hardware& hw,
   compute.vec = eqops; compute.compute_s = compute_time(hw,0,eqops,active);
   store.work[SRAM_READ] = static_cast<long double>(as_u64(output_bytes,"vector store"));
   add_hbm(store,hw,topo,output_bytes,active,true,eta(hw,"eta_hbm_vector"));
-  // Vector kernels stream bounded per-core tiles. The aggregate tensor still
-  // determines total service work, but it is never charged as one resident
-  // SRAM allocation (which would reject ordinary large Norms).
+  // Remaining legacy vector templates stream bounded per-core tiles.
+  // Norm has its own explicit row-resident allocation and ownership below.
   const u128 tile_elems = std::min<u128>(elements,256);
   const u128 tile_input = elements ? (mul128(input_bytes,tile_elems,"vector input tile") + elements - 1) / elements : 0;
   const u128 tile_output = elements ? (mul128(output_bytes,tile_elems,"vector output tile") + elements - 1) / elements : 0;
   u128 tile_extra = elements ? (mul128(extra_input,tile_elems,"vector extra tile") + elements - 1) / elements : 0;
-  if (gets(plan.task,"op_kind")=="norm") {
-    const u64 hidden=shape_u(plan.task,"hidden",shape_u(plan.task,"h",0));
-    if (hidden) {
-      const std::string norm=gets(plan.task.at("tensor_shapes"),"norm_type","rmsnorm");
-      tile_extra=mul128(norm=="layernorm"?2:1,bytes(std::min<u128>(hidden,tile_elems),dtype(plan.task,"parameters")),"Norm parameter tile");
-    }
-  }
   const u128 tile_peak=add128(add128(mul128(2,add128(tile_input,tile_extra,"vector input tile"),"vector input slots"),mul128(2,tile_output,"vector pending output slots"),"vector live tensors"),
       mul128(tile_elems,4,"vector FP32 working tile"),"vector peak");
   const u64 elems64=as_u64(elements,"vector elements");
@@ -1366,6 +1358,230 @@ void add_vector(Plan& plan, Metrics& m, const Hardware& hw,
   m.output_rounds = add128(m.output_rounds,rounds,"vector rounds");
   const u64 waves=rounds;
   m.waves = add128(m.waves,waves,"vector waves"); m.active_cores=active; m.template_id=label;
+}
+
+// Row-resident Norm: a row is one consumption/output unit. Statistics and
+// normalization are serial work inside Compute; no row output is exposed
+// before its full Compute terminal. Input storage is reread in SRAM for the
+// application pass. Gamma/beta never broadcast for free between Cores.
+void add_norm_rows(Plan& plan, Metrics& m, const Hardware& hw,
+    const Topology& topo,u64 rows,u64 hidden,u64 executions,
+    const std::string& ad,const std::string& pd,const std::string& od,
+    bool layernorm) {
+  const u64 active=std::min(rows,du(hw,"die","core_count"));
+  const u64 rounds=ceildiv(rows,active);
+  const u64 total_rounds=as_u64(mul128(rounds,executions,"Norm rounds"),"Norm rounds");
+  const u64 total_rows=as_u64(mul128(rows,executions,"Norm rows"),"Norm rows");
+  const u64 last_rows=rows-(rounds-1)*active;
+  const u64 slots=total_rounds==1 ? 1 : 2;
+  const u128 xrow=bytes(hidden,ad),yrow=bytes(hidden,od);
+  const u64 parameters=layernorm ? 2 : 1;
+  const u128 prow=mul128(parameters,bytes(hidden,pd),"Norm separately packed parameters");
+  const u128 pconverted=mul128(mul128(parameters,hidden,"Norm parameter elements"),4,"Norm FP32 parameters");
+  const u128 work_tile=mul128(std::min<u64>(hidden,256),4,"Norm FP32 tile");
+  const u128 base_peak=add128(add128(mul128(slots,add128(xrow,yrow,"Norm row slots"),"Norm row slots"),
+      work_tile,"Norm row working set"),80,"Norm reduction state and metadata");
+  const long double capacity=perf(hw,"rho_sram",0.9)*dd(hw,"core","sram_bytes_per_core");
+  // Source data expands in-place backwards into the allocated FP32 parameter
+  // buffer. Reuse is within one region only. Repeated-region boundaries have
+  // no production timing representation yet and keep a diagnostic body.
+  const bool cached=executions==1 && static_cast<long double>(add128(base_peak,pconverted,"Norm cache peak"))<=capacity;
+  const u128 parameter_buffer=cached ? pconverted : mul128(parameters,work_tile,"Norm streamed parameter tiles");
+  const u128 peak=add128(base_peak,parameter_buffer,"Norm SRAM peak");
+  if(static_cast<long double>(peak)>capacity)
+    fail("unsupported_workspace: Norm row-resident buffers require "+std::to_string(as_u64(peak,"Norm required SRAM"))+
+        " bytes per Core, exceeding configured usable SRAM; a two-pass HBM row template is not implemented");
+  for(u64 units:{total_rounds,total_rounds-1,total_rounds>1 ? total_rounds-2 : 0})
+    if(static_cast<long double>(static_cast<double>(units))!=static_cast<long double>(units))
+      fail("overflow: Norm cumulative row credit is not exactly representable");
+  const auto private_bytes=[&](u128 n,std::size_t resource) {
+    const long double rate=hw.rates[resource]/du(hw,"die","core_count");
+    if(!(rate>0))fail("invalid_hardware: Norm per-Core byte rate is zero");
+    return static_cast<long double>(as_u64(n,"Norm serial bytes"))/rate;
+  };
+  // Fixed uniform prefix plus final partial prefix, with invocation-local RR
+  // ownership. No row/Core loop and no assumption that a partial cohort has
+  // the full grid's aggregate private throughput.
+  const auto io=[&](u64 count,u64 repeats,u128 row_bytes,bool write) {
+    Flow f;
+    const auto group=[&](u64 cores,u128 payload) {
+      if(!payload)return;
+      const u64 n=as_u64(payload,"Norm route group");
+      for(std::size_t row=0;row<2;++row) {
+        const u64 amount=n/2+(row==0 ? n%2 : 0);
+        f.hbm[row][write ? 1 : 0]=add128(f.hbm[row][write ? 1 : 0],amount,"Norm HBM bytes");
+        f.work[row==0 ? HBM0 : HBM1]+=static_cast<long double>(amount)/eta(hw,"eta_hbm_vector");
+        route_bytes_to(f,hw,topo,row,amount,destination(cores,topo.nx,topo.ny),write);
+      }
+      add_bytes_work(f,write ? SRAM_READ : SRAM_WRITE,payload,"Norm IO SRAM bytes");
+    };
+    group(active,mul128(mul128(count/active,active,"Norm uniform rows"),row_bytes,"Norm uniform bytes"));
+    if(count%active)group(count%active,mul128(count%active,row_bytes,"Norm partial bytes"));
+    f=scale_flow(f,repeats);
+    f.private_s=private_bytes(mul128(mul128(ceildiv(count,active),repeats,"Norm serial IO rows"),row_bytes,"Norm serial IO bytes"),
+        write ? SRAM_READ : SRAM_WRITE);
+    return f;
+  };
+  const auto conversion=[&](u128 n,const std::string& dt) {
+    return dt=="fp32" ? EqWork{} : weighted_ops(n,dt=="int4" ? perf(hw,"kappa_quant_eqops",4) : 1,"Norm conversion");
+  };
+  const u128 row_elements=hidden;
+  const u128 parameter_elements=mul128(parameters,hidden,"Norm parameter elements");
+  const EqWork row_conversion=conversion(mul128(2,row_elements,"Norm two SRAM input visits"),ad)+
+      conversion(row_elements,od)+(cached ? EqWork{} : conversion(parameter_elements,pd));
+  const EqWork row_ops=EqWork(mul128(layernorm ? 8 : 6,row_elements,"Norm row math"))+row_conversion;
+  const EqWork cache_ops=cached ? conversion(parameter_elements,pd) : EqWork{};
+  // Converted input tiles are produced and consumed for each of the two
+  // SRAM passes. The output cast uses the same FP32 working tile.
+  const u128 xconverted=ad=="fp32" ? 0 : mul128(8,row_elements,"Norm converted input bytes");
+  const u128 yconverted=od=="fp32" ? 0 : mul128(4,row_elements,"Norm output cast bytes");
+  const u128 row_read=add128(add128(mul128(2,xrow,"Norm input SRAM visits"),xconverted,"Norm input SRAM reads"),
+      add128(pconverted,yconverted,"Norm parameter/output reads"),"Norm row SRAM reads");
+  const u128 row_write=add128(add128(xconverted,bytes(hidden,"fp32"),"Norm compute writes"),
+      od=="fp32" ? 0 : yrow,"Norm output cast writes");
+  const u128 stream_conversion_read=!cached && pd!="fp32" ? prow : 0;
+  const u128 stream_conversion_write=!cached && pd!="fp32" ? pconverted : 0;
+  const u128 cache_read=cached && pd!="fp32" ? prow : 0;
+  const u128 cache_write=cached && pd!="fp32" ? pconverted : 0;
+  const auto compute=[&](u64 count,u64 repeats,u64 serial_rows,bool first) {
+    Flow f;
+    if(!cached)f=io(count,repeats,prow,false);
+    const u128 n=mul128(count,repeats,"Norm compute rows");
+    const u128 cr=add128(mul128(n,add128(row_read,stream_conversion_read,"Norm compute read row"),"Norm compute reads"),
+        first ? mul128(active,cache_read,"Norm first conversion reads") : 0,"Norm compute reads");
+    const u128 cw=add128(mul128(n,add128(row_write,stream_conversion_write,"Norm compute write row"),"Norm compute writes"),
+        first ? mul128(active,cache_write,"Norm first conversion writes") : 0,"Norm compute writes");
+    add_bytes_work(f,SRAM_READ,cr,"Norm compute SRAM reads");
+    add_bytes_work(f,SRAM_WRITE,cw,"Norm compute SRAM writes");
+    add_bytes_work(f,LOCAL,add128(cr,cw,"Norm compute LOCAL bytes"),"Norm compute LOCAL bytes");
+    f.vec=row_ops.multiply(as_u64(n,"Norm operation rows"))+(first ? cache_ops.multiply(active) : EqWork{});
+    f.compute_s=compute_time(hw,0,row_ops.multiply(serial_rows)+(first ? cache_ops : EqWork{}),1);
+    const auto sr=add128(row_read,stream_conversion_read,"Norm private read row");
+    const auto sw=add128(add128(row_write,stream_conversion_write,"Norm private write row"),cached ? 0 : prow,"Norm private writes with stream landing");
+    const auto row_time=std::max({static_cast<long double>(compute_time(hw,0,row_ops,1)),
+        private_bytes(sr,SRAM_READ),private_bytes(sw,SRAM_WRITE),
+        private_bytes(add128(sr,add128(row_write,stream_conversion_write,"Norm LOCAL writes"),"Norm private LOCAL"),LOCAL)});
+    f.private_s=row_time*serial_rows;
+    if(first)f.private_s+=std::max({static_cast<long double>(compute_time(hw,0,cache_ops,1)),
+        private_bytes(cache_read,SRAM_READ),private_bytes(cache_write,SRAM_WRITE),private_bytes(add128(cache_read,cache_write,"Norm cache LOCAL"),LOCAL)});
+    return f;
+  };
+  Flow load=io(rows,executions,xrow,false);
+  Flow first_load=io(active,1,xrow,false);
+  if(cached) {
+    const Flow parameter_load=io(active,1,prow,false);
+    load=add_flow(load,parameter_load);first_load=add_flow(first_load,parameter_load);
+  }
+  Flow comp=compute(rows,executions,total_rounds,true);
+  Flow first_comp=compute(active,1,1,true);
+  Flow store=io(rows,executions,yrow,true),last_store=io(last_rows,1,yrow,true);
+  const auto begin=plan.epochs.size(),descriptions_begin=service_description_count(plan);
+  const bool prefix_drain=executions==1 && rounds>=3;
+  const bool two_cohort=executions==1 && rounds==2;
+  const auto append=[&](const char* suffix,Flow l,Flow c,Flow s,std::array<double,2> initial) {
+    Epoch e;e.name=std::string("norm_row_resident_v1")+suffix;e.credit_initial=initial;
+    e.credit_capacity={{static_cast<double>(slots),1}};
+    for(auto item:{std::pair<Role,Flow*>{Role::Load,&l},{Role::Compute,&c},{Role::Store,&s}}) {
+      Activity a;a.role=item.first;a.id=plan.epochs.size()*3+e.activities.size()+1;
+      seal_activity(a,*item.second,hw,active);a.credit_curve={{0,{{0,0}}},{1,a.credit_delta}};
+      if(std::any_of(a.work.begin(),a.work.end(),[](double v){return v>0;}))e.activities.push_back(std::move(a));
+    }
+    plan.epochs.push_back(std::move(e));
+  };
+  first_load.credit={{1,0}};first_comp.credit={{-1,0}};
+  append("_first_row_load",first_load,{}, {},{{0,0}});
+  if(prefix_drain || two_cohort) {
+    Flow next_load=prefix_drain ? io(active,1,xrow,false) : subtract_io_flow(load,first_load);
+    next_load.credit={{1,0}};
+    append("_first_compute_and_next_load",next_load,first_comp,{},{{1,0}});
+    Flow last_compute=compute(last_rows,1,1,false);
+    if(prefix_drain) {
+      Flow remaining_load=subtract_io_flow(subtract_io_flow(load,first_load),next_load);
+      Flow middle_compute=subtract_compute_flow(subtract_compute_flow(comp,first_comp),last_compute);
+      // Uncached parameters travel with Compute; preserve their typed HBM
+      // payload in both prefix partitions, independently of resource work.
+      for(std::size_t row=0;row<2;++row)for(std::size_t direction=0;direction<2;++direction)
+        middle_compute.hbm[row][direction]=comp.hbm[row][direction]-first_comp.hbm[row][direction]-last_compute.hbm[row][direction];
+      Flow penultimate_store=io(active,1,yrow,true);
+      Flow prefix_store=subtract_io_flow(subtract_io_flow(store,last_store),penultimate_store);
+      remaining_load.credit={{static_cast<long double>(rounds-3),0}};
+      middle_compute.credit={{-static_cast<long double>(rounds-2),static_cast<long double>(rounds-3)}};
+      prefix_store.credit={{0,-static_cast<long double>(rounds-2)}};
+      append("_middle_with_reserved_tail",remaining_load,middle_compute,prefix_store,{{1,1}});
+      plan.epochs.back().credit_capacity={{1,1}};
+      last_compute.credit={{-1,0}};penultimate_store.credit={{0,-1}};
+      append("_last_compute_and_penultimate_store",{},last_compute,penultimate_store,{{1,1}});
+    } else {
+      Flow first_store=subtract_io_flow(store,last_store);
+      last_compute.credit={{-1,0}};first_store.credit={{0,-1}};
+      append("_last_compute_and_first_store",{},last_compute,first_store,{{1,1}});
+    }
+  } else append("_first_row_compute",{},first_comp,{},{{1,0}});
+  if(total_rounds>1 && !prefix_drain && !two_cohort) {
+    Flow l=subtract_io_flow(load,first_load),c=subtract_compute_flow(comp,first_comp),s=subtract_io_flow(store,last_store);
+    // Unlike elementwise Compute, streamed gamma/beta carry real HBM payload.
+    for(std::size_t row=0;row<2;++row)for(std::size_t direction=0;direction<2;++direction) {
+      if(first_comp.hbm[row][direction]>comp.hbm[row][direction])
+        fail("mapping_invariant: Norm first Compute exceeds total payload");
+      c.hbm[row][direction]=comp.hbm[row][direction]-first_comp.hbm[row][direction];
+    }
+    l.credit={{static_cast<long double>(total_rounds-1),0}};
+    c.credit={{-static_cast<long double>(total_rounds-1),static_cast<long double>(total_rounds-2)}};
+    s.credit={{0,-static_cast<long double>(total_rounds-1)}};
+    append("_bounded_remaining_rows",l,c,s,{{0,1}});
+  }
+  last_store.credit={{0,-1}};
+  append("_last_row_store",{}, {},last_store,{{0,1}});
+  const u64 descriptions=service_description_count(plan)-descriptions_begin;
+  if(descriptions>(prefix_drain ? 16 : 8))fail("mapping_invariant: Norm description budget exceeded");
+  plan.summary["service_curves"].push_back({{"model",prefix_drain ? "analytical_cumulative_norm_rows_v2_bounded_prefix_drain" :
+      two_cohort ? "analytical_cumulative_norm_rows_v2_two_cohort_prefetch" : "analytical_cumulative_norm_rows_v1"},
+      {"epoch_begin",begin},{"epoch_count",plan.epochs.size()-begin},{"description_count",descriptions},
+      {"description_budget",descriptions<=5 ? 5 : descriptions<=8 ? 8 : 16},{"input_unit","one_complete_input_row_at_most_loaded_core"},
+      {"output_unit","one_visible_normalized_row_at_most_loaded_core"},{"input_units",total_rounds},{"output_units",total_rounds},
+      {"allocated_input_slots_per_core",slots},{"allocated_output_slots_per_core",slots},
+      {"reserved_last_output_slots_per_core",total_rounds>1 ? 1 : 0},
+      {"first_output_release","first_row_compute_terminal_after_complete_row_input"},
+      {"first_output_epoch",begin+1},{"first_output_activity_id",plan.epochs.at(begin+1).activities.back().id},
+      {"readiness_approximation",prefix_drain ? "fixed_prefetch_middle_reserved_last_input_and_penultimate_output" :
+          two_cohort ? "last_row_prefetch_during_first_compute" : "remaining_rows_affine_with_withheld_final_output"}});
+  if(prefix_drain) {
+    auto& audit=plan.summary["service_curves"].back();
+    audit.erase("reserved_last_output_slots_per_core");
+    audit["reserved_last_input_slots_per_core"]=1;
+    audit["reserved_penultimate_output_slots_per_core"]=1;
+    audit["reserved_input_terminal_transfer_units"]=1;
+    audit["reserved_input_terminal_transfer_epoch"]=begin+3;
+  }
+  plan.summary["norm_row_ledger"]={{"mapping","invocation_local_row_id_mod_core_count"},
+      {"parameter_cache",cached ? "complete_fp32_gamma_beta_per_consumer_core" : "streamed_each_row"},
+      {"parameter_hbm_loads",cached ? active : total_rows},{"parameter_vectors",parameters},
+      {"parameter_bytes_per_load",as_u64(prow,"Norm parameter payload")},
+      {"input_hbm_passes",1},{"input_sram_passes",2},{"row_input_bytes",as_u64(xrow,"Norm row input")},
+      {"row_output_bytes",as_u64(yrow,"Norm row output")},{"parameter_buffer_bytes_per_core",as_u64(parameter_buffer,"Norm parameter buffer")},
+      {"sram_peak_bytes_per_core",as_u64(peak,"Norm SRAM peak")},{"reduction_state_bytes_per_core",16},
+      {"metadata_bytes_per_core",64},{"multi_pass_hbm_rows","not_implemented"}};
+  if(executions>1) {
+    plan.summary["prediction_status"]="not_available";
+    plan.summary["prediction_scope"]="body_timing_only_norm_region_barriers_unmodeled";
+  }
+  const u128 xb=mul128(total_rows,xrow,"Norm input bytes"),yb=mul128(total_rows,yrow,"Norm output bytes");
+  const u128 pb=mul128(cached ? active : total_rows,prow,"Norm parameter bytes");
+  m.logical=add128(m.logical,add128(add128(xb,yb,"Norm logical tensors"),mul128(executions,prow,"Norm logical parameters"),"Norm logical tensors"),"logical bytes");
+  m.hbm_read=add128(m.hbm_read,add128(xb,pb,"Norm reads"),"HBM reads");m.hbm_write=add128(m.hbm_write,yb,"HBM writes");
+  m.source_vops=add128(m.source_vops,mul128(mul128(total_rows,hidden,"Norm math elements"),layernorm ? 8 : 6,"Norm math"),"source Vec ops");
+  m.vecops=m.vecops+comp.vec;
+  m.conversion_elements=add128(m.conversion_elements,
+      add128(mul128(total_rows,add128(ad=="fp32" ? 0 : 2*row_elements,od=="fp32" ? 0 : row_elements,"Norm input/output conversions"),"Norm input/output conversions"),
+          pd=="fp32" ? 0 : mul128(cached ? active : total_rows,parameter_elements,"Norm parameter conversions"),"Norm conversions"),"conversion elements");
+  for(const auto* f:{&load,&comp,&store}) {
+    m.sram_read=add128(m.sram_read,static_cast<u128>(f->work[SRAM_READ]),"Norm SRAM reads");
+    m.sram_write=add128(m.sram_write,static_cast<u128>(f->work[SRAM_WRITE]),"Norm SRAM writes");
+    m.local=add128(m.local,static_cast<u128>(f->work[LOCAL]),"Norm LOCAL bytes");
+  }
+  m.sram_peak=std::max(m.sram_peak,peak);m.output_rounds=add128(m.output_rounds,total_rounds,"Norm rounds");
+  m.waves=add128(m.waves,total_rounds,"Norm waves");m.active_cores=active;m.template_id="norm_row_resident_v1";
+  m.assumptions.push_back("complete_row_resident_statistics_then_apply_with_per_core_parameter_ownership");
 }
 
 // Elementwise kernels have no row reduction or K accumulation. Keep real
@@ -2341,8 +2557,6 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
     if (op=="norm") {
       const std::string norm=gets(task.at("tensor_shapes"),"norm_type","rmsnorm");
       if(norm!="rmsnorm"&&norm!="layernorm")fail("unsupported_op_kind: Norm variant "+norm);
-      eq=mul128(norm=="rmsnorm"?6:8,count,"Norm eqops");
-      extra=bytes(mul128(H,norm=="rmsnorm"?1:2,"Norm parameters"),dtype(task,"parameters"));
     }
     else if (op=="residual") { eq=count; extra=bytes(elems,ad); }
     else if (op=="mlp_activation") {
@@ -2414,7 +2628,11 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
       return plans;
     }
     const u128 executions=mul128(layers,passes,"vector executions");
-    if(op=="residual"||op=="mlp_activation") {
+    if(op=="norm") {
+      add_norm_rows(*p,m,hardware,topo,M,H,as_u64(executions,"Norm executions"),
+          ad,dtype(task,"parameters"),od,
+          gets(task.at("tensor_shapes"),"norm_type","rmsnorm")=="layernorm");
+    } else if(op=="residual"||op=="mlp_activation") {
       add_elementwise(*p,m,hardware,topo,as_u64(count,"elementwise elements per invocation"),
           as_u64(executions,"elementwise executions"),extra ? 2 : 1,
           as_u64(eq/count,"elementwise ops per element"),ad,od,op+"_vec_v3");

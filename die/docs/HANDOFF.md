@@ -1,10 +1,20 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch/ls-remote实核HEAD、main及工作分支均为 `4114533d6b25b68d93530a3af3126b6cba9880f9`。包含本页的Git提交补齐隔离五仓证据和三个测试fixture修正；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch/ls-remote实核HEAD、main及工作分支均为 `089c7db92a74d29dcd924e4f2a8d25d08eaa1663`。包含本页的Git提交为Norm行驻留账本/固定分段检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
 
 ## Current Status
 
-### 当前有效检查点：隔离新SDK五仓完成，保留R4业务失败
+### 当前有效检查点：Norm每Core参数、行容量和有界服务曲线
+
+- 真实旧CABI证明BF16 RMSNorm的4 Core/8行/hidden4096读取73728 B，完全缓存也至少98304；8 Core应131072而旧仍73728，LayerNorm四Core应131072而旧81920。根设计§6.4参数每消费Core首次读取未落实。现在专用`norm_row_resident_v1`按row_id mod Core，保留完整输入行及输出槽；完整FP32 gamma/beta与其它分配同时装入才R1每Core缓存，否则逐行HBM。SRAM/LOCAL参数使用仍逐行，两条INT4参数独立打包，输入在SRAM统计/应用访问两次及真实转换另计，math6/8不重算、不重拟eta。
+- R1单/两cohort及三以上分别3/6/9活动，后者加ready最多10/16描述，按既有elementwise首/尾/保留槽位合同解析生成，不逐行/Core/repeat推进。first实际Compute ID用于首输出；Last输入终态转移、末输入及倒二输出保留槽均显式audit。新增逐Core独立行计数/进度网格核物理槽位，不能借别Core空闲容量。R>1 body诊断仍not_available（包括零launch时未表示region barrier），不假跨region参数驻留。完整行驻留不够明确unsupported_workspace并给required bytes；两遍HBM长行模板not_implemented，原假一遍读/256元素峰值不再被接受。
+- 一致公共Release **48/48通过，18.55s**；之后只有Norm fixture新增54奇数/未缓存样例和逐Core网格、单独benchmark新增Norm样例，最新Norm重建1/1通过，其余47套被测源实核未变，生产库byte-identical。432组独立cached行/Core/dtype账本、54 streamed/奇数前缀、4精确cache边界、实际Plan/Runtime byte/ops/SRAM/LOCAL、首行就绪、暂停/取消/恢复、fractional kappa、repeat1e6≤20事件通过。相同最终fixture真实链接旧模型red失败。所有初始build/0tests not_run/ceil采样失败保留，未改时钟量化。
+- 离线cached BF16/单Core/R1的32case/96场景新模型对照：初版完成88目标/8在20%内未接受，联合18目标/78failed；固定prefix/drain后完成 **96/96≤10%（max1.480117%）**、160首输出≤10%（max7.269458%），联合原busy **42目标/54failed**，busy最大相对19303.15倍、绝对46.148533s（合成低速配置）。不改变原busy、零参考或门槛，不称硬件精度通过。当前driver真实重跑后128份raw/report/stderr/log与保留v2逐byte一致，source/ELF/命令另存+SHA引用；初版patch由Git089重建SHA吻合。
+- 最新30样本Norm cached8×4096/streamed128×19569冷P95 **0.365339/0.428994ms**，Norm热编译/alias/交替/cost **2.934—4.426μs**通过；整套 **failed**：GEMM128³ cold2.550269ms、hot cost27.250μs，OS J32更新57.145μs（J1/J8=30.696/48.862μs）。保留全部样本/历史尾部，不抽样挑最好，不归因未改路径给Norm。7个其它算子真实完整公开对象与旧库逐字段全等，含R3残差not_available；首次误包含legacy wrapper Norm的8例比较失败同样保留。
+- 当前CABI SHA `95e02c551a971fe92367e16df782969371202d36b1ac7ae1725d34b6fdd4d588`，证据/复现 `analysis/norm-row-accounting-20261016/README.md` 和同名evidence/checkpoint-summary。只改Mapping/测试/证据，ABI/公平/外部机制/先验不变。正式五份canonical24仍23160c…7e9b未publisher；旧隔离eb0472bf的83配置/五R3probe及旧SDK10项不冒充当前Norm五仓测试，当前新模型五仓业务/CPU not_run。
+- Norm长行两遍、R>1非服务窗口、原busy与全局速度尾部仍未解；WR/其它向量/Attention/FFN/OS二阶范围未扩大。TX8仍条件参考，目标参数不拟合、target raw/heldout缺失；工程NOT ACCEPTED，继续公共模型依赖及有证据的热路径优化。
+
+### 已合入089c7db：隔离新SDK五仓完成，保留R4业务失败
 
 - 冻结32文件eb0472bf…e55a的五仓consumer及双ABI全部实际构建成功，真实配置 **83/83、无skip**（18/17/20/15/13），五份coarse CABI均与公共47 ELF逐byte相同。五仓真实R3 compile/prepare/ready-scan拒绝probe **5/5通过**，含R1冷/热正例、公共body诊断、cache/graph/tick/lease/terminal不变。32文件实际hash、归档base9bb+31overlay和当前公共源/配置/头均实核，只有隔离CMake少CLI测试注册，SDK testsOFF。正式canonical24的五份实际hash仍全部吻合23160c…7e9b，没有正式publisher。
 - 原始新SDK标准CTest为四仓lifecycle **4 failed**（原样实际R4 FFN不可用）；JOINT **5/6 passed**，NativeProjection未观察到预期shared HBM，全部失败原样保留。不是业务或工程通过。两个WS取消fixture原来只proceed一次就断言typed服务，新首事件可能仅结束启动等待；现仅测试内最多32事件等实际compute服务，所有原取消/typed/两rank指标断言保留，新SDK完整main中这些断言全过，但随后原R4仍failed（SIGABRT/-6，外层250）。没有减少layers/passes或解除guard。
@@ -339,10 +349,10 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本页的main/HEAD，读consumer-availability README/checkpoint-summary-final/冻结matrix。公共47、Python148和旧SDK五仓10项已完成；显式硬件移除、每Core槽位、九描述曲线、双raw memo均已合入，不重复。
+1. fetch核实包含本页的main/HEAD，先读norm-row-accounting README/checkpoint-summary，再看consumer-availability的preview-complete-final-summary和冻结matrix。当前模型公共48+增强Norm1项已过；Python148、旧SDK五仓10项、显式硬件移除、每Core槽位、九描述elementwise曲线、双raw memo均已完成，不重复历史待办。
 2. 隔离五仓consumer/两ABI构建、83配置及5个真实R3拒绝probe已完成，三个fixture修正/旧SDK当前10项兼容已核；不重跑或重复publisher。最新总表preview-complete-final-summary，原标准四仓R4失败和JOINT初始1项失败保留。正式SDK仍canonical24。后续公共生产模型变化时，再用新freeze/label验受影响的ABI和真实负载，不复用旧ELF声称当前源通过；不可减少layers/passes获得业务成功。
-3. 核查公共Norm参数首次读取：当前add_vector的extra_input仅整层一次，设计§6.4要求每消费Core首次读取且只有完整参数片与其它缓冲共存才复用。先用实际CABI构造M/Core/H与小SRAM反例，解析修正确认的字节/容量问题，保留校准先验及旧数值。R>1非服务窗口/物化barrier仍为正式接入前依赖；按解析累计曲线/5、8、16预算推进，不前置R×wait、不作资源/PRIVATE替身，不逐K/tile/wave/repeat回放、周期/Program，不能只删status或guard。WR/其它向量/Attention/FFN、OS二阶/odd-row按真实收益和依赖推进。
-4. 长16/48完成全10%但24busy failed/首输出1项11.379%未接受，原17仍27联合失败；保留计量/每Core硬容量/公平及真实first终态，不放宽busy/速度定义。9bb生产模型/CABI未因消费者修复变化，复用其绑定证据；只有新增模型/热路径变更或未解决具体concern才重测，不反复抽样挑最好一次。
+3. Norm每Core首次读取/完整参数fit/行槽/转换及固定首中尾已落实，不恢复add_vector旧Norm路线；当前Norm完成/首输出scope达10%，busy54场景failed，长行两遍HBM仍未实现，R>1即零launch也诊断不可用。正式接入前的主要依赖仍R>1真实非服务窗口和region物化barrier；先研究能保持资源竞争/无Q等待且符合固定复杂度的表示，不前置R×wait、不作资源/PRIVATE替身、不逐K/tile/wave/repeat或周期/Program，不能只删status或guard。长行两遍、WR/其它向量/Attention/FFN和OS二阶/odd-row按真实收益推进。
+4. 最新速度整套failed，GEMM cold/hot cost及J32尾部有真实样本；先定位可证的分配/规范化/查询/积分开销，再做语义等价轻量优化，不为噪声改模型。Norm本次所测热/冷通过但不是全域速度证书。elementwise长16/48完成全10%仍24busy失败/首输出1项11.379%未接受，原17仍27联合失败；未改函数沿原证据并明确未重跑，7公开例逐字段全等不外推全域。保持计量/每Core容量/公平和真实终态，不放宽busy/速度；有新变更或具体未解concern才重测，不抽样挑最好。
 5. 模型稳定后才正式publisher；再做五仓完整业务、双ABI/配置与端到端CPU预算。旧SDK通过不冒充新SDK通过，R3拒绝通过不冒充R3支持；JOINT provider/live/sh30仍受保护。target raw/heldout与当前Runtime同合同TX8硬件入口仍缺，不造profile或重拟目标效率。
 6. 有意义检查点保存全部有效源/日志，安全提交并核实GitHub；持续自主开发，不按提交或阶段停止。
 
