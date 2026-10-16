@@ -1,0 +1,33 @@
+{
+  "scope": "isolated final Core SDK/consumer checkpoint; not formal release or full business acceptance",
+  "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+  "candidate_file_count": 33,
+  "abi_builds": 5,
+  "actual_abis_built": 10,
+  "configuration_tests": 98,
+  "configuration_skips": 0,
+  "typed_resolvers_passed": 4,
+  "joint_generic_probe": "failed_harness_unsupported_entry",
+  "joint_actual_oracle_probe": "passed",
+  "python": {
+    "face": "86/86 after test-only stale-pin correction; initial85pass1fail retained",
+    "face_LRU": "80/80",
+    "wscllm": "64/64",
+    "wscllm_LRU": "62passed,1skipped: optional oracle client absent; strict zero-skip check failed",
+    "joint": "92/92"
+  },
+  "three_real_python_availability_guards": "passed",
+  "native_consumers": "in_progress",
+  "formal_sdk_published": false,
+  "performance": "failed_current_30_samples_retained",
+  "engineering_status": "NOT ACCEPTED",
+  "coarse_libraries_sha256": {
+    "astra-sim-face": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "astra-sim-face-LRU": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "astra-sim-joint": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "astra-sim-wscllm": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "astra-sim-wscllm-LRU": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6"
+  },
+  "public_coarse_library_sha256": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+  "five_coarse_binaries_identical_to_public": true
+}

@@ -1,0 +1,64 @@
+{
+  "status": "syntax_help_dry_run_passed",
+  "scope": "tool checks only; no SDK prepare/copy/protoc/build/test/performance execution",
+  "syntax_checked": {
+    "die/docs/analysis/core-resume-20261016/typed_resolver_probe_historical.py": "f987dcc1d33bb3a0538b75d35fe0fc518bc0642fd5269ad06ae2a75f7b8c46a7",
+    "die/docs/analysis/core-resume-20261016/run_legacy_validation.py": "a77a42d50fe108bf653c2fbb996600d5799d9ca6591ff316126b8288550cd7a4",
+    "die/docs/analysis/core-resume-20261016/run_isolated_sdk.py": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+    "die/docs/analysis/core-resume-20261016/prepare_isolated_sdk.py": "9f0be61f54f0d534eae6b3df2efc4af3200fb70e890a2d9c9d1991545f5a6504"
+  },
+  "help_commands": [
+    {
+      "command": [
+        "python3",
+        "-B",
+        "die/docs/analysis/core-resume-20261016/run_legacy_validation.py",
+        "--help"
+      ],
+      "return_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "-B",
+        "die/docs/analysis/core-resume-20261016/prepare_isolated_sdk.py",
+        "--help"
+      ],
+      "return_code": 0
+    },
+    {
+      "command": [
+        "python3",
+        "-B",
+        "die/docs/analysis/core-resume-20261016/run_isolated_sdk.py",
+        "--help"
+      ],
+      "return_code": 0
+    }
+  ],
+  "dry_run": {
+    "command": [
+      "python3",
+      "-B",
+      "die/docs/analysis/core-resume-20261016/run_isolated_sdk.py",
+      "--snapshot",
+      "work/core-resume-sdk-not-prepared",
+      "--output",
+      "work/core-resume-sdk-validation/dry-run",
+      "--phases",
+      "abi",
+      "python",
+      "native"
+    ],
+    "return_code": 0,
+    "commands": 49,
+    "snapshot_status": "not_prepared_command_plan_only",
+    "source_digest": "not_frozen_no_snapshot",
+    "evidence_sha256": "40ee3a5ea147f3594ab74e8358bbc8aa0493b71f75e69bd5199b2a15bfd28462"
+  },
+  "static_targets_and_modules": {
+    "path": "sdk-tool-static-checks.json",
+    "sha256": "ae75c25493101975e266c809efd4033f21e59960f8c40e5891deed0cfa503097",
+    "scope": "names/files registered and present; compile/link not_run"
+  }
+}

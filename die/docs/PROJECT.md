@@ -14,7 +14,7 @@
 
 ## 当前恢复状态（2026-10-16）
 
-用户已恢复持续开发。从已推送迁移 b8ddbcf 建立 codex/die-core-resume-20261016，安全整合 main d3a64a6 独有交接资料；最终公共源码与五仓迁移验证进行中，正式 SDK 未发布，工程 NOT ACCEPTED。下方带日期停止/检查点均按历史范围阅读，最新操作以 HANDOFF 顶部为准。
+用户已恢复持续开发。从已推送迁移 b8ddbcf 建立 codex/die-core-resume-20261016，安全整合 main d3a64a6 独有交接资料；最终公共51/51、DOCX/192资源点及五仓隔离双ABI/98配置已实际通过；两套30样本性能failed，native消费者继续验证。正式 SDK 未发布，工程 NOT ACCEPTED。下方带日期停止/检查点均按历史范围阅读，最新操作以 HANDOFF 顶部为准。
 
 ## 项目目标
 

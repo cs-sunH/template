@@ -1,0 +1,93 @@
+[
+  {
+    "label": "astra-sim-joint-python-bindings",
+    "command": [
+      "/workspace/cloud-setup/venv/bin/python3",
+      "-B",
+      "-c",
+      "import pathlib,hashlib,sys; p=pathlib.Path(sys.argv[1]); assert p.is_file(), str(p); assert hashlib.sha256(p.read_bytes()).hexdigest()==sys.argv[2], \"frozen binding changed\"; print(\"verified frozen generated protobuf binding\")",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py",
+      "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7"
+    ],
+    "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint",
+    "environment": {},
+    "expected": null,
+    "requires": [],
+    "new_build": false,
+    "status": "passed",
+    "checks": {
+      "process_success": true
+    },
+    "return_code": 0,
+    "elapsed_seconds": 0.2541494369506836,
+    "libraries": {
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-face/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-face-LRU/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-joint/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-joint/lib/libdie_model_cabi.so": "7d362078ddfe342616853a5c158987d63c2c3de7a975eea2d3b9b633cb247033",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7"
+    },
+    "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+    "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+    "runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+    "log_sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb"
+  },
+  {
+    "label": "astra-sim-joint-python-consumers",
+    "command": [
+      "/workspace/cloud-setup/venv/bin/python3",
+      "-B",
+      "-m",
+      "unittest",
+      "-v",
+      "online.test_die_model_adapter",
+      "online.test_coarse_die_adapter",
+      "online.test_coarse_die_workspace",
+      "test_face_scheduler"
+    ],
+    "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+    "environment": {
+      "PYTHONDONTWRITEBYTECODE": "1",
+      "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-joint/lib/libdie_model_cabi.so",
+      "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-joint/lib/libcoarse_die_cabi.so",
+      "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint:/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh:/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference"
+    },
+    "expected": [
+      "unittest_nonempty",
+      null
+    ],
+    "requires": [
+      "astra-sim-joint-python-bindings"
+    ],
+    "new_build": false,
+    "status": "passed",
+    "checks": {
+      "process_success": true,
+      "zero_skips": true,
+      "expected_tests": true
+    },
+    "return_code": 0,
+    "elapsed_seconds": 1.180969476699829,
+    "libraries": {
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-face/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-face-LRU/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-joint/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-joint/lib/libdie_model_cabi.so": "7d362078ddfe342616853a5c158987d63c2c3de7a975eea2d3b9b633cb247033",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7"
+    },
+    "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+    "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+    "runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+    "log_sha256": "7f587fde07b63450357930c82afb31bb133d425039361bc44d565bfae37d27ee"
+  }
+]

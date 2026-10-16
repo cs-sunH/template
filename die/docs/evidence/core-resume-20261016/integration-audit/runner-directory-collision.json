@@ -1,0 +1,11 @@
+{
+  "status": "verification_runner_failure_before_build",
+  "affected_runner_before_sha256": "37932b6b21b09ae144a9f6b297223352db3bf3e0b5b8b745893ce9f019731821",
+  "fixed_runner_sha256": "a77a42d50fe108bf653c2fbb996600d5799d9ca6591ff316126b8288550cd7a4",
+  "reason": "phase_dir=run/phase used phase=build, colliding with the actual CMake build directory run/build; mkdir(exist_ok=False) raised FileExistsError before subprocess build launch",
+  "source_or_abi_failure": false,
+  "fix": "phase logs and identities now use run/phases/<phase>; CMake build stays run/build",
+  "original_configure_directories": "work/core-resume-validation/core32-final-three unchanged; parent will use a fresh label",
+  "build_started_by_audit": false,
+  "sdk_runner_audit": "SDK runner puts build artifacts under snapshot/build-abi or build-native and logs under a distinct output directory/phase-label; no matching directory-name collision"
+}

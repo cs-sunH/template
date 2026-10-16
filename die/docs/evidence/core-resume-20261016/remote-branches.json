@@ -1,0 +1,120 @@
+{
+  "head": "9fc4a6a88c03f8e4ca6ce318968f152d18732a9a",
+  "remote_heads": [
+    {
+      "ref": "origin",
+      "sha": "d3a64a6c4cb23b8ce437438ed68217d7cee4af1f",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-analytical-continue-20261015",
+      "sha": "5c2de289bc5744e5c252d782901cdba8b6f62459",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-analytical-curves-20261015",
+      "sha": "ec07f90ebabe6a0b97d458c01a3391377fc54aec",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-analytical-model-docs-20261015",
+      "sha": "1f7a2424b7f49da2b1bbc4c18090cd43add129fe",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-bounded-lifecycle-20261013",
+      "sha": "fc6460f2713448a75404b87280ef78512ad9bf07",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-capacity-joint-20261014",
+      "sha": "d9cc0240e07064996b5330c5659f7f8c6866998a",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-continue-20261013",
+      "sha": "f3b53eb906df788eecf613642106aa974d5d24a7",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-continue-20261016",
+      "sha": "04c63312e1e269911ba0818fe3212f2899199b8c",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-core-handoff-20261016",
+      "sha": "d3a64a6c4cb23b8ce437438ed68217d7cee4af1f",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-core-resume-20261016",
+      "sha": "9fc4a6a88c03f8e4ca6ce318968f152d18732a9a",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-explicit-continue-20261015",
+      "sha": "d16b5459a46df7f54d6e4afa36e2a5debd947690",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-handoff-20261013",
+      "sha": "ac6fc4cd4b9e9577297ead16fb74e61b1d691b0b",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-handoff-20261013-record",
+      "sha": "0b96a0eabc9564682fe9f3014f523343168d020d",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-joint-runtime-20261014",
+      "sha": "d1151179d2a3c3246e0b7a896db9e3dacef52885",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-k-readiness-20261015",
+      "sha": "3c8face0d8a9b16aeb1f194e143c17d4f508895a",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-lifecycle-online-20261014",
+      "sha": "27b21f50ca1ee216ebc36afc0211e3e3751a12be",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-lru-workspace-v2-20261014",
+      "sha": "cef6790bb37d4959d0340d1ec1010e461ffc19d5",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-os-lifecycle-20261014",
+      "sha": "df2f46d2cf5c2231dfb5c47db8852678ed91e239",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-runtime-waves-20261013",
+      "sha": "8b2ab3a893cab31e2c15cb28e868f20e0b259837",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-single-core-20261016",
+      "sha": "b8ddbcfd62e03738b0c3996444355cbbe2e99b80",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-workspace-envelope-20261014",
+      "sha": "700eec6a8ca104ab94da247d9136033b9057ead7",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/codex/die-workspace-runtime-20261014",
+      "sha": "5fda860b85f4a67d008de79717f048bba718f61a",
+      "ancestor_of_recovered_head": true
+    },
+    {
+      "ref": "origin/main",
+      "sha": "d3a64a6c4cb23b8ce437438ed68217d7cee4af1f",
+      "ancestor_of_recovered_head": true
+    }
+  ]
+}

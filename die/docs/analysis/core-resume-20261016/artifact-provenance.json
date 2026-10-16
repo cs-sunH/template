@@ -1,0 +1,31 @@
+{
+  "scope": "reproduction tools; syntax/help/dry-run only; no candidate SDK snapshot/build/consumer execution by this audit",
+  "historical_archive": "die/docs/evidence/single-core-20261016/integration/integration-artifacts.tar.gz",
+  "historical_typed_probe": {
+    "archive_member": "work/core-integration-audit/probe_typed_resolver.py",
+    "copied_as": "typed_resolver_probe_historical.py",
+    "sha256": "f987dcc1d33bb3a0538b75d35fe0fc518bc0642fd5269ad06ae2a75f7b8c46a7",
+    "byte_identical": true,
+    "runtime_location": "copied by preparation into snapshot/stage-root/work/integration-audit/ so its original parents[2] root resolution remains correct; do not run the historical probe directly from this analysis package"
+  },
+  "aggregate": {
+    "source": "die/docs/analysis/generated-lifecycle-20261014/integration-reproduction/CMakeLists.txt",
+    "copied_as": "aggregate/CMakeLists.txt",
+    "sha256": "d7c4bf2a439c4e46f71332b44b763b60cfcd9c3e8023ff24fe84a88f25f2a43d",
+    "byte_identical": true
+  },
+  "legacy_runner_origin": {
+    "source": "work/core-integration-audit/run_validation.py in historical archive",
+    "original_sha256": "45a741d5cfd8e81ecbe1e04d4ee1bfb03bff447b9c2f46645d6c212dd2708658",
+    "changes": "portable tool paths, Make generator, fresh directories, explicit count/skip validation and unchanged source/release identity; new tool not a claim that current tests passed"
+  },
+  "new_work_script_sha256": {
+    "prepare_isolated_sdk.py": "968e94aac1763a19fb006a53a1cc9539965d355293843e14e3d4502f2264d756",
+    "run_isolated_sdk.py": "cce4241080ca8c34ea8b3165aa3d91edbe37a19e8bfd033f76269ca79cf41e8d"
+  },
+  "prepared_script_sha256": {
+    "prepare_isolated_sdk.py": "9f0be61f54f0d534eae6b3df2efc4af3200fb70e890a2d9c9d1991545f5a6504",
+    "run_isolated_sdk.py": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+    "run_legacy_validation.py": "a77a42d50fe108bf653c2fbb996600d5799d9ca6591ff316126b8288550cd7a4"
+  }
+}

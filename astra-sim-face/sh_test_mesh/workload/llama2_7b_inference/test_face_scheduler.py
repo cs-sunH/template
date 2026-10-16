@@ -1115,15 +1115,15 @@ class DieModelEstimateTests(unittest.TestCase):
     def test_die_estimate_value_pin(self) -> None:
         # die 模型数值更新(规则不变):固定工作负载的孤立估值钉子,
         # 期望值来自当前 die_model 库(mesh_die_v1,face die 点)。
-        # E3 下界修正:编译期剪枝下界由"launch 串行和"换为健全的
-        # 槽位占用和 + lag 折算关键路径(旧下界在该 launch 主导的
-        # 微型负载上剪掉了真最优,所有分段选中更大的核组/上下文,
-        # 各分段估值全部变短),钉子 6338 -> 6197。
+        # 唯一 Core 的显式 10x10/25x32mm 工程点替代旧硬件后，
+        # 七项真实 ABI 结果按原组合为 6191.534384581714ns，ceil=6192。
+        # 分项/硬件/库身份见 die/docs/evidence/core-resume-20261016/
+        # face-legacy-pin-decomposition.json；旧 6197ns 只属于旧硬件点。
         hardware = FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 0, 0)
         value = estimate_iteration_time_ns(
             hardware, self.TOY, instance_size=2, p_chunk=8, d_batch=1,
             d_token=257, cost_oracle=self.oracle)
-        self.assertEqual(value, 6197)
+        self.assertEqual(value, 6192)
         # 确定性:同一输入重复估值逐字节相等(库内计划缓存 + 纯函数)。
         again = estimate_iteration_time_ns(
             hardware, self.TOY, instance_size=2, p_chunk=8, d_batch=1,

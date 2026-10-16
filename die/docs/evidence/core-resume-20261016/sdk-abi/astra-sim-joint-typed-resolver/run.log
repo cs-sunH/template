@@ -1,0 +1,4 @@
+Traceback (most recent call last):
+  File "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/work/integration-audit/probe_typed_resolver.py", line 7, in <module>
+    from config_resolver import derive_coarse_die_hardware,load_hardware_config
+ImportError: cannot import name 'derive_coarse_die_hardware' from 'config_resolver' (/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/config_resolver.py). Did you mean: 'derive_die_hardware'?

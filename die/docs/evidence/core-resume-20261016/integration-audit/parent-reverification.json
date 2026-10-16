@@ -1,0 +1,57 @@
+{
+  "status": "passed_source_identity_reverification",
+  "scope": "retain exact historical FACE/FACE-LRU tested scopes, not new executions",
+  "observed_git_head": "9fc4a6a88c03f8e4ca6ce318968f152d18732a9a",
+  "unix": 1792151210.335565,
+  "rows": [
+    {
+      "archive_identity_path": "results/face-build-authorized-point/identity.json",
+      "archive_identity_sha256": "986c10b06ac3d84a86ebc3269884c29812b830f6f84ee0e10100bc79880c3a15",
+      "files_compared": 30,
+      "mismatches": [],
+      "original_return_code": 0
+    },
+    {
+      "archive_identity_path": "results/face-unit-authorized-point/identity.json",
+      "archive_identity_sha256": "66384f599b6fc94793c43f1514d96dcd6bb7b29c1a24b00f646c7ad79fabc604",
+      "files_compared": 30,
+      "mismatches": [],
+      "original_return_code": 0
+    },
+    {
+      "archive_identity_path": "results/face-config-authorized-point/identity.json",
+      "archive_identity_sha256": "5aa1b8c15d73b2e0299e31fd6fe71433de79748275da1c5784b9d8f806f08cc3",
+      "files_compared": 30,
+      "mismatches": [],
+      "original_return_code": 0
+    },
+    {
+      "archive_identity_path": "results/face-default-authorized-point/identity.json",
+      "archive_identity_sha256": "3cb9231625ace88b50ac3d2b008a09c20a992d14d495c69b2934b83162f286a9",
+      "files_compared": 30,
+      "mismatches": [],
+      "original_return_code": 0
+    },
+    {
+      "archive_identity_path": "results/face-lru-build-authorized-point/identity.json",
+      "archive_identity_sha256": "6fc1ef02571e6a5a9946c012769de842e9418dd499b59d3d7c4a56625ebbef94",
+      "files_compared": 30,
+      "mismatches": [],
+      "original_return_code": 0
+    },
+    {
+      "archive_identity_path": "results/face-lru-config-authorized-point/identity.json",
+      "archive_identity_sha256": "8f56b44cdf89a341a9475165a3acd2887f1030333a634e72705aff6391b46174",
+      "files_compared": 30,
+      "mismatches": [],
+      "original_return_code": 0
+    },
+    {
+      "archive_identity_path": "results/face-lru-default-authorized-point/identity.json",
+      "archive_identity_sha256": "599da3fa5d548bec51d40c94cfec21e17ba67103b5d80f196465b44248d9c845",
+      "files_compared": 30,
+      "mismatches": [],
+      "original_return_code": 0
+    }
+  ]
+}

@@ -1,0 +1,108 @@
+test_bad_kv_identity_fails (online.test_die_model_adapter.BuildSpecTests.test_bad_kv_identity_fails) ... ok
+test_kv_identity_staged_annotation (online.test_die_model_adapter.BuildSpecTests.test_kv_identity_staged_annotation) ... ok
+test_layer_count_must_be_positive (online.test_die_model_adapter.BuildSpecTests.test_layer_count_must_be_positive) ... ok
+test_span_subset_override (online.test_die_model_adapter.BuildSpecTests.test_span_subset_override) ... ok
+test_spec_schema_shape (online.test_die_model_adapter.BuildSpecTests.test_spec_schema_shape) ... ok
+test_joint_category_names_covered (online.test_die_model_adapter.CategoryMapTests.test_joint_category_names_covered) ... ok
+test_unknown_category_fails_closed (online.test_die_model_adapter.CategoryMapTests.test_unknown_category_fails_closed) ... ok
+test_boundary_after_chain_tail_is_allowed (online.test_die_model_adapter.CompileRegionsTests.test_boundary_after_chain_tail_is_allowed) ... ok
+test_boundary_inside_chain_blocks_fusion (online.test_die_model_adapter.CompileRegionsTests.test_boundary_inside_chain_blocks_fusion) ... ok
+test_explicit_watch_targets_block_fusion (online.test_die_model_adapter.CompileRegionsTests.test_explicit_watch_targets_block_fusion) ... ok
+test_external_consumer_blocks_fusion (online.test_die_model_adapter.CompileRegionsTests.test_external_consumer_blocks_fusion) ... ok
+test_full_chains_fuse_in_order (online.test_die_model_adapter.CompileRegionsTests.test_full_chains_fuse_in_order) ... ok
+test_heterogeneous_identity_blocks_fusion (online.test_die_model_adapter.CompileRegionsTests.test_heterogeneous_identity_blocks_fusion) ... ok
+test_marker_anchor_names_never_fuse (online.test_die_model_adapter.CompileRegionsTests.test_marker_anchor_names_never_fuse) ... ok
+test_missing_link_keeps_separate_groups (online.test_die_model_adapter.CompileRegionsTests.test_missing_link_keeps_separate_groups) ... ok
+test_records_without_remote_read_key_fuse_and_sum_zero (online.test_die_model_adapter.CompileRegionsTests.test_records_without_remote_read_key_fuse_and_sum_zero) ... ok
+test_die_backend_requires_absolute_existing_path (online.test_die_model_adapter.FromServiceManifestGateTests.test_die_backend_requires_absolute_existing_path) ... ok
+test_die_backend_requires_config_key (online.test_die_model_adapter.FromServiceManifestGateTests.test_die_backend_requires_config_key) ... ok
+test_missing_backend_key_returns_none (online.test_die_model_adapter.FromServiceManifestGateTests.test_missing_backend_key_returns_none) ... ok
+test_roofline_and_replay_backends_return_none (online.test_die_model_adapter.FromServiceManifestGateTests.test_roofline_and_replay_backends_return_none) ... ok
+test_unknown_backend_fails_closed (online.test_die_model_adapter.FromServiceManifestGateTests.test_unknown_backend_fails_closed) ... ok
+test_d10_rebuild_span_identity (online.test_die_model_adapter.SpanRecordTests.test_d10_rebuild_span_identity) ... ok
+test_decode_iteration_span_identity (online.test_die_model_adapter.SpanRecordTests.test_decode_iteration_span_identity) ... ok
+test_decode_run_compression_and_expansion_identity (online.test_die_model_adapter.SpanRecordTests.test_decode_run_compression_and_expansion_identity) ... ok
+test_empty_spans_fail_closed (online.test_die_model_adapter.SpanRecordTests.test_empty_spans_fail_closed) ... ok
+test_kv_below_tokens_fails_closed (online.test_die_model_adapter.SpanRecordTests.test_kv_below_tokens_fails_closed) ... ok
+test_nonpositive_span_fails_closed (online.test_die_model_adapter.SpanRecordTests.test_nonpositive_span_fails_closed) ... ok
+test_prefill_chunk_span_identity (online.test_die_model_adapter.SpanRecordTests.test_prefill_chunk_span_identity) ... ok
+test_run_breaks_at_stride_or_q_change (online.test_die_model_adapter.SpanRecordTests.test_run_breaks_at_stride_or_q_change) ... ok
+test_slice_span_records_splits_runs (online.test_die_model_adapter.SpanRecordTests.test_slice_span_records_splits_runs) ... ok
+test_spec_shapes_parse_in_the_library (online.test_die_model_adapter.SpecThroughCostLibraryTests.test_spec_shapes_parse_in_the_library) ... ok
+test_coarse_top_level_status_must_be_a_string (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_top_level_status_must_be_a_string) ... ok
+test_coarse_v2_abi_is_selected_and_legacy_execution_is_blocked (online.test_coarse_die_adapter.CoarseOracleTests.test_coarse_v2_abi_is_selected_and_legacy_execution_is_blocked) ... ok
+test_config_schema_must_select_v2_abi (online.test_coarse_die_adapter.CoarseOracleTests.test_config_schema_must_select_v2_abi) ... ok
+test_estimate_one_rejects_unavailable_body (online.test_coarse_die_adapter.CoarseOracleTests.test_estimate_one_rejects_unavailable_body) ... ok
+test_legacy_cost_result_keeps_existing_status_semantics (online.test_coarse_die_adapter.CoarseOracleTests.test_legacy_cost_result_keeps_existing_status_semantics) ... ok
+test_unavailable_body_is_rejected_before_latency_validation (online.test_coarse_die_adapter.CoarseOracleTests.test_unavailable_body_is_rejected_before_latency_validation) ... ok
+test_unavailable_body_preserves_available_siblings_and_errors (online.test_coarse_die_adapter.CoarseOracleTests.test_unavailable_body_preserves_available_siblings_and_errors) ... ok
+test_builds_native_v2_task_from_typed_joint_fields (online.test_coarse_die_adapter.CoarseTaskBuilderTests.test_builds_native_v2_task_from_typed_joint_fields) ... ok
+test_context_dispatch_and_both_node_wires_preserve_schema (online.test_coarse_die_adapter.CoarseTaskBuilderTests.test_context_dispatch_and_both_node_wires_preserve_schema) ... ok
+test_dtype_roles_and_explicit_task_schema (online.test_coarse_die_adapter.CoarseTaskBuilderTests.test_dtype_roles_and_explicit_task_schema) ... ok
+test_empty_or_malformed_spans_fail_closed (online.test_coarse_die_adapter.CoarseTaskBuilderTests.test_empty_or_malformed_spans_fail_closed) ... ok
+test_frozen_legacy_projection_refuses_coarse_context (online.test_coarse_die_adapter.CoarseTaskBuilderTests.test_frozen_legacy_projection_refuses_coarse_context) ... ok
+test_legacy_context_and_untyped_local_region_fail_closed (online.test_coarse_die_adapter.CoarseTaskBuilderTests.test_legacy_context_and_untyped_local_region_fail_closed) ... ok
+test_online_builder_rejects_mixed_or_untyped_payload (online.test_coarse_die_adapter.CoarseTaskBuilderTests.test_online_builder_rejects_mixed_or_untyped_payload) ... ok
+test_service_context_requires_matching_hardware_and_system_profile (online.test_coarse_die_adapter.CoarseTaskBuilderTests.test_service_context_requires_matching_hardware_and_system_profile) ... ok
+test_bridge_v3_coarse_rows_echo_every_rank_and_revision (online.test_coarse_die_workspace.CoarseWorkspaceBridgeShapeTests.test_bridge_v3_coarse_rows_echo_every_rank_and_revision) ... ok
+test_extension_pins_mode_and_requires_capacity_owner (online.test_coarse_die_workspace.CoarseWorkspaceViewTests.test_extension_pins_mode_and_requires_capacity_owner) ... ok
+test_rejected_view_is_atomic_and_revisions_cannot_relabel_bytes (online.test_coarse_die_workspace.CoarseWorkspaceViewTests.test_rejected_view_is_atomic_and_revisions_cannot_relabel_bytes) ... ok
+test_snapshot_is_full_rank_scalar_base_and_workspace_is_subtracted_once (online.test_coarse_die_workspace.CoarseWorkspaceViewTests.test_snapshot_is_full_rank_scalar_base_and_workspace_is_subtracted_once) ... ok
+test_admission_pressure_keeps_two_stage_sequence (test_face_scheduler.FaceSchedulerTests.test_admission_pressure_keeps_two_stage_sequence) ... ok
+test_aggregated_transformer_pass_preserves_expanded_totals (test_face_scheduler.FaceSchedulerTests.test_aggregated_transformer_pass_preserves_expanded_totals) ... ok
+test_center_rank_nearest_edge_tie_and_xy_route_are_deterministic (test_face_scheduler.FaceSchedulerTests.test_center_rank_nearest_edge_tie_and_xy_route_are_deterministic) ... ok
+test_checked_in_config_is_request_neutral_and_fails_closed_without_input (test_face_scheduler.FaceSchedulerTests.test_checked_in_config_is_request_neutral_and_fails_closed_without_input)
+checked-in 配置 = request-neutral（占位队列路径，不绑定任何 ... ok
+test_decode_per_die_cost_and_hbm_capacity_tie (test_face_scheduler.FaceSchedulerTests.test_decode_per_die_cost_and_hbm_capacity_tie) ... ok
+test_default_config_uses_die_backend_and_one_million_reserve (test_face_scheduler.FaceSchedulerTests.test_default_config_uses_die_backend_and_one_million_reserve) ... ok
+test_ensure_capacity_records_deep_gap_events_before_failing (test_face_scheduler.FaceSchedulerTests.test_ensure_capacity_records_deep_gap_events_before_failing) ... ok
+test_et_kv_migration_ack_and_cross_instance_store_trigger (test_face_scheduler.FaceSchedulerTests.test_et_kv_migration_ack_and_cross_instance_store_trigger) ... ok
+test_first_n_session_selection_keeps_all_source_rows (test_face_scheduler.FaceSchedulerTests.test_first_n_session_selection_keeps_all_source_rows) ... ok
+test_history_local_remote_and_other_instance_transitions (test_face_scheduler.FaceSchedulerTests.test_history_local_remote_and_other_instance_transitions) ... ok
+test_kv_eviction_mode_key_rejected (test_face_scheduler.FaceSchedulerTests.test_kv_eviction_mode_key_rejected) ... ok
+test_llama2_7b_tp6_partition_is_exact_without_model_padding (test_face_scheduler.FaceSchedulerTests.test_llama2_7b_tp6_partition_is_exact_without_model_padding) ... ok
+test_llama2_7b_tp6_whole_head_kv_shards_are_exact (test_face_scheduler.FaceSchedulerTests.test_llama2_7b_tp6_whole_head_kv_shards_are_exact) ... ok
+test_mark_complete_records_next_request_type (test_face_scheduler.FaceSchedulerTests.test_mark_complete_records_next_request_type) ... ok
+test_odd_model_layer_count_derives_suffix_without_constants (test_face_scheduler.FaceSchedulerTests.test_odd_model_layer_count_derives_suffix_without_constants) ... ok
+test_passive_only_admission_pressure_evicts_exactly_enough (test_face_scheduler.FaceSchedulerTests.test_passive_only_admission_pressure_evicts_exactly_enough) ... ok
+test_passive_only_completion_short_circuits_but_records_type (test_face_scheduler.FaceSchedulerTests.test_passive_only_completion_short_circuits_but_records_type) ... ok
+test_per_rank_hbm_accounting_invariants_include_weights_and_kv (test_face_scheduler.FaceSchedulerTests.test_per_rank_hbm_accounting_invariants_include_weights_and_kv) ... ok
+test_prefill_task_load_order_and_deterministic_instance_tie (test_face_scheduler.FaceSchedulerTests.test_prefill_task_load_order_and_deterministic_instance_tie) ... ok
+test_prefill_work_derivation_matches_prefix_reuse_rules (test_face_scheduler.FaceSchedulerTests.test_prefill_work_derivation_matches_prefix_reuse_rules) ... ok
+test_remote_memory_mesh_shape_rejects_malformed_legacy_value (test_face_scheduler.FaceSchedulerTests.test_remote_memory_mesh_shape_rejects_malformed_legacy_value) ... ok
+test_remote_suffix_load_emits_target_hbm_dma_and_branch_gate (test_face_scheduler.FaceSchedulerTests.test_remote_suffix_load_emits_target_hbm_dma_and_branch_gate) ... ok
+test_roofline_estimate_keeps_exact_decode_token_length (test_face_scheduler.FaceSchedulerTests.test_roofline_estimate_keeps_exact_decode_token_length) ... ok
+test_roofline_task_load_accounts_for_history_and_decode_mean_cutoff (test_face_scheduler.FaceSchedulerTests.test_roofline_task_load_accounts_for_history_and_decode_mean_cutoff) ... ok
+test_suffix_eviction_leaves_partial_cache_resident (test_face_scheduler.FaceSchedulerTests.test_suffix_eviction_leaves_partial_cache_resident) ... ok
+test_terminal_retirement_bounds_many_single_turn_sessions (test_face_scheduler.FaceSchedulerTests.test_terminal_retirement_bounds_many_single_turn_sessions) ... ok
+test_terminal_retirement_releases_local_partial_and_remote_kv (test_face_scheduler.FaceSchedulerTests.test_terminal_retirement_releases_local_partial_and_remote_kv) ... ok
+test_tp_readiness_barrier_waits_for_every_rank_local_predecessor (test_face_scheduler.FaceSchedulerTests.test_tp_readiness_barrier_waits_for_every_rank_local_predecessor) ... ok
+test_trace_builder_can_stream_without_retaining_nodes (test_face_scheduler.FaceSchedulerTests.test_trace_builder_can_stream_without_retaining_nodes) ... ok
+test_weighted_schedulable_range_changes_after_update (test_face_scheduler.FaceSchedulerTests.test_weighted_schedulable_range_changes_after_update) ... ok
+test_zero_context_truncation_reconciles_partial_history_gate (test_face_scheduler.FaceSchedulerTests.test_zero_context_truncation_reconciles_partial_history_gate) ... ok
+test_active_hybrid_working_copy_not_evictable (test_face_scheduler.I10ActiveProtectionTest.test_active_hybrid_working_copy_not_evictable) ... ok
+test_dump_sidecar_per_key_sentinel (test_face_scheduler.KVDeltaJournalExportTests.test_dump_sidecar_per_key_sentinel) ... Traceback (most recent call last):
+  File "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py", line 223, in dump_joint_kv_ledgers
+    payload[key] = produce()
+                   ^^^^^^^^^
+  File "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py", line 210, in <lambda>
+    scheduler.kv_manager.kv_delta_journal_rows()]),
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/face_scheduler.py", line 8866, in kv_delta_journal_rows
+    raise RuntimeError(
+RuntimeError: kv_delta_journal row 0 field set drifted from the C14 frozen schema: ('seq', 'session_id', 'trigger_request_id', 'working_kind', 'direction', 'zero_byte_flip', 'winner_instance', 'loser_instance', 'home_before', 'home_after', 'home_migration', 'transferred_bytes', 'home_side_retained_bytes', 'exec_side_retained_bytes', 'new_tokens', 'staging_return_bytes', 'extra_field') != ('seq', 'session_id', 'trigger_request_id', 'working_kind', 'direction', 'zero_byte_flip', 'winner_instance', 'loser_instance', 'home_before', 'home_after', 'home_migration', 'transferred_bytes', 'home_side_retained_bytes', 'exec_side_retained_bytes', 'new_tokens', 'staging_return_bytes') -- ledger integrity failure
+ok
+test_empty_journal_exports_empty_tuple (test_face_scheduler.KVDeltaJournalExportTests.test_empty_journal_exports_empty_tuple) ... ok
+test_export_fails_closed_on_field_drift_and_seq_break (test_face_scheduler.KVDeltaJournalExportTests.test_export_fails_closed_on_field_drift_and_seq_break) ... ok
+test_forward_merge_export_fields_and_byte_conservation (test_face_scheduler.KVDeltaJournalExportTests.test_forward_merge_export_fields_and_byte_conservation) ... ok
+test_kv_delta_index_tracks_latest_and_matches_scan (test_face_scheduler.KVDeltaJournalExportTests.test_kv_delta_index_tracks_latest_and_matches_scan) ... ok
+test_stay_row_seq_chain_and_frozen_copy_semantics (test_face_scheduler.KVDeltaJournalExportTests.test_stay_row_seq_chain_and_frozen_copy_semantics) ... ok
+test_copy_partial_base_merges_as_zero_byte_flip (test_face_scheduler.MergeV2DirectionTests.test_copy_partial_base_merges_as_zero_byte_flip) ... ok
+test_recompute_at_remote_instance_merges_as_zero_byte_flip (test_face_scheduler.MergeV2DirectionTests.test_recompute_at_remote_instance_merges_as_zero_byte_flip) ... ok
+test_remote_base_copy_and_recompute_merge_in_place (test_face_scheduler.MergeV2DirectionTests.test_remote_base_copy_and_recompute_merge_in_place) ... ok
+test_stay_merge_sets_outcome_and_version_key_blocks_duplicates (test_face_scheduler.MergeV2DirectionTests.test_stay_merge_sets_outcome_and_version_key_blocks_duplicates) ... ok
+
+----------------------------------------------------------------------
+Ran 92 tests in 0.397s
+
+OK

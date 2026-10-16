@@ -1,0 +1,1140 @@
+{
+  "scope": "dry_run_only",
+  "snapshot_status": "not_prepared_command_plan_only",
+  "source_digest": "not_frozen_no_snapshot",
+  "commands": [
+    {
+      "label": "astra-sim-face-abi-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face/extern/die_model",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCOARSE_DIE_BUILD_TESTS=OFF"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-face-abi-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face",
+        "--parallel",
+        "2",
+        "--target",
+        "die_model_cabi",
+        "coarse_die_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-face-abi-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-config",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face/sh_test_mesh/tests",
+        "-p",
+        "test_config_resolver*.py",
+        "-v"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so"
+      },
+      "expected": [
+        "unittest",
+        21
+      ],
+      "requires": [
+        "astra-sim-face-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-typed-resolver",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/work/integration-audit/probe_typed_resolver.py",
+        "--library",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so",
+        "--label",
+        "actual-typed",
+        "--child",
+        "astra-sim-face"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so"
+      },
+      "expected": null,
+      "requires": [
+        "astra-sim-face-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-python-bindings",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-c",
+        "import pathlib,hashlib,sys; p=pathlib.Path(sys.argv[1]); assert p.is_file(), str(p); assert hashlib.sha256(p.read_bytes()).hexdigest()==sys.argv[2], \"frozen binding changed\"; print(\"verified frozen generated protobuf binding\")",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py",
+        "not_frozen_no_snapshot"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-python-consumers",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "-v",
+        "online.test_die_model_adapter",
+        "test_die_model_oracle",
+        "test_face_scheduler",
+        "online.test_graph_batch_builder"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face/sh_test_mesh/workload/llama2_7b_inference",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face/sh_test_mesh:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face/sh_test_mesh/workload/llama2_7b_inference"
+      },
+      "expected": [
+        "unittest_nonempty",
+        null
+      ],
+      "requires": [
+        "astra-sim-face-python-bindings"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-real-cost-consumer",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/die/docs/analysis/analytical-curves-partial-20261015/integration/face_cost_abi_probe.py",
+        "--repo-root",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face",
+        "--library",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so",
+        "--expect",
+        "new",
+        "--output",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-validation/dry-run/astra-sim-face-real-cost-consumer.json"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face/sh_test_mesh:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face/sh_test_mesh/workload/llama2_7b_inference"
+      },
+      "expected": null,
+      "requires": [],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-native-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-face",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-face-native-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-face",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest",
+        "coarse_die_cabi",
+        "die_model_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-face-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-native-consumers",
+      "command": [
+        "ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-face",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        4
+      ],
+      "requires": [
+        "astra-sim-face-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-abi-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU/extern/die_model",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCOARSE_DIE_BUILD_TESTS=OFF"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-face-LRU-abi-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU",
+        "--parallel",
+        "2",
+        "--target",
+        "die_model_cabi",
+        "coarse_die_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-face-LRU-abi-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-config",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU/sh_test_mesh/tests",
+        "-p",
+        "test_config_resolver*.py",
+        "-v"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so"
+      },
+      "expected": [
+        "unittest",
+        20
+      ],
+      "requires": [
+        "astra-sim-face-LRU-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-typed-resolver",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/work/integration-audit/probe_typed_resolver.py",
+        "--library",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+        "--label",
+        "actual-typed",
+        "--child",
+        "astra-sim-face-LRU"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so"
+      },
+      "expected": null,
+      "requires": [
+        "astra-sim-face-LRU-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-python-bindings",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-c",
+        "import pathlib,hashlib,sys; p=pathlib.Path(sys.argv[1]); assert p.is_file(), str(p); assert hashlib.sha256(p.read_bytes()).hexdigest()==sys.argv[2], \"frozen binding changed\"; print(\"verified frozen generated protobuf binding\")",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py",
+        "not_frozen_no_snapshot"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-python-consumers",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "-v",
+        "online.test_die_model_adapter",
+        "test_die_model_oracle",
+        "test_face_scheduler",
+        "online.test_graph_batch_builder"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU/sh_test_mesh/workload/llama2_7b_inference",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU/sh_test_mesh:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU/sh_test_mesh/workload/llama2_7b_inference"
+      },
+      "expected": [
+        "unittest_nonempty",
+        null
+      ],
+      "requires": [
+        "astra-sim-face-LRU-python-bindings"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-real-cost-consumer",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/die/docs/analysis/analytical-curves-partial-20261015/integration/face_cost_abi_probe.py",
+        "--repo-root",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU",
+        "--library",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+        "--expect",
+        "new",
+        "--output",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-validation/dry-run/astra-sim-face-LRU-real-cost-consumer.json"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU/sh_test_mesh:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU/sh_test_mesh/workload/llama2_7b_inference"
+      },
+      "expected": null,
+      "requires": [],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-native-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-face-LRU",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-face-LRU",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-face-LRU-native-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-face-LRU",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest",
+        "coarse_die_cabi",
+        "die_model_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-face-LRU-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-native-consumers",
+      "command": [
+        "ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-face-LRU",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        4
+      ],
+      "requires": [
+        "astra-sim-face-LRU-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-abi-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm/extern/die_model",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCOARSE_DIE_BUILD_TESTS=OFF"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-wscllm-abi-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm",
+        "--parallel",
+        "2",
+        "--target",
+        "die_model_cabi",
+        "coarse_die_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-wscllm-abi-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-config",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm/sh_test_mesh/tests",
+        "-p",
+        "test_config_resolver*.py",
+        "-v"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm/lib/libcoarse_die_cabi.so"
+      },
+      "expected": [
+        "unittest",
+        23
+      ],
+      "requires": [
+        "astra-sim-wscllm-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-typed-resolver",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/work/integration-audit/probe_typed_resolver.py",
+        "--library",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm/lib/libcoarse_die_cabi.so",
+        "--label",
+        "actual-typed",
+        "--child",
+        "astra-sim-wscllm"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm/lib/libcoarse_die_cabi.so"
+      },
+      "expected": null,
+      "requires": [
+        "astra-sim-wscllm-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-python-bindings",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-c",
+        "import pathlib,hashlib,sys; p=pathlib.Path(sys.argv[1]); assert p.is_file(), str(p); assert hashlib.sha256(p.read_bytes()).hexdigest()==sys.argv[2], \"frozen binding changed\"; print(\"verified frozen generated protobuf binding\")",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py",
+        "not_frozen_no_snapshot"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-python-consumers",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "-v",
+        "online.test_die_model_adapter",
+        "online.test_graph_batch_builder",
+        "test_wsc_llm_scheduler"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm/lib/libcoarse_die_cabi.so",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm/sh_test_mesh:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm/sh_test_mesh/workload/llama2_7b_inference"
+      },
+      "expected": [
+        "unittest_nonempty",
+        null
+      ],
+      "requires": [
+        "astra-sim-wscllm-python-bindings"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-native-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-wscllm",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-wscllm-native-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-wscllm",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "AstraSim_Analytical_WorkspaceAdmissionTest",
+        "coarse_die_cabi",
+        "die_model_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-wscllm-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-native-consumers",
+      "command": [
+        "ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-wscllm",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_WorkspaceAdmissionTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        4
+      ],
+      "requires": [
+        "astra-sim-wscllm-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-abi-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU/extern/die_model",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCOARSE_DIE_BUILD_TESTS=OFF"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-abi-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU",
+        "--parallel",
+        "2",
+        "--target",
+        "die_model_cabi",
+        "coarse_die_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-wscllm-LRU-abi-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-config",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU/sh_test_mesh/tests",
+        "-p",
+        "test_config_resolver*.py",
+        "-v"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so"
+      },
+      "expected": [
+        "unittest",
+        18
+      ],
+      "requires": [
+        "astra-sim-wscllm-LRU-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-typed-resolver",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/work/integration-audit/probe_typed_resolver.py",
+        "--library",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so",
+        "--label",
+        "actual-typed",
+        "--child",
+        "astra-sim-wscllm-LRU"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so"
+      },
+      "expected": null,
+      "requires": [
+        "astra-sim-wscllm-LRU-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-python-bindings",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-c",
+        "import pathlib,hashlib,sys; p=pathlib.Path(sys.argv[1]); assert p.is_file(), str(p); assert hashlib.sha256(p.read_bytes()).hexdigest()==sys.argv[2], \"frozen binding changed\"; print(\"verified frozen generated protobuf binding\")",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py",
+        "not_frozen_no_snapshot"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-python-consumers",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "-v",
+        "online.test_die_model_adapter",
+        "online.test_graph_batch_builder",
+        "test_wsc_llm_scheduler"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU/sh_test_mesh:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference"
+      },
+      "expected": [
+        "unittest_nonempty",
+        null
+      ],
+      "requires": [
+        "astra-sim-wscllm-LRU-python-bindings"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-wscllm-LRU",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-wscllm-LRU",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-wscllm-LRU",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "AstraSim_Analytical_WorkspaceAdmissionTest",
+        "coarse_die_cabi",
+        "die_model_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-wscllm-LRU-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-consumers",
+      "command": [
+        "ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-wscllm-LRU",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_WorkspaceAdmissionTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        4
+      ],
+      "requires": [
+        "astra-sim-wscllm-LRU-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-abi-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint/extern/die_model",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint",
+        "-G",
+        "Unix Makefiles",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCOARSE_DIE_BUILD_TESTS=OFF"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-joint-abi-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint",
+        "--parallel",
+        "2",
+        "--target",
+        "die_model_cabi",
+        "coarse_die_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-joint-abi-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-config",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint/sh_test_mesh/tests",
+        "-p",
+        "test_config_resolver*.py",
+        "-v"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint/lib/libcoarse_die_cabi.so"
+      },
+      "expected": [
+        "unittest",
+        16
+      ],
+      "requires": [
+        "astra-sim-joint-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-typed-resolver",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/work/integration-audit/probe_typed_resolver.py",
+        "--library",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint/lib/libcoarse_die_cabi.so",
+        "--label",
+        "actual-typed",
+        "--child",
+        "astra-sim-joint"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint/lib/libcoarse_die_cabi.so"
+      },
+      "expected": null,
+      "requires": [
+        "astra-sim-joint-abi-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-python-bindings",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-c",
+        "import pathlib,hashlib,sys; p=pathlib.Path(sys.argv[1]); assert p.is_file(), str(p); assert hashlib.sha256(p.read_bytes()).hexdigest()==sys.argv[2], \"frozen binding changed\"; print(\"verified frozen generated protobuf binding\")",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py",
+        "not_frozen_no_snapshot"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-python-consumers",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "-v",
+        "online.test_die_model_adapter",
+        "online.test_coarse_die_adapter",
+        "online.test_coarse_die_workspace",
+        "test_face_scheduler"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint/lib/libdie_model_cabi.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-joint/lib/libcoarse_die_cabi.so",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint/sh_test_mesh:/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference"
+      },
+      "expected": [
+        "unittest_nonempty",
+        null
+      ],
+      "requires": [
+        "astra-sim-joint-python-bindings"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-native-configure",
+      "command": [
+        "cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-joint",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-joint-native-build",
+      "command": [
+        "cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-joint",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "JointPipelineWindowTest",
+        "NativeProjectionCApiTest",
+        "NativeCoarseProjectionTest",
+        "NativeCoarseDieDomainTest",
+        "AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest",
+        "AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest",
+        "JointPipelineMutationTest",
+        "coarse_die_cabi",
+        "die_model_cabi",
+        "joint_projection"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-joint-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-native-consumers",
+      "command": [
+        "ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-joint",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|JointPipelineWindowTest|NativeProjectionCApiTest|NativeCoarseProjectionTest|NativeCoarseDieDomainTest|AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest|AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest|JointPipelineMutationTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        10
+      ],
+      "requires": [
+        "astra-sim-joint-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-native-python",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "joint.test_native_coarse_projection",
+        "-v"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+        "NATIVE_COARSE_PROJECTION_LIBRARY": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-joint/lib/libjoint_projection.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-joint/lib/libcoarse_die_cabi.so",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-native/astra-sim-joint/lib/libdie_model_cabi.so"
+      },
+      "expected": [
+        "unittest_nonempty",
+        null
+      ],
+      "requires": [
+        "astra-sim-joint-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "actual-python-availability",
+      "command": [
+        "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root/die/docs/analysis/consumer-availability-20261016/probe_python_native.py",
+        "--oracle-root",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/stage-root",
+        "--library",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-not-prepared/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so",
+        "--output",
+        "/workspace/template/work/core-resume/work/core-resume-sdk-validation/dry-run/actual-python-availability.json"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": false
+    }
+  ]
+}

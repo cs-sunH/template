@@ -5,7 +5,7 @@
 用户已明确恢复持续自主开发；下方停止交接段落只记录此前状态。已实际 fetch/ls-remote 核实 main=`d3a64a6c4cb23b8ce437438ed68217d7cee4af1f`、唯一迁移分支=`b8ddbcfd62e03738b0c3996444355cbbe2e99b80`。本次从迁移提交建立独立工作树/分支 `codex/die-core-resume-20261016`，安全合入 main 独有交接资料，保留新版 AGENTS、PROJECT、设计文档及全部实现；没有从旧 main 重写硬件或复用任何旧 ELF。
 
 - Current Status / Completed：完成远端核验和分叉恢复；最终公共fresh Make/Release 51/51、DOCX/32行及192资源点通过；两套正常30样本预算均failed，见下方本次实际公共检查点。当前不是最终工程验收。
-- Next Step / Tests：公共构建及实际验证证据在 work/build-core-release 对应的 evidence/core-resume-20261016；三仓最终 W/H ABI/配置 fresh验证进行中，随后隔离新 SDK 真实消费者；继续诊断已保存性能失败，再安全集成已满足条件的范围。
+- Next Step / Tests：公共构建及实际验证证据在 work/build-core-release 对应的 evidence/core-resume-20261016；三仓最终 W/H ABI/配置与五仓隔离双ABI/98配置均通过，实际native消费者继续验证；继续诊断已保存性能失败，再安全集成已满足条件的范围。
 - Important Decisions：仅 Core、core32_v1、L0=a；旧字段严格拒绝；解析固定分段路线、10%/有据20%及原 busy/速度门槛保持。TX8工程对照点不是通用强制硬件或目标实测校准。
 - Files to Continue：die/src、configs、tests、tools；single-core-20261016 和 single-core-handoff-20261016 归档；五仓最终配置及 canonical24 隔离验证入口。
 - Blocking Issues / Handoff Notes：尚无环境阻碍；最终验证/正式新 SDK 发布仍未完成，工程 NOT ACCEPTED。本恢复分支尚未合入共享 main；不将推送检查点当作集成或验收完成。Norm/Runtime/R>1/busy 未解项目按真实依赖继续。
@@ -16,6 +16,14 @@
 - 两份正常30样本预算 **failed**，没有并行构建；cgroup 两次新增 throttled 均为0。example 128³cold P95 2.587118ms、OS J8 68.344us；TX8工程点 cold 2.568263ms、交替alias 56.093us、Residual cost 121.610us、multi-domain J32 63.015us、OS J8/J32 104.229/277.039us。全部原始样本保留，不重采选最好；不是完整性能验收或目标硬件校准。
 - 新环境无 Ninja，首次配置/随后构建未成功；原log/identity保留，改用独立全新 Make 目录完成实际构建。三仓最终legacy配置阶段通过；首次验证工具接续因阶段目录与build目录重名而失败，未启动ABI构建，不误记为源码失败。正在修工具并fresh接续，正式SDK不变。
 - 完整当前证据在 `evidence/core-resume-20261016/`，总表 `public-checkpoint-summary.json`。有效用户文档两处过时说明已修；迁移仍仅在本分支，main及正式新版SDK尚未激活，工程NOT ACCEPTED。继续五仓及性能/数值依赖，不按检查点停工。
+
+### 本次五仓迁移接续检查点（正式 SDK 仍未发布）
+
+- 最终三仓 fresh legacy ABI、C++ **11/11 + 11/11 + 15/15**、W/H/config **23+18+16=57**、三个默认工程点全部通过，0skip；源码/ELF身份和原始日志在 `evidence/core-resume-20261016/legacy-final-three/`。父代理重新核对FACE/FACE-LRU七份旧身份共30文件/份，全部匹配；沿原41配置范围合计98，不冒充全为新执行。显式fetch全部23远端heads，全部是恢复HEAD祖先，无遗漏的另一套未合并成果。
+- 新隔离SDK从当前公共33文件冻结，digest `2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5`，五仓源码和消费者均实际复制、没有symlink读回正式旧SDK。先生成五份protobuf再冻结4493文件。实际五仓双ABI **10个构建全成功**，当前全部98配置重新执行通过且0skip；五coarse共享库逐byte相同，是否同公共库由 `integration-public-checkpoint.json` 实核。
+- 四仓typed resolver实测通过。通用旧probe在JOINT误用其不存在的derive_coarse_die_hardware入口，原失败保留；改用JOINT真实online.DieModelOracle入口后，Core32/88核及8种旧类型字段拒绝均通过，不新增生产resolver或假称JOINT authored coarse节点已实现。FACE/FACE-LRU/JOINT实际新库full/cost/fallback/R3与真实R4拒绝探针全部通过，原guard保持。
+- FACE Python首次85pass/1fail：唯一遗漏是工程点已从旧硬件变为显式10x10后仍钉旧6197ns。保存真实七项ABI分解得到6191.5343845817139ns，独立Decimal ceil=6192，与scheduler相同；只修测试期望/注释，复制独立完整FACE消费者、仅该测试文件不同，使用本次fresh库后 **86/86零skip**。初始失败和完整来源均保留；不是重拟时间模型。另FACE-LRU80/80、WSCLLM64/64、JOINT92/92；WSCLLM-LRU实际62pass/1skip（仓内未实现可选oracle客户端），严格零skip工具记failed而非抹去缺口。
+- 证据总表 `evidence/core-resume-20261016/integration-public-checkpoint.json`；五仓真实C++/native消费者正构建，不是完整业务/CPU通过。性能候选仅在work/perf-audit准备，生产模型未改。当前仍未publisher、未集成main、工程NOT ACCEPTED，继续源码/数值和接入依赖。
 
 ## 此前已保存交接记录（保留原始验证范围）
 
