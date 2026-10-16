@@ -1,0 +1,172 @@
+{
+  "scope": "fresh frozen A+B baseline native remainder; not later C4r working tree; isolated unpublished SDK; no full business or CPU budget acceptance",
+  "public_digest": "25c51345c5ddcedb45b21c8b4dc89805c1f9ea2166d49792ddaf639ccbf91013",
+  "source_head_at_freeze": "931855fa0d110fcd75762ca2510217822234ae3d",
+  "build_jobs": 2,
+  "repositories_built_sequentially": true,
+  "no_elf_or_build_reuse": true,
+  "native": {
+    "astra-sim-face-LRU": {
+      "tests": 4,
+      "passed": 3,
+      "failed": 1,
+      "skipped": false,
+      "lifecycle_r4_guard_failure_observed": true,
+      "native_consumer_status": "failed",
+      "skipped_test_count": 0,
+      "legacy_runner_skip_word_flag": false,
+      "legacy_runner_zero_skips_check": true,
+      "ctest_result_lines": [
+        "1/4 Test #12: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.02 sec",
+        "2/4 Test #14: AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest ......   Passed    0.00 sec",
+        "3/4 Test #18: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...Subprocess aborted***Exception:   0.01 sec",
+        "4/4 Test #19: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.00 sec"
+      ]
+    },
+    "astra-sim-wscllm": {
+      "tests": 4,
+      "passed": 3,
+      "failed": 1,
+      "skipped": false,
+      "lifecycle_r4_guard_failure_observed": true,
+      "native_consumer_status": "failed",
+      "skipped_test_count": 0,
+      "legacy_runner_skip_word_flag": true,
+      "legacy_runner_zero_skips_check": false,
+      "ctest_result_lines": [
+        "1/4 Test #15: AstraSim_Analytical_WorkspaceAdmissionTest .......................   Passed    0.00 sec",
+        "2/4 Test #44: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.00 sec",
+        "3/4 Test #45: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...Subprocess aborted***Exception:   0.04 sec",
+        "4/4 Test #46: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.00 sec"
+      ]
+    },
+    "astra-sim-wscllm-LRU": {
+      "tests": 4,
+      "passed": 3,
+      "failed": 1,
+      "skipped": false,
+      "lifecycle_r4_guard_failure_observed": true,
+      "native_consumer_status": "failed",
+      "skipped_test_count": 0,
+      "legacy_runner_skip_word_flag": true,
+      "legacy_runner_zero_skips_check": false,
+      "ctest_result_lines": [
+        "1/4 Test #15: AstraSim_Analytical_WorkspaceAdmissionTest .......................   Passed    0.00 sec",
+        "2/4 Test #26: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.01 sec",
+        "3/4 Test #27: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...Subprocess aborted***Exception:   0.03 sec",
+        "4/4 Test #28: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.00 sec"
+      ]
+    }
+  },
+  "fresh_shared_libraries": {
+    "astra-sim-face-LRU": {
+      "libcoarse_die_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+        "sha256": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+        "bytes": 1676920
+      },
+      "libdie_model_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152
+      }
+    },
+    "astra-sim-wscllm": {
+      "libcoarse_die_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/lib/libcoarse_die_cabi.so",
+        "sha256": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+        "bytes": 1676920
+      },
+      "libdie_model_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/lib/libdie_model_cabi.so",
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152
+      }
+    },
+    "astra-sim-wscllm-LRU": {
+      "libcoarse_die_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so",
+        "sha256": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+        "bytes": 1676920
+      },
+      "libdie_model_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so",
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152
+      }
+    }
+  },
+  "phases": [
+    {
+      "label": "astra-sim-face-LRU-native-configure",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 0.584749698638916
+    },
+    {
+      "label": "astra-sim-face-LRU-native-build",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 209.2433204650879
+    },
+    {
+      "label": "astra-sim-face-LRU-native-consumers",
+      "status": "failed",
+      "return_code": 8,
+      "elapsed_seconds": 0.3978993892669678
+    },
+    {
+      "label": "astra-sim-wscllm-native-configure",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 0.8826663494110107
+    },
+    {
+      "label": "astra-sim-wscllm-native-build",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 206.02913093566895
+    },
+    {
+      "label": "astra-sim-wscllm-native-consumers",
+      "status": "failed",
+      "return_code": 8,
+      "elapsed_seconds": 0.31276774406433105
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-configure",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 0.7783825397491455
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-build",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 262.69277811050415
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-consumers",
+      "status": "failed",
+      "return_code": 8,
+      "elapsed_seconds": 0.29126834869384766
+    }
+  ],
+  "not_run": [
+    "FACE/JOINT native re-execution (prior A+B evidence remains separate)",
+    "full five-repository business E2E and CPU<=10% comparison",
+    "public accuracy/performance/calibration",
+    "SDK publication"
+  ],
+  "formal_sdk": "canonical24 unchanged; actual hashes verified",
+  "engineering_status": "NOT ACCEPTED",
+  "exported_unix": 1792187652.42548,
+  "initial_export_summary_sha256": "1832b4454e73a032dd8f89f23ad46c07be17a73fbf6a2150d6c907aa6863d5c6",
+  "skip_classification_correction": {
+    "reason": "Original strict runner matches any word Skipped, including successful assertions of the business terminal status Skipped. Actual CTest skip records are classified separately.",
+    "original_runner_logs_and_checks_unchanged": true,
+    "overall_failed_status_unchanged": "all three lifecycle processes failed at the real R4 complete-prediction guard",
+    "initial_export_manifest": "manifest.json",
+    "initial_exporter_source": "die/docs/analysis/numeric-continue-20261017/native/export_evidence_before_skip_classification.py"
+  }
+}

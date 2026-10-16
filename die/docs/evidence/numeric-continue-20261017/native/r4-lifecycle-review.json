@@ -1,0 +1,187 @@
+{
+  "astra-sim-face-LRU": {
+    "source_path": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-face-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc",
+    "source_sha256": "242a6c54d75bfac7152de438ab4f12938f9d68fe4a253389c18ede51e9900ded",
+    "fixture_identity": {
+      "path": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-face-LRU/astra-sim/workload/execution_driven/tests/testdata/face_emitted_ffn_region.json",
+      "sha256": "7b940d8285debf6aae38c78c91e04f8597ba7044d970eb931feef75a234d2473"
+    },
+    "original_ffn_task": {
+      "schema_version": 1,
+      "op_kind": "ffn_region",
+      "phase": "decode",
+      "dtype": "bf16",
+      "model_dims": {
+        "hidden": 64,
+        "ffn": 128,
+        "vocab": 256,
+        "mlp_variant": "gelu",
+        "norm_type": "layernorm",
+        "position_encoding": "none",
+        "num_q_heads": 8,
+        "num_kv_heads": 8,
+        "head_dim": 8
+      },
+      "tp_slice": {
+        "tensor_parallel": 2,
+        "tensor_parallel_rank": 0,
+        "q_heads_local": 4,
+        "kv_heads_local": 4,
+        "ffn_local": 64,
+        "vocab_local": 128
+      },
+      "spans": [
+        {
+          "request_id": "batch_train_i1_1#s0",
+          "q_tokens": 1,
+          "kv_tokens": 1,
+          "q_start_pos": 0,
+          "kv_start_pos": 0
+        },
+        {
+          "request_id": "batch_train_i1_1#s1",
+          "q_tokens": 1,
+          "kv_tokens": 2,
+          "q_start_pos": 1,
+          "kv_start_pos": 0
+        }
+      ],
+      "layer_count": 2,
+      "weight_passes": 2,
+      "kv_access": {
+        "identity": "local"
+      },
+      "fusion_policy": "auto",
+      "provenance": "transformer_pass_aggregated",
+      "config_hash": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+    },
+    "R": 4,
+    "guard_failure_observed": true,
+    "not_run_after_abort": "remaining statements in this lifecycle process; separate CTest tests still ran",
+    "guard_and_original_layers_passes_unchanged": true
+  },
+  "astra-sim-wscllm": {
+    "source_path": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc",
+    "source_sha256": "e40e15149987463f35d2c7438dc98d2dd650e54ebe474afdf0dd03d8ebdbb4db",
+    "fixture_identity": {
+      "path": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc",
+      "function": "face_emitter_ffn_spec_json",
+      "sha256": "e40e15149987463f35d2c7438dc98d2dd650e54ebe474afdf0dd03d8ebdbb4db"
+    },
+    "original_ffn_task": {
+      "schema_version": 1,
+      "op_kind": "ffn_region",
+      "phase": "decode",
+      "dtype": "bf16",
+      "model_dims": {
+        "hidden": 64,
+        "ffn": 128,
+        "vocab": 256,
+        "mlp_variant": "gelu",
+        "norm_type": "layernorm",
+        "position_encoding": "none",
+        "num_q_heads": 8,
+        "num_kv_heads": 8,
+        "head_dim": 8
+      },
+      "tp_slice": {
+        "tensor_parallel": 2,
+        "tensor_parallel_rank": 0,
+        "q_heads_local": 4,
+        "kv_heads_local": 4,
+        "ffn_local": 64,
+        "vocab_local": 128
+      },
+      "spans": [
+        {
+          "request_id": "batch_train_i1_1#s0",
+          "q_tokens": 1,
+          "kv_tokens": 1,
+          "q_start_pos": 0,
+          "kv_start_pos": 0
+        },
+        {
+          "request_id": "batch_train_i1_1#s1",
+          "q_tokens": 1,
+          "kv_tokens": 2,
+          "q_start_pos": 1,
+          "kv_start_pos": 0
+        }
+      ],
+      "layer_count": 2,
+      "weight_passes": 2,
+      "kv_access": {
+        "identity": "local"
+      },
+      "fusion_policy": "auto",
+      "provenance": "transformer_pass_aggregated",
+      "config_hash": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+    },
+    "R": 4,
+    "guard_failure_observed": true,
+    "not_run_after_abort": "remaining statements in this lifecycle process; separate CTest tests still ran",
+    "guard_and_original_layers_passes_unchanged": true
+  },
+  "astra-sim-wscllm-LRU": {
+    "source_path": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc",
+    "source_sha256": "840a2d767d56e4192fb15fb6cddd14f7bf2d0e34e92071b12c5347309b6810b2",
+    "fixture_identity": {
+      "path": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc",
+      "function": "face_emitter_ffn_spec_json",
+      "sha256": "840a2d767d56e4192fb15fb6cddd14f7bf2d0e34e92071b12c5347309b6810b2"
+    },
+    "original_ffn_task": {
+      "schema_version": 1,
+      "op_kind": "ffn_region",
+      "phase": "decode",
+      "dtype": "bf16",
+      "model_dims": {
+        "hidden": 64,
+        "ffn": 128,
+        "vocab": 256,
+        "mlp_variant": "gelu",
+        "norm_type": "layernorm",
+        "position_encoding": "none",
+        "num_q_heads": 8,
+        "num_kv_heads": 8,
+        "head_dim": 8
+      },
+      "tp_slice": {
+        "tensor_parallel": 2,
+        "tensor_parallel_rank": 0,
+        "q_heads_local": 4,
+        "kv_heads_local": 4,
+        "ffn_local": 64,
+        "vocab_local": 128
+      },
+      "spans": [
+        {
+          "request_id": "batch_train_i1_1#s0",
+          "q_tokens": 1,
+          "kv_tokens": 1,
+          "q_start_pos": 0,
+          "kv_start_pos": 0
+        },
+        {
+          "request_id": "batch_train_i1_1#s1",
+          "q_tokens": 1,
+          "kv_tokens": 2,
+          "q_start_pos": 1,
+          "kv_start_pos": 0
+        }
+      ],
+      "layer_count": 2,
+      "weight_passes": 2,
+      "kv_access": {
+        "identity": "local"
+      },
+      "fusion_policy": "auto",
+      "provenance": "transformer_pass_aggregated",
+      "config_hash": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+    },
+    "R": 4,
+    "guard_failure_observed": true,
+    "not_run_after_abort": "remaining statements in this lifecycle process; separate CTest tests still ran",
+    "guard_and_original_layers_passes_unchanged": true
+  }
+}

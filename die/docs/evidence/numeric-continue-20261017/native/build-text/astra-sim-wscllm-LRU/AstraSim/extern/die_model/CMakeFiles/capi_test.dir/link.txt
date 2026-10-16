@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/capi_test.dir/link.d CMakeFiles/capi_test.dir/tests/capi_test.cc.o -o capi_test  -Wl,-rpath,/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm-LRU/lib ../../../lib/libdie_model_cabi.so libdie_model.a

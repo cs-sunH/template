@@ -39,6 +39,17 @@ json case_mixed_ready(const Hardware& hw){
  result["passed"]=!q.at("terminal").get<bool>()&&q.at("served").at("vec_eqops")==0&&q.at("activities")[0].at("progress")==0;
  return result;
 }
+json case_legacy_target(const Hardware& hw){
+ Runtime r(hw);auto h=r.submit(timed(hw,std::nextafter(1e-9,std::numeric_limits<double>::infinity()),false,0,"legacy_positive_tail_target_guard"),owner(1,1,1),0);
+ json result={{"case","legacy_event_must_not_integrate_past_requested_target"}};
+ r.advance_to(1);result["at_target"]=observe(r,{h});
+ const auto busy=std::stold(r.counters().at("compute_busy_ns_exact").get<std::string>());
+ bool imported=false;std::string error;
+ try{auto copy=Runtime::import_snapshot(hw,r.export_snapshot());imported=copy->export_snapshot()==r.export_snapshot();}catch(const std::exception& e){error=e.what();}
+ result["snapshot_import_error"]=error;
+ result["passed"]=busy<=1.0L&&(!r.drained()||r.terminal_finish_ns(h)<=r.now_ns())&&imported;
+ return result;
+}
 json case_full(const Hardware& hw){
  const auto duration=std::ldexp(1.,-85);Runtime r(hw);auto h=r.submit(timed(hw,duration,true,0,"full_positive_subepsilon_terminal"),owner(1,1,1),0);
  json result={{"case","full_positive_terminal"},{"before",observe(r,{h})}};r.advance_to(1);result["after"]=observe(r,{h});
@@ -61,7 +72,7 @@ json case_tail(const Hardware& hw){
  result["expected_from_published_rate"]=initial_rate;
  result["private_time_input_ns"]=dec(static_cast<long double>(duration)*1e9L);
  result["expected_busy_ns"]=dec(expected);result["actual_busy_ns"]=dec(busy);result["busy_difference_ns"]=dec(busy-expected);
- result["passed"]=live&&next==2&&r.terminal_finish_ns(h)==2&&std::abs(busy-expected)<=std::numeric_limits<long double>::epsilon()*2;
+ result["passed"]=result.at("before").at("next_event_ns")==2&&live&&next==2&&r.terminal_finish_ns(h)==2&&std::abs(busy-expected)<=std::numeric_limits<long double>::epsilon()*2;
  return result;
 }
 json case_legacy(const Hardware& hw){
@@ -101,7 +112,7 @@ int main(int argc,char**argv){
  std::array<double,resource_count> rates{};rates[COMPUTE_GATE]=1;auto hw=manual_hardware(rates);
  hw.fingerprint="synthetic_current_core_time_only_review_v1:"+stable_hash(json{{"base",hw.fingerprint},{"rates",rates}}.dump());
  json report={{"label",argv[2]},{"scope","independent current-Core synthetic time/readiness/legacy controls"},{"cases",json::array()}};
- for(auto fn:{case_ready,case_mixed_ready,case_full,case_tail,case_legacy,case_unrepresented_progress,case_unrepresented_clock})try{report["cases"].push_back(fn(hw));}catch(const std::exception& e){report["cases"].push_back({{"passed",false},{"error",e.what()}});}
+ for(auto fn:{case_ready,case_mixed_ready,case_legacy_target,case_full,case_tail,case_legacy,case_unrepresented_progress,case_unrepresented_clock})try{report["cases"].push_back(fn(hw));}catch(const std::exception& e){report["cases"].push_back({{"passed",false},{"error",e.what()}});}
  std::ofstream out(dest/"report.json");out<<report.dump(2)<<'\n';bool passed=true;for(const auto&c:report["cases"])passed=passed&&c.at("passed").get<bool>();
  std::cout<<json{{"label",argv[2]},{"passed",passed}}.dump()<<'\n';return passed?0:1;
 }

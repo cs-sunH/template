@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/workload_test.dir/link.d CMakeFiles/workload_test.dir/tests/workload_test.cc.o -o workload_test  libdie_model.a

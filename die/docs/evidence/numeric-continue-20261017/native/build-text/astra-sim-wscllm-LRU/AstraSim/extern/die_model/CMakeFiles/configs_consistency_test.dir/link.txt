@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/configs_consistency_test.dir/link.d CMakeFiles/configs_consistency_test.dir/tests/configs_consistency_test.cc.o -o configs_consistency_test  libdie_model.a

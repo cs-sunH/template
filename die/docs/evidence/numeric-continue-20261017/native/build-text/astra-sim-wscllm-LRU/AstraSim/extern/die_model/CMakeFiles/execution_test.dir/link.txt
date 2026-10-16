@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/execution_test.dir/link.d CMakeFiles/execution_test.dir/tests/execution_test.cc.o -o execution_test  libdie_model.a

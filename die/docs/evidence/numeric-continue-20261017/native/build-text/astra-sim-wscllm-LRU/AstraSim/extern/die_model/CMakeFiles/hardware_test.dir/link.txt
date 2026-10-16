@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/hardware_test.dir/link.d CMakeFiles/hardware_test.dir/tests/hardware_test.cc.o -o hardware_test  libdie_model.a

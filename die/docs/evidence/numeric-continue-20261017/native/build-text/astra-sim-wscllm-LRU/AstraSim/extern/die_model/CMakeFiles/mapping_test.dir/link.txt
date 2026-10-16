@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/mapping_test.dir/link.d CMakeFiles/mapping_test.dir/tests/mapping_test.cc.o -o mapping_test  libdie_model.a

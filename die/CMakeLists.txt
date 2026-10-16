@@ -32,6 +32,17 @@ if(COARSE_DIE_BUILD_TESTS)
       add_test(NAME coarse_${t} COMMAND coarse_${t})
     endif()
   endforeach()
+  # Synthetic numerical controls write their full observations only in the
+  # build directory. Their independent tiny-time/credit oracles remain in C++.
+  foreach(t runtime_positive_time_test runtime_credit_representability_test runtime_failure_snapshot_test runtime_tiny_ready_test runtime_subepsilon_event_test)
+    add_executable(coarse_${t} tests/${t}.cc)
+    target_link_libraries(coarse_${t} PRIVATE coarse_die)
+    target_compile_definitions(coarse_${t} PRIVATE
+      COARSE_DIE_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+      COARSE_DIE_ROOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
+    add_test(NAME coarse_${t}
+      COMMAND coarse_${t} "${CMAKE_CURRENT_BINARY_DIR}/numerical/${t}" ctest)
+  endforeach()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_core_source.py")
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME coarse_core_docx_source_test

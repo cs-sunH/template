@@ -1,5 +1,14 @@
 # Codex Cloud 开发交接状态
 
+## 最新持续研发检查点（2026-10-17；覆盖下方阶段/停止状态）
+
+- Current Status / Completed：工作分支 `codex/die-numeric-continue-20261017` 保留真实最新恢复 `9c464ca` 与main `021a47f`。当前已验证开发源码 `Execution.cc` SHA256 **`54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab`**：正小曲线事件、全活动精确整数ready、严格target/真ceil、微步前逐角色进度及原公式credit预检。未改变13资源、Q/alpha/PRIVATE、原busy/工作量或任何容差门槛；不增加tile/K/repeat状态。
+- Tests：本账号fresh来源、最终一致Release **58/58（15.02s）**，5个新测试对fresh A+B实际red；首次基线runner路径重名造成的abort另存并标无效，不计red。公开两配置×28输入/8轨迹/28符号对照：**严格全字段比较false**，13个estimate busy字段有最多4.538e-15ns/一个binary64投影1ULP差，其他字段和8实际轨迹全部相同。跨库snapshot通过；原严格矩阵 **78/84、六失败保留**，独立物理及机器账本0违规。详见[当前总表](evidence/numeric-continue-20261017/runtime-checkpoint/checkpoint-summary.json)与[复现/限制](analysis/numeric-continue-20261017/README.md)。
+- Performance：两配置各一次正常30样本，本次原预算全过；example/工程cold128³ P95 **0.987405/1.042688ms**、OS J32 **16.204/19.719us**，新增throttle均0。没有重采择优；全部历史失败保留，不称稳定完整业务/CPU验收。
+- Integration：补齐旧A+B未完成的FACE-LRU/WS/WSLRU，三仓fresh六ABI库成功、native各3/4，合计9pass/3原R4guard失败/实际0skip；旧runner误把业务单词Skipped当测试skip的原记录保留，修正摘要单列。冻结33文件digest25c513…1013及4493源实核，**只属于A+B**，[范围](analysis/numeric-continue-20261017/native/README.md)。当前新源码五仓重验尚未完成；正式canonical24共120文件实核未变，publisher未运行，main未激活，工程 **NOT ACCEPTED**。
+- Important Decisions / Blocking Issues：容量1 Norm、原busy近似误差、长行/R>1未解。微步可能因无关慢角色不可表示而failclosed，不能声称全shape可用。保持legacy progress closure；其亚ULP正尾的更强目标仍失败，不通过改参考掩盖。严格ceil收紧旧floor-valued fractional snapshot；large-origin fractional错误态恢复不获保证，near0独立控制通过。没有必须用户决定的阻碍。
+- Next Step / Files：先保存推送当前有效源码/355项text证据，按当前源码冻结隔离SDK，继续五仓必要重验；并行先做Norm固定规模affine数值公式对保存真实progress的独立Fraction检查，再决定最窄physical-view实验，不套旧candidate2。持续自主研发，不因本检查点停止。当前355项源码/原始log/失败与预算已无ELF归档，所有SHA及解包roundtrip实核；下方均按原身份保留。
+
 ## 当前自主接续（2026-10-17；覆盖下方历史停止状态）
 
 用户已授权持续开发；当前分支 `codex/die-numeric-continue-20261017` 从真实最新恢复分支 `9c464cac9447f97569e547bc7c1e7f6094cc63a1` 建立，普通 merge 保留 `main@021a47fed65554bba6264fe8ca58dc12ec1d82ee` 的共享指针；恢复 merge 为 `931855f`。未reset/force，未从旧Core重写。原499项停止归档的archive及逐项bytes/SHA全部核验并恢复work，没有旧ELF。

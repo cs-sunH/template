@@ -418,9 +418,33 @@ nlohmann::json credit_json(const std::array<double, 2>& values,
   return result;
 }
 
-long double min_positive(long double current, long double candidate) {
-  if (!std::isfinite(candidate) || candidate <= kTimeEpsilonNs) return current;
+long double min_positive(long double current, long double candidate, bool curved=false) {
+  if (!std::isfinite(candidate) || candidate <= (curved ? 0.0L : kTimeEpsilonNs)) return current;
   return candidate < current ? candidate : current;
+}
+
+
+// Curved service retains every positive event. Validate representability
+// before a tiny integration; credit and arbitration tolerances are unchanged.
+bool epoch_has_curves(const Execution& execution) {
+  if(execution.epoch>=execution.plan->epochs.size())return false;
+  const auto& epoch=execution.plan->epochs[execution.epoch];
+  return std::any_of(epoch.activities.begin(),epoch.activities.end(),
+      [](const Activity& a){return !a.credit_curve.empty();});
+}
+long double represented_progress_after(const LiveActivity& live,long double delta_ns) {
+  long double delta=static_cast<long double>(live.rate)*(delta_ns/kNsPerSecond);
+  if(delta<=0)return live.progress;
+  const double boundary=curve_boundary(live);
+  const long double remaining=static_cast<long double>(boundary)-live.progress;
+  const bool curved=!live.definition.credit_curve.empty();
+  if(curved ? delta_ns>=remaining/live.rate*kNsPerSecond : delta>=remaining-1.0e-14L)
+    delta=remaining;
+  if(delta<=0)return live.progress;
+  return curved ? (delta>=remaining ? static_cast<long double>(boundary)
+                  : std::min(static_cast<long double>(boundary),live.progress+delta))
+                : static_cast<long double>(std::min(boundary,
+                    static_cast<double>(live.progress)+static_cast<double>(delta)));
 }
 
 bool same_or_one_ulp(double saved, double rebuilt) {
@@ -1029,7 +1053,7 @@ std::uint64_t Runtime::submit_endpoint(const nlohmann::json& endpoint_json,
 void Runtime::settle() {
   for (auto& [handle, execution] : executions_) {
     (void)handle;
-    if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+    if (execution.terminal || time_until(execution.ready_ns) > 0.0L) continue;
     std::size_t guard = 0;
     while (!execution.terminal && guard++ <= execution.plan->epochs.size() + execution.activities.size() + 1) {
       if (execution.epoch >= execution.plan->epochs.size()) {
@@ -1217,7 +1241,7 @@ void Runtime::allocate(bool redundant_initial_boundaries,
   std::map<std::string, long double> owner_q;
   for (auto& [handle, execution] : executions_) {
     (void)handle;
-    if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+    if (execution.terminal || time_until(execution.ready_ns) > 0.0L) continue;
     for (LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done) continue;
       bool has_service = false;
@@ -1807,9 +1831,8 @@ void Runtime::integrate(long double delta_ns) {
   const auto next_origin = exact_origin_ns_ + integer_delta + carry;
   const long double next_fraction = fractional - carry;
   if (next_origin == std::numeric_limits<std::uint64_t>::max() &&
-      next_fraction > kTimeEpsilonNs)
+      next_fraction > 0.0L)
     throw std::overflow_error("overflow: fractional event exceeds uint64 nanoseconds");
-  const long double seconds = delta_ns / kNsPerSecond;
   std::array<std::set<std::string>, 2> row_owners;
   bool compute_busy = false;
   bool hbm_busy = false;
@@ -1818,24 +1841,16 @@ void Runtime::integrate(long double delta_ns) {
 
   for (auto& [handle, execution] : executions_) {
     (void)handle;
-    if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+    if (execution.terminal || time_until(execution.ready_ns) > 0.0L) continue;
     ServedCounters& categorized = served_by_category_[
         static_cast<std::size_t>(execution.served_category)];
     for (LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
-      long double delta_progress = static_cast<long double>(live.rate) * seconds;
-      if (delta_progress <= 0.0L) continue;
-      const long double remaining = static_cast<long double>(curve_boundary(live)) - static_cast<long double>(live.progress);
-      const bool curved=!live.definition.credit_curve.empty();
-      if (curved ? delta_ns >= remaining/live.rate*kNsPerSecond
-                 : delta_progress >= remaining-1.0e-14L) delta_progress=remaining;
-      if (delta_progress <= 0.0L) continue;
-      const double boundary = curve_boundary(live);
-      const long double next_progress = live.definition.credit_curve.empty()
-          ? static_cast<long double>(std::min(boundary,static_cast<double>(live.progress)+static_cast<double>(delta_progress)))
-          : (delta_progress >= remaining ? static_cast<long double>(boundary)
-             : std::min(static_cast<long double>(boundary),live.progress+delta_progress));
-      delta_progress = static_cast<long double>(next_progress) - live.progress;
+      // Busy retains its original positive-service-rate semantics, even
+      // when legacy progress quantizes to the same binary64 coordinate.
+      if(static_cast<long double>(live.rate)*(delta_ns/kNsPerSecond)<=0.0L)continue;
+      const long double next_progress=represented_progress_after(live,delta_ns);
+      const long double delta_progress=next_progress-live.progress;
       live.progress = next_progress;
 
       for (std::size_t row = 0; row < 2; ++row) {
@@ -1898,7 +1913,7 @@ long double Runtime::time_until(std::uint64_t absolute_ns) const {
 }
 
 std::uint64_t Runtime::ceil_exact_time() const {
-  if (exact_ns_ <= kTimeEpsilonNs) return exact_origin_ns_;
+  if (exact_ns_ <= 0.0L) return exact_origin_ns_;
   if (exact_origin_ns_ == std::numeric_limits<std::uint64_t>::max())
     throw std::overflow_error("overflow: fractional event exceeds uint64 nanoseconds");
   return exact_origin_ns_ + 1;
@@ -1959,23 +1974,103 @@ void recompute_credit(Execution& execution) {
 }
 
 void Runtime::advance_to(std::uint64_t absolute_ns) {
+  const auto curved_time_needed=[&]() {
+    return std::any_of(executions_.begin(),executions_.end(),[](const auto& item) {
+      return !item.second.terminal && has_credit_curves(*item.second.plan);
+    });
+  };
+  const auto curved_service_live=[&]() {
+    for(const auto& [handle,e]:executions_) {
+      (void)handle;
+      if(e.terminal || time_until(e.ready_ns)>0.0L)continue;
+      for(const auto& a:e.activities)
+        if(a.epoch_index==e.epoch && !a.done && a.rate>0 &&
+           !a.definition.credit_curve.empty())return true;
+    }
+    return false;
+  };
+  // Preflight happens before any counters/state mutate. Only tiny intervals
+  // need this representability check; they must not turn into no-service loops.
+  const auto preflight_tiny=[&](long double dt,const Execution* owner,
+                                const LiveActivity* selected,std::size_t buffer) {
+    if(!(dt>0 && dt<=kTimeEpsilonNs))return;
+    const long double fraction=exact_ns_+dt;
+    const auto carry=static_cast<std::uint64_t>(std::floor(fraction));
+    const long double next_fraction=fraction-carry;
+    if((carry==0 && next_fraction==exact_ns_) ||
+       (exact_origin_ns_==std::numeric_limits<std::uint64_t>::max() &&
+        (carry>0 || next_fraction>0)))
+      throw std::runtime_error("numerical_failure: positive curved event cannot advance represented clock");
+    bool changed=false;
+    for(const auto& [handle,e]:executions_) {
+      (void)handle;
+      if(e.terminal || time_until(e.ready_ns)>0.0L ||
+         e.epoch>=e.plan->epochs.size())continue;
+      const auto& epoch=e.plan->epochs[e.epoch];
+      std::array<long double,2> predicted{{epoch.credit_initial[0],epoch.credit_initial[1]}};
+      for(const auto& a:e.activities) {
+        if(a.epoch_index!=e.epoch)continue;
+        LiveActivity next=a;
+        if(!a.done && a.rate>0.0) {
+          next.progress=represented_progress_after(a,dt);
+          // A tiny step is unsupported if any positively served curved role
+          // cannot represent its progress. Never mutate a different role first.
+          if(!a.definition.credit_curve.empty() && !(next.progress>a.progress))
+            throw std::runtime_error("numerical_failure: positive curved event cannot advance a participating represented physical progress");
+          if((!owner || owner==&e) && (!selected || selected==&a) &&
+             (buffer>=2 || curve_derivative(a)[buffer]!=0.0))
+            changed=changed || next.progress>a.progress;
+        }
+        const auto contribution=accumulated_credit(next);
+        for(std::size_t b=0;b<2;++b)predicted[b]+=contribution[b];
+      }
+      // Exactly the existing recompute_credit arithmetic/order and guard.
+      // This validates represented service, not just continuous net rate.
+      for(std::size_t b=0;b<2;++b) {
+        const long double capacity=epoch.credit_capacity[b];
+        const long double tolerance=credit_boundary_tolerance(e,b,
+            static_cast<long double>(kCreditTolerance)*std::max(1.0L,capacity));
+        if(!std::isfinite(predicted[b]) || predicted[b]<-tolerance ||
+           predicted[b]>capacity+tolerance)
+          throw std::runtime_error("numerical_failure: represented tiny service would cross a finite buffer boundary");
+      }
+    }
+    if(buffer!=3 && !changed)
+      throw std::runtime_error("numerical_failure: positive curved event cannot advance its represented physical progress");
+  };
   if (absolute_ns < now_ns_) throw std::invalid_argument("invalid_time: advance_to moved backwards");
-  if (absolute_ns == now_ns_ && time_until(absolute_ns) <= kTimeEpsilonNs) return;
+  if (absolute_ns == now_ns_ && time_until(absolute_ns) <= 0.0L) return;
+  if (absolute_ns == now_ns_ && time_until(absolute_ns) <= (curved_time_needed()?0.0L:kTimeEpsilonNs)) return;
   std::uint64_t events = 0;
-  while (time_until(absolute_ns) > kTimeEpsilonNs) {
+  while (time_until(absolute_ns) > (curved_time_needed()?0.0L:kTimeEpsilonNs)) {
     long double next_delta = std::numeric_limits<long double>::infinity();
+    const Execution* event_owner=nullptr;
+    const LiveActivity* event_activity=nullptr;
+    std::size_t event_buffer=2;
+    const auto choose=[&](long double candidate,bool curved,const Execution* owner,
+                           const LiveActivity* activity,std::size_t buffer) {
+      const long double result=min_positive(next_delta,candidate,curved);
+      if(result<next_delta) {
+        next_delta=result;event_owner=curved?owner:nullptr;
+        event_activity=curved?activity:nullptr;event_buffer=buffer;
+      }
+    };
     for (const auto& [handle, execution] : executions_) {
       (void)handle;
       if (execution.terminal) continue;
-      if (time_until(execution.ready_ns) > kTimeEpsilonNs) {
-        next_delta = std::min(next_delta, time_until(execution.ready_ns));
+      if (time_until(execution.ready_ns) > 0.0L) {
+        if(time_until(execution.ready_ns)<next_delta) {
+          next_delta=time_until(execution.ready_ns);
+          event_owner=&execution;
+          event_activity=nullptr;event_buffer=3;
+        }
         continue;
       }
       for (const LiveActivity& live : execution.activities) {
         if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
         const long double remain = std::max(0.0L, static_cast<long double>(curve_boundary(live)) - static_cast<long double>(live.progress));
         if (remain > 0.0L) {
-          next_delta = min_positive(next_delta, remain / live.rate * kNsPerSecond);
+          choose(remain / live.rate * kNsPerSecond,!live.definition.credit_curve.empty(),&execution,&live,2);
         }
       }
       long double credit_rate[2]{0.0L, 0.0L};
@@ -1992,15 +2087,16 @@ void Runtime::advance_to(std::uint64_t absolute_ns) {
         const long double tolerance = credit_boundary_tolerance(execution,buffer,
             static_cast<long double>(kCreditTolerance));
         if (rate > 0.0L && credit < capacity - tolerance) {
-          next_delta = min_positive(next_delta, (capacity - credit) / rate * kNsPerSecond);
+          choose((capacity-credit)/rate*kNsPerSecond,epoch_has_curves(execution),&execution,nullptr,buffer);
         } else if (rate < 0.0L && credit > tolerance) {
-          next_delta = min_positive(next_delta, credit / (-rate) * kNsPerSecond);
+          choose(credit/(-rate)*kNsPerSecond,epoch_has_curves(execution),&execution,nullptr,buffer);
         }
       }
     }
 
     const long double remaining_to_target = time_until(absolute_ns);
-    if (!std::isfinite(next_delta) || next_delta > remaining_to_target + kTimeEpsilonNs) {
+    const bool strict_time=curved_time_needed();
+    if (!std::isfinite(next_delta) || next_delta > remaining_to_target) {
       struct SavedActivityState {
         std::size_t epoch = 0;
         bool terminal = false;
@@ -2014,6 +2110,7 @@ void Runtime::advance_to(std::uint64_t absolute_ns) {
         for (const LiveActivity& live : execution.activities) state.done.push_back(live.done);
         before_settle.emplace(handle, std::move(state));
       }
+      if(strict_time)preflight_tiny(remaining_to_target,nullptr,nullptr,curved_service_live()?2:3);
       integrate(remaining_to_target);
       set_exact_time(absolute_ns);
       settle();
@@ -2037,9 +2134,10 @@ void Runtime::advance_to(std::uint64_t absolute_ns) {
       if (membership_changed) allocate();
       break;
     }
-    if (next_delta <= kTimeEpsilonNs) {
+    if (next_delta <= (event_owner?0.0L:kTimeEpsilonNs)) {
       throw std::runtime_error("numerical_failure: nonpositive internal event interval");
     }
+    if(event_owner)preflight_tiny(next_delta,event_owner,event_activity,event_buffer);
     integrate(next_delta);
     ++events;
     ++internal_events_;
@@ -2088,17 +2186,26 @@ void Runtime::update_capacity(std::size_t resource, double rate,
 
 std::optional<std::uint64_t> Runtime::next_event() const {
   long double delta = std::numeric_limits<long double>::infinity();
+  bool strict_delta=false;
+  const auto choose=[&](long double candidate,bool strict) {
+    const long double result=min_positive(delta,candidate,strict);
+    if(result<delta) {
+      delta=result;strict_delta=strict;
+    } else if(strict && candidate==delta && candidate>0.0L && std::isfinite(candidate)) {
+      strict_delta=true;
+    }
+  };
   for (const auto& [handle, execution] : executions_) {
     (void)handle;
     if (execution.terminal) continue;
-    if (time_until(execution.ready_ns) > kTimeEpsilonNs) {
-      delta = std::min(delta, time_until(execution.ready_ns));
+    if (time_until(execution.ready_ns) > 0.0L) {
+      choose(time_until(execution.ready_ns),true);
       continue;
     }
     for (const LiveActivity& live : execution.activities) {
       if (live.epoch_index != execution.epoch || live.done || live.rate <= 0.0) continue;
       const long double remain = std::max(0.0L, static_cast<long double>(curve_boundary(live)) - static_cast<long double>(live.progress));
-      if (remain > 0.0L) delta = min_positive(delta, remain / live.rate * kNsPerSecond);
+      if (remain > 0.0L) choose(remain/live.rate*kNsPerSecond,!live.definition.credit_curve.empty());
     }
     long double credit_rate[2]{0.0L, 0.0L};
     for (const LiveActivity& live : execution.activities) {
@@ -2114,14 +2221,14 @@ std::optional<std::uint64_t> Runtime::next_event() const {
       const long double tolerance = credit_boundary_tolerance(execution,buffer,
           static_cast<long double>(kCreditTolerance));
       if (rate > 0.0L && credit < capacity - tolerance) {
-        delta = min_positive(delta, (capacity - credit) / rate * kNsPerSecond);
+        choose((capacity-credit)/rate*kNsPerSecond,epoch_has_curves(execution));
       } else if (rate < 0.0L && credit > tolerance) {
-        delta = min_positive(delta, credit / (-rate) * kNsPerSecond);
+        choose(credit/(-rate)*kNsPerSecond,epoch_has_curves(execution));
       }
     }
   }
   if (!std::isfinite(delta)) return std::nullopt;
-  long double rounded = std::ceil(delta - kTimeEpsilonNs);
+  long double rounded = std::ceil(delta - (strict_delta?0.0L:kTimeEpsilonNs));
   if (rounded < 1.0L) rounded = 1.0L;
   if (rounded >= std::ldexp(1.0L, 64))
     throw std::overflow_error("overflow: next event exceeds uint64 nanoseconds");
@@ -3053,7 +3160,7 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     for (const auto& [handle, execution] : runtime->executions_) {
       (void)handle;
       if (execution.terminal ||
-          runtime->time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+          runtime->time_until(execution.ready_ns) > 0.0L) continue;
       for (const LiveActivity& live : execution.activities) {
         if (live.epoch_index != execution.epoch || live.done) continue;
         const bool has_service = std::any_of(
@@ -3118,7 +3225,7 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
     for (const auto& [handle, execution] : runtime->executions_) {
       (void)handle;
       if (execution.terminal ||
-          runtime->time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
+          runtime->time_until(execution.ready_ns) > 0.0L) continue;
       std::vector<const LiveActivity*> active;
       for (const LiveActivity& live : execution.activities) {
         if (live.epoch_index != execution.epoch || live.done) continue;

@@ -1,0 +1,1 @@
+/usr/bin/g++ -fPIC -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/coarse_die_cabi.dir/link.d -shared -Wl,-soname,libcoarse_die_cabi.so -o ../../../../lib/libcoarse_die_cabi.so CMakeFiles/coarse_die_cabi.dir/src/Capi.cc.o  libcoarse_die.a

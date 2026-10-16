@@ -1,0 +1,2 @@
+/usr/bin/ar qc libdie_model.a CMakeFiles/die_model.dir/src/Hardware.cc.o CMakeFiles/die_model.dir/src/Workload.cc.o CMakeFiles/die_model.dir/src/Mapping.cc.o CMakeFiles/die_model.dir/src/CostModel.cc.o CMakeFiles/die_model.dir/src/Tx8Reference.cc.o CMakeFiles/die_model.dir/src/Execution.cc.o
+/usr/bin/ranlib libdie_model.a

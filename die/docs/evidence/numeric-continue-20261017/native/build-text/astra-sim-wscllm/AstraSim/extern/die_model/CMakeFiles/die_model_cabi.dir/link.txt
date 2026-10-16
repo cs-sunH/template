@@ -1,0 +1,1 @@
+/usr/bin/g++ -fPIC -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/die_model_cabi.dir/link.d -shared -Wl,-soname,libdie_model_cabi.so -o ../../../lib/libdie_model_cabi.so CMakeFiles/die_model_cabi.dir/src/Capi.cc.o  libdie_model.a

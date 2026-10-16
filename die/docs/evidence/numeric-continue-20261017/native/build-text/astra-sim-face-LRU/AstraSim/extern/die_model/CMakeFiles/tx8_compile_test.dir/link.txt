@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/tx8_compile_test.dir/link.d CMakeFiles/tx8_compile_test.dir/tests/tx8_compile_test.cc.o -o tx8_compile_test  libdie_model.a

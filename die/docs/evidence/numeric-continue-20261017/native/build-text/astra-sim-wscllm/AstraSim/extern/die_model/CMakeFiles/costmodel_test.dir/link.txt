@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/costmodel_test.dir/link.d CMakeFiles/costmodel_test.dir/tests/costmodel_test.cc.o -o costmodel_test  libdie_model.a

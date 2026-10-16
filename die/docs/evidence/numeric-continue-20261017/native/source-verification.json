@@ -1,0 +1,62 @@
+{
+  "current_head_at_export": "6431f2db70ad3cb3595ab6279a37e3f8a3b2692d",
+  "snapshot_source_head": "931855fa0d110fcd75762ca2510217822234ae3d",
+  "public_digest": "25c51345c5ddcedb45b21c8b4dc89805c1f9ea2166d49792ddaf639ccbf91013",
+  "public_current_files_equal_snapshot": false,
+  "public_files_sha256": {
+    "CMakeLists.txt": "452035f3076878214508ce5281c6058b0c48ac1734d3aa2cd7d8f766570675de",
+    "include/coarse_die/Capi.h": "8fa8be05f57599cbc0485da601b88f4a2fbf368c0af4086d5929cac98d7a2f89",
+    "include/coarse_die/Execution.hh": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+    "include/coarse_die/Hardware.hh": "629892410d0b77172fedb13f8eaf1633204eea5f9650ca2bf7469cbf20f0011c",
+    "include/coarse_die/Memory.hh": "0a3fc4aa58d1ecd2fedb8248d55080b9d30a12b7a476864a37f9b44d6e20022c",
+    "include/coarse_die/Plan.hh": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+    "include/coarse_die/Prediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "src/Capi.cc": "c924fa5867c52c4c0d38abec8f718d8985580e39da7ee610ee2b8beb47a6542d",
+    "src/Compiler.cc": "64ebea9e2fb5c17de30fdea1197867dd721b415679f7b9d457d09148bf3e9ab2",
+    "src/CompilerInternal.hh": "e935c36d02d128d197e693e7240820a5773b8f5ea7cb6cb1a7134651502b2bec",
+    "src/ElementwiseGeometry.hh": "4ca382e619b21de677de876187436c2fdf7df735d3f4ea16ec05df337a50df81",
+    "src/EquivalentWork.hh": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+    "src/Execution.cc": "54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab",
+    "src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+    "src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "src/GemmOSReadiness.hh": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+    "src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+    "src/GemmOSRouteCounter.hh": "298437831747470beaa2ee2f72f4c96ac60d98afc566e30722f348affea41ec9",
+    "src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+    "src/Hardware.cc": "d2fe3d9d807757c5cfc87903ff717532922d581cf4590056a432324f895a64d4",
+    "src/Mapping.cc": "a5208b17d7f017c62f691a4d0196c46b6cea4b1fa62a2e353880e68708996289",
+    "src/PackingAllocation.hh": "6fca2771bd406db3c12a0fffa6dddbc08392d6f4647368250a5547899316c75f",
+    "src/Plan.cc": "c80c34afa81196b83cbf79284c982c4273d0e3d9ad7bc2fe1eab26189282a872",
+    "src/RatioAllocation.hh": "ce5a040d44a4e4cfef1dbc9e9e0fd6dbbfb9eef335ed8482c2c5cf7392953fb8",
+    "src/RegionDelay.hh": "778db1de98fdd8c8782890ca343cad897efc9b6b5f67952b8235caf30c1e6c95",
+    "configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+    "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+    "configs/core32.json": "e89d353e29ffec23c50590d81344f44dd5b0d424c8361521ddf79fbe32c70986",
+    "configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+    "configs/example_hardware.json": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a",
+    "configs/example_hardware_explicit.json": "b275a326cceec297073a291ba230a9f0c8aeee21fbeb61454cebff8679ca4b3e",
+    "configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+    "configs/tx8_compute_matched_hardware.json": "90941cc259673d144c2d17c1ee44d08837270de802d99a9307d426afee81bb5c"
+  },
+  "production_deltas_at_export": {
+    "CMakeLists.txt": {
+      "frozen_ab_sha256": "623a5e8c395ef5d95111a05144ec5dbd8f6e3126f382d996878cc0b3655aee6d",
+      "production_sha256_at_export": "452035f3076878214508ce5281c6058b0c48ac1734d3aa2cd7d8f766570675de"
+    },
+    "src/Execution.cc": {
+      "frozen_ab_sha256": "6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e",
+      "production_sha256_at_export": "54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab"
+    }
+  },
+  "scope_note": "Native tests are exclusively frozen A+B baseline; later working-tree Runtime candidates are not tested here.",
+  "frozen_files_checked": 4493,
+  "frozen_file_mismatches": [],
+  "consumer_current_files_checked": 4282,
+  "consumer_current_file_mismatches": [],
+  "consumer_comparison_exclusions": [
+    "isolated new SDK",
+    "real generated et_def_pb2.py"
+  ],
+  "no_stage_source_symlinks": true,
+  "no_builds_or_elf_reused": true
+}

@@ -1,0 +1,178 @@
+{
+  "label": "astra-sim-wscllm-native-configure",
+  "command": [
+    "/workspace/cloud-setup/venv/bin/cmake",
+    "-S",
+    "/workspace/template/work/native-resume-20261017/sdk/aggregate",
+    "-B",
+    "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm",
+    "-G",
+    "Unix Makefiles",
+    "-DASTRA_SIM_ROOT=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm",
+    "-DBUILDTARGET=congestion_aware",
+    "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+    "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+    "-DCMAKE_BUILD_TYPE=Release"
+  ],
+  "cwd": "/workspace/template",
+  "environment": {},
+  "expected": null,
+  "requires": [],
+  "new_build": true,
+  "status": "passed",
+  "checks": {
+    "process_success": true
+  },
+  "return_code": 0,
+  "elapsed_seconds": 0.8826663494110107,
+  "libraries": {
+    "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-face-LRU/lib/libcoarse_die_cabi.so": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+    "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-face-LRU/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7"
+  },
+  "source_digest": "25c51345c5ddcedb45b21c8b4dc89805c1f9ea2166d49792ddaf639ccbf91013",
+  "snapshot_manifest_sha256": "7311816b6409b1be095c04fd2ebc3a789fbe5fd32f49b69edc3ec6bbee87ee94",
+  "runner_sha256": "c111dfe39f94b88bb396aeccfb0be51adf0666af1abfe68031430997a4872e7f",
+  "support_sha256": "29dbbea50ce1c82b263d69b8aa0a227909267d491341a079a284fd0262f3377c",
+  "log_sha256": "126d25ca3b48a435028ae3a2f31fcabe2c60c20ce5f50ef711f3ab4fc4b06979",
+  "started_record_sha256": "e9e77ef31e431076cf8e8581fd81b15758bf78ae274e74377dc9f4d3f59f9b56",
+  "tool_inputs_sha256": {
+    "/workspace/template/work/native-resume-20261017/sdk/aggregate/CMakeLists.txt": "d7c4bf2a439c4e46f71332b44b763b60cfcd9c3e8023ff24fe84a88f25f2a43d"
+  },
+  "artifacts_before": {
+    "build_root": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm",
+    "targets": {
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": {
+        "files": {},
+        "link_metadata": [],
+        "resolution": "not_yet_generated"
+      },
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": {
+        "files": {},
+        "link_metadata": [],
+        "resolution": "not_yet_generated"
+      },
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": {
+        "files": {},
+        "link_metadata": [],
+        "resolution": "not_yet_generated"
+      },
+      "AstraSim_Analytical_WorkspaceAdmissionTest": {
+        "files": {},
+        "link_metadata": [],
+        "resolution": "not_yet_generated"
+      },
+      "coarse_die_cabi": {
+        "files": {},
+        "link_metadata": [],
+        "resolution": "not_yet_generated"
+      },
+      "die_model_cabi": {
+        "files": {},
+        "link_metadata": [],
+        "resolution": "not_yet_generated"
+      }
+    }
+  },
+  "artifacts_after": {
+    "build_root": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm",
+    "targets": {
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": {
+        "files": {
+          "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": {
+            "exists": false,
+            "sha256": null,
+            "bytes": null
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/link.txt",
+            "sha256": "7cece65f0f1c1467cd0ee6259e16f59a4214db6a8160859219f5f761a406040e"
+          }
+        ],
+        "resolution": "resolved"
+      },
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": {
+        "files": {
+          "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": {
+            "exists": false,
+            "sha256": null,
+            "bytes": null
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/link.txt",
+            "sha256": "7742a32281f7e84d21743bb09052e69ea58a9c10417ca2a73139eb3007ac2967"
+          }
+        ],
+        "resolution": "resolved"
+      },
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": {
+        "files": {
+          "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": {
+            "exists": false,
+            "sha256": null,
+            "bytes": null
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/link.txt",
+            "sha256": "181dce815afa6b29c1427a0d955019596d3567eb1a705a55fd93bbfa5522be78"
+          }
+        ],
+        "resolution": "resolved"
+      },
+      "AstraSim_Analytical_WorkspaceAdmissionTest": {
+        "files": {
+          "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_WorkspaceAdmissionTest": {
+            "exists": false,
+            "sha256": null,
+            "bytes": null
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/frontend/CMakeFiles/AstraSim_Analytical_WorkspaceAdmissionTest.dir/link.txt",
+            "sha256": "289ca9b307a9218b0c9341ede9267e2e599929aec0af5525cfce2e330a11b900"
+          }
+        ],
+        "resolution": "resolved"
+      },
+      "coarse_die_cabi": {
+        "files": {
+          "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/lib/libcoarse_die_cabi.so": {
+            "exists": false,
+            "sha256": null,
+            "bytes": null
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/AstraSim/extern/die_model/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+            "sha256": "41670f1fde23a2e6116d85c428676316ea56a9978df6eb20822701c3be09982f"
+          }
+        ],
+        "resolution": "resolved"
+      },
+      "die_model_cabi": {
+        "files": {
+          "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/lib/libdie_model_cabi.so": {
+            "exists": false,
+            "sha256": null,
+            "bytes": null
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/AstraSim/extern/die_model/CMakeFiles/die_model_cabi.dir/link.txt",
+            "sha256": "e5f2bca9adbf71e3a9c2f6bce557b5ca9b2e10560366e35f42796f41306308da"
+          }
+        ],
+        "resolution": "resolved"
+      }
+    }
+  },
+  "resume_decision": {}
+}

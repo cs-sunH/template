@@ -1,5 +1,7 @@
 # die 子项目：项目说明与验收标准
 
+2026-10-17最新数值检查点：正小曲线事件/精确ready/严格target与真ceil、微步前逐角色及credit预检，最终一致Release58/58；5个新测试对fresh A+B真实red。严格矩阵仍78/84、API13个busy微差明确保留；两配置本次各一轮正常30速度全过，历史失败不抹去。原A+B剩余native三仓各3/4保留R4 guard失败；当前源码五仓待新验证。Norm/busy/R>1及target实测未验收，正式SDK未发布、main未激活，工程NOT ACCEPTED。持续研发及下一步以[HANDOFF最新章节](HANDOFF.md)为准。
+
 2026-10-17 用户恢复持续自主开发：已从真实最新 `codex/die-runtime-continue-20261016@9c464ca` 接续并保留main交接指针。A+B公共源码保持；C2实际混合ready回归失败，不采用。当前C3隔离研究及剩余三仓native推进中，以[HANDOFF顶部](HANDOFF.md)与新身份/原始证据为准；下方停止状态均历史，正式SDK未发布、工程NOT ACCEPTED。
 
 ## 当前持续开发（2026-10-16）

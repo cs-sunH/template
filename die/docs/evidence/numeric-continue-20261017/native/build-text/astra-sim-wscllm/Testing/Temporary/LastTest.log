@@ -1,0 +1,209 @@
+Start testing: Oct 16 21:49 UTC
+----------------------------------------------------------
+15/46 Testing: AstraSim_Analytical_WorkspaceAdmissionTest
+15/46 Test: AstraSim_Analytical_WorkspaceAdmissionTest
+Command: "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_WorkspaceAdmissionTest"
+Directory: /workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/frontend
+"AstraSim_Analytical_WorkspaceAdmissionTest" start time: Oct 16 21:49 UTC
+Output:
+----------------------------------------------------------
+[workspace_admission_test] ALL PASS
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_WorkspaceAdmissionTest" end time: Oct 16 21:49 UTC
+"AstraSim_Analytical_WorkspaceAdmissionTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+44/46 Testing: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+44/46 Test: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+Command: "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest"
+Directory: /workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/frontend
+"AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest" start time: Oct 16 21:49 UTC
+Output:
+----------------------------------------------------------
+A: die + roofline-enabled=1 exits fail-closed                          -> PASS
+A: compute-cost-model=die resolves to the Die backend                  -> PASS
+A: die runtime (hardware + plan cache) installed                       -> PASS
+A: roofline stays off under the die backend                            -> PASS
+A: HBM fluid model stays on (contention default)                       -> PASS
+A: peak_perf filled from the library (PE_peak_die)                     -> PASS
+A: local-mem-bw filled from the library                                -> PASS
+A: die-model-config defaults next to the system.json                   -> PASS
+B: GPU comp slot occupied while the die node runs                      -> PASS
+B: die node finishes through finish_generic_node exactly once (Success) -> PASS
+B: completion tick includes the one-shot local_mem_latency (>= 100 latency + 1) -> PASS
+B: GPU comp slot released after completion                             -> PASS
+B: adapter drains after the node completes                             -> PASS
+B: compute utilization weighted sum == plan FLOP / PE_peak (die caliber) -> PASS
+B: memory utilization weighted sum == actual bytes / B_mem (die caliber) -> PASS
+B: vector utilization weighted sum == eqops / V_peak (die-only field aggregates) -> PASS
+C: control_marker completes at issue + 100 + 1 (legacy micro-job, no die plan) -> PASS
+D: real COMP without die_op_spec throws (no silent roofline/replay fallback) -> PASS
+D: parser rejects die_op_spec with runtime_ns != 0                     -> PASS
+[die_model_adapter_test] ALL PASS
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest" end time: Oct 16 21:49 UTC
+"AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+45/46 Testing: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+45/46 Test: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+Command: "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest"
+Directory: /workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/frontend
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" start time: Oct 16 21:49 UTC
+Output:
+----------------------------------------------------------
+A: GPU comp slot occupied at issue                                       -> PASS
+A: node terminal fires exactly once                                      -> PASS
+A: span >= isolated estimate + one-shot latency                          -> PASS
+A: span == oracle machine elapsed + exactly one 100 ns local_mem_latency charge -> PASS
+A: GPU comp slot released after Done                                     -> PASS
+A: adapter drains after Done                                             -> PASS
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+B: node terminal fires exactly once                                      -> PASS
+B: span == oracle machine elapsed exactly (latency 0 -> no latency charge) -> PASS
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+C: adapter reports an active execution mid-flight                        -> PASS
+C: GPU comp slot still occupied mid-flight                               -> PASS
+C: node terminal fires exactly once under contention                     -> PASS
+C: span >= isolated estimate + latency (equal share can only delay)      -> PASS
+C: adapter drains after Done under contention                            -> PASS
+C: die side-band records service AND actual bytes (separate columns)     -> PASS
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+D: marker without the HBM model completes on the 1 ns event (legacy micro-job) -> PASS
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+E: big node still in flight after partial pumping                        -> PASS
+E: teardown fires no completion for the in-flight node (exactly-zero terminals) -> PASS
+[2026-10-16 21:49:45.066] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.066] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+[2026-10-16 21:49:45.066] [system] [warning] Exiting
+F: pre-issue admission holds exactly the compiled Plan workspace         -> PASS
+F: real typed COMP has positive partial INT4 service                     -> PASS
+F: COMP and declared COMM source read share local HBM                    -> PASS
+F: shutdown cancels live Runtime work before releasing its lease         -> PASS
+F: teardown cancellation preserves delivered work without graph terminals -> PASS
+F: MetricCollector emits coarse rank and HBM records                     -> PASS
+F: rank metrics retain cancelled partial typed service                   -> PASS
+F: total HBM numerator includes DIE and COMM once over raw peaks         -> PASS
+[2026-10-16 21:49:45.069] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.069] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.069] [system] [warning] Exiting
+[2026-10-16 21:49:45.069] [system] [warning] Exiting
+F: COMP plus COMM teardown drains stale alarms without callbacks         -> PASS
+G: typed COMP and COMM complete once and release GPU + workspace         -> PASS
+G: retired COMP and COMM conserve their typed served work                -> PASS
+G: normal service finalization retains retired coarse counters           -> PASS
+[2026-10-16 21:49:45.072] [system] [warning] Exiting
+[2026-10-16 21:49:45.072] [system] [warning] Exiting
+G: completed teardown publishes no duplicate terminals                   -> PASS
+I: ordinary scalar COMP remains forbidden by coarse HBM guard            -> PASS
+I: positive-workspace typed COMP and marker are concurrently live        -> PASS
+I: typed COMP and delayed marker terminalize once and release GPU/workspace -> PASS
+I: exactly one physical marker byte is die-owned; compatibility compute bytes stay 1 and COMM/typed ops stay clean -> PASS
+[2026-10-16 21:49:45.079] [system] [warning] Exiting
+[2026-10-16 21:49:45.079] [system] [warning] Exiting
+I: completed coarse marker teardown publishes no duplicate terminal      -> PASS
+L: normal availability-gated issue shares Runtime between delayed marker and real COMM endpoint -> PASS
+L: marker and COMM endpoint both complete once with isolated DIE/COMM byte accounting -> PASS
+[2026-10-16 21:49:45.080] [system] [warning] Exiting
+[2026-10-16 21:49:45.080] [system] [warning] Exiting
+L: completed marker/COMM teardown does not duplicate terminals           -> PASS
+J: marker endpoint is live and nonterminal before teardown               -> PASS
+J: HBM teardown cancels and retires delayed endpoint without callback    -> PASS
+[2026-10-16 21:49:45.080] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.080] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.080] [system] [warning] Exiting
+[2026-10-16 21:49:45.080] [system] [warning] Exiting
+J: stale teardown alarms drain without a marker terminal                 -> PASS
+K: endpoint has a positive strict-prefix read after its delay            -> PASS
+K: const getter samples live marker bytes without mutating Runtime, slots, terminals, or fail-closed checks -> PASS
+K: partial cancellation preserves the same die/compatibility bytes, leaves COMM clean, and suppresses graph completion -> PASS
+[2026-10-16 21:49:45.081] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.081] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.081] [system] [warning] Exiting
+[2026-10-16 21:49:45.081] [system] [warning] Exiting
+K: cancelled marker teardown does not publish a terminal                 -> PASS
+M: partial teardown retains the sampled DIE prefix and suppresses marker callbacks -> PASS
+M: partial marker teardown remains nonterminal after stale alarms drain  -> PASS
+[2026-10-16 21:49:45.082] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.082] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.082] [system] [warning] Exiting
+[2026-10-16 21:49:45.082] [system] [warning] Exiting
+N: teardown retains two physically finished bytes without dispatching either ready callback -> PASS
+[2026-10-16 21:49:45.082] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.082] [HardwareResource] [critical] !!!Hardware Resource sys.id=0 has unreleased nodes!!!
+[2026-10-16 21:49:45.082] [system] [warning] Exiting
+[2026-10-16 21:49:45.082] [system] [warning] Exiting
+N: terminal-tick marker teardown stays silent after stale alarms drain   -> PASS
+H: fixture Plan has a positive exact workspace peak                      -> PASS
+H: blocked Plan remains free and does not occupy GPU or publish terminal -> PASS
+H: capacity refresh admits exact workspace before take/occupy            -> PASS
+H: cancellation fixture has typed served work and a positive elapsed window -> PASS
+H: live cancellation records served utilization, releases workspace once, marks cancellation, terminalizes Skipped, and frees its dependent node -> PASS
+H: cancelled COMP releases its real graph dependency for normal successor issue -> PASS
+H: rank service report exports the live cancelled COMP count             -> PASS
+H: impossible Plan fails before take/occupy and leaves no lease          -> PASS
+[2026-10-16 21:49:45.089] [system] [warning] Exiting
+[2026-10-16 21:49:45.089] [system] [warning] Exiting
+P: preflight fixture Plan has a positive workspace peak                  -> PASS
+P: noncanonical Prepared bytes fail before ledger mutation               -> PASS
+P: independent same-rank ledgers admit the same fixture key              -> PASS
+P: full-key collision from a foreign same-rank ledger is rejected before take/occupy -> PASS
+P: mismatched Plan/Prepared/lease byte count fails before take/occupy    -> PASS
+P: stale task payload with the same node/generation is rejected before take/occupy -> PASS
+[2026-10-16 21:49:45.096] [system] [warning] Exiting
+[2026-10-16 21:49:45.096] [system] [warning] Exiting
+O: real ParsedGraphBatch retains raw old FFN task and parsed legacy diagnostic -> PASS
+terminate called after throwing an instance of 'std::invalid_argument'
+  what():  prediction_not_available: prediction_status marks body-only timing; a complete latency prediction is required
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Failed.
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" end time: Oct 16 21:49 UTC
+"AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+46/46 Testing: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+46/46 Test: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+Command: "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest"
+Directory: /workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/frontend
+"AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest" start time: Oct 16 21:49 UTC
+Output:
+----------------------------------------------------------
+DIE A completes at 10 (2 die users @ 3 B/ns, 30 units; the comm job is still in its latency phase) -> PASS
+DIE B completes at 15 (alone @ 6 B/ns, 30 units left)                      -> PASS
+exactly two sink fires total (one per die job)                             -> PASS
+internal die/comm HBM jobs never complete the outer node alone (send node has no terminal) -> PASS
+die_service_units_served == 90 (drained quantity)                          -> PASS
+die_actual_bytes_served == 51 (21 + 30, service * eta)                     -> PASS
+comm_read_bytes_served == 120 (untouched by die units)                     -> PASS
+no COMP roofline bytes mixed into the die accounting                       -> PASS
+hbm_busy_ns == 35 (15 ns die drain + 20 ns comm drain)                     -> PASS
+peak concurrency 3 (2 die jobs + 1 comm read)                              -> PASS
+redistribution events 4 (2 joins + 2 survivor splits)                      -> PASS
+eta >= 1 request (service <= actual) refused                               -> PASS
+zero-service request refused                                               -> PASS
+cancel_die_jobs_of drops the pending job                                   -> PASS
+cancelled job never fires its sink                                         -> PASS
+cancelled job served nothing                                               -> PASS
+[local_hbm_die_memory_test] ALL PASS
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest" end time: Oct 16 21:49 UTC
+"AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 16 21:49 UTC

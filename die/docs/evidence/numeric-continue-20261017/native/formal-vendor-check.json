@@ -1,0 +1,517 @@
+{
+  "astra-sim-face": {
+    "source_digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+    "canonical24": true,
+    "all_files_match": true,
+    "files": {
+      "CMakeLists.txt": {
+        "expected": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917",
+        "actual": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917"
+      },
+      "include/coarse_die/Capi.h": {
+        "expected": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
+        "actual": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778"
+      },
+      "include/coarse_die/Execution.hh": {
+        "expected": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2",
+        "actual": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2"
+      },
+      "include/coarse_die/Hardware.hh": {
+        "expected": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+        "actual": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8"
+      },
+      "include/coarse_die/Memory.hh": {
+        "expected": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+        "actual": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d"
+      },
+      "include/coarse_die/Plan.hh": {
+        "expected": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
+        "actual": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09"
+      },
+      "src/Capi.cc": {
+        "expected": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87",
+        "actual": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87"
+      },
+      "src/Compiler.cc": {
+        "expected": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+        "actual": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98"
+      },
+      "src/EquivalentWork.hh": {
+        "expected": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+        "actual": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e"
+      },
+      "src/Execution.cc": {
+        "expected": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b",
+        "actual": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b"
+      },
+      "src/GemmOSAccessCounter.hh": {
+        "expected": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+        "actual": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9"
+      },
+      "src/GemmOSGeometry.hh": {
+        "expected": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+        "actual": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58"
+      },
+      "src/GemmOSReadiness.hh": {
+        "expected": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+        "actual": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774"
+      },
+      "src/GemmOSResourceFacts.hh": {
+        "expected": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+        "actual": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c"
+      },
+      "src/GemmTailBudget.hh": {
+        "expected": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+        "actual": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936"
+      },
+      "src/Hardware.cc": {
+        "expected": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+        "actual": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2"
+      },
+      "src/Mapping.cc": {
+        "expected": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+        "actual": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839"
+      },
+      "src/Plan.cc": {
+        "expected": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+        "actual": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681"
+      },
+      "configs/VERSION": {
+        "expected": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+        "actual": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220"
+      },
+      "configs/calibration_tx8.json": {
+        "expected": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+        "actual": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698"
+      },
+      "configs/core64.json": {
+        "expected": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+        "actual": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af"
+      },
+      "configs/engineering_prior.json": {
+        "expected": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+        "actual": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f"
+      },
+      "configs/example_hardware.json": {
+        "expected": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+        "actual": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+      },
+      "configs/example_tasks.json": {
+        "expected": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+        "actual": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+      }
+    }
+  },
+  "astra-sim-face-LRU": {
+    "source_digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+    "canonical24": true,
+    "all_files_match": true,
+    "files": {
+      "CMakeLists.txt": {
+        "expected": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917",
+        "actual": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917"
+      },
+      "include/coarse_die/Capi.h": {
+        "expected": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
+        "actual": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778"
+      },
+      "include/coarse_die/Execution.hh": {
+        "expected": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2",
+        "actual": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2"
+      },
+      "include/coarse_die/Hardware.hh": {
+        "expected": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+        "actual": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8"
+      },
+      "include/coarse_die/Memory.hh": {
+        "expected": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+        "actual": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d"
+      },
+      "include/coarse_die/Plan.hh": {
+        "expected": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
+        "actual": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09"
+      },
+      "src/Capi.cc": {
+        "expected": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87",
+        "actual": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87"
+      },
+      "src/Compiler.cc": {
+        "expected": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+        "actual": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98"
+      },
+      "src/EquivalentWork.hh": {
+        "expected": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+        "actual": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e"
+      },
+      "src/Execution.cc": {
+        "expected": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b",
+        "actual": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b"
+      },
+      "src/GemmOSAccessCounter.hh": {
+        "expected": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+        "actual": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9"
+      },
+      "src/GemmOSGeometry.hh": {
+        "expected": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+        "actual": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58"
+      },
+      "src/GemmOSReadiness.hh": {
+        "expected": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+        "actual": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774"
+      },
+      "src/GemmOSResourceFacts.hh": {
+        "expected": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+        "actual": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c"
+      },
+      "src/GemmTailBudget.hh": {
+        "expected": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+        "actual": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936"
+      },
+      "src/Hardware.cc": {
+        "expected": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+        "actual": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2"
+      },
+      "src/Mapping.cc": {
+        "expected": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+        "actual": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839"
+      },
+      "src/Plan.cc": {
+        "expected": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+        "actual": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681"
+      },
+      "configs/VERSION": {
+        "expected": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+        "actual": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220"
+      },
+      "configs/calibration_tx8.json": {
+        "expected": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+        "actual": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698"
+      },
+      "configs/core64.json": {
+        "expected": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+        "actual": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af"
+      },
+      "configs/engineering_prior.json": {
+        "expected": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+        "actual": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f"
+      },
+      "configs/example_hardware.json": {
+        "expected": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+        "actual": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+      },
+      "configs/example_tasks.json": {
+        "expected": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+        "actual": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+      }
+    }
+  },
+  "astra-sim-wscllm": {
+    "source_digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+    "canonical24": true,
+    "all_files_match": true,
+    "files": {
+      "CMakeLists.txt": {
+        "expected": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917",
+        "actual": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917"
+      },
+      "include/coarse_die/Capi.h": {
+        "expected": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
+        "actual": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778"
+      },
+      "include/coarse_die/Execution.hh": {
+        "expected": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2",
+        "actual": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2"
+      },
+      "include/coarse_die/Hardware.hh": {
+        "expected": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+        "actual": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8"
+      },
+      "include/coarse_die/Memory.hh": {
+        "expected": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+        "actual": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d"
+      },
+      "include/coarse_die/Plan.hh": {
+        "expected": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
+        "actual": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09"
+      },
+      "src/Capi.cc": {
+        "expected": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87",
+        "actual": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87"
+      },
+      "src/Compiler.cc": {
+        "expected": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+        "actual": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98"
+      },
+      "src/EquivalentWork.hh": {
+        "expected": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+        "actual": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e"
+      },
+      "src/Execution.cc": {
+        "expected": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b",
+        "actual": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b"
+      },
+      "src/GemmOSAccessCounter.hh": {
+        "expected": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+        "actual": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9"
+      },
+      "src/GemmOSGeometry.hh": {
+        "expected": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+        "actual": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58"
+      },
+      "src/GemmOSReadiness.hh": {
+        "expected": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+        "actual": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774"
+      },
+      "src/GemmOSResourceFacts.hh": {
+        "expected": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+        "actual": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c"
+      },
+      "src/GemmTailBudget.hh": {
+        "expected": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+        "actual": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936"
+      },
+      "src/Hardware.cc": {
+        "expected": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+        "actual": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2"
+      },
+      "src/Mapping.cc": {
+        "expected": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+        "actual": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839"
+      },
+      "src/Plan.cc": {
+        "expected": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+        "actual": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681"
+      },
+      "configs/VERSION": {
+        "expected": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+        "actual": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220"
+      },
+      "configs/calibration_tx8.json": {
+        "expected": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+        "actual": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698"
+      },
+      "configs/core64.json": {
+        "expected": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+        "actual": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af"
+      },
+      "configs/engineering_prior.json": {
+        "expected": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+        "actual": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f"
+      },
+      "configs/example_hardware.json": {
+        "expected": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+        "actual": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+      },
+      "configs/example_tasks.json": {
+        "expected": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+        "actual": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+      }
+    }
+  },
+  "astra-sim-wscllm-LRU": {
+    "source_digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+    "canonical24": true,
+    "all_files_match": true,
+    "files": {
+      "CMakeLists.txt": {
+        "expected": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917",
+        "actual": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917"
+      },
+      "include/coarse_die/Capi.h": {
+        "expected": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
+        "actual": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778"
+      },
+      "include/coarse_die/Execution.hh": {
+        "expected": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2",
+        "actual": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2"
+      },
+      "include/coarse_die/Hardware.hh": {
+        "expected": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+        "actual": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8"
+      },
+      "include/coarse_die/Memory.hh": {
+        "expected": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+        "actual": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d"
+      },
+      "include/coarse_die/Plan.hh": {
+        "expected": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
+        "actual": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09"
+      },
+      "src/Capi.cc": {
+        "expected": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87",
+        "actual": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87"
+      },
+      "src/Compiler.cc": {
+        "expected": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+        "actual": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98"
+      },
+      "src/EquivalentWork.hh": {
+        "expected": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+        "actual": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e"
+      },
+      "src/Execution.cc": {
+        "expected": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b",
+        "actual": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b"
+      },
+      "src/GemmOSAccessCounter.hh": {
+        "expected": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+        "actual": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9"
+      },
+      "src/GemmOSGeometry.hh": {
+        "expected": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+        "actual": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58"
+      },
+      "src/GemmOSReadiness.hh": {
+        "expected": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+        "actual": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774"
+      },
+      "src/GemmOSResourceFacts.hh": {
+        "expected": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+        "actual": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c"
+      },
+      "src/GemmTailBudget.hh": {
+        "expected": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+        "actual": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936"
+      },
+      "src/Hardware.cc": {
+        "expected": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+        "actual": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2"
+      },
+      "src/Mapping.cc": {
+        "expected": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+        "actual": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839"
+      },
+      "src/Plan.cc": {
+        "expected": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+        "actual": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681"
+      },
+      "configs/VERSION": {
+        "expected": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+        "actual": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220"
+      },
+      "configs/calibration_tx8.json": {
+        "expected": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+        "actual": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698"
+      },
+      "configs/core64.json": {
+        "expected": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+        "actual": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af"
+      },
+      "configs/engineering_prior.json": {
+        "expected": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+        "actual": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f"
+      },
+      "configs/example_hardware.json": {
+        "expected": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+        "actual": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+      },
+      "configs/example_tasks.json": {
+        "expected": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+        "actual": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+      }
+    }
+  },
+  "astra-sim-joint": {
+    "source_digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+    "canonical24": true,
+    "all_files_match": true,
+    "files": {
+      "CMakeLists.txt": {
+        "expected": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917",
+        "actual": "97b69048d16852a5026ed68a6649da06eeeeeb16bc5e54576f03d5c9d514b917"
+      },
+      "include/coarse_die/Capi.h": {
+        "expected": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778",
+        "actual": "7bc80b82cfce405fac5e5a8f2c7a883ebe1579a020ec2a4cd30a4c1e1c62e778"
+      },
+      "include/coarse_die/Execution.hh": {
+        "expected": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2",
+        "actual": "4aa2a52a517baf73c3b7a190693298a130a9a58351b4954ad318336be11b07e2"
+      },
+      "include/coarse_die/Hardware.hh": {
+        "expected": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8",
+        "actual": "3670da52f39b4c63ef46f43ddbf7975f68fa8c7f086d7504102c5f591456b4b8"
+      },
+      "include/coarse_die/Memory.hh": {
+        "expected": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d",
+        "actual": "d9886c8957805c2d6a29e54d1da5122a444f0b08ea1af1480931ab261f2e4e2d"
+      },
+      "include/coarse_die/Plan.hh": {
+        "expected": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
+        "actual": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09"
+      },
+      "src/Capi.cc": {
+        "expected": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87",
+        "actual": "73481f9097d4d7e05fbdcfaefcd8b571ca7dbe4d1ad151b4ab20194cf4245b87"
+      },
+      "src/Compiler.cc": {
+        "expected": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98",
+        "actual": "364f99da34222f52ab2ed2a20d8b7e2db6fb415767cb7774bf1b0d7c238abd98"
+      },
+      "src/EquivalentWork.hh": {
+        "expected": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+        "actual": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e"
+      },
+      "src/Execution.cc": {
+        "expected": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b",
+        "actual": "7a11c2c0bbc4e0f9ce27421c9a20d7edcba8b1569a378e792b5b80334650e03b"
+      },
+      "src/GemmOSAccessCounter.hh": {
+        "expected": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+        "actual": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9"
+      },
+      "src/GemmOSGeometry.hh": {
+        "expected": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+        "actual": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58"
+      },
+      "src/GemmOSReadiness.hh": {
+        "expected": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+        "actual": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774"
+      },
+      "src/GemmOSResourceFacts.hh": {
+        "expected": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+        "actual": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c"
+      },
+      "src/GemmTailBudget.hh": {
+        "expected": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+        "actual": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936"
+      },
+      "src/Hardware.cc": {
+        "expected": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2",
+        "actual": "77a3e01c153e770397e3e76f68712d7011ec12e5ad1b465035ae3d03f8ed62d2"
+      },
+      "src/Mapping.cc": {
+        "expected": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839",
+        "actual": "4fabea6b2798b7b1b4ebf0eebfa9679f37547861b9d9fe87d9dae351c3efb839"
+      },
+      "src/Plan.cc": {
+        "expected": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681",
+        "actual": "f4915a3027dbfefdccf6f1c0aa187745641bbbcfdd5bc0e0a01f01f9a5a04681"
+      },
+      "configs/VERSION": {
+        "expected": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+        "actual": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220"
+      },
+      "configs/calibration_tx8.json": {
+        "expected": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+        "actual": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698"
+      },
+      "configs/core64.json": {
+        "expected": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af",
+        "actual": "5277d43213ac5cefc6f9b2ada92ef7413e2a9b4aeabbea0347f38a90afda23af"
+      },
+      "configs/engineering_prior.json": {
+        "expected": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+        "actual": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f"
+      },
+      "configs/example_hardware.json": {
+        "expected": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda",
+        "actual": "3321c0cd5543414ad55b4601497027130d0e0a32994a7e52cae3716e13424cda"
+      },
+      "configs/example_tasks.json": {
+        "expected": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+        "actual": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279"
+      }
+    }
+  }
+}

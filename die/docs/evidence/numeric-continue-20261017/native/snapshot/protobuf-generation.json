@@ -1,0 +1,97 @@
+[
+  {
+    "repo": "astra-sim-face",
+    "source_proto_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "tracked_original": false,
+    "tracked_original_sha256": null,
+    "copied_before_generation_sha256": null,
+    "protoc_version": "libprotoc 3.21.12",
+    "command": [
+      "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+      "--proto_path=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-face",
+      "--python_out=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-face",
+      "extern/graph_frontend/chakra/schema/protobuf/et_def.proto"
+    ],
+    "cwd": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-face",
+    "return_code": 0,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "generated_sha256": "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7",
+    "generated_path": "astra-sim-face/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py"
+  },
+  {
+    "repo": "astra-sim-face-LRU",
+    "source_proto_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "tracked_original": false,
+    "tracked_original_sha256": null,
+    "copied_before_generation_sha256": null,
+    "protoc_version": "libprotoc 3.21.12",
+    "command": [
+      "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+      "--proto_path=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-face-LRU",
+      "--python_out=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-face-LRU",
+      "extern/graph_frontend/chakra/schema/protobuf/et_def.proto"
+    ],
+    "cwd": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-face-LRU",
+    "return_code": 0,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "generated_sha256": "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7",
+    "generated_path": "astra-sim-face-LRU/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py"
+  },
+  {
+    "repo": "astra-sim-wscllm",
+    "source_proto_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "tracked_original": true,
+    "tracked_original_sha256": "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7",
+    "copied_before_generation_sha256": "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7",
+    "protoc_version": "libprotoc 3.21.12",
+    "command": [
+      "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+      "--proto_path=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm",
+      "--python_out=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm",
+      "extern/graph_frontend/chakra/schema/protobuf/et_def.proto"
+    ],
+    "cwd": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm",
+    "return_code": 0,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "generated_sha256": "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7",
+    "generated_path": "astra-sim-wscllm/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py"
+  },
+  {
+    "repo": "astra-sim-wscllm-LRU",
+    "source_proto_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "tracked_original": false,
+    "tracked_original_sha256": null,
+    "copied_before_generation_sha256": null,
+    "protoc_version": "libprotoc 3.21.12",
+    "command": [
+      "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+      "--proto_path=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm-LRU",
+      "--python_out=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm-LRU",
+      "extern/graph_frontend/chakra/schema/protobuf/et_def.proto"
+    ],
+    "cwd": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-wscllm-LRU",
+    "return_code": 0,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "generated_sha256": "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7",
+    "generated_path": "astra-sim-wscllm-LRU/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py"
+  },
+  {
+    "repo": "astra-sim-joint",
+    "source_proto_sha256": "46b67392c6192561c146c14718cae5336c644d43cf5f96a1466028a89f3ab890",
+    "tracked_original": false,
+    "tracked_original_sha256": "4608144d0aab16cde4d259e8ff56c0c7b947e181c722f7b8a50d07441487ab1b",
+    "copied_before_generation_sha256": null,
+    "protoc_version": "libprotoc 3.21.12",
+    "command": [
+      "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+      "--proto_path=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-joint",
+      "--python_out=/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-joint",
+      "extern/graph_frontend/chakra/schema/protobuf/et_def.proto"
+    ],
+    "cwd": "/workspace/template/work/native-resume-20261017/sdk/stage-root/astra-sim-joint",
+    "return_code": 0,
+    "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "generated_sha256": "be8e5ef6c2bc88833f6ace1bb6d14ea94084e2a9edf7229094582172b36c50c7",
+    "generated_path": "astra-sim-joint/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py"
+  }
+]

@@ -1,0 +1,137 @@
+{
+  "scope": "fresh frozen A+B baseline native remainder; not later C4r working tree; isolated unpublished SDK; no full business or CPU budget acceptance",
+  "public_digest": "25c51345c5ddcedb45b21c8b4dc89805c1f9ea2166d49792ddaf639ccbf91013",
+  "source_head_at_freeze": "931855fa0d110fcd75762ca2510217822234ae3d",
+  "build_jobs": 2,
+  "repositories_built_sequentially": true,
+  "no_elf_or_build_reuse": true,
+  "native": {
+    "astra-sim-face-LRU": {
+      "tests": 4,
+      "passed": 3,
+      "failed": 1,
+      "skipped": false,
+      "lifecycle_r4_guard_failure_observed": true,
+      "native_consumer_status": "failed"
+    },
+    "astra-sim-wscllm": {
+      "tests": 4,
+      "passed": 3,
+      "failed": 1,
+      "skipped": true,
+      "lifecycle_r4_guard_failure_observed": true,
+      "native_consumer_status": "failed"
+    },
+    "astra-sim-wscllm-LRU": {
+      "tests": 4,
+      "passed": 3,
+      "failed": 1,
+      "skipped": true,
+      "lifecycle_r4_guard_failure_observed": true,
+      "native_consumer_status": "failed"
+    }
+  },
+  "fresh_shared_libraries": {
+    "astra-sim-face-LRU": {
+      "libcoarse_die_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-face-LRU/lib/libcoarse_die_cabi.so",
+        "sha256": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+        "bytes": 1676920
+      },
+      "libdie_model_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-face-LRU/lib/libdie_model_cabi.so",
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152
+      }
+    },
+    "astra-sim-wscllm": {
+      "libcoarse_die_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/lib/libcoarse_die_cabi.so",
+        "sha256": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+        "bytes": 1676920
+      },
+      "libdie_model_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm/lib/libdie_model_cabi.so",
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152
+      }
+    },
+    "astra-sim-wscllm-LRU": {
+      "libcoarse_die_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so",
+        "sha256": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+        "bytes": 1676920
+      },
+      "libdie_model_cabi.so": {
+        "path": "/workspace/template/work/native-resume-20261017/sdk/build-native/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so",
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152
+      }
+    }
+  },
+  "phases": [
+    {
+      "label": "astra-sim-face-LRU-native-configure",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 0.584749698638916
+    },
+    {
+      "label": "astra-sim-face-LRU-native-build",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 209.2433204650879
+    },
+    {
+      "label": "astra-sim-face-LRU-native-consumers",
+      "status": "failed",
+      "return_code": 8,
+      "elapsed_seconds": 0.3978993892669678
+    },
+    {
+      "label": "astra-sim-wscllm-native-configure",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 0.8826663494110107
+    },
+    {
+      "label": "astra-sim-wscllm-native-build",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 206.02913093566895
+    },
+    {
+      "label": "astra-sim-wscllm-native-consumers",
+      "status": "failed",
+      "return_code": 8,
+      "elapsed_seconds": 0.31276774406433105
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-configure",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 0.7783825397491455
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-build",
+      "status": "passed",
+      "return_code": 0,
+      "elapsed_seconds": 262.69277811050415
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-consumers",
+      "status": "failed",
+      "return_code": 8,
+      "elapsed_seconds": 0.29126834869384766
+    }
+  ],
+  "not_run": [
+    "FACE/JOINT native re-execution (prior A+B evidence remains separate)",
+    "full five-repository business E2E and CPU<=10% comparison",
+    "public accuracy/performance/calibration",
+    "SDK publication"
+  ],
+  "formal_sdk": "canonical24 unchanged; actual hashes verified",
+  "engineering_status": "NOT ACCEPTED",
+  "exported_unix": 1792187652.42548
+}

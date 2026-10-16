@@ -1,0 +1,209 @@
+{
+  "scope": "current Runtime numerical checkpoint; not main integration, SDK publication or engineering acceptance",
+  "execution_sha256": "54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab",
+  "header_sha256": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+  "libraries_sha256": {
+    "work/build-numeric-final-20261017/libcoarse_die.a": "6c5d0dd223f75e02dd9f599945fc09678cfaf3dfc0c7bbdba191d88771c6774a",
+    "work/build-numeric-final-20261017/lib/libcoarse_die_cabi.so": "7e3f0fb6543712ffd97df3878248d916c11198fb12dbb493a94c30bb08783714"
+  },
+  "public_ctest": {
+    "passed": 58,
+    "failed": 0,
+    "actual_record": "public-58.json",
+    "record_return_code": 0
+  },
+  "new_tests_baseline_red": true,
+  "invalid_initial_baseline_runner": "baseline-new-tests/qualification.json; original aborts are tool failures",
+  "public_api": {
+    "strict_exact_comparison_passed": false,
+    "changed_fields": 13,
+    "changes_only_estimate_busy_fields": true,
+    "live_trace_differences": 0,
+    "max_exact_busy_difference_ns": "4.538E-15",
+    "max_binary64_busy_projection_ulp": 1.0,
+    "identical_cabi_symbols": true,
+    "symbol_count": 28
+  },
+  "strict_matrix": {
+    "passed": 78,
+    "failed": 6,
+    "strict_feasibility_violations": 0,
+    "machine_ledger_failures": 0
+  },
+  "snapshot_cross_command_return_code": 0,
+  "performance": {
+    "example": {
+      "status": "ok",
+      "samples": 30,
+      "failures": [],
+      "new_throttled": 0,
+      "query_p95_ns": {
+        "gemm_1x128x128": {
+          "cabi_hot_alternating_alias_compile_batch": 1943,
+          "cabi_hot_compile_batch": 1963,
+          "cabi_hot_cost_only": 3204,
+          "cabi_hot_full_estimate_report": 344288,
+          "cabi_hot_semantic_alias_compile_batch": 1873,
+          "cpp_cold_compile_uncached": 251709
+        },
+        "gemm_128x128x128": {
+          "cabi_hot_alternating_alias_compile_batch": 2003,
+          "cabi_hot_compile_batch": 2123,
+          "cabi_hot_cost_only": 2894,
+          "cabi_hot_full_estimate_report": 334783,
+          "cabi_hot_semantic_alias_compile_batch": 1923,
+          "cpp_cold_compile_uncached": 987405
+        },
+        "residual_257": {
+          "cabi_hot_alternating_alias_compile_batch": 2043,
+          "cabi_hot_compile_batch": 2153,
+          "cabi_hot_cost_only": 3035,
+          "cabi_hot_full_estimate_report": 316185,
+          "cabi_hot_semantic_alias_compile_batch": 2183,
+          "cpp_cold_compile_uncached": 194052
+        },
+        "swiglu_16x4097": {
+          "cabi_hot_alternating_alias_compile_batch": 2173,
+          "cabi_hot_compile_batch": 2193,
+          "cabi_hot_cost_only": 2954,
+          "cabi_hot_full_estimate_report": 522075,
+          "cabi_hot_semantic_alias_compile_batch": 2143,
+          "cpp_cold_compile_uncached": 326081
+        },
+        "norm_8x4096_cached": {
+          "cabi_hot_alternating_alias_compile_batch": 2144,
+          "cabi_hot_compile_batch": 2143,
+          "cabi_hot_cost_only": 2974,
+          "cabi_hot_full_estimate_report": 305990,
+          "cabi_hot_semantic_alias_compile_batch": 2143,
+          "cpp_cold_compile_uncached": 196776
+        },
+        "norm_128x19569_streamed_parameters": {
+          "cabi_hot_alternating_alias_compile_batch": 2083,
+          "cabi_hot_compile_batch": 2304,
+          "cabi_hot_cost_only": 7271,
+          "cabi_hot_full_estimate_report": 373732,
+          "cabi_hot_semantic_alias_compile_batch": 3045,
+          "cpp_cold_compile_uncached": 260091
+        },
+        "example_attention": {
+          "cabi_hot_alternating_alias_compile_batch": 1592,
+          "cabi_hot_compile_batch": 1673,
+          "cabi_hot_cost_only": 2874,
+          "cabi_hot_full_estimate_report": 309346,
+          "cabi_hot_semantic_alias_compile_batch": 1572,
+          "cpp_cold_compile_uncached": 409666
+        }
+      },
+      "update_p95_ns": {
+        "homogeneous_j1": 220,
+        "homogeneous_j8": 1522,
+        "homogeneous_j32": 3045,
+        "heterogeneous_j1": 211,
+        "heterogeneous_j8": 3595,
+        "heterogeneous_j32": 4957,
+        "endpoint_hbm_j1": 220,
+        "endpoint_hbm_j8": 1462,
+        "endpoint_hbm_j32": 3135,
+        "multi_domain_j1": 220,
+        "multi_domain_j8": 3515,
+        "multi_domain_j32": 5368,
+        "compiled_os_credit_curve_bulk_j1": 2403,
+        "compiled_os_credit_curve_bulk_j8": 6950,
+        "compiled_os_credit_curve_bulk_j32": 16204
+      }
+    },
+    "engineering": {
+      "status": "ok",
+      "samples": 30,
+      "failures": [],
+      "new_throttled": 0,
+      "query_p95_ns": {
+        "gemm_1x128x128": {
+          "cabi_hot_alternating_alias_compile_batch": 1883,
+          "cabi_hot_compile_batch": 2083,
+          "cabi_hot_cost_only": 3295,
+          "cabi_hot_full_estimate_report": 346221,
+          "cabi_hot_semantic_alias_compile_batch": 1923,
+          "cpp_cold_compile_uncached": 254753
+        },
+        "gemm_128x128x128": {
+          "cabi_hot_alternating_alias_compile_batch": 1883,
+          "cabi_hot_compile_batch": 2133,
+          "cabi_hot_cost_only": 4517,
+          "cabi_hot_full_estimate_report": 364227,
+          "cabi_hot_semantic_alias_compile_batch": 2073,
+          "cpp_cold_compile_uncached": 1042688
+        },
+        "residual_257": {
+          "cabi_hot_alternating_alias_compile_batch": 2143,
+          "cabi_hot_compile_batch": 2164,
+          "cabi_hot_cost_only": 2825,
+          "cabi_hot_full_estimate_report": 342975,
+          "cabi_hot_semantic_alias_compile_batch": 2925,
+          "cpp_cold_compile_uncached": 227061
+        },
+        "swiglu_16x4097": {
+          "cabi_hot_alternating_alias_compile_batch": 2193,
+          "cabi_hot_compile_batch": 2393,
+          "cabi_hot_cost_only": 2824,
+          "cabi_hot_full_estimate_report": 532020,
+          "cabi_hot_semantic_alias_compile_batch": 2204,
+          "cpp_cold_compile_uncached": 327833
+        },
+        "norm_8x4096_cached": {
+          "cabi_hot_alternating_alias_compile_batch": 2063,
+          "cabi_hot_compile_batch": 2324,
+          "cabi_hot_cost_only": 2914,
+          "cabi_hot_full_estimate_report": 317187,
+          "cabi_hot_semantic_alias_compile_batch": 2113,
+          "cpp_cold_compile_uncached": 200341
+        },
+        "norm_128x19569_streamed_parameters": {
+          "cabi_hot_alternating_alias_compile_batch": 2104,
+          "cabi_hot_compile_batch": 2143,
+          "cabi_hot_cost_only": 2845,
+          "cabi_hot_full_estimate_report": 380062,
+          "cabi_hot_semantic_alias_compile_batch": 2233,
+          "cpp_cold_compile_uncached": 266802
+        },
+        "example_attention": {
+          "cabi_hot_alternating_alias_compile_batch": 1592,
+          "cabi_hot_compile_batch": 1713,
+          "cabi_hot_cost_only": 2935,
+          "cabi_hot_full_estimate_report": 287342,
+          "cabi_hot_semantic_alias_compile_batch": 1612,
+          "cpp_cold_compile_uncached": 365209
+        }
+      },
+      "update_p95_ns": {
+        "homogeneous_j1": 230,
+        "homogeneous_j8": 1542,
+        "homogeneous_j32": 3335,
+        "heterogeneous_j1": 241,
+        "heterogeneous_j8": 3655,
+        "heterogeneous_j32": 5238,
+        "endpoint_hbm_j1": 221,
+        "endpoint_hbm_j8": 1552,
+        "endpoint_hbm_j32": 3295,
+        "multi_domain_j1": 230,
+        "multi_domain_j8": 3575,
+        "multi_domain_j32": 5398,
+        "compiled_os_credit_curve_bulk_j1": 8623,
+        "compiled_os_credit_curve_bulk_j8": 11878,
+        "compiled_os_credit_curve_bulk_j32": 19719
+      }
+    }
+  },
+  "scope_limits": [
+    "Synthetic probes do not calibrate target hardware.",
+    "Positive-time preflight may reject an unrelated slow curved participant; unsupported representation fails closed.",
+    "Capacity1 Norm snapping/deadlock, structural busy error and R>1 readiness are not solved.",
+    "Pure legacy progress closure remains unchanged; strict sub-ULP positive legacy tail oracle remains unresolved.",
+    "Strict ceil rejects historical floor-valued public clocks with tiny positive fractions.",
+    "Fractional error-state snapshot recovery is only tested near origin0; large-origin wire serialization can lose fractions.",
+    "Current native evidence is A+B baseline, not this new Runtime.",
+    "Formal canonical24 SDKs unchanged; publisher not run; main still old integration plus recovery pointer.",
+    "Each performance configuration was measured once; historical failures remain valid."
+  ]
+}

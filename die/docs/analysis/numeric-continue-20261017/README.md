@@ -1,5 +1,71 @@
 # Numerical continuation, 2026-10-17
 
+## Current verified numerical checkpoint
+
+Production development source is now the reviewed positive-time revision,
+Execution.cc SHA256 `54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab`.
+It retains every positive curved event, exact integer readiness for curved and
+legacy competitors, strict requested-target bounds and true ceil of the internal
+clock. A tiny step checks represented progress of every positively served curved
+role and predicts credit with the existing arithmetic/order/guard before mutation.
+The original integration projection is shared by the preflight and actual service.
+Original busy still counts positive allocated physical service; zero quantized
+legacy progress does not suppress busy. No credit/LP/one-ULP/work tolerance,
+physical work, resource definition, fair-owner policy or model curve was widened.
+
+The first fresh Release directory compiled all source and test objects. After
+review, only Execution.cc was recompiled and all dependents relinked; archive
+member hashes prove all other source objects unchanged. Final consistent CTest
+**58/58 passed (15.02s)**. All five new tests were linked to the actual fresh A+B
+baseline and executed red with observation reports. An earlier runner collided
+its executable and output path; its aborts are retained and explicitly qualified
+as invalid tool failures, not model red. Final tests are not mixed old-account
+ELF experiments.
+
+Strict public comparison remains **false**, with all 13 changed fields disclosed:
+estimate busy decimals differ by at most `4.538e-15 ns`, and one binary64 busy
+projection changes by one ULP. No other captured fields differ: two configurations
+times28 inputs, all eight live competition/cancel/capacity/fork traces, and28 C ABI
+function symbols agree. This is not exact JSON equivalence and no comparison
+threshold was added. Cross-library snapshot continuation/guards passed. Unchanged
+exact Fraction matrices remain **78/84**, with all six original rounding failures;
+the independent physical/PRIVATE/credit/tangent and machine-ledger assessor finds
+zero violations in that scope.
+
+Both normal30-sample budget runs passed once, serially after other builds/probes
+ended, with zero additional cgroup throttles. Example/engineering cold128 cubed
+P95 is0.987405/1.042688ms; compiled OS J32 update16.204/19.719us. Original hot20us,
+cold2ms and update50us gates were not changed. All raw samples remain; historical
+failed budgets are still valid and this is not a stable full-business certificate.
+
+The complete355-file text/source archive and summary are in
+`../../evidence/numeric-continue-20261017/runtime-checkpoint/`. The manifest verifies
+archive SHA256, each byte count/hash and decompression roundtrip; no ELF/object/
+library/cache is committed. It includes intermediate C3/C4 failures and exact
+source identities, independent review probes, all final commands, raw API
+differences, original strict failures, corrected baseline controls and budgets.
+Use `save_evidence.py` with a new output directory; never overwrite frozen evidence.
+
+### Boundaries still open
+
+A tiny event may fail closed because an unrelated slow curved role cannot
+represent its progress. This tightens availability; it does not prove every shape
+is representable. The tested near-zero-origin error state imports its own snapshot,
+but large-origin fractional error-state recovery remains limited by the old wire
+serializing origin+fraction into one long double. True ceil rejects historical
+positive-tiny-fraction snapshots paired with a floor-valued public clock; strict
+clock/LP guards are not relaxed to import them. Pure legacy progress closure is
+unchanged, so the independent stronger positive sub-ULP legacy-tail oracle remains
+unresolved even though the minimum target/lifecycle invariant is repaired.
+
+Capacity1 Norm snapping/deadlock, structural busy approximation and R>1 region
+readiness are not solved. Norm affine arithmetic is a separate offline next step.
+Current three-repository native completion belongs only to frozen A+B, see
+[native/README.md](native/README.md); it is not new-Runtime validation. Formal five
+SDKs remain canonical24, main is not activated, and engineering is NOT ACCEPTED.
+The remaining sections preserve the earlier investigation, not current adoption
+status.
+
 Recovered the actual latest `9c464ca` branch, not only main or the older
 `2750e24` Runtime handoff. Merge `931855f` preserves main's additional shared
 pointer. Verified the stop archive and all 499 restored text-file hashes.

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcoarse_die.a CMakeFiles/coarse_die.dir/src/Hardware.cc.o CMakeFiles/coarse_die.dir/src/Plan.cc.o CMakeFiles/coarse_die.dir/src/Compiler.cc.o CMakeFiles/coarse_die.dir/src/Mapping.cc.o CMakeFiles/coarse_die.dir/src/Execution.cc.o
+/usr/bin/ranlib libcoarse_die.a

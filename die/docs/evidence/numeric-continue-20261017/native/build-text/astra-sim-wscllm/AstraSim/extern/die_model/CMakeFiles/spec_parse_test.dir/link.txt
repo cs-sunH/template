@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/spec_parse_test.dir/link.d CMakeFiles/spec_parse_test.dir/tests/spec_parse_test.cc.o -o spec_parse_test  libdie_model.a

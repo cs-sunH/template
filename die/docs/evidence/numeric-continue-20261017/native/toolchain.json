@@ -1,0 +1,48 @@
+{
+  "cmake": {
+    "path": "/workspace/cloud-setup/venv/bin/cmake",
+    "resolved_path": "/workspace/cloud-setup/venv/bin/cmake",
+    "sha256": "f3b316f375ff4446c599ae60ebaf12cfb56b27d6a7aee0acbc845fc67ed893c0",
+    "return_code": 0,
+    "version_output": "cmake version 3.31.10\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
+  },
+  "ctest": {
+    "path": "/workspace/cloud-setup/venv/bin/ctest",
+    "resolved_path": "/workspace/cloud-setup/venv/bin/ctest",
+    "sha256": "f1684c9740e3f5c23652fbb2fed23b1ceba54555af0ff87bfbf79808e9edfeb7",
+    "return_code": 0,
+    "version_output": "ctest version 3.31.10\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n"
+  },
+  "g++": {
+    "path": "/usr/bin/g++",
+    "resolved_path": "/usr/bin/x86_64-linux-gnu-g++-14",
+    "sha256": "6b3696e4dcb85e1c949c732a02befa50e3983ecf94ce7e8e58d9d503b954b79d",
+    "return_code": 0,
+    "version_output": "g++ (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n"
+  },
+  "protoc": {
+    "path": "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+    "resolved_path": "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+    "sha256": "7730414b191c9363340457770c330a7cc00dbba4b6f4130b1293369b3454c27f",
+    "return_code": 0,
+    "version_output": "libprotoc 3.21.12\n"
+  },
+  "python": {
+    "path": "/workspace/cloud-setup/venv/bin/python",
+    "resolved_path": "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3.12",
+    "sha256": "fa67443527ed9647f760d807e2a38f26340757123e643c4639cf273ed15d5ea7",
+    "return_code": 0,
+    "version_output": "Python 3.12.14\n"
+  },
+  "scripts_sha256": {
+    "die/docs/analysis/core-resume-20261016/prepare_isolated_sdk.py": "9f0be61f54f0d534eae6b3df2efc4af3200fb70e890a2d9c9d1991545f5a6504",
+    "die/docs/analysis/core-resume-20261016/run_isolated_sdk.py": "c111dfe39f94b88bb396aeccfb0be51adf0666af1abfe68031430997a4872e7f",
+    "die/docs/analysis/core-resume-20261016/sdk_resume_support.py": "29dbbea50ce1c82b263d69b8aa0a227909267d491341a079a284fd0262f3377c",
+    "die/docs/analysis/core-resume-20261016/aggregate/CMakeLists.txt": "d7c4bf2a439c4e46f71332b44b763b60cfcd9c3e8023ff24fe84a88f25f2a43d"
+  },
+  "activation": {
+    "path": "/workspace/cloud-setup/activate.sh",
+    "sha256": "0ce553771f16966ba1574c663ceae1b358a0f3ce29abdc4c0af3f994f87cd558",
+    "content": "export PATH=/workspace/cloud-setup/venv/bin:/workspace/cloud-setup/sysroot/usr/bin:$PATH\nexport LD_LIBRARY_PATH=/workspace/cloud-setup/sysroot/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}\nexport CMAKE_PREFIX_PATH=/workspace/cloud-setup/sysroot/usr${CMAKE_PREFIX_PATH:+:$CMAKE_PREFIX_PATH}\n"
+  }
+}

@@ -1,0 +1,1 @@
+/usr/bin/g++ -O3 -DNDEBUG -Wl,--dependency-file=CMakeFiles/selection_fuzz_test.dir/link.d CMakeFiles/selection_fuzz_test.dir/tests/selection_fuzz_test.cc.o -o selection_fuzz_test  libdie_model.a
