@@ -2,7 +2,7 @@
 
 ## 2026-10-16 唯一 Core 来源与当前状态
 
-硬件权威为根 `架构建模_单Core版_严格复核修订.docx`，只有 Core，32行 `core32_v1`、`L0=a`。完整迁移从远端 `codex/die-single-core-20261016@b8ddbcfd62e03738b0c3996444355cbbe2e99b80` 恢复，已保留 main 独有交接归档；当前分支 `codex/die-core-resume-20261016`。最终公共51/51与192资源点、五仓隔离10库/98配置已验证，实际 native C++22通过/4个原R4失败，JOINT另6项native Python通过。两套正常30样本性能failed。准备安全快进激活main，实际推送身份以 [HANDOFF](HANDOFF.md) 最新记录为准；正式五仓SDK未发布，工程 **NOT ACCEPTED**。
+硬件权威为根 `架构建模_单Core版_严格复核修订.docx`，只有 Core，32行 `core32_v1`、`L0=a`。完整迁移从远端 `codex/die-single-core-20261016@b8ddbcfd62e03738b0c3996444355cbbe2e99b80` 恢复，已保留 main 独有交接归档；当前分支 `codex/die-core-resume-20261016`。最终公共51/51与192资源点、五仓隔离10库/98配置已验证，实际 native C++22通过/4个原R4失败，JOINT另6项native Python通过。两套正常30样本性能failed。已安全快进激活main至 `6b83624600cdd13c7a8ebe72d36c48cf29873a98` 并实核远端，后续状态以 [HANDOFF](HANDOFF.md) 顶部为准；正式五仓SDK未发布，工程 **NOT ACCEPTED**。
 
 用户授权的10×10、25×32mm、0.75MiB/512bit工程对照点为126.6 INT4 TOPS，只数值接近128 BF16 TFLOPS参考，不等效实测，Vec/存储未匹配，不改变先验或校准身份。此前“停止/未激活”段落是旧检查点；完整恢复归档仍保留，不覆盖当前持续开发授权。
 
@@ -14,7 +14,7 @@
 
 ## 当前恢复状态（2026-10-16）
 
-用户已恢复持续开发。公共生产源码仍与保存迁移一致；五仓最终实际验证范围见[总表](evidence/core-resume-20261016/SDK-VALIDATION-SCOPE.md)。R4不可用guard、WSLRU原optional skip和性能失败均保留。SDK正式canonical24未发布；两项Runtime数值/快照修复和四项性能优化仅在隔离研究中，尚未采用。main安全激活后继续Runtime/Norm/R>1/busy及五仓业务依赖。最新操作以HANDOFF顶部为准。
+用户已恢复持续开发。公共生产源码仍与保存迁移一致；五仓最终实际验证范围见[总表](evidence/core-resume-20261016/SDK-VALIDATION-SCOPE.md)。R4不可用guard、WSLRU原optional skip和性能失败均保留。SDK正式canonical24未发布；两项Runtime数值/快照修复和四项性能优化仅在隔离研究中，尚未采用。继续Runtime/Norm/R>1/busy及五仓业务依赖。最新操作以HANDOFF顶部为准。
 
 ## 项目目标
 

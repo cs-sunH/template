@@ -1,14 +1,14 @@
 # Codex Cloud 开发交接状态
 
-## 当前有效状态：唯一 Core 已完成迁移验证，准备安全激活 main（2026-10-16）
+## 当前有效状态：唯一 Core 已安全激活 main，继续 Runtime 研发（2026-10-16）
 
 用户已恢复持续自主开发。已从唯一迁移提交 `b8ddbcfd62e03738b0c3996444355cbbe2e99b80` 建立 `codex/die-core-resume-20261016`，安全合入 main 独有交接资料，保留新版 AGENTS、PROJECT、设计文档及完整实现。2026-10-16 再次 fetch 全部远端 heads/ls-remote 核实 main 仍为 `d3a64a6c4cb23b8ce437438ed68217d7cee4af1f` 且为恢复 HEAD 祖先。没有从旧生产源码重写或复用上一账号 ELF。
 
 - Current Status / Completed：最终公共 fresh Release **51/51**、DOCX **32行/192资源点**通过；五仓最新 legacy W/H 范围补齐，新隔离 SDK **10库构建/98配置**通过。实际消费者已执行完毕，成功与失败范围见[五仓总表](evidence/core-resume-20261016/SDK-VALIDATION-SCOPE.md)。公共生产源码/头/配置/测试仍逐文件等于保存迁移 b8ddbcf。
 - Tests / Remaining：五仓原生 C++ **22通过/4失败/0skip**，四项均为原 R4 Lifecycle guard 拒绝；JOINT **10/10 C++ + 6/6 native Python**通过。FACE独立 fixture 修正 **86/86**；原85/86保留。WSLRU **62通过/1原optional skip**仍不满足零skip，真实producer桥接另存，未替代生产客户端。两套最终公共正常30样本性能均 **failed**；业务端到端 CPU/目标硬件实测未验收。
 - Important Decisions：仅 Core、`core32_v1`、`L0=a`；旧字段严格拒绝。保持解析固定分段路线、原 busy、10%/有据20%与全部速度门槛。TX8工程点只作授权对照，不是通用配置或独立目标校准。
-- Integration：本检查点先保存可复核证据及源码，再以普通非force快进推送 main；推送前不能称已激活，成功后单独记录实际远端 SHA。**正式五仓 SDK 保持 canonical24，未运行 publisher；工程 NOT ACCEPTED。**
-- Next Step / Files：main 激活后继续 Runtime tiny-credit 与 snapshot 两个有真实 baseline-red 的窄修复，合并前 fresh 全源构建、有效回归、完整 API 与性能测量；再接 Norm 长行/数值、R>1 ready、原 busy 和真实业务。四项存储优化候选未达到预算，不采用。
+- Integration：已普通非force快进推送 main，由 `d3a64a6c4cb23b8ce437438ed68217d7cee4af1f` 更新至 **`6b83624600cdd13c7a8ebe72d36c48cf29873a98`**；ls-remote 实核 main 与恢复分支均为此 SHA。该提交完成唯一 Core 公共/legacy 源码激活及完整证据保存；后续本页文档提交不改变该源码身份。**正式五仓 SDK 保持 canonical24，未运行 publisher；工程 NOT ACCEPTED。**
+- Next Step / Files：继续 Runtime tiny-credit 与 snapshot 两个有真实 baseline-red 的窄修复，合并前 fresh 全源构建、有效回归、完整 API 与性能测量；再接 Norm 长行/数值、R>1 ready、原 busy 和真实业务。四项存储优化候选未达到预算，不采用。
 - Blocking Issues / Handoff Notes：无环境阻碍；硬件迁移的执行范围完成不等于全部业务可用或工程验收。下方均为按提交身份保留的过程/历史记录，以本节为当前状态。不因检查点停止开发。
 
 ### 本次补齐：五仓真实消费者、失败性能和可恢复 Runtime 研究

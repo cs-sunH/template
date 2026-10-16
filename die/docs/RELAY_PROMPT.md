@@ -1,6 +1,6 @@
 # 新任务接续提示词：解析粗粒度建模
 
-> 当前接续：先 fetch 并读 HANDOFF 顶部实际 main 状态。唯一 Core 从 b8ddbcf 恢复，最终公共51/51、DOCX/192点与五仓10库/98配置通过；native22通过/4项原R4失败，性能预算仍failed。正式SDK保持canonical24。当前准备安全快进激活已验证硬件范围，随后继续Runtime数值/快照窄修复、Norm及业务；两修复仍在隔离研究，勿把旧ELF或分离试验当最终联合验收。硬件依据新DOCX，保持Core32/L0=a及旧字段严格拒绝。
+> 当前接续：先 fetch 并读 HANDOFF 顶部实际 main 状态。唯一 Core 从 b8ddbcf 恢复，最终公共51/51、DOCX/192点与五仓10库/98配置通过；native22通过/4项原R4失败，性能预算仍failed。正式SDK保持canonical24。main已安全快进激活至 `6b83624600cdd13c7a8ebe72d36c48cf29873a98` 并实核远端，继续Runtime数值/快照窄修复、Norm及业务；两修复仍在隔离研究，勿把旧ELF或分离试验当最终联合验收。硬件依据新DOCX，保持Core32/L0=a及旧字段严格拒绝。
 
 
 更新：2026-10-16（硬件文档迁移；解析路线和精度合同继续有效）。在GitHub选择 `cs-sunH/template`，从最新main新建开发任务，复制以下全文。先前归档Program/精确周期路线已撤出主线。此提示词授权新任务实现代码；本次文档更新本身不修改代码。
