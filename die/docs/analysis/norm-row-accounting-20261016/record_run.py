@@ -23,7 +23,8 @@ if not command: p.error('command required')
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 sources = [root / 'die/CMakeLists.txt', root / 'die/validation/norm_row_oracle.py',
            root / 'die/validation/elementwise_service_oracle.py']
-for base in ['die/src', 'die/include', 'die/tests', 'die/configs', 'die/docs/analysis/norm-row-accounting-20261016']:
+for base in ['die/src', 'die/include', 'die/tests', 'die/configs', 'die/docs/analysis/norm-row-accounting-20261016',
+             'die/docs/analysis/hotpath-allocation-20261016']:
     sources += [path for path in (root / base).rglob('*') if path.is_file()
                 and path.suffix in ['.cc', '.hh', '.h', '.py', '.json', '.txt']]
 binaries = list(build.rglob('*.a')) + list(build.rglob('*.so'))
@@ -40,7 +41,12 @@ meta = {'observed_git_head': subprocess.check_output(['git','rev-parse','HEAD'],
     'cmake_cache_sha256': sha(build / 'CMakeCache.txt') if (build / 'CMakeCache.txt').is_file() else None,
     'started_unix': time.time(), 'cpu_before': cpu.read_text() if cpu.is_file() else None}
 with pathlib.Path(str(prefix) + '.log').open('w') as log:
-    result = subprocess.run(command, cwd=root, stdout=log, stderr=subprocess.STDOUT)
+    try:
+        result = subprocess.run(command, cwd=root, stdout=log, stderr=subprocess.STDOUT)
+    except OSError as error:
+        log.write(str(error)+'\n')
+        meta['launch_error']=str(error)
+        result=subprocess.CompletedProcess(command,127)
 meta.update(return_code=result.returncode, finished_unix=time.time(),
     cpu_after=cpu.read_text() if cpu.is_file() else None,
     binary_after_sha256={str(path): sha(path) for path in sorted(set(binaries)) if path.is_file()})

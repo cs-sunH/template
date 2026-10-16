@@ -1,10 +1,18 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch/ls-remote实核HEAD、main及工作分支均为 `089c7db92a74d29dcd924e4f2a8d25d08eaa1663`。包含本页的Git提交为Norm行驻留账本/固定分段检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch实核HEAD/main为 `32157ae69b05adbb4b8e50af3d4a3003994451a5`，其push/fetch/ls-remote已实核main和工作分支同SHA。包含本页的Git提交为比率仲裁临时内存复用检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
 
 ## Current Status
 
-### 当前有效检查点：Norm每Core参数、行容量和有界服务曲线
+### 当前有效检查点：比率仲裁循环临时内存复用，速度仍failed
+
+- 独立诊断驱动拆分真实compile并计global C++ new/thread CPU/wall；100样本中128³候选Runtime约占46%，完整19634次分配、候选Runtime10429，生成7460、硬件复制438。计数器增开销，只作定位，不代替预算测量。初次诊断编译/缺loader环境失败与not_run保留；recorder现捕获不存在命令的OSError为127并记launch_error，旧raw不改。
+- 仅生产RatioAllocation.hh复用closure/probe/forced向量、constraints深拷贝的既有capacity并按原assign/clear重置，physical rows/edges按已有上限reserve。运算/循环/约束顺序、owner Q/alpha、PRIVATE、近似拒绝/LP fallback和严格舍入认证均不变，没有跨调用新状态。J1分配81→69，J8/J32 **88→76**，每次少496B请求；128³完整19634→19598。诊断wall无一致变快，不把少分配宣传成性能通过。
+- 当前一致Release **48/48通过，18.57s**，生产/头/测试源SHA实核；相同11个真实公开完整对象与Git321库逐字段全等，含legacy/cached/streamed Norm和R3诊断。新driver真实重跑Norm32/96，128份raw/report/stderr/log与已保留内容逐byte相同，另列当前源/ELF/命令和SHA引用；Norm因此仍完成96/首输出160目标、busy54failed，不是新硬件校准。
+- 新正常30样本整套仍 **failed**：128³冷P95 **2.149427ms**、OS J8/J32更新 **134.268/56.163μs**（J1=16.494μs）。本次所有热编译/alias/交替/cost≤20μs，Norm冷0.469414/0.628730ms；保留Norm检查点和全部历史慢样本，不挑一次最快。下一步应拆候选Runtime实际路径/重复诊断构建等固定开销，不能假设每减少malloc即达到尾部预算。
+- 当前CABI SHA `8834372c2ad845acb4ec4f95f8bfa1cc4ef04acde3d93f0d3e08bf9ea1c89729`；复现/总表为analysis/evidence的hotpath-allocation-20261016。正式五份canonical24实际hash仍23160c…7e9b未publisher，新模型五仓业务/CPU not_run。R>1窗口、Norm长行、busy精度、其它模板及独立target数据缺口保留，TX8/目标先验冻结；持续自主开发，工程NOT ACCEPTED。
+
+### 已合入32157ae：Norm每Core参数、行容量和有界服务曲线
 
 - 真实旧CABI证明BF16 RMSNorm的4 Core/8行/hidden4096读取73728 B，完全缓存也至少98304；8 Core应131072而旧仍73728，LayerNorm四Core应131072而旧81920。根设计§6.4参数每消费Core首次读取未落实。现在专用`norm_row_resident_v1`按row_id mod Core，保留完整输入行及输出槽；完整FP32 gamma/beta与其它分配同时装入才R1每Core缓存，否则逐行HBM。SRAM/LOCAL参数使用仍逐行，两条INT4参数独立打包，输入在SRAM统计/应用访问两次及真实转换另计，math6/8不重算、不重拟eta。
 - R1单/两cohort及三以上分别3/6/9活动，后者加ready最多10/16描述，按既有elementwise首/尾/保留槽位合同解析生成，不逐行/Core/repeat推进。first实际Compute ID用于首输出；Last输入终态转移、末输入及倒二输出保留槽均显式audit。新增逐Core独立行计数/进度网格核物理槽位，不能借别Core空闲容量。R>1 body诊断仍not_available（包括零launch时未表示region barrier），不假跨region参数驻留。完整行驻留不够明确unsupported_workspace并给required bytes；两遍HBM长行模板not_implemented，原假一遍读/256元素峰值不再被接受。
@@ -349,10 +357,10 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本页的main/HEAD，先读norm-row-accounting README/checkpoint-summary，再看consumer-availability的preview-complete-final-summary和冻结matrix。当前模型公共48+增强Norm1项已过；Python148、旧SDK五仓10项、显式硬件移除、每Core槽位、九描述elementwise曲线、双raw memo均已完成，不重复历史待办。
+1. fetch核实包含本页的main/HEAD，先读hotpath-allocation README/checkpoint-summary及norm-row-accounting总表，再看consumer-availability的preview-complete-final-summary和冻结matrix。当前模型公共48已过、11公开对象/96 Norm实际新源重跑全等；Python148、旧SDK五仓10项、显式硬件移除、每Core槽位、九描述elementwise曲线、双raw memo均已完成，不重复历史待办。
 2. 隔离五仓consumer/两ABI构建、83配置及5个真实R3拒绝probe已完成，三个fixture修正/旧SDK当前10项兼容已核；不重跑或重复publisher。最新总表preview-complete-final-summary，原标准四仓R4失败和JOINT初始1项失败保留。正式SDK仍canonical24。后续公共生产模型变化时，再用新freeze/label验受影响的ABI和真实负载，不复用旧ELF声称当前源通过；不可减少layers/passes获得业务成功。
 3. Norm每Core首次读取/完整参数fit/行槽/转换及固定首中尾已落实，不恢复add_vector旧Norm路线；当前Norm完成/首输出scope达10%，busy54场景failed，长行两遍HBM仍未实现，R>1即零launch也诊断不可用。正式接入前的主要依赖仍R>1真实非服务窗口和region物化barrier；先研究能保持资源竞争/无Q等待且符合固定复杂度的表示，不前置R×wait、不作资源/PRIVATE替身、不逐K/tile/wave/repeat或周期/Program，不能只删status或guard。长行两遍、WR/其它向量/Attention/FFN和OS二阶/odd-row按真实收益推进。
-4. 最新速度整套failed，GEMM cold/hot cost及J32尾部有真实样本；先定位可证的分配/规范化/查询/积分开销，再做语义等价轻量优化，不为噪声改模型。Norm本次所测热/冷通过但不是全域速度证书。elementwise长16/48完成全10%仍24busy失败/首输出1项11.379%未接受，原17仍27联合失败；未改函数沿原证据并明确未重跑，7公开例逐字段全等不外推全域。保持计量/每Core容量/公平和真实终态，不放宽busy/速度；有新变更或具体未解concern才重测，不抽样挑最好。
+4. 最新速度整套failed：GEMM cold和J8/J32仍超；热查询本次所测通过但此前cost27.25μs失败保留。临时向量复用已减12次update分配，不重复做；继续诊断候选Runtime路径分布、JSON审计/候选构建等主要成本，必要时只延迟loser诊断或复用可靠轻量字段，不能跳过结构/硬件校验、改变软件候选或公平。不要假设malloc数少必然尾延迟低；物理模型/校准不为CPU噪声调整。elementwise长16/48完成全10%仍24busy失败/首输出1项11.379%未接受，原17仍27联合失败；未受影响范围沿原证据且不声称新重跑。新变更或具体concern才重测，不挑最好样本。
 5. 模型稳定后才正式publisher；再做五仓完整业务、双ABI/配置与端到端CPU预算。旧SDK通过不冒充新SDK通过，R3拒绝通过不冒充R3支持；JOINT provider/live/sh30仍受保护。target raw/heldout与当前Runtime同合同TX8硬件入口仍缺，不造profile或重拟目标效率。
 6. 有意义检查点保存全部有效源/日志，安全提交并核实GitHub；持续自主开发，不按提交或阶段停止。
 

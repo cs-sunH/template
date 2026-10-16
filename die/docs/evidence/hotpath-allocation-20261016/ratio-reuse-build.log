@@ -1,0 +1,110 @@
+[  1%] Building CXX object CMakeFiles/coarse_die.dir/src/Execution.cc.o
+/workspace/template/die/src/Execution.cc: In member function ‘void coarse_die::Runtime::allocate()’:
+/workspace/template/die/src/Execution.cc:1196:48: warning: missing initializer for member ‘coarse_die::Runtime::allocate()::Ref::mirrors’ [-Wmissing-field-initializers]
+ 1196 |                          first_resource, q, 0.0});
+      |                                                ^
+[  2%] Linking CXX static library libcoarse_die.a
+[  6%] Built target coarse_die
+[  8%] Linking CXX executable coarse_owner_lp_oracle_driver
+[  8%] Linking CXX shared library lib/libcoarse_die_cabi.so
+[  9%] Built target coarse_owner_lp_oracle_driver
+[ 10%] Built target coarse_die_cabi
+[ 10%] Linking CXX executable coarse_compiled_gemm_oracle_driver
+[ 10%] Linking CXX executable coarse_elementwise_oracle_driver
+[ 11%] Built target coarse_compiled_gemm_oracle_driver
+[ 12%] Built target coarse_elementwise_oracle_driver
+[ 13%] Linking CXX executable coarse_k_readiness_runtime_driver
+[ 14%] Linking CXX executable coarse_norm_oracle_driver
+[ 16%] Built target coarse_norm_oracle_driver
+[ 16%] Built target coarse_k_readiness_runtime_driver
+[ 17%] Linking CXX executable coarse_die_benchmark
+[ 18%] Linking CXX executable coarse_service_curve_benchmark
+[ 19%] Built target coarse_die_benchmark
+[ 19%] Built target coarse_service_curve_benchmark
+[ 20%] Linking CXX executable coarse_norm_row_accounting_test
+[ 21%] Linking CXX executable coarse_prediction_availability_test
+[ 22%] Built target coarse_norm_row_accounting_test
+[ 23%] Built target coarse_prediction_availability_test
+[ 24%] Linking CXX executable coarse_region_delay_math_test
+[ 24%] Linking CXX executable coarse_region_overhead_test
+[ 25%] Built target coarse_region_delay_math_test
+[ 26%] Linking CXX executable coarse_elementwise_service_test
+[ 27%] Built target coarse_region_overhead_test
+[ 28%] Linking CXX executable coarse_packing_allocator_test
+[ 29%] Built target coarse_packing_allocator_test
+[ 30%] Built target coarse_elementwise_service_test
+[ 31%] Building CXX object CMakeFiles/coarse_ratio_allocator_test.dir/tests/ratio_allocator_test.cc.o
+[ 31%] Linking CXX executable coarse_os_service_curve_test
+[ 32%] Built target coarse_os_service_curve_test
+[ 33%] Linking CXX executable coarse_os_service_scaling_test
+[ 34%] Built target coarse_os_service_scaling_test
+[ 35%] Linking CXX executable coarse_service_curve_schema_test
+[ 36%] Built target coarse_service_curve_schema_test
+[ 37%] Linking CXX executable coarse_service_curve_runtime_test
+[ 38%] Built target coarse_service_curve_runtime_test
+[ 39%] Linking CXX executable coarse_capi_cost_query_test
+[ 40%] Built target coarse_capi_cost_query_test
+[ 41%] Linking CXX executable coarse_source_golden_test
+[ 42%] Built target coarse_source_golden_test
+[ 43%] Linking CXX executable coarse_hardware_input_test
+[ 43%] Built target coarse_hardware_input_test
+[ 44%] Linking CXX executable coarse_compile_execution_test
+[ 45%] Built target coarse_compile_execution_test
+[ 46%] Linking CXX executable coarse_compiler_credit_test
+[ 47%] Built target coarse_compiler_credit_test
+[ 48%] Linking CXX executable coarse_gemm_os_access_counter_test
+[ 49%] Built target coarse_gemm_os_access_counter_test
+[ 50%] Linking CXX executable coarse_gemm_os_geometry_test
+[ 51%] Built target coarse_gemm_os_geometry_test
+[ 52%] Linking CXX executable coarse_gemm_os_route_counter_test
+[ 53%] Built target coarse_gemm_os_route_counter_test
+[ 54%] Linking CXX executable coarse_gemm_os_resource_facts_test
+[ 55%] Built target coarse_gemm_os_resource_facts_test
+[ 56%] Linking CXX executable coarse_gemm_os_readiness_test
+[ 57%] Built target coarse_gemm_os_readiness_test
+[ 58%] Linking CXX executable coarse_operator_accounting_test
+[ 59%] Built target coarse_operator_accounting_test
+[ 60%] Linking CXX executable coarse_gemm_accounting_test
+[ 60%] Built target coarse_gemm_accounting_test
+[ 61%] Linking CXX executable coarse_gemm_tail_budget_test
+[ 62%] Built target coarse_gemm_tail_budget_test
+[ 63%] Linking CXX executable coarse_task_schema_test
+[ 64%] Built target coarse_task_schema_test
+[ 65%] Linking CXX executable coarse_compact_batch_semantics_test
+[ 66%] Built target coarse_compact_batch_semantics_test
+[ 67%] Linking CXX executable coarse_equivalent_work_test
+[ 68%] Built target coarse_equivalent_work_test
+[ 69%] Linking CXX executable coarse_fractional_work_test
+[ 70%] Built target coarse_fractional_work_test
+[ 71%] Linking CXX executable coarse_fused_ffn_accounting_test
+[ 72%] Built target coarse_fused_ffn_accounting_test
+[ 73%] Linking CXX executable coarse_attention_accounting_test
+[ 73%] Built target coarse_attention_accounting_test
+[ 74%] Linking CXX executable coarse_endpoint_allocation_test
+[ 75%] Built target coarse_endpoint_allocation_test
+[ 76%] Linking CXX executable coarse_runtime_credit_scale_test
+[ 77%] Built target coarse_runtime_credit_scale_test
+[ 78%] Linking CXX executable coarse_runtime_clock_translation_test
+[ 79%] Built target coarse_runtime_clock_translation_test
+[ 80%] Linking CXX executable coarse_runtime_counters_test
+[ 81%] Built target coarse_runtime_counters_test
+[ 82%] Linking CXX executable coarse_estimate_driver_test
+[ 83%] Built target coarse_estimate_driver_test
+[ 84%] Linking CXX executable coarse_runtime_semantics_test
+[ 85%] Built target coarse_runtime_semantics_test
+[ 86%] Linking CXX executable coarse_oracle_granularity_test
+[ 87%] Built target coarse_oracle_granularity_test
+[ 88%] Linking CXX executable coarse_capi_lifecycle_test
+[ 89%] Built target coarse_capi_lifecycle_test
+[ 90%] Linking CXX executable coarse_capi_cache_response_test
+[ 91%] Built target coarse_capi_cache_response_test
+[ 92%] Linking CXX executable coarse_workspace_metadata_test
+[ 93%] Built target coarse_workspace_metadata_test
+[ 94%] Linking CXX executable coarse_workspace_envelope_test
+[ 95%] Built target coarse_workspace_envelope_test
+[ 96%] Linking CXX executable coarse_runtime_submit_transaction_test
+[ 97%] Built target coarse_runtime_submit_transaction_test
+[ 98%] Linking CXX executable coarse_runtime_owner_symmetry_test
+[ 99%] Built target coarse_runtime_owner_symmetry_test
+[100%] Linking CXX executable coarse_ratio_allocator_test
+[100%] Built target coarse_ratio_allocator_test

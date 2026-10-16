@@ -1,0 +1,31 @@
+{
+  "source_git_head": "32157ae69b05adbb4b8e50af3d4a3003994451a5",
+  "scope": "immutable local checkpoint binaries before ratio scratch reuse; build from Git in another account",
+  "files": [
+    {
+      "original": "/workspace/template/work/build-die-continue/libcoarse_die.a",
+      "retained": "/workspace/template/work/hotpath-allocation/baseline-binaries/libcoarse_die.a",
+      "sha256": "1509ff3019327b36e4d2b7c755000e4a6d564cdaf75c797f12e800401468333c"
+    },
+    {
+      "original": "/workspace/template/work/build-die-continue/lib/libcoarse_die_cabi.so",
+      "retained": "/workspace/template/work/hotpath-allocation/baseline-binaries/libcoarse_die_cabi.so",
+      "sha256": "95e02c551a971fe92367e16df782969371202d36b1ac7ae1725d34b6fdd4d588"
+    },
+    {
+      "original": "/workspace/template/work/build-die-continue/coarse_service_curve_benchmark",
+      "retained": "/workspace/template/work/hotpath-allocation/baseline-binaries/coarse_service_curve_benchmark",
+      "sha256": "7eee82d76900935d234d76e669dd09d107c996f326d299cec8a9c4cce5908d9a"
+    },
+    {
+      "original": "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+      "retained": "/workspace/template/work/hotpath-allocation/baseline-binaries/coarse_norm_oracle_driver",
+      "sha256": "615c066081f7b43d2b73644b46613dd50f958e9ca945a4a7296b2e418a30b818"
+    },
+    {
+      "original": "/workspace/template/work/hotpath-allocation/phase-profile-baseline",
+      "retained": "/workspace/template/work/hotpath-allocation/baseline-binaries/phase-profile-baseline",
+      "sha256": "bb6d53085c8413bc78c08a8872e2444de8c2e3e1637f7ca914270a2befa400e6"
+    }
+  ]
+}

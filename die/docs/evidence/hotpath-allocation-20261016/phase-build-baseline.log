@@ -1,0 +1,23 @@
+die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc: In function ‘{anonymous}::Json {anonymous}::measure(F)’:
+die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc:38:9: error: inconsistent deduction for ‘auto’: ‘const long unsigned int’ and then ‘const std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long int, std::ratio<1, 1000000000> > >’
+   38 |   const auto cpu=thread_time(),wall=Clock::now();
+      |         ^~~~
+die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc:42:9: error: inconsistent deduction for ‘auto’: ‘const std::chrono::time_point<std::chrono::_V2::steady_clock, std::chrono::duration<long int, std::ratio<1, 1000000000> > >’ and then ‘const long unsigned int’
+   42 |   const auto end=Clock::now(),cpu_end=thread_time();getrusage(RUSAGE_THREAD,&after);
+      |         ^~~~
+die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc: In lambda function:
+die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc:65:95: error: ‘validate_plan_structure’ was not declared in this scope; did you mean ‘coarse_die::detail::validate_plan_structure’?
+   65 |         row["candidate_structure_validation_subset"]=measure([&]{for(const auto& p:candidates)validate_plan_structure(*p);});
+      |                                                                                               ^~~~~~~~~~~~~~~~~~~~~~~
+      |                                                                                               coarse_die::detail::validate_plan_structure
+In file included from die/include/coarse_die/Execution.hh:2,
+                 from die/docs/analysis/hotpath-allocation-20261016/../../../tests/test_support.hh:3,
+                 from die/docs/analysis/hotpath-allocation-20261016/../../../tests/service_curve_benchmark.cc:1,
+                 from die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc:24:
+die/include/coarse_die/Plan.hh:169:6: note: ‘coarse_die::detail::validate_plan_structure’ declared here
+  169 | void validate_plan_structure(const Plan& plan);
+      |      ^~~~~~~~~~~~~~~~~~~~~~~
+die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc: In function ‘int main(int, char**)’:
+die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc:84:5: error: ‘write_json_file’ was not declared in this scope
+   84 |     write_json_file(args.output_path,report);return 0;
+      |     ^~~~~~~~~~~~~~~

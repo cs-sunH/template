@@ -20,7 +20,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
-2026-10-16当前源码检查点：公共Norm现按完整行、每消费Core gamma/beta首次读取、真实缓存容量及逐行SRAM/转换收费，纠正四Core RMSNorm 73728→98304 B的已复现少收费；R1最多9活动+ready10/16，R>1继续body诊断，放不下完整行则明确unsupported_workspace，两遍HBM模板未实现。一致公共48/48（18.55s）及后续增强Norm1项通过，432 cached/54 streamed独立账本、4容量边界、逐Core槽/恢复/取消/半数kappa/repeat1e6通过。离线单Core缓存BF16的32case/96场景完成全≤10%、160首输出全≤10%，原busy仍54联合failed，不作硬件校准；7其它算子完整公开结果与旧库全等。Norm冷P95 0.365339/0.428994ms、热2.934—4.426μs通过，但整套benchmark仍failed（GEMM冷2.550269ms、hot cost27.250μs、J32 57.145μs），全部raw保留。详见norm-row-accounting分析/总表。旧隔离五仓83配置/五R3拒绝probe、旧SDK10项兼容仍各自有效；正式vendor24仍23160c…7e9b未publisher，当前Norm新模型五仓业务/CPU not_run。elementwise busy/首输出、R>1窗口、长行和其它模板仍待解；TX8/target先验冻结、独立target数据缺失。继续公共模型依赖及可证热路径优化，工程NOT ACCEPTED。
+2026-10-16当前源码检查点：比率仲裁只复用循环内临时向量容量，原约束/owner Q/alpha/PRIVATE/LP拒绝及舍入不变，无新模型状态。独立诊断J8/J32堆分配88→76，但未宣称时间必然变快；正常Release48/48（18.57s）、11公开完整对象与Git321逐字段全等，真实新Norm32/96 raw/report全部同保留内容。新30样本速度仍failed：GEMM128³ cold2.149427ms、J8/J32更新134.268/56.163μs；本次所测热查询通过，历史27.25μs等慢样本全保留。详见hotpath-allocation总表，继续拆候选Runtime/诊断构建等实际成本。Norm行驻留/每Core参数/转换/容量已在32157ae落实，离线96完成和160首输出≤10%，busy54failed，长行两遍未实现，R>1仍诊断不可用。旧隔离五仓83配置/五R3拒绝probe、旧SDK10项兼容按原scope有效；正式vendor24仍23160c…7e9b未publisher，新模型五仓业务/CPU not_run。TX8/目标先验冻结、独立target数据缺失，工程NOT ACCEPTED，持续自主开发。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
 

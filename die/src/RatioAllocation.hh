@@ -527,6 +527,8 @@ inline bool allocate_ratio(const std::vector<RatioRow>& rows,
 
     std::vector<Constraint> physical_rows;
     std::vector<Edge> edges;
+    physical_rows.reserve(rows.size());
+    edges.reserve(rows.size());
     std::vector<bool> individually_bounded(count, false);
     for (const RatioRow& row : rows) {
       if (row.a.size() != count || !std::isfinite(row.b) || row.b < 0.0)
@@ -589,12 +591,18 @@ inline bool allocate_ratio(const std::vector<RatioRow>& rows,
     Wide floor = 0.0L;
     std::vector<Wide> solution(count, 0.0L);
     std::size_t remaining = count;
+    // Every closure resets all count entries. Retain their allocations across
+    // tiers/probes instead of allocating two vectors for every raised item.
+    std::vector<Wide> constant, slope, probe_constant, probe_slope;
+    std::vector<Constraint> constraints;
+    constraints.reserve(physical_rows.size()+count);
+    std::vector<std::size_t> forced;
+    forced.reserve(count);
     while (remaining != 0) {
-      std::vector<Wide> constant, slope;
       if (!closure_for_tier(gain, edges, frozen, frozen_value,
                             constant, slope)) return false;
 
-      std::vector<Constraint> constraints = physical_rows;
+      constraints = physical_rows;
       for (std::size_t i = 0; i < count; ++i) {
         if (!frozen[i]) continue;
         Constraint fixed_upper{std::vector<Wide>(count, 0.0L), frozen_value[i]};
@@ -606,10 +614,9 @@ inline bool allocate_ratio(const std::vector<RatioRow>& rows,
       if (!maximum_feasible_parameter(constraints, constant, slope, floor, tier) ||
           !(tier > 0.0L)) return false;  // Zero-tier restart is LP-only here.
 
-      std::vector<std::size_t> forced;
+      forced.clear();
       for (std::size_t raised = 0; raised < count; ++raised) {
         if (frozen[raised]) continue;
-        std::vector<Wide> probe_constant, probe_slope;
         if (!closure_for_probe(gain, edges, frozen, frozen_value, raised,
                                tier, probe_constant, probe_slope)) return false;
         Wide max_floor = 0.0L;
@@ -634,11 +641,10 @@ inline bool allocate_ratio(const std::vector<RatioRow>& rows,
 
     // All utilities are now fixed. Recompute the exact ratio closure and
     // require every frozen value to satisfy its own propagated lower bound.
-    std::vector<Wide> final_constant, final_slope;
     if (!closure_for_tier(gain, edges, frozen, frozen_value,
-                          final_constant, final_slope)) return false;
+                          constant, slope)) return false;
     for (std::size_t i = 0; i < count; ++i) {
-      if (final_constant[i] != frozen_value[i]) return false;
+      if (constant[i] != frozen_value[i]) return false;
       solution[i] = frozen_value[i];
     }
     if (!rows_feasible(physical_rows, solution)) return false;
