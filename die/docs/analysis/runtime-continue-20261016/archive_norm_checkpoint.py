@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Archive a frozen Norm checkpoint without modifying ongoing experiments."""
+import argparse
 import gzip
 import hashlib
 import io
@@ -7,9 +8,14 @@ import json
 from pathlib import Path
 import tarfile
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--checkpoint', choices=('checkpoint-1', 'checkpoint-2'), default='checkpoint-1')
+args = parser.parse_args()
 root = Path(__file__).resolve().parents[4]
-source = root / 'work/norm-runtime-current/checkpoint-1'
+source = root / 'work/norm-runtime-current' / args.checkpoint
 destination = root / 'die/docs/evidence/runtime-continue-20261016/norm-capacity1'
+if args.checkpoint != 'checkpoint-1':
+    destination = destination / args.checkpoint
 destination.mkdir(parents=True, exist_ok=False)
 manifest_path = source / 'manifest.json'
 manifest = json.loads(manifest_path.read_text())
@@ -29,7 +35,7 @@ with tarfile.open(fileobj=buffer, mode='w') as archive:
         entry.size, entry.mtime, entry.mode = len(data), 0, 0o644
         archive.addfile(entry, io.BytesIO(data))
 blob = gzip.compress(buffer.getvalue(), mtime=0)
-archive_path = destination / 'checkpoint-1-text.tar.gz'
+archive_path = destination / (args.checkpoint + '-text.tar.gz')
 archive_path.write_bytes(blob)
 with tarfile.open(fileobj=io.BytesIO(gzip.decompress(blob))) as archive:
     for f in files:

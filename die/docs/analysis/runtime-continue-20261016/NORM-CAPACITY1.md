@@ -1,5 +1,45 @@
 # Current-Core capacity1 Norm: real red and incomplete causal experiment
 
+## Latest frozen checkpoint2: rejected numerical candidate
+
+[Checkpoint2](../../evidence/runtime-continue-20261016/norm-capacity1/checkpoint-2/)
+preserves283 additional/frozen text artifacts, manifest `e2be837a…44936`, archive
+`c0fb750e…754b4` (646069bytes). Every original/saved hash and compression roundtrip
+is verified. Its `CANDIDATE2-STATUS.md` supersedes preparation-phase wording.
+Both numerical candidates remain unadopted; production still uses A+B.
+
+The physical-enclosure candidate passes the seven-epoch, exact dyadic capacity1
+half-second, and representable positive-subepsilon probes. It nevertheless fails
+the unchanged negative-four-ULP split guard and service-curve regression, so it
+is **REJECTED**. A formula enclosure passing912 sampled independent Fraction
+comparisons does not prove safe multi-role integration: the failing service
+case advances Store while Compute's represented progress remains exactly0.5,
+creating an independently certified small negative output inventory. The
+retained-plan clock flag and partial-mutation failure issues are also recorded.
+
+The ULP diagnosis distinguishes actual contracts. In this rejected candidate,
+a rate four ULP below the source matches a different redundant-row reconstruction
+within one ULP, violating the frozen test. Separately, actual A+B accepts source
++4/+5ULP because those values already match its ordinary reconstruction within
+one ULP; it rejects the tested negative directions and+2/+3. This is neither
+newly attributed to B nor a hardware accuracy claim. Version3 does not record
+the historical allocation context, so its chosen-canonical check cannot prove
+an arbitrary symmetric ULP distance from an unknown historical source vector.
+Recording an allocation context/version is a design dependency, not an
+implemented or newly accepted change.
+
+The independent positive-time probe has unit2^-60, capacity4units, initial1unit,
+delta−2units, gate/PRIVATE2^-85s and synthetic Vec1e12. Its real half-event is
+1.29246970711410574198658e-17ns: both clock and half-progress can be represented.
+Actual A+B omits this event, then crosses the buffer and throws on advance1ns;
+the rejected candidate handles it correctly. A separate **time-only** experiment
+now studies that dependency on A+B without changing credit/LP/witness rules.
+Its mixed six focused regressions and this subepsilon probe pass, but no fresh
+whole-source/API/budget result or adoption is claimed. Its files and results are
+separate from checkpoint2; it is not a Norm fix.
+
+## Checkpoint1 and first causal experiment
+
 This checkpoint advances Runtime diagnosis only. Production remains the tested
 A+B source `6fcc637e…e710e`. No long-row builder, numerical candidate, old Core
 type, or historical snapshot was activated or published.

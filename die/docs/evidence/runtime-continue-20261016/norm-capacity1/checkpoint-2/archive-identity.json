@@ -1,0 +1,11 @@
+{
+  "scope": "current-Core actual numerical dependencies; candidate2 rejected; no production adoption",
+  "file_count": 283,
+  "checkpoint_manifest_sha256": "e2be837a4758872a04907369609b96b37cc0bbb83a48883986e01c4479d44936",
+  "archive_sha256": "c0fb750e61535629aa2e4ea3ad7f53f65c057b5d03cb1650d296c21740b754b4",
+  "archive_bytes": 646069,
+  "archiver_sha256": "cdfc215640e4bc721fa1acfc8bddb7cd3635783ac97b1a941678ce68dbbe4203",
+  "all_files_hash_verified": true,
+  "roundtrip_byte_equal": true,
+  "production_runtime_source": "unchanged A+B; this candidate is not adopted"
+}
