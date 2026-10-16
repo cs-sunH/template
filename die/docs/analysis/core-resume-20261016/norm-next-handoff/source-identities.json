@@ -1,0 +1,96 @@
+{
+  "status": "read_only_notes_no_new_execution",
+  "scratch_archive_origin": "die/docs/analysis/pre-core-migration-20261016/unadopted-artifacts.tar.gz",
+  "source_files": [
+    {
+      "path": "die/docs/analysis/pre-core-migration-20261016/README.md",
+      "exists": true,
+      "sha256": "1e4d90c292bbdf41f36dbd5f4af66dac6064537d0ae3b58686d4d3cf28b8403b",
+      "scratch_extraction": false
+    },
+    {
+      "path": "die/docs/analysis/norm-long-row-20261016/README.md",
+      "exists": true,
+      "sha256": "72098e7a554c075ad6774f58d39e73617c5b5a650a15abdacd120a9d54acd7d1",
+      "scratch_extraction": false
+    },
+    {
+      "path": "work/norm-audit/die/src/NormLongRow.hh",
+      "exists": true,
+      "sha256": "16b428bdbb8a7ae622b391dedf0ff3d9d9f4bb1e26c1f0954cddd4c431020ff7",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/die/tests/norm_long_row_test.cc",
+      "exists": true,
+      "sha256": "37933c20a538e995b349c2d5ff9b4e6f5d2331a8423dfe25f8dee7dea8423ba0",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/die/tests/norm_long_oracle_driver.cc",
+      "exists": true,
+      "sha256": "3caeba5df8fae856265eb2d1e2e0df986cc10b58ceb9b923f7652b25d92acd35",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/work/norm-statistics-variant/README.md",
+      "exists": true,
+      "sha256": "cb418726c8810c1f8f199349117cf470e27dcc6575943ac022f4ae3478a4577d",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/work/norm-statistics-variant/NormLongRow.baseline.hh",
+      "exists": true,
+      "sha256": "16b428bdbb8a7ae622b391dedf0ff3d9d9f4bb1e26c1f0954cddd4c431020ff7",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/work/norm-statistics-variant/NormLongRow.candidate.hh",
+      "exists": true,
+      "sha256": "1e57149171509e23ca38080f3cbe1170f99b09785c8aff33d2c736bb836c8170",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/work/norm-statistics-variant/partition-validation.json",
+      "exists": true,
+      "sha256": "2042a811f80ddff0d7bb4206ab04c83aec2c749a607cd21e4e5de086df394871",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/current-baseline/synchronous-contract.json",
+      "exists": true,
+      "sha256": "825acf78911368856123e4ac0277f17214f6e8eccfa8e6394ceb2d4c07f9320e",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/current-baseline/synchronous_three_activity_candidate.cc",
+      "exists": true,
+      "sha256": "e44113d0f4b6fd863499716bb7277324e1c870a0df54a5a4fcd3d29ef4385a9c",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/work/norm-review/runtime-archive-20261016/strict-projection.stderr.log",
+      "exists": true,
+      "sha256": "0973c32fd6bdf2e891ba5c096cf3b4722440cbf710da8cbc4bfc13eaf64226c6",
+      "scratch_extraction": true
+    },
+    {
+      "path": "work/norm-audit/work/norm-review/runtime-archive-20261016/boundary-diagnostic.stderr.log",
+      "exists": true,
+      "sha256": "47d976a713f7c12033e066410469885f61a34313d4b384f862751359df83ac79",
+      "scratch_extraction": true
+    },
+    {
+      "path": "die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-balanced.report.json",
+      "exists": true,
+      "sha256": "4b3475651db29336588cf6059e758dbdc6b9df0596b6e60343a2b8954205a97d",
+      "scratch_extraction": false
+    },
+    {
+      "path": "die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-compute.report.json",
+      "exists": true,
+      "sha256": "174fcca0928462db1b5808b805b04604a36fa1247f80f0fbfa8e141ba5b098c6",
+      "scratch_extraction": false
+    }
+  ]
+}

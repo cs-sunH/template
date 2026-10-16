@@ -1,5 +1,9 @@
 # die 子项目：项目说明与验收标准
 
+## 最新停止交接指针（2026-10-16）
+
+用户已要求立即停止。未验收 Runtime A+B 源码已远端保存于 `codex/die-core-resume-20261016@6f01a6af1dc8976a8124d754e40446edbcd0b443`，后续纯归档提交保存全部部分成果；组合源码 fresh构建/CTest/API/预算均not_run。main已激活唯一Core，未激活此次Runtime组合；正式SDK未发布，工程NOT ACCEPTED。恢复入口为[HANDOFF最新停止章节](HANDOFF.md)。下方持续研发描述均为停止前历史状态。
+
 ## 2026-10-16 唯一 Core 来源与当前状态
 
 硬件权威为根 `架构建模_单Core版_严格复核修订.docx`，只有 Core，32行 `core32_v1`、`L0=a`。完整迁移从远端 `codex/die-single-core-20261016@b8ddbcfd62e03738b0c3996444355cbbe2e99b80` 恢复，已保留 main 独有交接归档；当前分支 `codex/die-core-resume-20261016`。最终公共51/51与192资源点、五仓隔离10库/98配置已验证，实际 native C++22通过/4个原R4失败，JOINT另6项native Python通过。两套正常30样本性能failed。已安全快进激活main至 `6b83624600cdd13c7a8ebe72d36c48cf29873a98` 并实核远端，后续状态以 [HANDOFF](HANDOFF.md) 顶部为准；正式五仓SDK未发布，工程 **NOT ACCEPTED**。

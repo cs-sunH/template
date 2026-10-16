@@ -1,0 +1,127 @@
+{
+  "after": {
+    "die/include/coarse_die/Execution.hh": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea",
+    "die/src/Execution.cc": "3c9d58a0ed8c6b64450b86cac1059b3a1dba7b604caf67b31f00034c673e3043",
+    "die/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+    "work/build-core-release/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "work/build-core-release/libcoarse_die.a": "e12c029d3a574b234a2bbcd52139d7ab94dccb040e281cfe71ab85fe31afa599",
+    "work/snapshot-lab/libcoarse_die.a": "6573ce3f330833b9b7b05d117e05456b9f983e8554281c5dad77ec5cd90316c6",
+    "work/snapshot-lab/libcoarse_die_cabi.so": "4edae4b1fe5b03d80a6b8f50297fe2d51c9e511351c78be570c8113e194e2427",
+    "work/snapshot-regression/fixtures/snapshot_split_owner.json": "1a18afa4add09566c626ec12896f7bd7bb367f451023d316509e24dc990ee286",
+    "work/snapshot-regression/runtime_snapshot_split_owner_test.cc": "10b0ef1ac1868b845f65fe2d7c8a14194052cd477ac997dae3a5a8a828c27a6f"
+  },
+  "baseline": {
+    "binary_sha256": "a86f102aa19f000a19b249707809e495850d674ef401f71ee6d74eb5b9706a72",
+    "shared_library_sha256": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "static_library_sha256": "e12c029d3a574b234a2bbcd52139d7ab94dccb040e281cfe71ab85fe31afa599",
+    "test_exit": 1
+  },
+  "before": {
+    "die/include/coarse_die/Execution.hh": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea",
+    "die/src/Execution.cc": "3c9d58a0ed8c6b64450b86cac1059b3a1dba7b604caf67b31f00034c673e3043",
+    "die/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+    "work/build-core-release/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "work/build-core-release/libcoarse_die.a": "e12c029d3a574b234a2bbcd52139d7ab94dccb040e281cfe71ab85fe31afa599",
+    "work/snapshot-lab/libcoarse_die.a": "6573ce3f330833b9b7b05d117e05456b9f983e8554281c5dad77ec5cd90316c6",
+    "work/snapshot-lab/libcoarse_die_cabi.so": "4edae4b1fe5b03d80a6b8f50297fe2d51c9e511351c78be570c8113e194e2427",
+    "work/snapshot-regression/fixtures/snapshot_split_owner.json": "1a18afa4add09566c626ec12896f7bd7bb367f451023d316509e24dc990ee286",
+    "work/snapshot-regression/runtime_snapshot_split_owner_test.cc": "10b0ef1ac1868b845f65fe2d7c8a14194052cd477ac997dae3a5a8a828c27a6f"
+  },
+  "candidate": {
+    "binary_sha256": "9b692149093681ae383f2b11b8852c422144bae78a1909a4537946b940a5adcb",
+    "shared_library_sha256": "4edae4b1fe5b03d80a6b8f50297fe2d51c9e511351c78be570c8113e194e2427",
+    "static_library_sha256": "6573ce3f330833b9b7b05d117e05456b9f983e8554281c5dad77ec5cd90316c6",
+    "test_exit": 1
+  },
+  "scope": "Single new C++ C ABI regression source, baseline-red/candidate-green; unchanged prebuilt libraries from this-session fresh baseline and separately identified B-only mixed-object scratch candidate. No production edits, fresh-final acceptance or budget run.",
+  "source_and_libraries_unchanged": true,
+  "steps": [
+    {
+      "command": [
+        "c++",
+        "-std=c++17",
+        "-O3",
+        "-DNDEBUG",
+        "-I",
+        "/workspace/template/work/core-resume/die/tests",
+        "-I",
+        "/workspace/template/work/core-resume/die/include",
+        "-I",
+        "/workspace/template/work/core-resume/astra-sim-wscllm/extern/helper",
+        "-DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/work/core-resume/die\"",
+        "-DCOARSE_DIE_ROOT_DIR=\"/workspace/template/work/core-resume\"",
+        "-DCOARSE_DIE_SPLIT_FIXTURE=\"/workspace/template/work/core-resume/work/snapshot-regression/fixtures/snapshot_split_owner.json\"",
+        "-c",
+        "/workspace/template/work/core-resume/work/snapshot-regression/runtime_snapshot_split_owner_test.cc",
+        "-o",
+        "/workspace/template/work/core-resume/work/snapshot-regression/runtime_snapshot_split_owner_test.o"
+      ],
+      "elapsed_s": 25.408149427000353,
+      "exit": 0,
+      "name": "compile"
+    },
+    {
+      "command": [
+        "c++",
+        "/workspace/template/work/core-resume/work/snapshot-regression/runtime_snapshot_split_owner_test.o",
+        "/workspace/template/work/core-resume/work/build-core-release/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/build-core-release/lib/libcoarse_die_cabi.so",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/build-core-release/lib",
+        "-o",
+        "/workspace/template/work/core-resume/work/snapshot-regression/baseline-runtime-snapshot-split-owner"
+      ],
+      "elapsed_s": 0.10129067900015798,
+      "exit": 0,
+      "name": "baseline-link"
+    },
+    {
+      "command": [
+        "/workspace/template/work/core-resume/work/snapshot-regression/baseline-runtime-snapshot-split-owner"
+      ],
+      "elapsed_s": 0.020670742000220343,
+      "exit": 1,
+      "name": "baseline-test"
+    },
+    {
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/snapshot-regression/baseline-runtime-snapshot-split-owner"
+      ],
+      "elapsed_s": 0.010574384999927133,
+      "exit": 0,
+      "name": "baseline-ldd"
+    },
+    {
+      "command": [
+        "c++",
+        "/workspace/template/work/core-resume/work/snapshot-regression/runtime_snapshot_split_owner_test.o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/snapshot-lab/libcoarse_die_cabi.so",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/snapshot-lab",
+        "-o",
+        "/workspace/template/work/core-resume/work/snapshot-regression/candidate-runtime-snapshot-split-owner"
+      ],
+      "elapsed_s": 0.09706325300066965,
+      "exit": 0,
+      "name": "candidate-link"
+    },
+    {
+      "command": [
+        "/workspace/template/work/core-resume/work/snapshot-regression/candidate-runtime-snapshot-split-owner"
+      ],
+      "elapsed_s": 0.12967415999992227,
+      "exit": 1,
+      "name": "candidate-test"
+    },
+    {
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/snapshot-regression/candidate-runtime-snapshot-split-owner"
+      ],
+      "elapsed_s": 0.010396941999715636,
+      "exit": 0,
+      "name": "candidate-ldd"
+    }
+  ],
+  "tool_sha256": "aefc27e74c228d5148f64f660e558ddcb255bb7f003a22d9fac196909e32b853"
+}

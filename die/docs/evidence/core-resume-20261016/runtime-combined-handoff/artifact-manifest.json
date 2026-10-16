@@ -1,0 +1,293 @@
+{
+  "status": "stopped_source_saved_AB_applied_fresh_build_not_run",
+  "head_at_archive": "6f01a6af1dc8976a8124d754e40446edbcd0b443",
+  "archive_runner_sha256": "e42d0f4c675b2eb545dcabd0761ab90c14ce72946cbfb89c5020f71530dd12fe",
+  "production_execution_sha256": "6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e",
+  "production_header_sha256": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+  "production_test_sha256": "20dbbbab2d0568aba148b22e63d1e519d5925b61ad1d0e1b2fc435335c41fb9b",
+  "AB_source_matches_production": true,
+  "AB_header_matches_production": true,
+  "new_test_currently_named_in_CMake": false,
+  "AB_compile": "not_run",
+  "fresh_source_CTest": "not_run",
+  "full_API_trace": "not_run",
+  "budget": "not_run",
+  "existing_libraries_actual_return_codes": {
+    "baseline": 1,
+    "A": 0,
+    "B": 1
+  },
+  "source_or_log_count": 44,
+  "artifacts": [
+    {
+      "original_path": "work/runtime-combined-tests/archive_handoff.py",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/archive_handoff.py",
+      "sha256": "e42d0f4c675b2eb545dcabd0761ab90c14ce72946cbfb89c5020f71530dd12fe",
+      "bytes": 8618
+    },
+    {
+      "original_path": "work/runtime-combined-tests/combined/die/include/coarse_die/Execution.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/combined/die/include/coarse_die/Execution.hh",
+      "sha256": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+      "bytes": 5560
+    },
+    {
+      "original_path": "work/runtime-combined-tests/combined/die/src/Execution.cc",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/combined/die/src/Execution.cc",
+      "sha256": "6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e",
+      "bytes": 161802
+    },
+    {
+      "original_path": "work/runtime-combined-tests/combined-A-B.patch",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/combined-A-B.patch",
+      "sha256": "7646b0fdd81f17c4a2f4a285747703071d2e12f66935b57a95b667a56bc218d9",
+      "bytes": 15220
+    },
+    {
+      "original_path": "work/runtime-combined-tests/compile-small-test.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/compile-small-test.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/compile-small-test.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/compile-small-test.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/existing-libraries-identity.json",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/existing-libraries-identity.json",
+      "sha256": "155b139d5a08c5e28f458dd751f9476ac1a6d9610fb0e615179670b42a1da268",
+      "bytes": 8632
+    },
+    {
+      "original_path": "work/runtime-combined-tests/existing-libraries.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/existing-libraries.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/existing-libraries.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/existing-libraries.stdout.log",
+      "sha256": "f2ede6977c19c31375b39b629ad68e04c7e01d72599620a1137ec6b7286fc1c9",
+      "bytes": 287
+    },
+    {
+      "original_path": "work/runtime-combined-tests/fixture-source/configs/example_hardware.json",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/fixture-source/configs/example_hardware.json",
+      "sha256": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a",
+      "bytes": 2413
+    },
+    {
+      "original_path": "work/runtime-combined-tests/fixture-source/include/coarse_die/Execution.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/fixture-source/include/coarse_die/Execution.hh",
+      "sha256": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea",
+      "bytes": 5460
+    },
+    {
+      "original_path": "work/runtime-combined-tests/fixture-source/include/coarse_die/Hardware.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/fixture-source/include/coarse_die/Hardware.hh",
+      "sha256": "629892410d0b77172fedb13f8eaf1633204eea5f9650ca2bf7469cbf20f0011c",
+      "bytes": 317
+    },
+    {
+      "original_path": "work/runtime-combined-tests/fixture-source/include/coarse_die/Memory.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/fixture-source/include/coarse_die/Memory.hh",
+      "sha256": "0a3fc4aa58d1ecd2fedb8248d55080b9d30a12b7a476864a37f9b44d6e20022c",
+      "bytes": 2327
+    },
+    {
+      "original_path": "work/runtime-combined-tests/fixture-source/include/coarse_die/Plan.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/fixture-source/include/coarse_die/Plan.hh",
+      "sha256": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+      "bytes": 8661
+    },
+    {
+      "original_path": "work/runtime-combined-tests/fixture-source/include/coarse_die/Prediction.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/fixture-source/include/coarse_die/Prediction.hh",
+      "sha256": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+      "bytes": 1255
+    },
+    {
+      "original_path": "work/runtime-combined-tests/fixture-source/tests/test_support.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/fixture-source/tests/test_support.hh",
+      "sha256": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+      "bytes": 4570
+    },
+    {
+      "original_path": "work/runtime-combined-tests/link-A_subunit.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/link-A_subunit.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/link-A_subunit.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/link-A_subunit.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/link-B_snapshot.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/link-B_snapshot.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/link-B_snapshot.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/link-B_snapshot.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/link-baseline.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/link-baseline.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/link-baseline.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/link-baseline.stdout.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/merge-identity.json",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/merge-identity.json",
+      "sha256": "a5f5715673d65e38c6905a5c72ca371194f23247109eaeeb49087a56b6dc7b4b",
+      "bytes": 2333
+    },
+    {
+      "original_path": "work/runtime-combined-tests/merge.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/merge.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/merge.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/merge.stdout.log",
+      "sha256": "0fc30b8f8ecf9b4e4eccb7699053452e0ce7dd5c2c7693f60791eef4684e6ed3",
+      "bytes": 759
+    },
+    {
+      "original_path": "work/runtime-combined-tests/merge_combined.py",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/merge_combined.py",
+      "sha256": "47912d43840aa788cc7e0d4629bc5aad7d4e581ba854e349ed89de158b0f38a3",
+      "bytes": 3696
+    },
+    {
+      "original_path": "work/runtime-combined-tests/prepare-identity.json",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/prepare-identity.json",
+      "sha256": "4c85df09d6d56f1a7db084e075888d7717a55ce323b5a80f2421df2b5f20e14e",
+      "bytes": 3673
+    },
+    {
+      "original_path": "work/runtime-combined-tests/prepare.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/prepare.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/prepare.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/prepare.stdout.log",
+      "sha256": "5ae6ec2f3b5980e83825118755a4d17ec2a3a7be0aafa6134b8c377bd95c1ce3",
+      "bytes": 152
+    },
+    {
+      "original_path": "work/runtime-combined-tests/prepare_combined.py",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/prepare_combined.py",
+      "sha256": "63856d6fe3980fb3a14ed97f97082742c7e8c06d4099d2382749f6707adb2cb8",
+      "bytes": 2939
+    },
+    {
+      "original_path": "work/runtime-combined-tests/run-A_subunit.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/run-A_subunit.stderr.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "original_path": "work/runtime-combined-tests/run-A_subunit.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/run-A_subunit.stdout.log",
+      "sha256": "b309c395d02eb77466391ddf633f8b581865ee104fac520932849c46ee9c3179",
+      "bytes": 523
+    },
+    {
+      "original_path": "work/runtime-combined-tests/run-B_snapshot.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/run-B_snapshot.stderr.log",
+      "sha256": "88fed012afa2b7a6101d8533f5118a871b33074a0eab63288a4f53043da832e1",
+      "bytes": 867
+    },
+    {
+      "original_path": "work/runtime-combined-tests/run-B_snapshot.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/run-B_snapshot.stdout.log",
+      "sha256": "69628fa056c846502459a647aee9832e324603dff9cab3564a0659d1a16e0d89",
+      "bytes": 324
+    },
+    {
+      "original_path": "work/runtime-combined-tests/run-baseline.stderr.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/run-baseline.stderr.log",
+      "sha256": "88fed012afa2b7a6101d8533f5118a871b33074a0eab63288a4f53043da832e1",
+      "bytes": 867
+    },
+    {
+      "original_path": "work/runtime-combined-tests/run-baseline.stdout.log",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/run-baseline.stdout.log",
+      "sha256": "69628fa056c846502459a647aee9832e324603dff9cab3564a0659d1a16e0d89",
+      "bytes": 324
+    },
+    {
+      "original_path": "work/runtime-combined-tests/run_existing_libraries.py",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/run_existing_libraries.py",
+      "sha256": "6bc03720d8b67625a3887bdb4fb8353e5c1e4405d5ef7479abcb1c4d8e5ff8fa",
+      "bytes": 4829
+    },
+    {
+      "original_path": "work/runtime-combined-tests/runtime_subunit_credit_test.cc",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/runtime_subunit_credit_test.cc",
+      "sha256": "20dbbbab2d0568aba148b22e63d1e519d5925b61ad1d0e1b2fc435335c41fb9b",
+      "bytes": 4984
+    },
+    {
+      "original_path": "work/runtime-combined-tests/source-AB/die/include/coarse_die/Execution.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/source-AB/die/include/coarse_die/Execution.hh",
+      "sha256": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea",
+      "bytes": 5460
+    },
+    {
+      "original_path": "work/runtime-combined-tests/source-AB/die/src/Execution.cc",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/source-AB/die/src/Execution.cc",
+      "sha256": "66f34d699d79b3c6dcffc5af04002799f3b1bfa4d4dcb569165825fc6a3f655a",
+      "bytes": 158920
+    },
+    {
+      "original_path": "work/runtime-combined-tests/source-BA/die/include/coarse_die/Execution.hh",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/source-BA/die/include/coarse_die/Execution.hh",
+      "sha256": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+      "bytes": 5560
+    },
+    {
+      "original_path": "work/runtime-combined-tests/source-BA/die/src/Execution.cc",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/source-BA/die/src/Execution.cc",
+      "sha256": "81c1152784d2f7a63d6dd6e41c48b72b419c578e4564aa8004ffa10549af8bb4",
+      "bytes": 159915
+    },
+    {
+      "original_path": "work/runtime-combined-tests/three-way-identity.json",
+      "archive_path": "die/docs/evidence/core-resume-20261016/runtime-combined-handoff/three-way-identity.json",
+      "sha256": "906152f228c97e660a94ab20f9470b557b94509c72858f69abe9fc3a65e6a705",
+      "bytes": 389
+    },
+    {
+      "original_path": "work/runtime-combined-tests/three-way-unresolved.cc",
+      "archive_path": "die/docs/analysis/core-resume-20261016/runtime-combined-handoff/three-way-unresolved.cc",
+      "sha256": "6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e",
+      "bytes": 161802
+    }
+  ],
+  "not_archived": [
+    "ELF",
+    "objects",
+    "static/shared libraries",
+    "cache"
+  ]
+}

@@ -1,0 +1,7 @@
+	linux-vdso.so.1 (0x00007fe548143000)
+	libcoarse_die_cabi.so => /workspace/template/work/core-resume/work/build-core-release/lib/libcoarse_die_cabi.so (0x00007fe547ef7000)
+	libstdc++.so.6 => /lib/x86_64-linux-gnu/libstdc++.so.6 (0x00007fe547c6e000)
+	libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007fe547b7e000)
+	libgcc_s.so.1 => /lib/x86_64-linux-gnu/libgcc_s.so.1 (0x00007fe547b51000)
+	libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007fe54795b000)
+	/lib64/ld-linux-x86-64.so.2 (0x00007fe548145000)
