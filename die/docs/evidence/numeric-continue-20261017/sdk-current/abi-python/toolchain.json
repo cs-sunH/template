@@ -1,0 +1,32 @@
+{
+  "cmake": {
+    "path": "/workspace/cloud-setup/venv/bin/cmake",
+    "sha256": "f3b316f375ff4446c599ae60ebaf12cfb56b27d6a7aee0acbc845fc67ed893c0",
+    "version": "cmake version 3.31.10\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n",
+    "return_code": 0
+  },
+  "ctest": {
+    "path": "/workspace/cloud-setup/venv/bin/ctest",
+    "sha256": "f1684c9740e3f5c23652fbb2fed23b1ceba54555af0ff87bfbf79808e9edfeb7",
+    "version": "ctest version 3.31.10\n\nCMake suite maintained and supported by Kitware (kitware.com/cmake).\n",
+    "return_code": 0
+  },
+  "g++": {
+    "path": "/usr/bin/g++",
+    "sha256": "6b3696e4dcb85e1c949c732a02befa50e3983ecf94ce7e8e58d9d503b954b79d",
+    "version": "g++ (Debian 14.2.0-19) 14.2.0\nCopyright (C) 2024 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+    "return_code": 0
+  },
+  "protoc": {
+    "path": "/workspace/cloud-setup/sysroot/usr/bin/protoc",
+    "sha256": "7730414b191c9363340457770c330a7cc00dbba4b6f4130b1293369b3454c27f",
+    "version": "libprotoc 3.21.12\n",
+    "return_code": 0
+  },
+  "python": {
+    "path": "/workspace/cloud-setup/venv/bin/python",
+    "sha256": "fa67443527ed9647f760d807e2a38f26340757123e643c4639cf273ed15d5ea7",
+    "version": "Python 3.12.14\n",
+    "return_code": 0
+  }
+}

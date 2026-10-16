@@ -1,0 +1,106 @@
+{
+  "scope": "standalone affine given-progress arithmetic; not integration or snapshot validation",
+  "sources_sha256": {
+    "work/norm-runtime-current/norm-seven-epoch-contract.json": "be403ad6884c84c7529f9307a83717e2193bd3efa1f912abb39a584546ddfe10",
+    "work/norm-runtime-current/run-interior-internal-diagnostic/run.stderr.log": "4c79aaf2b148c0742236c43b8b9ad2d23c830d00c1a4b43769f72971a0aff801",
+    "work/norm-runtime-current/run-combined-ab/trace/event-000.json": "dda1d20765b1cb7faa11ca1dae61ad894c79622658b49e4ecb529b992f6a8794",
+    "work/norm-runtime-current/run-combined-ab/trace/event-001.json": "1d758cc99ed6ebf062e41953c3d1efaddeefcb6c9efd5fe367443e2100af9b60",
+    "work/norm-runtime-current/run-combined-ab/trace/event-002.json": "af8d980e50d50bc618a48544d0cb423707f62a435bcba0e9556a0d2003da1aa9",
+    "work/norm-runtime-current/run-combined-ab/trace/event-003.json": "b18e3e8ab8c79249897b999c5bd27f8aee0124df40caf1eeed08119e08fa37f4",
+    "work/norm-runtime-current/run-combined-ab/trace/event-004.json": "0299e988a27c8b57684358b2037973ddee0417f0bda32275aa88542db1078dc6",
+    "work/norm-runtime-current/run-combined-ab/trace/event-005.json": "c0b7a81b54fca672e0702d1f3c54544ff3801b036923f425ba716bfafa574d09",
+    "work/norm-runtime-current/run-combined-ab/trace/event-006.json": "219585c5074967edf9446ab29364f202a3f69f713e6c9df58e440e1a1ee66383",
+    "work/norm-runtime-current/run-combined-ab/trace/event-007.json": "77f09182cba58f47f78017f00d0d00042c48047b1a15e29bc62ffc5be4f2e315",
+    "work/norm-runtime-current/run-combined-ab/trace/event-008.json": "f371f2d7e8133e8d204a8f23a1da91e9cb566226fe751d9dc0cd22da4149289f",
+    "work/norm-runtime-current/run-combined-ab/trace/event-009.json": "8c3345c1f0490d119e06b9201a3612360424e8e7c30643e8ea10d96ffb5a7cc8",
+    "work/norm-runtime-current/run-combined-ab/trace/event-010.json": "abadc6a3322c6ba81a7afab36ccc15561143bbe6d7b113f8c7edb75d04387970",
+    "work/norm-runtime-current/run-interior-only/trace/event-000.json": "dda1d20765b1cb7faa11ca1dae61ad894c79622658b49e4ecb529b992f6a8794",
+    "work/norm-runtime-current/run-interior-only/trace/event-001.json": "1d758cc99ed6ebf062e41953c3d1efaddeefcb6c9efd5fe367443e2100af9b60",
+    "work/norm-runtime-current/run-interior-only/trace/event-002.json": "af8d980e50d50bc618a48544d0cb423707f62a435bcba0e9556a0d2003da1aa9",
+    "work/norm-runtime-current/run-interior-only/trace/event-003.json": "b18e3e8ab8c79249897b999c5bd27f8aee0124df40caf1eeed08119e08fa37f4",
+    "work/norm-runtime-current/run-interior-only/trace/event-004.json": "0299e988a27c8b57684358b2037973ddee0417f0bda32275aa88542db1078dc6",
+    "work/norm-runtime-current/run-interior-only/trace/event-005.json": "c0b7a81b54fca672e0702d1f3c54544ff3801b036923f425ba716bfafa574d09",
+    "work/norm-runtime-current/run-interior-only/trace/event-006.json": "219585c5074967edf9446ab29364f202a3f69f713e6c9df58e440e1a1ee66383",
+    "work/norm-runtime-current/run-interior-only/trace/event-007.json": "5f21b1f6234e5069f672a5d0fd6de4a54902cf3d834868f2f4468d792ef111cf",
+    "work/norm-runtime-current/run-interior-only/trace/event-008.json": "c983705860c1948f7bc9aaedbb2fd0be77a221312a6bcafeb0c5a39373338170",
+    "work/norm-runtime-current/run-interior-only/trace/event-009.json": "63e962033e082bc7612a1d744e8e2c6b16709802de2a2900e55b4b6d45865746",
+    "work/norm-runtime-current/run-interior-only/trace/event-010.json": "b57241eda4de80079e09be164594d11e1a1ccf782abe17b38758a19901cf3f3c",
+    "work/norm-runtime-current/run-interior-only/trace/event-011.json": "1856af9998308fab55be3bf528dc45a6fe0608164b072b14668ce416fa2b03d8",
+    "work/norm-runtime-current/run-interior-only/trace/event-012.json": "61844d66f3140105b55a403f9c659e6f1f43a045cf63b6d0c3511e8642dccdc0",
+    "work/norm-runtime-current/run-interior-only/trace/event-013.json": "2e0e1b9fbd05ceb8a10a85ef170f6b3ed5e97b4fbb4aa194ede8348d40794812",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-000.json": "dda1d20765b1cb7faa11ca1dae61ad894c79622658b49e4ecb529b992f6a8794",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-001.json": "1d758cc99ed6ebf062e41953c3d1efaddeefcb6c9efd5fe367443e2100af9b60",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-002.json": "af8d980e50d50bc618a48544d0cb423707f62a435bcba0e9556a0d2003da1aa9",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-003.json": "b18e3e8ab8c79249897b999c5bd27f8aee0124df40caf1eeed08119e08fa37f4",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-004.json": "362e86c46bdd31c99a8f17e2781dfba8ef849b8a1bb9c518863f9281315fed8d",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-005.json": "eb12ca0606051b5ce7c437b53955c755d28329d8f65db591216b6593b7febaa6",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-006.json": "ace73ad235ea06183f7ca4b94ab36b0fe9442246bba17d33b55d9cbe8cbe0bc8",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-007.json": "c1ddf2db6ce391aff3e3cbe72704a68ac302caa0ae6f582b984a86fa80d26986",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-008.json": "4f615f52eab2a568085543cb6c6597fed8f4dde8d2dfe1927cc282d9a95400a3",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-009.json": "f4e6b0ad09b288cb1eac4994ffbcbacc79097fec32ba45af4035f53300bd2688",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-010.json": "e9d694f08d5782389237951c20e9c8475bd4b6ffdbe4c49c858e0491377b5491",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-011.json": "47a08bc35fea298914b342e508cf2340dc01a3957f106e4c36cbbe508a463277",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-012.json": "efad3236b9fe9709cf0b05d36fa890cc918a5ca85eff19154b01704ab44ddd39",
+    "work/norm-runtime-current/run-physical-enclosure/trace/event-013.json": "2cf6d51744e28aafa831871ada4731fd10bb2101087325fd0f9905608d8d361b",
+    "work/norm-runtime-current/NormLongRow.hh": "16b428bdbb8a7ae622b391dedf0ff3d9d9f4bb1e26c1f0954cddd4c431020ff7"
+  },
+  "evaluator_sha256": "abc07b20969d6cce2f0cd24bf113f82ec619bccf2808838c3ad0c7e0b04746af",
+  "runner_sha256": "6674ba4e1c6049caef63af118dcebc997c4aea500a8e519f39e2fbcfbf436bf9",
+  "input_sha256": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+  "commands": [
+    {
+      "label": "compiler_version",
+      "command": [
+        "c++",
+        "--version"
+      ],
+      "returncode": 0,
+      "elapsed_s": 0.0014557838439941406
+    },
+    {
+      "label": "compile",
+      "command": [
+        "c++",
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-ffp-contract=off",
+        "-I/workspace/template/astra-sim-wscllm/extern/helper",
+        "/workspace/template/work/norm-affine-evaluator-20261017/evaluator.cc",
+        "-o",
+        "/workspace/template/work/norm-affine-evaluator-20261017/evaluator"
+      ],
+      "returncode": 0,
+      "elapsed_s": 2.8664257526397705
+    },
+    {
+      "label": "run",
+      "command": [
+        "/workspace/template/work/norm-affine-evaluator-20261017/evaluator",
+        "/workspace/template/work/norm-affine-evaluator-20261017/input.json",
+        "/workspace/template/work/norm-affine-evaluator-20261017/output.jsonl"
+      ],
+      "returncode": 0,
+      "elapsed_s": 0.07269501686096191
+    }
+  ],
+  "host": "Linux-6.18.44-x86_64-with-glibc2.41",
+  "executable_sha256": "e9ec00782e36e21744a1bff6f6a60b4dad578fe134cab097a275389b73d6e984",
+  "outputs_sha256": {
+    "attempt1.stderr.log": "2423abc5fffdcc9a334fb5c49e1328d6bfa1badf85fc2af660b419f5e81259b6",
+    "run.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "input.json": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+    "attempt2.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "run.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "report.json": "e27593defe0eeed5f9fb4431f759ab44983ae943ad3740cfa894157301b48869",
+    "output.jsonl": "98b63f543c969b58470b7168f5167de1bb1cb3819e2b22148b6758e8dba85307",
+    "compile.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "compiler_version.stdout.log": "00f7e3c3e6a0308d7b60cc02429720ef6000d84c0add523f7dc030058d19961b",
+    "attempt2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "compile.stderr.log": "9a37a08f939d592ba2a436b7a29c3d07af2f5a1bdd2314175c55176b9e550246",
+    "compiler_version.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "attempt1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

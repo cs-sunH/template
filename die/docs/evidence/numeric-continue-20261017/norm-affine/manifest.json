@@ -1,0 +1,48 @@
+{
+  "scope": "standalone given-progress affine arithmetic checkpoint; no Runtime build or execution, no production adoption",
+  "source_root": "work/norm-affine-evaluator-20261017",
+  "json_header": {
+    "path": "astra-sim-wscllm/extern/helper/json/json.hpp",
+    "sha256": "e832d339d9e0c042e7dff807754769d778cf5d6ae9730ce21eed56de99cb5e86"
+  },
+  "compressed_roundtrip_verified": {
+    "input.json": {
+      "original_sha256": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+      "original_bytes": 1102773,
+      "saved_sha256": "71fa5d0104508cd6f8b4c3b0ac70724aefe98a12a37497bcacac5f928c1d8cca",
+      "saved_bytes": 25095
+    },
+    "output.jsonl": {
+      "original_sha256": "98b63f543c969b58470b7168f5167de1bb1cb3819e2b22148b6758e8dba85307",
+      "original_bytes": 3671238,
+      "saved_sha256": "201bf58d54e0e760f388d09ad2cf4de401fc313723e557ff4f74c3baee111ced",
+      "saved_bytes": 89099
+    },
+    "report.json": {
+      "original_sha256": "e27593defe0eeed5f9fb4431f759ab44983ae943ad3740cfa894157301b48869",
+      "original_bytes": 8915809,
+      "saved_sha256": "a2f3d10f2b1b82f9ccb585eb9852d5d96dffe71ea1fbc94458945d7b499b8a17",
+      "saved_bytes": 622335
+    }
+  },
+  "saved_files_sha256": {
+    "die/docs/analysis/numeric-continue-20261017/norm-affine/README.md": "0b9fc1be9ebf35357c488c85c87851b7ea7af1f8b365c5ae35a18daa71a6248f",
+    "die/docs/analysis/numeric-continue-20261017/norm-affine/evaluator.cc": "abc07b20969d6cce2f0cd24bf113f82ec619bccf2808838c3ad0c7e0b04746af",
+    "die/docs/analysis/numeric-continue-20261017/norm-affine/run.py": "6674ba4e1c6049caef63af118dcebc997c4aea500a8e519f39e2fbcfbf436bf9",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/attempt1-compile-failed.tar.gz": "bdc14a95d1eff82d99829c0d7e2d53e5b6cadddca6952251e2e16e96c633ce7a",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/attempt1.stderr.log": "2423abc5fffdcc9a334fb5c49e1328d6bfa1badf85fc2af660b419f5e81259b6",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/attempt1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/attempt2.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/compile.stderr.log": "9a37a08f939d592ba2a436b7a29c3d07af2f5a1bdd2314175c55176b9e550246",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/compile.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/compiler_version.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/compiler_version.stdout.log": "00f7e3c3e6a0308d7b60cc02429720ef6000d84c0add523f7dc030058d19961b",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/identity.json": "3108634a869b825417109541e5d26e20322e39b84f403021655b7a8dbbe83964",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/input.json.gz": "71fa5d0104508cd6f8b4c3b0ac70724aefe98a12a37497bcacac5f928c1d8cca",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/output.jsonl.gz": "201bf58d54e0e760f388d09ad2cf4de401fc313723e557ff4f74c3baee111ced",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/report.json.gz": "a2f3d10f2b1b82f9ccb585eb9852d5d96dffe71ea1fbc94458945d7b499b8a17",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/run.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/run.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine/summary.json": "a8acdb79141c263757f308f6f6fbe3f6712c19288de4ad7436455527e6340ec1"
+  }
+}

@@ -1,0 +1,1236 @@
+{
+  "scope": "text archive and metadata; no ELF/object/library/compiler cache",
+  "archive_entries": [
+    {
+      "path": "results/actual-python-availability/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/actual-python-availability/identity.json",
+      "sha256": "36820b2d512ce3e1bdbf06b0df607e9dff575ebd3e98d0a5ea1a005082482b8b",
+      "bytes": 3914
+    },
+    {
+      "path": "results/actual-python-availability/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/actual-python-availability/run.log",
+      "sha256": "17164cf10b173abaf567d2cd198ddee6c87319d53e3efb121d5ad57ccfc2bfe2",
+      "bytes": 841
+    },
+    {
+      "path": "results/actual-python-availability/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/actual-python-availability/started.json",
+      "sha256": "2c6d0877615e1d0fd9e8045f288a4b41591b15d43a53760208d65d37539adb1d",
+      "bytes": 1671
+    },
+    {
+      "path": "results/actual-python-availability.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/actual-python-availability.json",
+      "sha256": "764d728d457ada04725850be12d2aaff002f150c438b540673c6e1b92d7b538e",
+      "bytes": 690234
+    },
+    {
+      "path": "results/astra-sim-face-LRU-abi-build/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-abi-build/identity.json",
+      "sha256": "b1fc7a4ac77d3bb1680a75f8e50e12e2157f9e785fcd033512f714ae4146be07",
+      "bytes": 4831
+    },
+    {
+      "path": "results/astra-sim-face-LRU-abi-build/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-abi-build/run.log",
+      "sha256": "65561500268943a0996c070822ce866d768d94e943f46df9b5d871bdd803c992",
+      "bytes": 26583
+    },
+    {
+      "path": "results/astra-sim-face-LRU-abi-build/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-abi-build/started.json",
+      "sha256": "124d8af279b28b4c12428a2957402861375dfb6a8546ee9790f318066acd9033",
+      "bytes": 2373
+    },
+    {
+      "path": "results/astra-sim-face-LRU-abi-configure/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-abi-configure/identity.json",
+      "sha256": "05c6d6c984f71eb74d4527a7b5e2d24893570cd202cfdac73c4d67711371f0d8",
+      "bytes": 3681
+    },
+    {
+      "path": "results/astra-sim-face-LRU-abi-configure/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-abi-configure/run.log",
+      "sha256": "0e88bdb0c62dccfc8cc5e90d2208dcb3bc6f2d93d5f67aea574c52f9239673fe",
+      "bytes": 678
+    },
+    {
+      "path": "results/astra-sim-face-LRU-abi-configure/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-abi-configure/started.json",
+      "sha256": "041d8f8b56f034574f0621f60e41da94b1020af010bb886436fa7e45ede3d84a",
+      "bytes": 1717
+    },
+    {
+      "path": "results/astra-sim-face-LRU-config/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-config/identity.json",
+      "sha256": "cd6b97b758b0f2aeb98abe6aba1340b00701b89e38be6b1ebcbc7c298487068b",
+      "bytes": 2526
+    },
+    {
+      "path": "results/astra-sim-face-LRU-config/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-config/run.log",
+      "sha256": "010cec66cc2782fd520f1692e2b90d97bf727146c00fd148bcdff28bbe528213",
+      "bytes": 3744
+    },
+    {
+      "path": "results/astra-sim-face-LRU-config/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-config/started.json",
+      "sha256": "5baadea79af70f17d1cea6d8f8d4f97eb49e91ba70f29b7a96cea05fcc1b66f0",
+      "bytes": 1441
+    },
+    {
+      "path": "results/astra-sim-face-LRU-python-bindings/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-python-bindings/identity.json",
+      "sha256": "cd58cf63fe6b58f2d7a17c12bd0d41e9ed8d0c2664b5f2d19bd08706ab220343",
+      "bytes": 2645
+    },
+    {
+      "path": "results/astra-sim-face-LRU-python-bindings/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "results/astra-sim-face-LRU-python-bindings/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-python-bindings/started.json",
+      "sha256": "2165a3e4e238fc8e92da46797f710f989f46b391e0763bded50cbb057a34d93c",
+      "bytes": 1612
+    },
+    {
+      "path": "results/astra-sim-face-LRU-python-consumers/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-python-consumers/identity.json",
+      "sha256": "77a742b010767c80415b9fffb0a6c796aaeda92fe67e40388e13dc344ef4c9b3",
+      "bytes": 2940
+    },
+    {
+      "path": "results/astra-sim-face-LRU-python-consumers/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-python-consumers/run.log",
+      "sha256": "80487d3f7dbe4272d5e755332c9bcf5ca097697e2936c594138b97d8de26529d",
+      "bytes": 13162
+    },
+    {
+      "path": "results/astra-sim-face-LRU-python-consumers/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-python-consumers/started.json",
+      "sha256": "27d95edde63c585a6aa50833694a04bb22795b1ad94492a09e3353f1614e54e4",
+      "bytes": 1856
+    },
+    {
+      "path": "results/astra-sim-face-LRU-real-cost-consumer/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-real-cost-consumer/identity.json",
+      "sha256": "f611aa1a0c3ba0c01174d7d400af71a2f1d483cc4be624cbcc60c963a36d2a0a",
+      "bytes": 3597
+    },
+    {
+      "path": "results/astra-sim-face-LRU-real-cost-consumer/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-real-cost-consumer/run.log",
+      "sha256": "2be4644bd79727fdc6636834959fd78f05d5d2e3df0dd44c587a79d48a714cb2",
+      "bytes": 267
+    },
+    {
+      "path": "results/astra-sim-face-LRU-real-cost-consumer/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-real-cost-consumer/started.json",
+      "sha256": "11471ab8449e96cb231c8187da29387a7267d32f650ce0933e36d29fbcd922fe",
+      "bytes": 2434
+    },
+    {
+      "path": "results/astra-sim-face-LRU-real-cost-consumer.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-real-cost-consumer.json",
+      "sha256": "023710e76d11244c9334e42b2858184b11005ca0baec7d707d687ac162052811",
+      "bytes": 1339
+    },
+    {
+      "path": "results/astra-sim-face-LRU-typed-resolver/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-typed-resolver/identity.json",
+      "sha256": "914a877e7ce6180f8841f7e742147316cbebbfbcbaf0e53b33693c014b32ea17",
+      "bytes": 2939
+    },
+    {
+      "path": "results/astra-sim-face-LRU-typed-resolver/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-typed-resolver/run.log",
+      "sha256": "11558636d8edea29299135314a78c376699150bab594e81db6d7384c3fe1b4fc",
+      "bytes": 10266
+    },
+    {
+      "path": "results/astra-sim-face-LRU-typed-resolver/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-LRU-typed-resolver/started.json",
+      "sha256": "fd6bb0e9acf78eca6c488af63b20573865984500c8f4d70b92b49f6cc5b45b56",
+      "bytes": 1817
+    },
+    {
+      "path": "results/astra-sim-face-abi-build/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-abi-build/identity.json",
+      "sha256": "834903f92a00ab65ae74e1ae139fb313936639eb53286d0d630ec161c5661af8",
+      "bytes": 4411
+    },
+    {
+      "path": "results/astra-sim-face-abi-build/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-abi-build/run.log",
+      "sha256": "3eee5b25d3e9d797f9c3fdb9d283d575936be1b9d7ddd6f87bc2920b1b96a2a3",
+      "bytes": 26283
+    },
+    {
+      "path": "results/astra-sim-face-abi-build/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-abi-build/started.json",
+      "sha256": "6659d096b30857477470ffcbe93921b89e88d0224ba3061eaded1a5cc682f38f",
+      "bytes": 2342
+    },
+    {
+      "path": "results/astra-sim-face-abi-configure/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-abi-configure/identity.json",
+      "sha256": "f1dafbe2fcf90eb1f1fd7729704d65d3cd04b21b5133f9e8e31f0c3ce0bf5273",
+      "bytes": 3279
+    },
+    {
+      "path": "results/astra-sim-face-abi-configure/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-abi-configure/run.log",
+      "sha256": "74c268c720e1343650ed294edf450bcdc353333d91c4ee911d261f877842ca7b",
+      "bytes": 674
+    },
+    {
+      "path": "results/astra-sim-face-abi-configure/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-abi-configure/started.json",
+      "sha256": "af10246c11bce9d5d6e99ec41cc48fd8082d29b90cbef299ca273909938d28a6",
+      "bytes": 1697
+    },
+    {
+      "path": "results/astra-sim-face-config/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-config/identity.json",
+      "sha256": "b55b85fd6b2cfee0062178d32e34c2cbe0436d1eff89b45dec08734c7692a02c",
+      "bytes": 2139
+    },
+    {
+      "path": "results/astra-sim-face-config/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-config/run.log",
+      "sha256": "55c8015b739afbae73c84abab6d7e548d6f71caa0b7fcd4ce6977cd010afe83e",
+      "bytes": 3834
+    },
+    {
+      "path": "results/astra-sim-face-config/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-config/started.json",
+      "sha256": "dc7c6b726882f5695e45bf92ded0e06c0e376188d77d1d0a803427329bc82350",
+      "bytes": 1419
+    },
+    {
+      "path": "results/astra-sim-face-python-bindings/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-python-bindings/identity.json",
+      "sha256": "ab3a5d8a2e49fdd8b0e4f4b5f00332b1a95ce9d54810d7bee9512c93591ef5e1",
+      "bytes": 2261
+    },
+    {
+      "path": "results/astra-sim-face-python-bindings/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "results/astra-sim-face-python-bindings/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-python-bindings/started.json",
+      "sha256": "8205640e9456f01e30f98e7f8125e8974f4b6e745fbb2ec0494e5c2966e51689",
+      "bytes": 1595
+    },
+    {
+      "path": "results/astra-sim-face-python-consumers/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-python-consumers/identity.json",
+      "sha256": "8f0007bc02d94892ed3acb2c57614a4bfe797ee9fc725e5aac2032f32af21212",
+      "bytes": 2541
+    },
+    {
+      "path": "results/astra-sim-face-python-consumers/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-python-consumers/run.log",
+      "sha256": "25a317525a2686f40a544fa880b06801cfab4ed9ef97fc54cb94ab753de915bb",
+      "bytes": 13728
+    },
+    {
+      "path": "results/astra-sim-face-python-consumers/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-python-consumers/started.json",
+      "sha256": "f149b49b287c756b1efc49c292ef6a5d1436cee8e29d9a0230aca03905420e93",
+      "bytes": 1824
+    },
+    {
+      "path": "results/astra-sim-face-real-cost-consumer/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-real-cost-consumer/identity.json",
+      "sha256": "e5e9136808d70184f9d36bab33829e98879895dceed6b240c96b578fdd6d4663",
+      "bytes": 3194
+    },
+    {
+      "path": "results/astra-sim-face-real-cost-consumer/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-real-cost-consumer/run.log",
+      "sha256": "148031f3b7fdc473300cb215700ac0f45d05698692556a523ed592d0d2703f73",
+      "bytes": 259
+    },
+    {
+      "path": "results/astra-sim-face-real-cost-consumer/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-real-cost-consumer/started.json",
+      "sha256": "74dbdba9946b540c11f4851247fb987f7f6f4fe0cdcf2a1058693c88dfc23ab0",
+      "bytes": 2398
+    },
+    {
+      "path": "results/astra-sim-face-real-cost-consumer.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-real-cost-consumer.json",
+      "sha256": "37bc981dbd71332bd5876e6480a89f5faebd8a19e0adb69030bd20bb9b426195",
+      "bytes": 1331
+    },
+    {
+      "path": "results/astra-sim-face-typed-resolver/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-typed-resolver/identity.json",
+      "sha256": "d0bc188c4d3e50def4a3bd9494c51ed9dddf9e19e64095885510dc1923c18c0b",
+      "bytes": 2548
+    },
+    {
+      "path": "results/astra-sim-face-typed-resolver/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-typed-resolver/run.log",
+      "sha256": "5a059a659513a185185d934cdc3387c270bf2d5c6f60e96de1c94a111ba6ef73",
+      "bytes": 10258
+    },
+    {
+      "path": "results/astra-sim-face-typed-resolver/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-face-typed-resolver/started.json",
+      "sha256": "ed21480b1c7bb3f4a8b742e2d21608d0d88a43cb0eaeaf828ff9b162bce1cffe",
+      "bytes": 1792
+    },
+    {
+      "path": "results/astra-sim-joint-abi-build/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-abi-build/identity.json",
+      "sha256": "c98461915e6393a938db2f598c9a0cdc88289d93649809f7925d141b7f1451e0",
+      "bytes": 5887
+    },
+    {
+      "path": "results/astra-sim-joint-abi-build/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-abi-build/run.log",
+      "sha256": "c8eabd212a00352dc18557e4947b47eae1adfe73cfaa4c4c854126e9a316aaf3",
+      "bytes": 26358
+    },
+    {
+      "path": "results/astra-sim-joint-abi-build/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-abi-build/started.json",
+      "sha256": "db22ab187f9fa98742b0f795a36a0be39a3365a70f5f26cc5f9e071c65e288a1",
+      "bytes": 2349
+    },
+    {
+      "path": "results/astra-sim-joint-abi-configure/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-abi-configure/identity.json",
+      "sha256": "8532cfccb9137e39d598fce20d1ddc730ec838d4e451296bba1037f2909f5f8b",
+      "bytes": 4751
+    },
+    {
+      "path": "results/astra-sim-joint-abi-configure/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-abi-configure/run.log",
+      "sha256": "1e08399c017b15190c62f44c076c91f9082ca4e8b1160395ee7b1e454798f776",
+      "bytes": 675
+    },
+    {
+      "path": "results/astra-sim-joint-abi-configure/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-abi-configure/started.json",
+      "sha256": "4b982fc8edacd12defc6b132d9377f7fefc4d70a75a38b276cdced066b643960",
+      "bytes": 1701
+    },
+    {
+      "path": "results/astra-sim-joint-config/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-config/identity.json",
+      "sha256": "89315f72286fb5e9412523bbf3c33f19889af357a43ea8af896d0198f4c5c824",
+      "bytes": 3606
+    },
+    {
+      "path": "results/astra-sim-joint-config/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-config/run.log",
+      "sha256": "bb2e4c092b176e23120034b5fc4433ce88112245190b241b9f8e8786d921f66e",
+      "bytes": 2519
+    },
+    {
+      "path": "results/astra-sim-joint-config/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-config/started.json",
+      "sha256": "e6737993b7b7b49a667f23b22dbd260ea0094de78b63f4efc9774f980485cafb",
+      "bytes": 1426
+    },
+    {
+      "path": "results/astra-sim-joint-python-bindings/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-python-bindings/identity.json",
+      "sha256": "b9a88cf0904abdea49da776bd59902a23ca43a6fb9d6064601d6f3e4c6deb98d",
+      "bytes": 3728
+    },
+    {
+      "path": "results/astra-sim-joint-python-bindings/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "results/astra-sim-joint-python-bindings/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-python-bindings/started.json",
+      "sha256": "a1d3e71382148eaf32d9a026da833a2f46cb9a37b55774c2a5b375aeaabfd5c5",
+      "bytes": 1600
+    },
+    {
+      "path": "results/astra-sim-joint-python-consumers/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-python-consumers/identity.json",
+      "sha256": "a78803f6130823b379d005ec4d847d33ed264bf2f01479da0ca19129883a38b2",
+      "bytes": 4022
+    },
+    {
+      "path": "results/astra-sim-joint-python-consumers/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-python-consumers/run.log",
+      "sha256": "64157f1ad4772f28423e9f68ee45bfef4af5c5c757609d38d5324eb228ac75db",
+      "bytes": 15756
+    },
+    {
+      "path": "results/astra-sim-joint-python-consumers/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-python-consumers/started.json",
+      "sha256": "472860fda68e41f8414a72997bc150fff4b8a4d9323ee3fd472ab2b93a907197",
+      "bytes": 1841
+    },
+    {
+      "path": "results/astra-sim-joint-typed-hardware-consumer.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-typed-hardware-consumer.json",
+      "sha256": "9ad83efe08d94e7a27e0d8d5de7a77ad0a4c4ed49b11882045a6086d1e91eae9",
+      "bytes": 14579
+    },
+    {
+      "path": "results/astra-sim-joint-typed-resolver/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-typed-resolver/identity.json",
+      "sha256": "fd91b7aae6ac648f5a0600487d22c7af4618bda1b9c889ec87012a012bcbdf55",
+      "bytes": 4483
+    },
+    {
+      "path": "results/astra-sim-joint-typed-resolver/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-typed-resolver/run.log",
+      "sha256": "7e46afeefc17ddfc1c97a5de7faab5f9447cab38db2d47e492488cb8efa76840",
+      "bytes": 115
+    },
+    {
+      "path": "results/astra-sim-joint-typed-resolver/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-joint-typed-resolver/started.json",
+      "sha256": "72ca57b4fcb2a49a0b67de1cc3c1e2e1ca40ae1136167a5b83f3330f8d1eb086",
+      "bytes": 2285
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-abi-build/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-abi-build/identity.json",
+      "sha256": "60e6b575d0519296466390f9b3d6171a7fe73115b6c4af17887e87ede3e3d9d6",
+      "bytes": 5591
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-abi-build/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-abi-build/run.log",
+      "sha256": "afec7f95a47ac5ecf9446cc0138b0c01530a08fd7cecb31c663f9cead5558cf7",
+      "bytes": 26733
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-abi-build/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-abi-build/started.json",
+      "sha256": "edf102af12874c7c9fabd9dbd83f8b062b927f4b284d255c2f8b21402f2bf593",
+      "bytes": 2390
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-abi-configure/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-abi-configure/identity.json",
+      "sha256": "4545d2336237297c2606103c5dc853050601e04302838cd57fa725b868bdad31",
+      "bytes": 4431
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-abi-configure/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-abi-configure/run.log",
+      "sha256": "de2fcda349b7e5554f0da4ec55b33c58968dbca29f77e558fa2d390afb4e490e",
+      "bytes": 680
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-abi-configure/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-abi-configure/started.json",
+      "sha256": "715c88fe9f89de0f4e193c01154ad48b9e602a91ec69d58fcc5458edb4b5ae7b",
+      "bytes": 1727
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-config/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-config/identity.json",
+      "sha256": "4ef15d44650d5713652e035b38d83910c955be1a680aefd09c82da80733bae6d",
+      "bytes": 3270
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-config/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-config/run.log",
+      "sha256": "845fcdc5f97e5506e96199fb0c5b27e2ffcffb4842eedcb911330423b3e4824a",
+      "bytes": 2921
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-config/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-config/started.json",
+      "sha256": "2b5d795a28e58c4958323e9596ffedacff80a8c1e7b3abe13bd3f91aeabb0121",
+      "bytes": 1451
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-python-bindings/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-python-bindings/identity.json",
+      "sha256": "5873fbca777c970166d0028afe06eee93121f3ede2869b3a00a87058d8707dd9",
+      "bytes": 3387
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-python-bindings/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-python-bindings/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-python-bindings/started.json",
+      "sha256": "7b550e6e9f132cf61af3201cde71c32c31d451279a09a7edf0b53df93d4c4407",
+      "bytes": 1620
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-python-consumers/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-python-consumers/identity.json",
+      "sha256": "da1ca8975fd6e377010e592181726febc2b1a7f0483da39120a9efac22baa89c",
+      "bytes": 3664
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-python-consumers/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-python-consumers/run.log",
+      "sha256": "89abc484e065b12f7ba6945d18daca07485bfedab669a3d6f519115145f122bb",
+      "bytes": 11815
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-python-consumers/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-python-consumers/started.json",
+      "sha256": "cd66c7d46079a6487c2b1499c9daefcd5fa36f4925fb042ecb385d36a089b4d8",
+      "bytes": 1845
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-typed-resolver/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-typed-resolver/identity.json",
+      "sha256": "cb3626e86d7ef4aaf7a074f6dcdd26c5e6e4925234be05a3663b917b88693a41",
+      "bytes": 3685
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-typed-resolver/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-typed-resolver/run.log",
+      "sha256": "18265d536fa0f8709366d358de7cb7e1df87650361de00998f98676591169f75",
+      "bytes": 10270
+    },
+    {
+      "path": "results/astra-sim-wscllm-LRU-typed-resolver/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-LRU-typed-resolver/started.json",
+      "sha256": "0764c4e1c0b096f9e955570a43593c788fcfe49d12b603b5039e5cd028f67b55",
+      "bytes": 1829
+    },
+    {
+      "path": "results/astra-sim-wscllm-abi-build/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-abi-build/identity.json",
+      "sha256": "d2753348d7a3f4e4d75b36a9918edb2bfac412a7efc0f3d3a6e72fb574cdde0e",
+      "bytes": 5168
+    },
+    {
+      "path": "results/astra-sim-wscllm-abi-build/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-abi-build/run.log",
+      "sha256": "832557565f922d6fbc9643fb7b34b0555f1ab7ff4d49cccc39d4be2a27cdf6cc",
+      "bytes": 26433
+    },
+    {
+      "path": "results/astra-sim-wscllm-abi-build/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-abi-build/started.json",
+      "sha256": "68c44cd910d72ad4b0ece1133bb6b701400f39f8c8dd367b40eee3b4048fc47d",
+      "bytes": 2358
+    },
+    {
+      "path": "results/astra-sim-wscllm-abi-configure/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-abi-configure/identity.json",
+      "sha256": "5c516039ce711e662ab7f0b6bc27922e379f0ae917e91517c9a67a64c9f05064",
+      "bytes": 4028
+    },
+    {
+      "path": "results/astra-sim-wscllm-abi-configure/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-abi-configure/run.log",
+      "sha256": "41fd05f67f6161ac021de178db926f54f8920ddf0d2c9d2409aefe8f2f3049ee",
+      "bytes": 676
+    },
+    {
+      "path": "results/astra-sim-wscllm-abi-configure/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-abi-configure/started.json",
+      "sha256": "027034e7c65e7c73831e8d40856020c3cdd7bc01b88e60c2135cadb77ef747a1",
+      "bytes": 1707
+    },
+    {
+      "path": "results/astra-sim-wscllm-config/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-config/identity.json",
+      "sha256": "bf3d25df96c8e68f677eb7f4385fbfd15fbf88f483f89377be308c5e7ad211c1",
+      "bytes": 2879
+    },
+    {
+      "path": "results/astra-sim-wscllm-config/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-config/run.log",
+      "sha256": "40367951467ce2792a986840fcbd28ecdce23043a68191700085db17aa0bb550",
+      "bytes": 4260
+    },
+    {
+      "path": "results/astra-sim-wscllm-config/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-config/started.json",
+      "sha256": "d436917520d04b8d4ad9e2e8aa947dc41d842cb15910713ec3e0846f131120ec",
+      "bytes": 1430
+    },
+    {
+      "path": "results/astra-sim-wscllm-python-bindings/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-python-bindings/identity.json",
+      "sha256": "0c2b863bb41762bdaffc8d4dc73383b7a28d64341053f73123f5f93dfa4e0604",
+      "bytes": 3000
+    },
+    {
+      "path": "results/astra-sim-wscllm-python-bindings/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "results/astra-sim-wscllm-python-bindings/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-python-bindings/started.json",
+      "sha256": "dfa0ab2654847e58fbe3c72b2665b7bcd978b906f91ce37f43afa6c45bf5f837",
+      "bytes": 1604
+    },
+    {
+      "path": "results/astra-sim-wscllm-python-consumers/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-python-consumers/identity.json",
+      "sha256": "6d324f7d5ff5c45267b99b6571e466e0c7eadc5f2e1feacd43cadf6044e23c31",
+      "bytes": 3262
+    },
+    {
+      "path": "results/astra-sim-wscllm-python-consumers/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-python-consumers/run.log",
+      "sha256": "55fe831db96a59593b8280e153912fb7130845c7da8c8263f993572dc543e436",
+      "bytes": 11586
+    },
+    {
+      "path": "results/astra-sim-wscllm-python-consumers/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-python-consumers/started.json",
+      "sha256": "b172b171814bbfb7c581bc49c0cb32affff3768e0c868be0c7d9fc7ab15d0809",
+      "bytes": 1814
+    },
+    {
+      "path": "results/astra-sim-wscllm-typed-resolver/identity.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-typed-resolver/identity.json",
+      "sha256": "ab8fcb74c8d5654e3c414a0bc0f02cac5b138d330ac616c8bd518f05850239d1",
+      "bytes": 3290
+    },
+    {
+      "path": "results/astra-sim-wscllm-typed-resolver/run.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-typed-resolver/run.log",
+      "sha256": "c865d240ba4fe19080897f1c3e3cd5aa737f4e49b5b1025430c620bc39296558",
+      "bytes": 10262
+    },
+    {
+      "path": "results/astra-sim-wscllm-typed-resolver/started.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/astra-sim-wscllm-typed-resolver/started.json",
+      "sha256": "d529002793c0b8f77893ff4da483d941fe5dadd0c44442408a55453f82570894",
+      "bytes": 1805
+    },
+    {
+      "path": "results/summary.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/abi-python-results/summary.json",
+      "sha256": "8f4bef5cf7cc10451e1415611e9cb740c81e8893f2085489356b14ebe9a73dbc",
+      "bytes": 124314
+    },
+    {
+      "path": "snapshot/manifest.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/manifest.json",
+      "sha256": "83d98579fda4dfaac0f40c3891b9b92447a8c356d77c3ec25d3e8c5300fa1fcd",
+      "bytes": 666301
+    },
+    {
+      "path": "snapshot/protobuf-generation.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/protobuf-generation.json",
+      "sha256": "16ed457f261564eeae2aa4899f6d6f260b1a05ed7cc7eaa072e6c0b780ce3a3a",
+      "bytes": 5408
+    },
+    {
+      "path": "snapshot/build-map.json",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-map.json",
+      "sha256": "7fef891e34e41f8a6bc60ef0b02de63a8f0519f4b801772a300fe97290e4225f",
+      "bytes": 539
+    },
+    {
+      "path": "snapshot/protobuf-generation/astra-sim-face-LRU.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/protobuf-generation/astra-sim-face-LRU.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "snapshot/protobuf-generation/astra-sim-face.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/protobuf-generation/astra-sim-face.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "snapshot/protobuf-generation/astra-sim-joint.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/protobuf-generation/astra-sim-joint.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "snapshot/protobuf-generation/astra-sim-wscllm-LRU.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/protobuf-generation/astra-sim-wscllm-LRU.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "snapshot/protobuf-generation/astra-sim-wscllm.log",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/protobuf-generation/astra-sim-wscllm.log",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    {
+      "path": "snapshot/aggregate/CMakeLists.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/aggregate/CMakeLists.txt",
+      "sha256": "d7c4bf2a439c4e46f71332b44b763b60cfcd9c3e8023ff24fe84a88f25f2a43d",
+      "bytes": 397
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeCache.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeCache.txt",
+      "sha256": "0fc910d6b9e401a02cdb648b35fca69090c8f4364429d3202fb0cc905a15f1ed",
+      "bytes": 15435
+    },
+    {
+      "path": "build-text/astra-sim-face/CTestTestfile.cmake",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CTestTestfile.cmake",
+      "sha256": "9cb88c704e08199822b88deb26a99a069ac5d40af99f75a947905986a25fc106",
+      "bytes": 5306
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/capi_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/capi_test.dir/link.txt",
+      "sha256": "13065741129d12fc36f5931f7f65755283ae76c61765b95f3432d9a51223c6af",
+      "bytes": 274
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "sha256": "75e13cf1b5f1768417ab71a81d208df955f216f3ec6b3cd5e784ac11cd6680c1",
+      "bytes": 215
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/costmodel_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/costmodel_test.dir/link.txt",
+      "sha256": "070bcb24ff4cc74d5df74530157b8d3f14ccd2850b1ef5f17d708b87c940d8f5",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/die_model.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/die_model.dir/link.txt",
+      "sha256": "04fd3b532cf7aa1c29cfa6600b6986dc8de9a7641f18a799cd2d77b6a1e593f2",
+      "bytes": 324
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/die_model_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/die_model_cabi.dir/link.txt",
+      "sha256": "3c6c68db7a61ac6fa10b94ec1b042912908a87708bf950d3d08dfd52bca868f1",
+      "bytes": 220
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/execution_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/execution_test.dir/link.txt",
+      "sha256": "de4e59f1b7b433bfccecc21e91b4b48722bfd48aeba3e8255e58f4b3973bbc3d",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/hardware_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/hardware_test.dir/link.txt",
+      "sha256": "83adef6b55eb329bb7e6b95225b056aaba660d156ab1a1a8addfc0308dca546e",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/mapping_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/mapping_test.dir/link.txt",
+      "sha256": "be0934dfb0ef921700980de09b5272cba4608bd45994333efc1bf3b2b19c3374",
+      "bytes": 167
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "sha256": "acd963a94e57b01b888afee53e0106e48e161ea908c28aee166cd1c5b86998a7",
+      "bytes": 195
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/spec_parse_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/spec_parse_test.dir/link.txt",
+      "sha256": "096906a8ad304ddd8839d517d9079440a501b0623342226f63acf456d940f164",
+      "bytes": 179
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "sha256": "4f3fbac1b1f933678adaa15ac07c6435a7b57e5a66a0c019a4c6da81c4994462",
+      "bytes": 183
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "sha256": "f8269e969f415ed9a95326453d5fc727f5a162c2fbc3661ab51caff691f2fe51",
+      "bytes": 191
+    },
+    {
+      "path": "build-text/astra-sim-face/CMakeFiles/workload_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/CMakeFiles/workload_test.dir/link.txt",
+      "sha256": "2eeea1489243d24e6ad57c0cc68e4c52da7d0589f7231a9e22c6c25cbb2e8cdc",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-face/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "sha256": "beefff292813803ee1bd3bed763e4cd123d7683a31e385ae288ae1cb51e9c0aa",
+      "bytes": 279
+    },
+    {
+      "path": "build-text/astra-sim-face/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "sha256": "2e85c2b5cb947e1e81642fe73cb8e90c7205fbf9bba37a9fc9dada58e57cd720",
+      "bytes": 228
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeCache.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeCache.txt",
+      "sha256": "51e84485725fa0642ea462fb9ed77dba721610c61c61baef19eca2f80bd84e31",
+      "bytes": 15467
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CTestTestfile.cmake",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CTestTestfile.cmake",
+      "sha256": "d21d5599b47ba577fab445497e7443e9cde478fea3739e8acfbd51be5f68f720",
+      "bytes": 5446
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/capi_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/capi_test.dir/link.txt",
+      "sha256": "3613e2eecf12da60dd09ecd7a183723340f4d09b00808addaec0b56cfcf59e90",
+      "bytes": 278
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "sha256": "75e13cf1b5f1768417ab71a81d208df955f216f3ec6b3cd5e784ac11cd6680c1",
+      "bytes": 215
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/costmodel_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/costmodel_test.dir/link.txt",
+      "sha256": "070bcb24ff4cc74d5df74530157b8d3f14ccd2850b1ef5f17d708b87c940d8f5",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/die_model.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/die_model.dir/link.txt",
+      "sha256": "04fd3b532cf7aa1c29cfa6600b6986dc8de9a7641f18a799cd2d77b6a1e593f2",
+      "bytes": 324
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/die_model_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/die_model_cabi.dir/link.txt",
+      "sha256": "3c6c68db7a61ac6fa10b94ec1b042912908a87708bf950d3d08dfd52bca868f1",
+      "bytes": 220
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/execution_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/execution_test.dir/link.txt",
+      "sha256": "de4e59f1b7b433bfccecc21e91b4b48722bfd48aeba3e8255e58f4b3973bbc3d",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/hardware_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/hardware_test.dir/link.txt",
+      "sha256": "83adef6b55eb329bb7e6b95225b056aaba660d156ab1a1a8addfc0308dca546e",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/mapping_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/mapping_test.dir/link.txt",
+      "sha256": "be0934dfb0ef921700980de09b5272cba4608bd45994333efc1bf3b2b19c3374",
+      "bytes": 167
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "sha256": "acd963a94e57b01b888afee53e0106e48e161ea908c28aee166cd1c5b86998a7",
+      "bytes": 195
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/spec_parse_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/spec_parse_test.dir/link.txt",
+      "sha256": "096906a8ad304ddd8839d517d9079440a501b0623342226f63acf456d940f164",
+      "bytes": 179
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "sha256": "4f3fbac1b1f933678adaa15ac07c6435a7b57e5a66a0c019a4c6da81c4994462",
+      "bytes": 183
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "sha256": "f8269e969f415ed9a95326453d5fc727f5a162c2fbc3661ab51caff691f2fe51",
+      "bytes": 191
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/CMakeFiles/workload_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/CMakeFiles/workload_test.dir/link.txt",
+      "sha256": "2eeea1489243d24e6ad57c0cc68e4c52da7d0589f7231a9e22c6c25cbb2e8cdc",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "sha256": "beefff292813803ee1bd3bed763e4cd123d7683a31e385ae288ae1cb51e9c0aa",
+      "bytes": 279
+    },
+    {
+      "path": "build-text/astra-sim-face-LRU/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "sha256": "2e85c2b5cb947e1e81642fe73cb8e90c7205fbf9bba37a9fc9dada58e57cd720",
+      "bytes": 228
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeCache.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeCache.txt",
+      "sha256": "59a13af6492add9f2802d87098f7a92a9a187d85a57e43f551d2a7b5ca9ce088",
+      "bytes": 15451
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CTestTestfile.cmake",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CTestTestfile.cmake",
+      "sha256": "2d6e0233df1af9261fe06e3c7905348a6ea6c3d2f6c7792da7b8ba505e9ca0aa",
+      "bytes": 5376
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/capi_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/capi_test.dir/link.txt",
+      "sha256": "f65f14882b2e8f65b80771ad829043f73dcb54c919ef3ede4884b0dabcb3bacf",
+      "bytes": 276
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "sha256": "75e13cf1b5f1768417ab71a81d208df955f216f3ec6b3cd5e784ac11cd6680c1",
+      "bytes": 215
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/costmodel_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/costmodel_test.dir/link.txt",
+      "sha256": "070bcb24ff4cc74d5df74530157b8d3f14ccd2850b1ef5f17d708b87c940d8f5",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/die_model.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/die_model.dir/link.txt",
+      "sha256": "04fd3b532cf7aa1c29cfa6600b6986dc8de9a7641f18a799cd2d77b6a1e593f2",
+      "bytes": 324
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/die_model_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/die_model_cabi.dir/link.txt",
+      "sha256": "3c6c68db7a61ac6fa10b94ec1b042912908a87708bf950d3d08dfd52bca868f1",
+      "bytes": 220
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/execution_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/execution_test.dir/link.txt",
+      "sha256": "de4e59f1b7b433bfccecc21e91b4b48722bfd48aeba3e8255e58f4b3973bbc3d",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/hardware_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/hardware_test.dir/link.txt",
+      "sha256": "83adef6b55eb329bb7e6b95225b056aaba660d156ab1a1a8addfc0308dca546e",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/mapping_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/mapping_test.dir/link.txt",
+      "sha256": "be0934dfb0ef921700980de09b5272cba4608bd45994333efc1bf3b2b19c3374",
+      "bytes": 167
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "sha256": "acd963a94e57b01b888afee53e0106e48e161ea908c28aee166cd1c5b86998a7",
+      "bytes": 195
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/spec_parse_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/spec_parse_test.dir/link.txt",
+      "sha256": "096906a8ad304ddd8839d517d9079440a501b0623342226f63acf456d940f164",
+      "bytes": 179
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "sha256": "4f3fbac1b1f933678adaa15ac07c6435a7b57e5a66a0c019a4c6da81c4994462",
+      "bytes": 183
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "sha256": "f8269e969f415ed9a95326453d5fc727f5a162c2fbc3661ab51caff691f2fe51",
+      "bytes": 191
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/CMakeFiles/workload_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/CMakeFiles/workload_test.dir/link.txt",
+      "sha256": "2eeea1489243d24e6ad57c0cc68e4c52da7d0589f7231a9e22c6c25cbb2e8cdc",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "sha256": "beefff292813803ee1bd3bed763e4cd123d7683a31e385ae288ae1cb51e9c0aa",
+      "bytes": 279
+    },
+    {
+      "path": "build-text/astra-sim-wscllm/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "sha256": "2e85c2b5cb947e1e81642fe73cb8e90c7205fbf9bba37a9fc9dada58e57cd720",
+      "bytes": 228
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeCache.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeCache.txt",
+      "sha256": "a59f5f60f13339d62e63112a34d13d2b445ee765101a8ea81236025f8a6769d4",
+      "bytes": 15483
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CTestTestfile.cmake",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CTestTestfile.cmake",
+      "sha256": "165f0ee15e43122e8df85f897bd51569e51fe7fd89d0230befae7ebff6054a6d",
+      "bytes": 5516
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/capi_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/capi_test.dir/link.txt",
+      "sha256": "c81cda58a54dc07ec3a68d7334f48cea0e2fcfe63f2395cbb17589715df85ae6",
+      "bytes": 280
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "sha256": "75e13cf1b5f1768417ab71a81d208df955f216f3ec6b3cd5e784ac11cd6680c1",
+      "bytes": 215
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/costmodel_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/costmodel_test.dir/link.txt",
+      "sha256": "070bcb24ff4cc74d5df74530157b8d3f14ccd2850b1ef5f17d708b87c940d8f5",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/die_model.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/die_model.dir/link.txt",
+      "sha256": "04fd3b532cf7aa1c29cfa6600b6986dc8de9a7641f18a799cd2d77b6a1e593f2",
+      "bytes": 324
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/die_model_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/die_model_cabi.dir/link.txt",
+      "sha256": "3c6c68db7a61ac6fa10b94ec1b042912908a87708bf950d3d08dfd52bca868f1",
+      "bytes": 220
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/execution_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/execution_test.dir/link.txt",
+      "sha256": "de4e59f1b7b433bfccecc21e91b4b48722bfd48aeba3e8255e58f4b3973bbc3d",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/hardware_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/hardware_test.dir/link.txt",
+      "sha256": "83adef6b55eb329bb7e6b95225b056aaba660d156ab1a1a8addfc0308dca546e",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/mapping_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/mapping_test.dir/link.txt",
+      "sha256": "be0934dfb0ef921700980de09b5272cba4608bd45994333efc1bf3b2b19c3374",
+      "bytes": 167
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "sha256": "acd963a94e57b01b888afee53e0106e48e161ea908c28aee166cd1c5b86998a7",
+      "bytes": 195
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/spec_parse_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/spec_parse_test.dir/link.txt",
+      "sha256": "096906a8ad304ddd8839d517d9079440a501b0623342226f63acf456d940f164",
+      "bytes": 179
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "sha256": "4f3fbac1b1f933678adaa15ac07c6435a7b57e5a66a0c019a4c6da81c4994462",
+      "bytes": 183
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "sha256": "f8269e969f415ed9a95326453d5fc727f5a162c2fbc3661ab51caff691f2fe51",
+      "bytes": 191
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/CMakeFiles/workload_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/CMakeFiles/workload_test.dir/link.txt",
+      "sha256": "2eeea1489243d24e6ad57c0cc68e4c52da7d0589f7231a9e22c6c25cbb2e8cdc",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "sha256": "beefff292813803ee1bd3bed763e4cd123d7683a31e385ae288ae1cb51e9c0aa",
+      "bytes": 279
+    },
+    {
+      "path": "build-text/astra-sim-wscllm-LRU/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "sha256": "2e85c2b5cb947e1e81642fe73cb8e90c7205fbf9bba37a9fc9dada58e57cd720",
+      "bytes": 228
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeCache.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeCache.txt",
+      "sha256": "87ebbea5d73a5590eab720965e8aa618235fc37ec77e774ba9fea4138e8101c8",
+      "bytes": 15443
+    },
+    {
+      "path": "build-text/astra-sim-joint/CTestTestfile.cmake",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CTestTestfile.cmake",
+      "sha256": "001a0bcc96b5b2d82fb3e1067b9a87decc7200dfa24e43823e1ca92845a2e47c",
+      "bytes": 7257
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/capi_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/capi_test.dir/link.txt",
+      "sha256": "52c1a98c6dcc64fb5a28fd8eabca7aa730e3da792b6698ee6b289967c49ef140",
+      "bytes": 275
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/configs_consistency_test.dir/link.txt",
+      "sha256": "75e13cf1b5f1768417ab71a81d208df955f216f3ec6b3cd5e784ac11cd6680c1",
+      "bytes": 215
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/costmodel_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/costmodel_test.dir/link.txt",
+      "sha256": "070bcb24ff4cc74d5df74530157b8d3f14ccd2850b1ef5f17d708b87c940d8f5",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/die_model.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/die_model.dir/link.txt",
+      "sha256": "04fd3b532cf7aa1c29cfa6600b6986dc8de9a7641f18a799cd2d77b6a1e593f2",
+      "bytes": 324
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/die_model_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/die_model_cabi.dir/link.txt",
+      "sha256": "3c6c68db7a61ac6fa10b94ec1b042912908a87708bf950d3d08dfd52bca868f1",
+      "bytes": 220
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/execution_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/execution_test.dir/link.txt",
+      "sha256": "de4e59f1b7b433bfccecc21e91b4b48722bfd48aeba3e8255e58f4b3973bbc3d",
+      "bytes": 175
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/hardware_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/hardware_test.dir/link.txt",
+      "sha256": "83adef6b55eb329bb7e6b95225b056aaba660d156ab1a1a8addfc0308dca546e",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/internal_service_progress_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/internal_service_progress_test.dir/link.txt",
+      "sha256": "6c60ef08c3a93184bb307e3c95808142a675bcb104500066f0117344edbd26db",
+      "bytes": 239
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/internal_slice_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/internal_slice_test.dir/link.txt",
+      "sha256": "30096333f0f4042519029c0b9feaf64b84b21259fca2b0b76a745c8419ffdb26",
+      "bytes": 195
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/k2_plan_negative_cache_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/k2_plan_negative_cache_test.dir/link.txt",
+      "sha256": "ee4f0b6462ae5ec566315c9f3e525a07ae6a855b8b7fb7fb29197cbdaad8aca9",
+      "bytes": 227
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/k2_timer_window_memo_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/k2_timer_window_memo_test.dir/link.txt",
+      "sha256": "22992b64dbb46d4d17bff77afba815c2f668d07a86a5df4170213ca0f2b7e2f8",
+      "bytes": 219
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/mapping_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/mapping_test.dir/link.txt",
+      "sha256": "be0934dfb0ef921700980de09b5272cba4608bd45994333efc1bf3b2b19c3374",
+      "bytes": 167
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/selection_fuzz_test.dir/link.txt",
+      "sha256": "acd963a94e57b01b888afee53e0106e48e161ea908c28aee166cd1c5b86998a7",
+      "bytes": 195
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/spec_parse_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/spec_parse_test.dir/link.txt",
+      "sha256": "096906a8ad304ddd8839d517d9079440a501b0623342226f63acf456d940f164",
+      "bytes": 179
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/tx8_compile_test.dir/link.txt",
+      "sha256": "4f3fbac1b1f933678adaa15ac07c6435a7b57e5a66a0c019a4c6da81c4994462",
+      "bytes": 183
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/tx8_reference_test.dir/link.txt",
+      "sha256": "f8269e969f415ed9a95326453d5fc727f5a162c2fbc3661ab51caff691f2fe51",
+      "bytes": 191
+    },
+    {
+      "path": "build-text/astra-sim-joint/CMakeFiles/workload_test.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/CMakeFiles/workload_test.dir/link.txt",
+      "sha256": "2eeea1489243d24e6ad57c0cc68e4c52da7d0589f7231a9e22c6c25cbb2e8cdc",
+      "bytes": 171
+    },
+    {
+      "path": "build-text/astra-sim-joint/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/coarse/CMakeFiles/coarse_die.dir/link.txt",
+      "sha256": "beefff292813803ee1bd3bed763e4cd123d7683a31e385ae288ae1cb51e9c0aa",
+      "bytes": 279
+    },
+    {
+      "path": "build-text/astra-sim-joint/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "original_path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/coarse/CMakeFiles/coarse_die_cabi.dir/link.txt",
+      "sha256": "2e85c2b5cb947e1e81642fe73cb8e90c7205fbf9bba37a9fc9dada58e57cd720",
+      "bytes": 228
+    }
+  ],
+  "files": {
+    "checkpoint-summary.json": {
+      "sha256": "1e194a4e40d245d12ced35a7835e43d03a2bbe629c4c7a738a7a2d53b8669182",
+      "bytes": 12728
+    },
+    "formal-vendor-check.json": {
+      "sha256": "833e0a6d26e459da2c4945bf69e29567b1a4a4b09c34483a0d1b23dd16330bb8",
+      "bytes": 26846
+    },
+    "results-text.tar.gz": {
+      "sha256": "c6106588fdd65093b406d7227ea324e1dcae44189d2345e6d25eef161c5f983c",
+      "bytes": 386620
+    },
+    "toolchain.json": {
+      "sha256": "bb4569910e368e76883481da1af94b84be56c2fb0e27b10ff2fb65d94ca04144",
+      "bytes": 1414
+    }
+  },
+  "archiver_sha256": "611ce8d16530da1fae7354c1773cb75042ea28e2ed060706b91b4f38895f91cd"
+}

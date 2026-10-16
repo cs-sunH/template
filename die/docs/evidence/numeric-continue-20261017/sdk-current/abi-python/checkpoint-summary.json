@@ -1,0 +1,363 @@
+{
+  "scope": "actual fresh frozen current numerical Runtime SDK; unpublished, not full-business acceptance",
+  "phase": "abi-python",
+  "source_head_at_freeze": "c734ce1145915279bc26367cb8e1e5076629adfe",
+  "source_digest": "0fb24b47de6b9a3622508d59b60d86542ee2413a20d4a482add0f3cdd56ef7dc",
+  "public_files_sha256": {
+    "CMakeLists.txt": "452035f3076878214508ce5281c6058b0c48ac1734d3aa2cd7d8f766570675de",
+    "include/coarse_die/Capi.h": "8fa8be05f57599cbc0485da601b88f4a2fbf368c0af4086d5929cac98d7a2f89",
+    "include/coarse_die/Execution.hh": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+    "include/coarse_die/Hardware.hh": "629892410d0b77172fedb13f8eaf1633204eea5f9650ca2bf7469cbf20f0011c",
+    "include/coarse_die/Memory.hh": "0a3fc4aa58d1ecd2fedb8248d55080b9d30a12b7a476864a37f9b44d6e20022c",
+    "include/coarse_die/Plan.hh": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+    "include/coarse_die/Prediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "src/Capi.cc": "c924fa5867c52c4c0d38abec8f718d8985580e39da7ee610ee2b8beb47a6542d",
+    "src/Compiler.cc": "64ebea9e2fb5c17de30fdea1197867dd721b415679f7b9d457d09148bf3e9ab2",
+    "src/CompilerInternal.hh": "e935c36d02d128d197e693e7240820a5773b8f5ea7cb6cb1a7134651502b2bec",
+    "src/ElementwiseGeometry.hh": "4ca382e619b21de677de876187436c2fdf7df735d3f4ea16ec05df337a50df81",
+    "src/EquivalentWork.hh": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+    "src/Execution.cc": "54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab",
+    "src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+    "src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "src/GemmOSReadiness.hh": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+    "src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+    "src/GemmOSRouteCounter.hh": "298437831747470beaa2ee2f72f4c96ac60d98afc566e30722f348affea41ec9",
+    "src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+    "src/Hardware.cc": "d2fe3d9d807757c5cfc87903ff717532922d581cf4590056a432324f895a64d4",
+    "src/Mapping.cc": "a5208b17d7f017c62f691a4d0196c46b6cea4b1fa62a2e353880e68708996289",
+    "src/PackingAllocation.hh": "6fca2771bd406db3c12a0fffa6dddbc08392d6f4647368250a5547899316c75f",
+    "src/Plan.cc": "c80c34afa81196b83cbf79284c982c4273d0e3d9ad7bc2fe1eab26189282a872",
+    "src/RatioAllocation.hh": "ce5a040d44a4e4cfef1dbc9e9e0fd6dbbfb9eef335ed8482c2c5cf7392953fb8",
+    "src/RegionDelay.hh": "778db1de98fdd8c8782890ca343cad897efc9b6b5f67952b8235caf30c1e6c95",
+    "configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+    "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+    "configs/core32.json": "e89d353e29ffec23c50590d81344f44dd5b0d424c8361521ddf79fbe32c70986",
+    "configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+    "configs/example_hardware.json": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a",
+    "configs/example_hardware_explicit.json": "b275a326cceec297073a291ba230a9f0c8aeee21fbeb61454cebff8679ca4b3e",
+    "configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+    "configs/tx8_compute_matched_hardware.json": "90941cc259673d144c2d17c1ee44d08837270de802d99a9307d426afee81bb5c"
+  },
+  "frozen_files_checked": 4493,
+  "no_source_symlinks_or_old_build_reuse": true,
+  "production_deltas_at_export": {},
+  "phase_count": 33,
+  "phase_status_counts": {
+    "failed": 1,
+    "passed": 32
+  },
+  "phases": [
+    {
+      "label": "astra-sim-face-abi-configure",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-abi-build",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-config",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-typed-resolver",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-python-bindings",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-python-consumers",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-real-cost-consumer",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-LRU-abi-configure",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-LRU-abi-build",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-LRU-config",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-LRU-typed-resolver",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-LRU-python-bindings",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-LRU-python-consumers",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-face-LRU-real-cost-consumer",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-abi-configure",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-abi-build",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-config",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-typed-resolver",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-python-bindings",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-python-consumers",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-abi-configure",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-abi-build",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-config",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-typed-resolver",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-python-bindings",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-python-consumers",
+      "status": "failed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-joint-abi-configure",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-joint-abi-build",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-joint-config",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-joint-typed-resolver",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-joint-python-bindings",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "astra-sim-joint-python-consumers",
+      "status": "passed",
+      "return_code": 0
+    },
+    {
+      "label": "actual-python-availability",
+      "status": "passed",
+      "return_code": 0
+    }
+  ],
+  "suites": {
+    "astra-sim-face": {
+      "status": "passed",
+      "tests": 86,
+      "passed": 86,
+      "failed": 0,
+      "skipped": 0,
+      "skip_lines": []
+    },
+    "astra-sim-face-LRU": {
+      "status": "passed",
+      "tests": 80,
+      "passed": 80,
+      "failed": 0,
+      "skipped": 0,
+      "skip_lines": []
+    },
+    "astra-sim-wscllm": {
+      "status": "passed",
+      "tests": 64,
+      "passed": 64,
+      "failed": 0,
+      "skipped": 0,
+      "skip_lines": []
+    },
+    "astra-sim-wscllm-LRU": {
+      "status": "failed",
+      "tests": 63,
+      "passed": 62,
+      "failed": 0,
+      "skipped": 1,
+      "skip_lines": [
+        "spec dict \u76f4\u63a5\u8fc7 die_estimate_batch \u4e25\u683c\u89e3\u6790(\u82e5\u5e93\u53ef\u53d1\u73b0)\u3002 ... skipped 'die_model_oracle unavailable'"
+      ]
+    },
+    "astra-sim-joint": {
+      "status": "passed",
+      "tests": 92,
+      "passed": 92,
+      "failed": 0,
+      "skipped": 0,
+      "skip_lines": []
+    }
+  },
+  "fresh_libraries": {
+    "astra-sim-face": {
+      "libcoarse_die_cabi.so": {
+        "sha256": "7e3f0fb6543712ffd97df3878248d916c11198fb12dbb493a94c30bb08783714",
+        "bytes": 1685552,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/lib/libcoarse_die_cabi.so"
+      },
+      "libdie_model_cabi.so": {
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face/lib/libdie_model_cabi.so"
+      }
+    },
+    "astra-sim-face-LRU": {
+      "libcoarse_die_cabi.so": {
+        "sha256": "7e3f0fb6543712ffd97df3878248d916c11198fb12dbb493a94c30bb08783714",
+        "bytes": 1685552,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/lib/libcoarse_die_cabi.so"
+      },
+      "libdie_model_cabi.so": {
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-face-LRU/lib/libdie_model_cabi.so"
+      }
+    },
+    "astra-sim-wscllm": {
+      "libcoarse_die_cabi.so": {
+        "sha256": "7e3f0fb6543712ffd97df3878248d916c11198fb12dbb493a94c30bb08783714",
+        "bytes": 1685552,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/lib/libcoarse_die_cabi.so"
+      },
+      "libdie_model_cabi.so": {
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm/lib/libdie_model_cabi.so"
+      }
+    },
+    "astra-sim-wscllm-LRU": {
+      "libcoarse_die_cabi.so": {
+        "sha256": "7e3f0fb6543712ffd97df3878248d916c11198fb12dbb493a94c30bb08783714",
+        "bytes": 1685552,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so"
+      },
+      "libdie_model_cabi.so": {
+        "sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+        "bytes": 517152,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so"
+      }
+    },
+    "astra-sim-joint": {
+      "libcoarse_die_cabi.so": {
+        "sha256": "7e3f0fb6543712ffd97df3878248d916c11198fb12dbb493a94c30bb08783714",
+        "bytes": 1685552,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/lib/libcoarse_die_cabi.so"
+      },
+      "libdie_model_cabi.so": {
+        "sha256": "7d362078ddfe342616853a5c158987d63c2c3de7a975eea2d3b9b633cb247033",
+        "bytes": 634720,
+        "path": "/workspace/template/work/sdk-numeric-current-20261017/build-abi/astra-sim-joint/lib/libdie_model_cabi.so"
+      }
+    }
+  },
+  "current_public_library": {
+    "path": "/workspace/template/work/build-numeric-final-20261017/lib/libcoarse_die_cabi.so",
+    "sha256": "7e3f0fb6543712ffd97df3878248d916c11198fb12dbb493a94c30bb08783714"
+  },
+  "all_five_coarse_equal_current_public": true,
+  "configurations": [
+    {
+      "repo": "astra-sim-face",
+      "status": "passed"
+    },
+    {
+      "repo": "astra-sim-face-LRU",
+      "status": "passed"
+    },
+    {
+      "repo": "astra-sim-wscllm",
+      "status": "passed"
+    },
+    {
+      "repo": "astra-sim-wscllm-LRU",
+      "status": "passed"
+    },
+    {
+      "repo": "astra-sim-joint",
+      "status": "passed"
+    }
+  ],
+  "build_jobs": 2,
+  "repositories_executed_sequentially": true,
+  "formal_sdk": "five canonical24 actual file hashes unchanged; publisher not run",
+  "not_run": [
+    "full five-repository business E2E and CPU<=10% comparison",
+    "hardware calibration and target raw acquisition",
+    "SDK publication"
+  ],
+  "engineering_status": "NOT ACCEPTED",
+  "archive_sha256": "c6106588fdd65093b406d7227ea324e1dcae44189d2345e6d25eef161c5f983c",
+  "archive_entries": 202,
+  "archive_roundtrip_verified": true,
+  "exported_unix": 1792188103.3499277,
+  "archiver_sha256": "611ce8d16530da1fae7354c1773cb75042ea28e2ed060706b91b4f38895f91cd"
+}

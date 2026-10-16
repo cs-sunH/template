@@ -1,0 +1,207 @@
+{
+  "scope": "fresh current Runtime manual seven-epoch fixture, visibly synthetic service rates; not compiled long-row availability or hardware calibration",
+  "production_source_sha256": "54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab",
+  "driver_status": "failed",
+  "liveness_status": "stalled_no_event",
+  "observations": 11,
+  "physical_ledger_violation_observations": 6,
+  "final_now_ns": 5130029297,
+  "error": "nonterminal two-owner Plan has no next event",
+  "physical_terminal_totals_status": "not_checked",
+  "snapshot_comparison_to_saved_AB": [
+    {
+      "name": "event-000.json",
+      "saved_AB_sha256": "dda1d20765b1cb7faa11ca1dae61ad894c79622658b49e4ecb529b992f6a8794",
+      "current_sha256": "dda1d20765b1cb7faa11ca1dae61ad894c79622658b49e4ecb529b992f6a8794",
+      "byte_identical": true
+    },
+    {
+      "name": "event-001.json",
+      "saved_AB_sha256": "1d758cc99ed6ebf062e41953c3d1efaddeefcb6c9efd5fe367443e2100af9b60",
+      "current_sha256": "1d758cc99ed6ebf062e41953c3d1efaddeefcb6c9efd5fe367443e2100af9b60",
+      "byte_identical": true
+    },
+    {
+      "name": "event-002.json",
+      "saved_AB_sha256": "af8d980e50d50bc618a48544d0cb423707f62a435bcba0e9556a0d2003da1aa9",
+      "current_sha256": "af8d980e50d50bc618a48544d0cb423707f62a435bcba0e9556a0d2003da1aa9",
+      "byte_identical": true
+    },
+    {
+      "name": "event-003.json",
+      "saved_AB_sha256": "b18e3e8ab8c79249897b999c5bd27f8aee0124df40caf1eeed08119e08fa37f4",
+      "current_sha256": "b18e3e8ab8c79249897b999c5bd27f8aee0124df40caf1eeed08119e08fa37f4",
+      "byte_identical": true
+    },
+    {
+      "name": "event-004.json",
+      "saved_AB_sha256": "0299e988a27c8b57684358b2037973ddee0417f0bda32275aa88542db1078dc6",
+      "current_sha256": "0299e988a27c8b57684358b2037973ddee0417f0bda32275aa88542db1078dc6",
+      "byte_identical": true
+    },
+    {
+      "name": "event-005.json",
+      "saved_AB_sha256": "c0b7a81b54fca672e0702d1f3c54544ff3801b036923f425ba716bfafa574d09",
+      "current_sha256": "c0b7a81b54fca672e0702d1f3c54544ff3801b036923f425ba716bfafa574d09",
+      "byte_identical": true
+    },
+    {
+      "name": "event-006.json",
+      "saved_AB_sha256": "219585c5074967edf9446ab29364f202a3f69f713e6c9df58e440e1a1ee66383",
+      "current_sha256": "219585c5074967edf9446ab29364f202a3f69f713e6c9df58e440e1a1ee66383",
+      "byte_identical": true
+    },
+    {
+      "name": "event-007.json",
+      "saved_AB_sha256": "77f09182cba58f47f78017f00d0d00042c48047b1a15e29bc62ffc5be4f2e315",
+      "current_sha256": "77f09182cba58f47f78017f00d0d00042c48047b1a15e29bc62ffc5be4f2e315",
+      "byte_identical": true
+    },
+    {
+      "name": "event-008.json",
+      "saved_AB_sha256": "f371f2d7e8133e8d204a8f23a1da91e9cb566226fe751d9dc0cd22da4149289f",
+      "current_sha256": "f371f2d7e8133e8d204a8f23a1da91e9cb566226fe751d9dc0cd22da4149289f",
+      "byte_identical": true
+    },
+    {
+      "name": "event-009.json",
+      "saved_AB_sha256": "8c3345c1f0490d119e06b9201a3612360424e8e7c30643e8ea10d96ffb5a7cc8",
+      "current_sha256": "8c3345c1f0490d119e06b9201a3612360424e8e7c30643e8ea10d96ffb5a7cc8",
+      "byte_identical": true
+    },
+    {
+      "name": "event-010.json",
+      "saved_AB_sha256": "abadc6a3322c6ba81a7afab36ccc15561143bbe6d7b113f8c7edb75d04387970",
+      "current_sha256": "abadc6a3322c6ba81a7afab36ccc15561143bbe6d7b113f8c7edb75d04387970",
+      "byte_identical": true
+    }
+  ],
+  "archive_sha256": "275d4379d556a5cccc81a1afff5d8567a6f5f34ddd65d4f72948dede7daec630",
+  "files": [
+    {
+      "path": "work/norm-runtime-current/norm-seven-epoch-contract.json",
+      "bytes": 19258,
+      "sha256": "be403ad6884c84c7529f9307a83717e2193bd3efa1f912abb39a584546ddfe10"
+    },
+    {
+      "path": "work/norm-runtime-current/norm_seven_epoch_driver.cc",
+      "bytes": 16526,
+      "sha256": "aede3e043ff9eeedaf2d8aebf0fe37b015ece2d992fe26e53504d859254185b5"
+    },
+    {
+      "path": "work/norm-runtime-current/prepare_contract.py",
+      "bytes": 4524,
+      "sha256": "1d39f1c8ac7abfc7ed8da5c5e497e0ce7d8dc5a76617adee49f66865a9f422f1"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/compile.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/compile.stdout.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/identity.json",
+      "bytes": 7717,
+      "sha256": "10aa7ef5e1369c0ec29f09da6d12eb0fb444ae441d46170722b816e7f1944f03"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/run.stderr.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/run.stdout.log",
+      "bytes": 212,
+      "sha256": "819620c20a08d4eb3a738db026ab7fbd8e8f94c53e525c858cfb20b8eaabaf41"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-000.json",
+      "bytes": 59369,
+      "sha256": "dda1d20765b1cb7faa11ca1dae61ad894c79622658b49e4ecb529b992f6a8794"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-001.json",
+      "bytes": 59499,
+      "sha256": "1d758cc99ed6ebf062e41953c3d1efaddeefcb6c9efd5fe367443e2100af9b60"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-002.json",
+      "bytes": 59632,
+      "sha256": "af8d980e50d50bc618a48544d0cb423707f62a435bcba0e9556a0d2003da1aa9"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-003.json",
+      "bytes": 59492,
+      "sha256": "b18e3e8ab8c79249897b999c5bd27f8aee0124df40caf1eeed08119e08fa37f4"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-004.json",
+      "bytes": 59536,
+      "sha256": "0299e988a27c8b57684358b2037973ddee0417f0bda32275aa88542db1078dc6"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-005.json",
+      "bytes": 59661,
+      "sha256": "c0b7a81b54fca672e0702d1f3c54544ff3801b036923f425ba716bfafa574d09"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-006.json",
+      "bytes": 59441,
+      "sha256": "219585c5074967edf9446ab29364f202a3f69f713e6c9df58e440e1a1ee66383"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-007.json",
+      "bytes": 59775,
+      "sha256": "77f09182cba58f47f78017f00d0d00042c48047b1a15e29bc62ffc5be4f2e315"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-008.json",
+      "bytes": 59785,
+      "sha256": "f371f2d7e8133e8d204a8f23a1da91e9cb566226fe751d9dc0cd22da4149289f"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-009.json",
+      "bytes": 59654,
+      "sha256": "8c3345c1f0490d119e06b9201a3612360424e8e7c30643e8ea10d96ffb5a7cc8"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/event-010.json",
+      "bytes": 59432,
+      "sha256": "abadc6a3322c6ba81a7afab36ccc15561143bbe6d7b113f8c7edb75d04387970"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/failure-snapshot.json",
+      "bytes": 59432,
+      "sha256": "abadc6a3322c6ba81a7afab36ccc15561143bbe6d7b113f8c7edb75d04387970"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/hardware-derived-synthetic.json",
+      "bytes": 4623,
+      "sha256": "8910eaaff4a70f633d4d4b1459dc8596f4e0188c8e1d97809d7ea8572b5d3d5a"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/hardware-input.json",
+      "bytes": 2405,
+      "sha256": "595365a592c88bdb3ac14a30c6890cb48ec5a255e9ecdd3cd6826b669c408c96"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/plan.json",
+      "bytes": 15118,
+      "sha256": "82ef38e57ce516a4766ad79c6aafbfd3e970afa266208b3e7900dac136aa6023"
+    },
+    {
+      "path": "work/norm-runtime-current/run-current-positive-time-20261017/trace/result.json",
+      "bytes": 800116,
+      "sha256": "d71e242e33251a6230811e9819df7233887e0f8eb60129a5e6a2b257cb83d86b"
+    },
+    {
+      "path": "work/norm-runtime-current/run_probe.py",
+      "bytes": 6879,
+      "sha256": "f73df08ba02ba125311539d87c42b2dfd0789caf07b06326ece0b9a4e9e8e6ff"
+    }
+  ]
+}
