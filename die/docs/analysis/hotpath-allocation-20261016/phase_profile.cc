@@ -45,6 +45,7 @@ template<class F> Json measure(F action) {
       {"voluntary_switches",after.ru_nvcsw-before.ru_nvcsw},{"involuntary_switches",after.ru_nivcsw-before.ru_nivcsw}};
 }
 }
+#ifndef HOTPATH_PROFILE_UTILITIES_ONLY
 int main(int argc,char** argv) {
   try {
     const auto args=parse_args(argc,argv);
@@ -85,3 +86,4 @@ int main(int argc,char** argv) {
     output<<report.dump(2)<<'\n';return 0;
   }catch(const std::exception& e){std::cerr<<"phase_profile: "<<e.what()<<'\n';return 1;}
 }
+#endif

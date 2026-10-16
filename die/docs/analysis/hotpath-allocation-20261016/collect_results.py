@@ -7,24 +7,27 @@ import pathlib
 import statistics
 import subprocess
 
-p=argparse.ArgumentParser();p.add_argument('--output',required=True);a=p.parse_args()
+p=argparse.ArgumentParser();p.add_argument('--output',required=True)
+p.add_argument('--stage',choices=['ratio','flat'],default='flat');a=p.parse_args()
 root=pathlib.Path(__file__).resolve().parents[4];base=root/'die/docs/evidence/hotpath-allocation-20261016'
 out=pathlib.Path(a.output)
 if out.exists():p.error('fresh output required')
 read=lambda name:json.loads((base/name).read_text())
 sha=lambda path:hashlib.sha256(path.read_bytes()).hexdigest()
-test=read('ratio-reuse-public-identity.json');run=read('ratio-reuse-benchmark-run-identity.json')
+stage='flat-simplex' if a.stage=='flat' else 'ratio-reuse'
+test=read(stage+'-public-identity.json');run=read(stage+'-benchmark-run-identity.json')
 result={'observed_git_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
-    'scope':'equivalent ratio scratch storage reuse; instrumentation is not budget evidence',
+    'scope':'equivalent '+stage+' storage; instrumentation is not budget evidence',
     'public_tests':{'return_code':test['return_code'],'tests_run':test['tests_run']},
     'all_production_headers_and_test_sources_still_match':all(sha(root/name)==value
         for name,value in test['source_sha256'].items() if name.startswith(('die/src/','die/include/','die/tests/'))),
-    'phase_diagnostics':{},'public_benchmark':read('ratio-reuse-benchmark.json'),
+    'phase_diagnostics':{},'public_benchmark':read(stage+'-benchmark.json'),
     'baseline_actual_benchmark_reference':'die/docs/evidence/norm-row-accounting-20261016/benchmark.json'}
-before=read('api-baseline.json');after=read('api-ratio-reuse.json')
+before=read('api-pre-flat.json' if a.stage=='flat' else 'api-baseline.json')
+after=read('api-flat-simplex.json' if a.stage=='flat' else 'api-ratio-reuse.json')
 result['actual_public_objects']={'cases':len(before['rows']),'exactly_equal':before['rows']==after['rows'],
     'baseline_cabi_sha256':before['library_sha256'],'new_cabi_sha256':after['library_sha256']}
-for name in ['phase-baseline','phase-ratio-reuse']:
+for name in (['phase-ratio-reuse','phase-flat-simplex'] if a.stage=='flat' else ['phase-baseline','phase-ratio-reuse']):
     report=read(name+'.json');cases={}
     for case in report['cases']:
         cases[str(case['m'])]={phase:{metric:statistics.median(row[phase][metric] for row in case['samples'])
@@ -35,10 +38,14 @@ for name in ['phase-baseline','phase-ratio-reuse']:
         for metric in ['wall_ns','thread_cpu_ns','cpp_new_calls','cpp_new_bytes']} for owners in [1,8,32]}
     result['phase_diagnostics'][name]={'scope':report['scope'],'samples':report['samples'],
         'gemm_medians':cases,'os_update_medians':updates}
-refs=read('oracle-content-references.json')
+refs=read('flat-oracle-content-references.json' if a.stage=='flat' else 'oracle-content-references.json')
 result['fresh_norm_reference_content_all_matches']=all(sha(root/item['retained_equal_bytes'])==item['sha256'] for item in refs['files'])
 result['fresh_norm_reference_file_count']=len(refs['files'])
 result['fresh_norm_reference_scenarios']=96
+if a.stage=='flat':
+    prior=read('candidate-paths.json');now=read('candidate-paths-flat.json')
+    result['all_36_candidate_paths_pivots_latencies_equal']=[x['candidate_paths'] for x in prior['cases']]==[x['candidate_paths'] for x in now['cases']]
+    assert result['all_36_candidate_paths_pivots_latencies_equal']
 result['accuracy_status']='unchanged scoped Norm evidence: completion 96 target / first output 160 target; original busy still 54 failed; not hardware calibration'
 result['public_libraries_still_match_tests']=all(sha(pathlib.Path(name))==value for name,value in test['binary_after_sha256'].items()
     if pathlib.Path(name).name in ['libcoarse_die.a','libcoarse_die_cabi.so'])

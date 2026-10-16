@@ -1,0 +1,5818 @@
+{
+  "cases": [
+    {
+      "candidate_count": 8,
+      "candidate_paths": [
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1066
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1131
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2278
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2279
+            }
+          ],
+          "latency_ns": 2279,
+          "tk": 64,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1131
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2297
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2298
+            }
+          ],
+          "latency_ns": 2298,
+          "tk": 128,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1129
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1258
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3537
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3539
+            }
+          ],
+          "latency_ns": 3539,
+          "tk": 64,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1258
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3574
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3576
+            }
+          ],
+          "latency_ns": 3576,
+          "tk": 128,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1131
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2343
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2344
+            }
+          ],
+          "latency_ns": 2344,
+          "tk": 64,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1131
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2297
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2298
+            }
+          ],
+          "latency_ns": 2298,
+          "tk": 128,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1258
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3666
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3668
+            }
+          ],
+          "latency_ns": 3668,
+          "tk": 64,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1258
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3574
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3576
+            }
+          ],
+          "latency_ns": 3576,
+          "tk": 128,
+          "tm": 1,
+          "tn": 128
+        }
+      ],
+      "m": 1,
+      "task_identity_copy_samples": [
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 13790,
+          "voluntary_switches": 0,
+          "wall_ns": 6730
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5678,
+          "voluntary_switches": 0,
+          "wall_ns": 5478
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5649,
+          "voluntary_switches": 0,
+          "wall_ns": 5448
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5398,
+          "voluntary_switches": 0,
+          "wall_ns": 5168
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4837,
+          "voluntary_switches": 0,
+          "wall_ns": 4657
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 22694,
+          "voluntary_switches": 0,
+          "wall_ns": 22483
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4697,
+          "voluntary_switches": 0,
+          "wall_ns": 4487
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4667,
+          "voluntary_switches": 0,
+          "wall_ns": 4496
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4657,
+          "voluntary_switches": 0,
+          "wall_ns": 4487
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4587,
+          "voluntary_switches": 0,
+          "wall_ns": 4397
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4707,
+          "voluntary_switches": 0,
+          "wall_ns": 4536
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4666,
+          "voluntary_switches": 0,
+          "wall_ns": 4506
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4647,
+          "voluntary_switches": 0,
+          "wall_ns": 4477
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6089,
+          "voluntary_switches": 0,
+          "wall_ns": 5888
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4657,
+          "voluntary_switches": 0,
+          "wall_ns": 4477
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4546,
+          "voluntary_switches": 0,
+          "wall_ns": 4377
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4747,
+          "voluntary_switches": 0,
+          "wall_ns": 4567
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5408,
+          "voluntary_switches": 0,
+          "wall_ns": 5238
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4657,
+          "voluntary_switches": 0,
+          "wall_ns": 4477
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4657,
+          "voluntary_switches": 0,
+          "wall_ns": 4477
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4477,
+          "voluntary_switches": 0,
+          "wall_ns": 4306
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4677,
+          "voluntary_switches": 0,
+          "wall_ns": 4496
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4717,
+          "voluntary_switches": 0,
+          "wall_ns": 4537
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4667,
+          "voluntary_switches": 0,
+          "wall_ns": 4496
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4517,
+          "voluntary_switches": 0,
+          "wall_ns": 4336
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4727,
+          "voluntary_switches": 0,
+          "wall_ns": 4537
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6850,
+          "voluntary_switches": 0,
+          "wall_ns": 6629
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4998,
+          "voluntary_switches": 0,
+          "wall_ns": 4807
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4757,
+          "voluntary_switches": 0,
+          "wall_ns": 4586
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4597,
+          "voluntary_switches": 0,
+          "wall_ns": 4416
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4627,
+          "voluntary_switches": 0,
+          "wall_ns": 4457
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4607,
+          "voluntary_switches": 0,
+          "wall_ns": 4437
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4877,
+          "voluntary_switches": 0,
+          "wall_ns": 4677
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5087,
+          "voluntary_switches": 0,
+          "wall_ns": 4928
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4737,
+          "voluntary_switches": 0,
+          "wall_ns": 4547
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4737,
+          "voluntary_switches": 0,
+          "wall_ns": 4556
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5077,
+          "voluntary_switches": 0,
+          "wall_ns": 4887
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4898,
+          "voluntary_switches": 0,
+          "wall_ns": 4717
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4867,
+          "voluntary_switches": 0,
+          "wall_ns": 4706
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4657,
+          "voluntary_switches": 0,
+          "wall_ns": 4486
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4717,
+          "voluntary_switches": 0,
+          "wall_ns": 4537
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4637,
+          "voluntary_switches": 0,
+          "wall_ns": 4457
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4647,
+          "voluntary_switches": 0,
+          "wall_ns": 4476
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4767,
+          "voluntary_switches": 0,
+          "wall_ns": 4596
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4757,
+          "voluntary_switches": 0,
+          "wall_ns": 4577
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4647,
+          "voluntary_switches": 0,
+          "wall_ns": 4477
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5859,
+          "voluntary_switches": 0,
+          "wall_ns": 5659
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4767,
+          "voluntary_switches": 0,
+          "wall_ns": 4587
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4867,
+          "voluntary_switches": 0,
+          "wall_ns": 4606
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4657,
+          "voluntary_switches": 0,
+          "wall_ns": 4487
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4687,
+          "voluntary_switches": 0,
+          "wall_ns": 4497
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4547,
+          "voluntary_switches": 0,
+          "wall_ns": 4387
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4567,
+          "voluntary_switches": 0,
+          "wall_ns": 4397
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4697,
+          "voluntary_switches": 0,
+          "wall_ns": 4527
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4647,
+          "voluntary_switches": 0,
+          "wall_ns": 4467
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4727,
+          "voluntary_switches": 0,
+          "wall_ns": 4537
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 18527,
+          "voluntary_switches": 0,
+          "wall_ns": 18337
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4707,
+          "voluntary_switches": 0,
+          "wall_ns": 4537
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4587,
+          "voluntary_switches": 0,
+          "wall_ns": 4406
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4577,
+          "voluntary_switches": 0,
+          "wall_ns": 4397
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4757,
+          "voluntary_switches": 0,
+          "wall_ns": 4567
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4576,
+          "voluntary_switches": 0,
+          "wall_ns": 4397
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4557,
+          "voluntary_switches": 0,
+          "wall_ns": 4377
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4547,
+          "voluntary_switches": 0,
+          "wall_ns": 4366
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4747,
+          "voluntary_switches": 0,
+          "wall_ns": 4566
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4557,
+          "voluntary_switches": 0,
+          "wall_ns": 4376
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4707,
+          "voluntary_switches": 0,
+          "wall_ns": 4527
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4867,
+          "voluntary_switches": 0,
+          "wall_ns": 4677
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5128,
+          "voluntary_switches": 0,
+          "wall_ns": 4947
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4827,
+          "voluntary_switches": 0,
+          "wall_ns": 4657
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4747,
+          "voluntary_switches": 0,
+          "wall_ns": 4567
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4827,
+          "voluntary_switches": 0,
+          "wall_ns": 4646
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4707,
+          "voluntary_switches": 0,
+          "wall_ns": 4527
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4667,
+          "voluntary_switches": 0,
+          "wall_ns": 4476
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5418,
+          "voluntary_switches": 0,
+          "wall_ns": 5218
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4627,
+          "voluntary_switches": 0,
+          "wall_ns": 4446
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4667,
+          "voluntary_switches": 0,
+          "wall_ns": 4496
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5458,
+          "voluntary_switches": 0,
+          "wall_ns": 5278
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5178,
+          "voluntary_switches": 0,
+          "wall_ns": 4997
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4758,
+          "voluntary_switches": 0,
+          "wall_ns": 4587
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4707,
+          "voluntary_switches": 0,
+          "wall_ns": 4536
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4657,
+          "voluntary_switches": 0,
+          "wall_ns": 4476
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4807,
+          "voluntary_switches": 0,
+          "wall_ns": 4627
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4677,
+          "voluntary_switches": 0,
+          "wall_ns": 4497
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4647,
+          "voluntary_switches": 0,
+          "wall_ns": 4477
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4667,
+          "voluntary_switches": 0,
+          "wall_ns": 4487
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4647,
+          "voluntary_switches": 0,
+          "wall_ns": 4467
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 20561,
+          "voluntary_switches": 0,
+          "wall_ns": 4847
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4777,
+          "voluntary_switches": 0,
+          "wall_ns": 4597
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4807,
+          "voluntary_switches": 0,
+          "wall_ns": 4627
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4607,
+          "voluntary_switches": 0,
+          "wall_ns": 4436
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4647,
+          "voluntary_switches": 0,
+          "wall_ns": 4476
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5739,
+          "voluntary_switches": 0,
+          "wall_ns": 5548
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5338,
+          "voluntary_switches": 0,
+          "wall_ns": 5157
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4987,
+          "voluntary_switches": 0,
+          "wall_ns": 4817
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6239,
+          "voluntary_switches": 0,
+          "wall_ns": 6019
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6129,
+          "voluntary_switches": 0,
+          "wall_ns": 5909
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5358,
+          "voluntary_switches": 0,
+          "wall_ns": 5158
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4868,
+          "voluntary_switches": 0,
+          "wall_ns": 4697
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4507,
+          "voluntary_switches": 0,
+          "wall_ns": 4326
+        }
+      ],
+      "winner_public_serialization_samples": [
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 69714,
+          "voluntary_switches": 0,
+          "wall_ns": 69432
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 67831,
+          "voluntary_switches": 0,
+          "wall_ns": 67580
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 69303,
+          "voluntary_switches": 0,
+          "wall_ns": 68802
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 64697,
+          "voluntary_switches": 0,
+          "wall_ns": 64475
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62863,
+          "voluntary_switches": 0,
+          "wall_ns": 62632
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 78026,
+          "voluntary_switches": 0,
+          "wall_ns": 77725
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62723,
+          "voluntary_switches": 0,
+          "wall_ns": 62512
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62022,
+          "voluntary_switches": 0,
+          "wall_ns": 61832
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60610,
+          "voluntary_switches": 0,
+          "wall_ns": 60409
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61732,
+          "voluntary_switches": 0,
+          "wall_ns": 61511
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61021,
+          "voluntary_switches": 0,
+          "wall_ns": 60820
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61812,
+          "voluntary_switches": 0,
+          "wall_ns": 61581
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 86258,
+          "voluntary_switches": 0,
+          "wall_ns": 85616
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61041,
+          "voluntary_switches": 0,
+          "wall_ns": 60830
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60119,
+          "voluntary_switches": 0,
+          "wall_ns": 59869
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 78477,
+          "voluntary_switches": 0,
+          "wall_ns": 78215
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59910,
+          "voluntary_switches": 0,
+          "wall_ns": 59708
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61541,
+          "voluntary_switches": 0,
+          "wall_ns": 61341
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61161,
+          "voluntary_switches": 0,
+          "wall_ns": 60940
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58968,
+          "voluntary_switches": 0,
+          "wall_ns": 58757
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59248,
+          "voluntary_switches": 0,
+          "wall_ns": 59047
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60540,
+          "voluntary_switches": 0,
+          "wall_ns": 60349
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59919,
+          "voluntary_switches": 0,
+          "wall_ns": 59728
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58618,
+          "voluntary_switches": 0,
+          "wall_ns": 58426
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59638,
+          "voluntary_switches": 0,
+          "wall_ns": 59428
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 72788,
+          "voluntary_switches": 0,
+          "wall_ns": 72548
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60019,
+          "voluntary_switches": 0,
+          "wall_ns": 59808
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59528,
+          "voluntary_switches": 0,
+          "wall_ns": 59328
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60650,
+          "voluntary_switches": 0,
+          "wall_ns": 60429
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59258,
+          "voluntary_switches": 0,
+          "wall_ns": 59037
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59920,
+          "voluntary_switches": 0,
+          "wall_ns": 59618
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61121,
+          "voluntary_switches": 0,
+          "wall_ns": 60900
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61992,
+          "voluntary_switches": 0,
+          "wall_ns": 61791
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59559,
+          "voluntary_switches": 0,
+          "wall_ns": 59357
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59068,
+          "voluntary_switches": 0,
+          "wall_ns": 58857
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60820,
+          "voluntary_switches": 0,
+          "wall_ns": 60630
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61131,
+          "voluntary_switches": 0,
+          "wall_ns": 60900
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61882,
+          "voluntary_switches": 0,
+          "wall_ns": 61642
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59348,
+          "voluntary_switches": 0,
+          "wall_ns": 59147
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60420,
+          "voluntary_switches": 0,
+          "wall_ns": 60159
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59538,
+          "voluntary_switches": 0,
+          "wall_ns": 59318
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58808,
+          "voluntary_switches": 0,
+          "wall_ns": 58616
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58918,
+          "voluntary_switches": 0,
+          "wall_ns": 58727
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60430,
+          "voluntary_switches": 0,
+          "wall_ns": 60219
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60030,
+          "voluntary_switches": 0,
+          "wall_ns": 59818
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 75142,
+          "voluntary_switches": 0,
+          "wall_ns": 74911
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 73850,
+          "voluntary_switches": 0,
+          "wall_ns": 73599
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59008,
+          "voluntary_switches": 0,
+          "wall_ns": 58797
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 63925,
+          "voluntary_switches": 0,
+          "wall_ns": 63704
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 64616,
+          "voluntary_switches": 0,
+          "wall_ns": 64386
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61912,
+          "voluntary_switches": 0,
+          "wall_ns": 61721
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 64446,
+          "voluntary_switches": 0,
+          "wall_ns": 64205
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61311,
+          "voluntary_switches": 0,
+          "wall_ns": 61100
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 80890,
+          "voluntary_switches": 0,
+          "wall_ns": 80559
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 63585,
+          "voluntary_switches": 0,
+          "wall_ns": 63333
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62142,
+          "voluntary_switches": 0,
+          "wall_ns": 61942
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61922,
+          "voluntary_switches": 0,
+          "wall_ns": 61712
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 63184,
+          "voluntary_switches": 0,
+          "wall_ns": 62953
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61762,
+          "voluntary_switches": 0,
+          "wall_ns": 61581
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61482,
+          "voluntary_switches": 0,
+          "wall_ns": 61260
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62814,
+          "voluntary_switches": 0,
+          "wall_ns": 62602
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60380,
+          "voluntary_switches": 0,
+          "wall_ns": 60179
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60490,
+          "voluntary_switches": 0,
+          "wall_ns": 60299
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61401,
+          "voluntary_switches": 0,
+          "wall_ns": 61180
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62593,
+          "voluntary_switches": 0,
+          "wall_ns": 62362
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61051,
+          "voluntary_switches": 0,
+          "wall_ns": 60839
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 74050,
+          "voluntary_switches": 0,
+          "wall_ns": 73729
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60761,
+          "voluntary_switches": 0,
+          "wall_ns": 60549
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60319,
+          "voluntary_switches": 0,
+          "wall_ns": 60129
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60620,
+          "voluntary_switches": 0,
+          "wall_ns": 60390
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58988,
+          "voluntary_switches": 0,
+          "wall_ns": 58797
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60050,
+          "voluntary_switches": 0,
+          "wall_ns": 59818
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60660,
+          "voluntary_switches": 0,
+          "wall_ns": 60460
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59748,
+          "voluntary_switches": 0,
+          "wall_ns": 59558
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61882,
+          "voluntary_switches": 0,
+          "wall_ns": 61672
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59719,
+          "voluntary_switches": 0,
+          "wall_ns": 59507
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 71036,
+          "voluntary_switches": 0,
+          "wall_ns": 70844
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62163,
+          "voluntary_switches": 0,
+          "wall_ns": 61912
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59698,
+          "voluntary_switches": 0,
+          "wall_ns": 59508
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58627,
+          "voluntary_switches": 0,
+          "wall_ns": 58406
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61101,
+          "voluntary_switches": 0,
+          "wall_ns": 60870
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59819,
+          "voluntary_switches": 0,
+          "wall_ns": 59608
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57877,
+          "voluntary_switches": 0,
+          "wall_ns": 57665
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61041,
+          "voluntary_switches": 0,
+          "wall_ns": 60820
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58687,
+          "voluntary_switches": 0,
+          "wall_ns": 58466
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58567,
+          "voluntary_switches": 0,
+          "wall_ns": 58376
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60029,
+          "voluntary_switches": 0,
+          "wall_ns": 59809
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58267,
+          "voluntary_switches": 0,
+          "wall_ns": 58066
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59158,
+          "voluntary_switches": 0,
+          "wall_ns": 58947
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60440,
+          "voluntary_switches": 0,
+          "wall_ns": 60209
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56625,
+          "voluntary_switches": 0,
+          "wall_ns": 56413
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57255,
+          "voluntary_switches": 0,
+          "wall_ns": 57055
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60200,
+          "voluntary_switches": 0,
+          "wall_ns": 59969
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58967,
+          "voluntary_switches": 0,
+          "wall_ns": 58767
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 76224,
+          "voluntary_switches": 0,
+          "wall_ns": 76012
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 76303,
+          "voluntary_switches": 0,
+          "wall_ns": 76062
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60180,
+          "voluntary_switches": 0,
+          "wall_ns": 59929
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58146,
+          "voluntary_switches": 0,
+          "wall_ns": 57945
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60770,
+          "voluntary_switches": 0,
+          "wall_ns": 60549
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58817,
+          "voluntary_switches": 0,
+          "wall_ns": 58616
+        }
+      ]
+    },
+    {
+      "candidate_count": 28,
+      "candidate_paths": [
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "ratio": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 13,
+              "tangent_rounds": 0,
+              "time_ns": 2013
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3026
+            },
+            {
+              "activities": 3,
+              "path": "ratio",
+              "pivots": 0,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 3226
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7125
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7139
+            }
+          ],
+          "latency_ns": 7139,
+          "tk": 64,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "ratio": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3026
+            },
+            {
+              "activities": 3,
+              "path": "ratio",
+              "pivots": 0,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 4193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 8092
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 8106
+            }
+          ],
+          "latency_ns": 8106,
+          "tk": 128,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 13,
+              "tangent_rounds": 0,
+              "time_ns": 3011
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 5021
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 10,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 5418
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7277
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7291
+            }
+          ],
+          "latency_ns": 7291,
+          "tk": 64,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "signed_lp": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 5021
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 10,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 7336
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9195
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9209
+            }
+          ],
+          "latency_ns": 9209,
+          "tk": 128,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1499
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1998
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 4426
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 4526
+            }
+          ],
+          "latency_ns": 4526,
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1998
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 4193
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 4293
+            }
+          ],
+          "latency_ns": 4293,
+          "tk": 128,
+          "tm": 16,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1449
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1898
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7028
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7128
+            }
+          ],
+          "latency_ns": 7128,
+          "tk": 64,
+          "tm": 16,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1898
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6013
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6113
+            }
+          ],
+          "latency_ns": 6113,
+          "tk": 128,
+          "tm": 16,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1200
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1399
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9613
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9713
+            }
+          ],
+          "latency_ns": 9713,
+          "tk": 64,
+          "tm": 64,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1399
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6886
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6986
+            }
+          ],
+          "latency_ns": 6986,
+          "tk": 128,
+          "tm": 64,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 16920
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17048
+            }
+          ],
+          "latency_ns": 17048,
+          "tk": 64,
+          "tm": 64,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11260
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11388
+            }
+          ],
+          "latency_ns": 11388,
+          "tk": 128,
+          "tm": 64,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 16920
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17048
+            }
+          ],
+          "latency_ns": 17048,
+          "tk": 64,
+          "tm": 128,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11260
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11388
+            }
+          ],
+          "latency_ns": 11388,
+          "tk": 128,
+          "tm": 128,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1003
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1006
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 1309
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 1310
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 1312
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 39479
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 39784
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 39785
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 40090
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 40091
+            }
+          ],
+          "latency_ns": 40091,
+          "tk": 64,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1003
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1006
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 1263
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 1264
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 1266
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 33651
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 33910
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 33911
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 34169
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 34170
+            }
+          ],
+          "latency_ns": 34170,
+          "tk": 128,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1004
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1008
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 1597
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 1599
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 1601
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 75660
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 76252
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 76254
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 76845
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 76847
+            }
+          ],
+          "latency_ns": 76847,
+          "tk": 64,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1004
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1008
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 1505
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 1507
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 1509
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 64072
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 64573
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 64575
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 65073
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 65075
+            }
+          ],
+          "latency_ns": 65075,
+          "tk": 128,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1049
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1097
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 3175
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 3191
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 3224
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 13809
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 15936
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 15952
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 18063
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 18079
+            }
+          ],
+          "latency_ns": 18079,
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1049
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1097
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 2443
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 2460
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 2493
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9418
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 10812
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 10828
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 12207
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 12223
+            }
+          ],
+          "latency_ns": 12223,
+          "tk": 128,
+          "tm": 16,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1065
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1129
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 5043
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 5075
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 5108
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 24934
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 28912
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 28944
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 32891
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 32923
+            }
+          ],
+          "latency_ns": 32923,
+          "tk": 64,
+          "tm": 16,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1065
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1129
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 3579
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 3612
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 3645
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 16154
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 18668
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 18700
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 21183
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 21215
+            }
+          ],
+          "latency_ns": 21215,
+          "tk": 128,
+          "tm": 16,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 4
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 9148
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9212
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17104
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17168
+            }
+          ],
+          "latency_ns": 17168,
+          "tk": 64,
+          "tm": 64,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 4
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 6222
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6286
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11251
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11315
+            }
+          ],
+          "latency_ns": 11315,
+          "tk": 128,
+          "tm": 64,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 4
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1257
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1513
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 16069
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 16197
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 30882
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 31010
+            }
+          ],
+          "latency_ns": 31010,
+          "tk": 64,
+          "tm": 64,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 4
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1257
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1513
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 10217
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 10345
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 19178
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 19306
+            }
+          ],
+          "latency_ns": 19306,
+          "tk": 128,
+          "tm": 64,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17112
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17240
+            }
+          ],
+          "latency_ns": 17240,
+          "tk": 64,
+          "tm": 128,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11260
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11388
+            }
+          ],
+          "latency_ns": 11388,
+          "tk": 128,
+          "tm": 128,
+          "tn": 64
+        }
+      ],
+      "m": 128,
+      "task_identity_copy_samples": [
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 19729,
+          "voluntary_switches": 0,
+          "wall_ns": 18978
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 18047,
+          "voluntary_switches": 0,
+          "wall_ns": 17866
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16154,
+          "voluntary_switches": 0,
+          "wall_ns": 15953
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 18157,
+          "voluntary_switches": 0,
+          "wall_ns": 17966
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 37326,
+          "voluntary_switches": 0,
+          "wall_ns": 37115
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16114,
+          "voluntary_switches": 0,
+          "wall_ns": 15894
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 23034,
+          "voluntary_switches": 0,
+          "wall_ns": 22743
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15243,
+          "voluntary_switches": 0,
+          "wall_ns": 15043
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 17657,
+          "voluntary_switches": 0,
+          "wall_ns": 17456
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15473,
+          "voluntary_switches": 0,
+          "wall_ns": 15282
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15974,
+          "voluntary_switches": 0,
+          "wall_ns": 15784
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15513,
+          "voluntary_switches": 0,
+          "wall_ns": 15333
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 18368,
+          "voluntary_switches": 0,
+          "wall_ns": 18047
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15824,
+          "voluntary_switches": 0,
+          "wall_ns": 15653
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15703,
+          "voluntary_switches": 0,
+          "wall_ns": 15513
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 17085,
+          "voluntary_switches": 0,
+          "wall_ns": 16875
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15743,
+          "voluntary_switches": 0,
+          "wall_ns": 15543
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15513,
+          "voluntary_switches": 0,
+          "wall_ns": 15332
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15643,
+          "voluntary_switches": 0,
+          "wall_ns": 15453
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15553,
+          "voluntary_switches": 0,
+          "wall_ns": 15363
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15814,
+          "voluntary_switches": 0,
+          "wall_ns": 15623
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16665,
+          "voluntary_switches": 0,
+          "wall_ns": 16475
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16064,
+          "voluntary_switches": 0,
+          "wall_ns": 15863
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15863,
+          "voluntary_switches": 0,
+          "wall_ns": 15673
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15543,
+          "voluntary_switches": 0,
+          "wall_ns": 15362
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15423,
+          "voluntary_switches": 0,
+          "wall_ns": 15223
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 44446,
+          "voluntary_switches": 0,
+          "wall_ns": 44215
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15824,
+          "voluntary_switches": 0,
+          "wall_ns": 15633
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15764,
+          "voluntary_switches": 0,
+          "wall_ns": 15523
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 17516,
+          "voluntary_switches": 0,
+          "wall_ns": 17275
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16775,
+          "voluntary_switches": 0,
+          "wall_ns": 16575
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16574,
+          "voluntary_switches": 0,
+          "wall_ns": 16394
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15423,
+          "voluntary_switches": 0,
+          "wall_ns": 15242
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15723,
+          "voluntary_switches": 0,
+          "wall_ns": 15543
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 29875,
+          "voluntary_switches": 0,
+          "wall_ns": 29634
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 94871,
+          "voluntary_switches": 0,
+          "wall_ns": 94450
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 17456,
+          "voluntary_switches": 0,
+          "wall_ns": 17185
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15914,
+          "voluntary_switches": 0,
+          "wall_ns": 15723
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 17907,
+          "voluntary_switches": 0,
+          "wall_ns": 17716
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16785,
+          "voluntary_switches": 0,
+          "wall_ns": 16604
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15903,
+          "voluntary_switches": 0,
+          "wall_ns": 15713
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15953,
+          "voluntary_switches": 0,
+          "wall_ns": 15753
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15243,
+          "voluntary_switches": 0,
+          "wall_ns": 15062
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 25218,
+          "voluntary_switches": 0,
+          "wall_ns": 24676
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16765,
+          "voluntary_switches": 0,
+          "wall_ns": 16554
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16535,
+          "voluntary_switches": 0,
+          "wall_ns": 16344
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15934,
+          "voluntary_switches": 0,
+          "wall_ns": 15733
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15563,
+          "voluntary_switches": 0,
+          "wall_ns": 15383
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15663,
+          "voluntary_switches": 0,
+          "wall_ns": 15453
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15713,
+          "voluntary_switches": 0,
+          "wall_ns": 15363
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 22334,
+          "voluntary_switches": 0,
+          "wall_ns": 21582
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16635,
+          "voluntary_switches": 0,
+          "wall_ns": 16435
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16955,
+          "voluntary_switches": 0,
+          "wall_ns": 16765
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16144,
+          "voluntary_switches": 0,
+          "wall_ns": 15953
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16034,
+          "voluntary_switches": 0,
+          "wall_ns": 15854
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16324,
+          "voluntary_switches": 0,
+          "wall_ns": 16084
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15863,
+          "voluntary_switches": 0,
+          "wall_ns": 15663
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 22754,
+          "voluntary_switches": 0,
+          "wall_ns": 22443
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 17586,
+          "voluntary_switches": 0,
+          "wall_ns": 17366
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15984,
+          "voluntary_switches": 0,
+          "wall_ns": 15793
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 18778,
+          "voluntary_switches": 0,
+          "wall_ns": 18487
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16215,
+          "voluntary_switches": 0,
+          "wall_ns": 16024
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16704,
+          "voluntary_switches": 0,
+          "wall_ns": 16515
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15793,
+          "voluntary_switches": 0,
+          "wall_ns": 15594
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15754,
+          "voluntary_switches": 0,
+          "wall_ns": 15543
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16815,
+          "voluntary_switches": 0,
+          "wall_ns": 16624
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16925,
+          "voluntary_switches": 0,
+          "wall_ns": 16744
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16634,
+          "voluntary_switches": 0,
+          "wall_ns": 16434
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16164,
+          "voluntary_switches": 0,
+          "wall_ns": 15973
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16004,
+          "voluntary_switches": 0,
+          "wall_ns": 15693
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15674,
+          "voluntary_switches": 0,
+          "wall_ns": 15443
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16084,
+          "voluntary_switches": 0,
+          "wall_ns": 15893
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15573,
+          "voluntary_switches": 0,
+          "wall_ns": 15383
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15563,
+          "voluntary_switches": 0,
+          "wall_ns": 15362
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16875,
+          "voluntary_switches": 0,
+          "wall_ns": 16674
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16034,
+          "voluntary_switches": 0,
+          "wall_ns": 15823
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16174,
+          "voluntary_switches": 0,
+          "wall_ns": 15993
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 17286,
+          "voluntary_switches": 0,
+          "wall_ns": 17075
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16775,
+          "voluntary_switches": 0,
+          "wall_ns": 16585
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16154,
+          "voluntary_switches": 0,
+          "wall_ns": 15964
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16164,
+          "voluntary_switches": 0,
+          "wall_ns": 15954
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16695,
+          "voluntary_switches": 0,
+          "wall_ns": 16464
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16705,
+          "voluntary_switches": 0,
+          "wall_ns": 16515
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15934,
+          "voluntary_switches": 0,
+          "wall_ns": 15743
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16174,
+          "voluntary_switches": 0,
+          "wall_ns": 15984
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16314,
+          "voluntary_switches": 0,
+          "wall_ns": 16114
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16144,
+          "voluntary_switches": 0,
+          "wall_ns": 15954
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16976,
+          "voluntary_switches": 0,
+          "wall_ns": 16635
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16685,
+          "voluntary_switches": 0,
+          "wall_ns": 16494
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15793,
+          "voluntary_switches": 0,
+          "wall_ns": 15603
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15933,
+          "voluntary_switches": 0,
+          "wall_ns": 15743
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15293,
+          "voluntary_switches": 0,
+          "wall_ns": 15102
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16174,
+          "voluntary_switches": 0,
+          "wall_ns": 15984
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16114,
+          "voluntary_switches": 0,
+          "wall_ns": 15914
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15833,
+          "voluntary_switches": 0,
+          "wall_ns": 15643
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15724,
+          "voluntary_switches": 0,
+          "wall_ns": 15533
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16285,
+          "voluntary_switches": 0,
+          "wall_ns": 16094
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15933,
+          "voluntary_switches": 0,
+          "wall_ns": 15753
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16505,
+          "voluntary_switches": 0,
+          "wall_ns": 16284
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16234,
+          "voluntary_switches": 0,
+          "wall_ns": 16044
+        }
+      ],
+      "winner_public_serialization_samples": [
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 64475,
+          "voluntary_switches": 0,
+          "wall_ns": 64114
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 64055,
+          "voluntary_switches": 0,
+          "wall_ns": 63844
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60991,
+          "voluntary_switches": 0,
+          "wall_ns": 60790
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58887,
+          "voluntary_switches": 0,
+          "wall_ns": 58706
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59278,
+          "voluntary_switches": 0,
+          "wall_ns": 58967
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58196,
+          "voluntary_switches": 0,
+          "wall_ns": 57985
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 63936,
+          "voluntary_switches": 0,
+          "wall_ns": 63604
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58818,
+          "voluntary_switches": 0,
+          "wall_ns": 58617
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57676,
+          "voluntary_switches": 0,
+          "wall_ns": 57465
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56915,
+          "voluntary_switches": 0,
+          "wall_ns": 56663
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56193,
+          "voluntary_switches": 0,
+          "wall_ns": 55963
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55312,
+          "voluntary_switches": 0,
+          "wall_ns": 55101
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55933,
+          "voluntary_switches": 0,
+          "wall_ns": 55712
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55202,
+          "voluntary_switches": 0,
+          "wall_ns": 55011
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54051,
+          "voluntary_switches": 0,
+          "wall_ns": 53860
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55954,
+          "voluntary_switches": 0,
+          "wall_ns": 55762
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55703,
+          "voluntary_switches": 0,
+          "wall_ns": 55522
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54952,
+          "voluntary_switches": 0,
+          "wall_ns": 54751
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55572,
+          "voluntary_switches": 0,
+          "wall_ns": 55341
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55352,
+          "voluntary_switches": 0,
+          "wall_ns": 55121
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54621,
+          "voluntary_switches": 0,
+          "wall_ns": 54400
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54691,
+          "voluntary_switches": 0,
+          "wall_ns": 54500
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53429,
+          "voluntary_switches": 0,
+          "wall_ns": 53248
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55102,
+          "voluntary_switches": 0,
+          "wall_ns": 54901
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54421,
+          "voluntary_switches": 0,
+          "wall_ns": 54221
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53439,
+          "voluntary_switches": 0,
+          "wall_ns": 53249
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54731,
+          "voluntary_switches": 0,
+          "wall_ns": 54530
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53870,
+          "voluntary_switches": 0,
+          "wall_ns": 53679
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 115892,
+          "voluntary_switches": 0,
+          "wall_ns": 115351
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56564,
+          "voluntary_switches": 0,
+          "wall_ns": 56333
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55303,
+          "voluntary_switches": 0,
+          "wall_ns": 55111
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54471,
+          "voluntary_switches": 0,
+          "wall_ns": 54230
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 52608,
+          "voluntary_switches": 0,
+          "wall_ns": 52377
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 52969,
+          "voluntary_switches": 0,
+          "wall_ns": 52768
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53901,
+          "voluntary_switches": 0,
+          "wall_ns": 53679
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 95041,
+          "voluntary_switches": 0,
+          "wall_ns": 94800
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57335,
+          "voluntary_switches": 0,
+          "wall_ns": 57095
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 118547,
+          "voluntary_switches": 0,
+          "wall_ns": 118154
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56324,
+          "voluntary_switches": 0,
+          "wall_ns": 56083
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55883,
+          "voluntary_switches": 0,
+          "wall_ns": 55653
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56143,
+          "voluntary_switches": 0,
+          "wall_ns": 55922
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55553,
+          "voluntary_switches": 0,
+          "wall_ns": 55332
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 52979,
+          "voluntary_switches": 0,
+          "wall_ns": 52768
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60891,
+          "voluntary_switches": 0,
+          "wall_ns": 60609
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55753,
+          "voluntary_switches": 0,
+          "wall_ns": 55563
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 67881,
+          "voluntary_switches": 0,
+          "wall_ns": 67599
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54641,
+          "voluntary_switches": 0,
+          "wall_ns": 54421
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53770,
+          "voluntary_switches": 0,
+          "wall_ns": 53589
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54862,
+          "voluntary_switches": 0,
+          "wall_ns": 54650
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53710,
+          "voluntary_switches": 0,
+          "wall_ns": 53479
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61181,
+          "voluntary_switches": 0,
+          "wall_ns": 60930
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54652,
+          "voluntary_switches": 0,
+          "wall_ns": 54471
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53891,
+          "voluntary_switches": 0,
+          "wall_ns": 53709
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53971,
+          "voluntary_switches": 0,
+          "wall_ns": 53779
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56274,
+          "voluntary_switches": 0,
+          "wall_ns": 56073
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54922,
+          "voluntary_switches": 0,
+          "wall_ns": 54671
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54711,
+          "voluntary_switches": 0,
+          "wall_ns": 54491
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55703,
+          "voluntary_switches": 0,
+          "wall_ns": 55472
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54170,
+          "voluntary_switches": 0,
+          "wall_ns": 53869
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54160,
+          "voluntary_switches": 0,
+          "wall_ns": 53919
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58297,
+          "voluntary_switches": 0,
+          "wall_ns": 58066
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54821,
+          "voluntary_switches": 0,
+          "wall_ns": 54601
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54241,
+          "voluntary_switches": 0,
+          "wall_ns": 54019
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54891,
+          "voluntary_switches": 0,
+          "wall_ns": 54661
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 80289,
+          "voluntary_switches": 0,
+          "wall_ns": 80008
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59148,
+          "voluntary_switches": 0,
+          "wall_ns": 58937
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57095,
+          "voluntary_switches": 0,
+          "wall_ns": 56874
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56955,
+          "voluntary_switches": 0,
+          "wall_ns": 56764
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56665,
+          "voluntary_switches": 0,
+          "wall_ns": 56443
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56174,
+          "voluntary_switches": 0,
+          "wall_ns": 55982
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55733,
+          "voluntary_switches": 0,
+          "wall_ns": 55542
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55422,
+          "voluntary_switches": 0,
+          "wall_ns": 55121
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55983,
+          "voluntary_switches": 0,
+          "wall_ns": 55782
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55372,
+          "voluntary_switches": 0,
+          "wall_ns": 55162
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54902,
+          "voluntary_switches": 0,
+          "wall_ns": 54711
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55352,
+          "voluntary_switches": 0,
+          "wall_ns": 55161
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54922,
+          "voluntary_switches": 0,
+          "wall_ns": 54721
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 134921,
+          "voluntary_switches": 0,
+          "wall_ns": 134559
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56144,
+          "voluntary_switches": 0,
+          "wall_ns": 55913
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55072,
+          "voluntary_switches": 0,
+          "wall_ns": 54841
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 80179,
+          "voluntary_switches": 0,
+          "wall_ns": 79868
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56454,
+          "voluntary_switches": 0,
+          "wall_ns": 56203
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54791,
+          "voluntary_switches": 0,
+          "wall_ns": 54561
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53981,
+          "voluntary_switches": 0,
+          "wall_ns": 53760
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54060,
+          "voluntary_switches": 0,
+          "wall_ns": 53830
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54100,
+          "voluntary_switches": 0,
+          "wall_ns": 53870
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54211,
+          "voluntary_switches": 0,
+          "wall_ns": 53990
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53419,
+          "voluntary_switches": 0,
+          "wall_ns": 53159
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53770,
+          "voluntary_switches": 0,
+          "wall_ns": 53539
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54761,
+          "voluntary_switches": 0,
+          "wall_ns": 54530
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54281,
+          "voluntary_switches": 0,
+          "wall_ns": 54040
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55532,
+          "voluntary_switches": 0,
+          "wall_ns": 55312
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53599,
+          "voluntary_switches": 0,
+          "wall_ns": 53378
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 52739,
+          "voluntary_switches": 0,
+          "wall_ns": 52518
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53159,
+          "voluntary_switches": 0,
+          "wall_ns": 52928
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53770,
+          "voluntary_switches": 0,
+          "wall_ns": 53409
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 53790,
+          "voluntary_switches": 0,
+          "wall_ns": 53599
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 67440,
+          "voluntary_switches": 0,
+          "wall_ns": 67219
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54491,
+          "voluntary_switches": 0,
+          "wall_ns": 54250
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54200,
+          "voluntary_switches": 0,
+          "wall_ns": 53960
+        }
+      ]
+    }
+  ],
+  "scope": "candidate path and JSON allocation diagnostics only, no budget acceptance"
+}

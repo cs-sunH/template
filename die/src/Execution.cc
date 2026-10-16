@@ -631,39 +631,50 @@ struct LpResult {
   std::vector<double> dual_rows;
 };
 
+// The solver has at most 97 columns and a bounded constraint set. One flat
+// allocation keeps the original row/column indexing and pivot operation order
+// while avoiding an allocation for every tableau row.
+class SimplexTableau {
+ public:
+  SimplexTableau(std::size_t rows,std::size_t columns)
+      : columns_(columns),cells_(rows*columns,0.0) {}
+  double* operator[](std::size_t row) {return cells_.data()+row*columns_;}
+  const double* operator[](std::size_t row) const {return cells_.data()+row*columns_;}
+ private:
+  std::size_t columns_;
+  std::vector<double> cells_;
+};
+
 class DenseSimplex {
  public:
-  DenseSimplex(const std::vector<std::vector<double>>& input_a,
-               const std::vector<double>& input_b,
+  DenseSimplex(const std::vector<detail::RatioRow>& input,
                const std::vector<double>& objective,
                std::size_t& pivot_count)
-      : m_(static_cast<int>(input_b.size())),
+      : m_(static_cast<int>(input.size())),
         n_(static_cast<int>(objective.size())),
         basis_(m_),
         nonbasis_(n_ + 1),
-        tableau_(m_ + 2, std::vector<double>(n_ + 2, 0.0)),
+        tableau_(m_ + 2, n_ + 2),
         pivot_count_(pivot_count) {
-    if (input_a.size() != input_b.size()) {
-      throw std::invalid_argument("numerical_failure: LP row count mismatch");
-    }
     for (int i = 0; i < m_; ++i) {
-      if (input_a[static_cast<std::size_t>(i)].size() != static_cast<std::size_t>(n_)) {
+      const auto& row=input[static_cast<std::size_t>(i)];
+      if (row.a.size() != static_cast<std::size_t>(n_)) {
         throw std::invalid_argument("numerical_failure: LP column count mismatch");
       }
       double scale = 0.0;
-      for (double value : input_a[static_cast<std::size_t>(i)]) {
+      for (double value : row.a) {
         if (!std::isfinite(value)) throw std::invalid_argument("numerical_failure: nonfinite LP coefficient");
         scale = std::max(scale, std::abs(value));
       }
-      if (!std::isfinite(input_b[static_cast<std::size_t>(i)])) {
+      if (!std::isfinite(row.b)) {
         throw std::invalid_argument("numerical_failure: nonfinite LP bound");
       }
       if (scale == 0.0) scale = 1.0;
       for (int j = 0; j < n_; ++j) {
-        tableau_[i][j] = input_a[static_cast<std::size_t>(i)][static_cast<std::size_t>(j)] / scale;
+        tableau_[i][j] = row.a[static_cast<std::size_t>(j)] / scale;
       }
       tableau_[i][n_] = -1.0;
-      tableau_[i][n_ + 1] = input_b[static_cast<std::size_t>(i)] / scale;
+      tableau_[i][n_ + 1] = row.b / scale;
       if (!std::isfinite(tableau_[i][n_ + 1])) {
         throw std::invalid_argument("numerical_failure: LP row scaling overflow");
       }
@@ -755,7 +766,7 @@ class DenseSimplex {
   int n_ = 0;
   std::vector<int> basis_;
   std::vector<int> nonbasis_;
-  std::vector<std::vector<double>> tableau_;
+  SimplexTableau tableau_;
   std::size_t& pivot_count_;
   bool budget_exceeded_ = false;
 
@@ -1456,15 +1467,7 @@ void Runtime::allocate() {
   };
   auto solve_lp = [&](const std::vector<Constraint>& rows,
                       const std::vector<double>& objective) -> LpResult {
-    std::vector<std::vector<double>> a;
-    std::vector<double> b;
-    a.reserve(rows.size());
-    b.reserve(rows.size());
-    for (const Constraint& row : rows) {
-      a.push_back(row.a);
-      b.push_back(row.b);
-    }
-    DenseSimplex solver(a, b, objective, pivot_count);
+    DenseSimplex solver(rows, objective, pivot_count);
     auto result=solver.solve();
     last_arbitration_.pivots=pivot_count;
     return result;

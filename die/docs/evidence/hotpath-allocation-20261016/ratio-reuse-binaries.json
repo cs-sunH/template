@@ -1,0 +1,36 @@
+{
+  "source_git_head": "3cf579f1aaddd7d12ae6aad8124b126ee1b54ed6",
+  "scope": "source-confirmed checkpoint before contiguous simplex representation; rebuild from Git in another account",
+  "files": [
+    {
+      "original": "/workspace/template/work/build-die-continue/libcoarse_die.a",
+      "retained": "/workspace/template/work/hotpath-allocation/ratio-reuse-binaries/libcoarse_die.a",
+      "sha256": "af906f9272edb9cc13be1d60cb046493203a66f4e3147575f42e41fee95f561f"
+    },
+    {
+      "original": "/workspace/template/work/build-die-continue/lib/libcoarse_die_cabi.so",
+      "retained": "/workspace/template/work/hotpath-allocation/ratio-reuse-binaries/libcoarse_die_cabi.so",
+      "sha256": "8834372c2ad845acb4ec4f95f8bfa1cc4ef04acde3d93f0d3e08bf9ea1c89729"
+    },
+    {
+      "original": "/workspace/template/work/build-die-continue/coarse_service_curve_benchmark",
+      "retained": "/workspace/template/work/hotpath-allocation/ratio-reuse-binaries/coarse_service_curve_benchmark",
+      "sha256": "3ce6471eea8c5b79c36936a3baf9db9c545187569129f19053c3c76ee2cd58ab"
+    },
+    {
+      "original": "/workspace/template/work/build-die-continue/coarse_norm_oracle_driver",
+      "retained": "/workspace/template/work/hotpath-allocation/ratio-reuse-binaries/coarse_norm_oracle_driver",
+      "sha256": "c82116c04ef4f94ec9391285ed1dbf8b2bc1f125929ea99d3eee80ad6f20225d"
+    },
+    {
+      "original": "/workspace/template/work/hotpath-allocation/phase-profile-ratio-reuse",
+      "retained": "/workspace/template/work/hotpath-allocation/ratio-reuse-binaries/phase-profile-ratio-reuse",
+      "sha256": "5724878bf2c81abdf2f9021a31953abf9f076cf8416febb0bd03fb3e969a4097"
+    },
+    {
+      "original": "/workspace/template/work/hotpath-allocation/candidate-paths",
+      "retained": "/workspace/template/work/hotpath-allocation/ratio-reuse-binaries/candidate-paths",
+      "sha256": "bf23ba134a86d1b439caf09044917bd6acd780fbc625544d86a620f3e60e0766"
+    }
+  ]
+}

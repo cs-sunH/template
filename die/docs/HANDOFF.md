@@ -1,10 +1,17 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch实核HEAD/main为 `32157ae69b05adbb4b8e50af3d4a3003994451a5`，其push/fetch/ls-remote已实核main和工作分支同SHA。包含本页的Git提交为比率仲裁临时内存复用检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch实核HEAD/main为 `3cf579f1aaddd7d12ae6aad8124b126ee1b54ed6`，其push/fetch/ls-remote已实核main和工作分支同SHA。包含本页的Git提交为连续simplex表检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
 
 ## Current Status
 
-### 当前有效检查点：比率仲裁循环临时内存复用，速度仍failed
+### 当前有效检查点：simplex连续矩阵、全部候选轨迹等价，尾延迟仍failed
+
+- 真正的candidate路径诊断发现128³的28候选有30次signed-LP仲裁，主要是保留legacy语义的WR，不为速度放开ratio入口。task identity批量复制约16μs、winner公开序列化约55μs，非主要成本。新`Execution.cc`用单个连续double数组保留tableau原行列索引，直接读原RatioRow，去掉a矩阵/b向量中转深拷贝；缩放、有限性/列数检查、目标、基/非基编号、枢轴/舍入/预算和物理公平全部不变。行数由同一行结构决定，不再有不可表示的split-vector row-count mismatch；无新算法/模型状态。
+- 一致公共Release **48/48通过，19.44s**，实际全部生产/头/测试源匹配。36候选（8+28）的完整完成时间、仲裁路径、枢轴及切向轮次逐字段全等；11真实完整公开对象与Git3cf保存库全等。新Norm32/96再实际重跑，128份raw/report/stderr/log同原保留内容，当前源/ELF/命令另存。因此模型精度scope不变：Norm完成96目标/首输出160目标、原busy54failed；不冒充真实硬件校准。
+- 100样本诊断128³候选Runtime分配 **10393→7293**，完整compile **19598→16498**，各少3100次/124000B请求；thread CPU中位数候选约0.827→0.662ms、完整1.656→1.470ms。计数器有开销且环境跨次可变，只是定位/工程证据，不代替预算。当前正常30样本仍 **failed**：cold128³ P95 **4.635381ms**（中位1.668726ms；保留5.0373/4.635381/3.329561ms全部慢点），J32更新 **79.227μs**（J1/J8=13.059/25.548μs）；其它本次计入预算的查询/编译通过，不挑最快/不改门槛，尾部取舍未解决。
+- 当前CABI SHA `c7d5ac67b1468c6a7a5d0a158685501e481d7b8976ccf388763283c8b2eaf9e7`，当前总表 `evidence/hotpath-allocation-20261016/flat-simplex-checkpoint-summary.json`。旧ratio总表不覆盖；collector默认flat，历史ratio明确stage并checkout。正式canonical24五份仍23160c…7e9b逐文件吻合，未publisher，新公共模型五仓业务/CPU not_run。R>1窗口/长行/busy/其它模板/target raw缺口不变，TX8/目标先验不动，持续自主开发。
+
+### 已合入3cf579f：比率仲裁循环临时内存复用，速度仍failed
 
 - 独立诊断驱动拆分真实compile并计global C++ new/thread CPU/wall；100样本中128³候选Runtime约占46%，完整19634次分配、候选Runtime10429，生成7460、硬件复制438。计数器增开销，只作定位，不代替预算测量。初次诊断编译/缺loader环境失败与not_run保留；recorder现捕获不存在命令的OSError为127并记launch_error，旧raw不改。
 - 仅生产RatioAllocation.hh复用closure/probe/forced向量、constraints深拷贝的既有capacity并按原assign/clear重置，physical rows/edges按已有上限reserve。运算/循环/约束顺序、owner Q/alpha、PRIVATE、近似拒绝/LP fallback和严格舍入认证均不变，没有跨调用新状态。J1分配81→69，J8/J32 **88→76**，每次少496B请求；128³完整19634→19598。诊断wall无一致变快，不把少分配宣传成性能通过。
@@ -357,10 +364,10 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本页的main/HEAD，先读hotpath-allocation README/checkpoint-summary及norm-row-accounting总表，再看consumer-availability的preview-complete-final-summary和冻结matrix。当前模型公共48已过、11公开对象/96 Norm实际新源重跑全等；Python148、旧SDK五仓10项、显式硬件移除、每Core槽位、九描述elementwise曲线、双raw memo均已完成，不重复历史待办。
+1. fetch核实包含本页的main/HEAD，先读hotpath-allocation README/flat-simplex-checkpoint-summary及norm-row-accounting总表，再看consumer-availability的preview-complete-final-summary和冻结matrix。当前模型公共48已过、36候选轨迹/11公开对象/96 Norm新源重跑全等；比率临时复用与连续simplex已完成，不重复。Python148、旧SDK五仓10项、显式硬件移除、每Core槽位、九描述elementwise曲线、双raw memo均已完成，不机械执行历史待办。
 2. 隔离五仓consumer/两ABI构建、83配置及5个真实R3拒绝probe已完成，三个fixture修正/旧SDK当前10项兼容已核；不重跑或重复publisher。最新总表preview-complete-final-summary，原标准四仓R4失败和JOINT初始1项失败保留。正式SDK仍canonical24。后续公共生产模型变化时，再用新freeze/label验受影响的ABI和真实负载，不复用旧ELF声称当前源通过；不可减少layers/passes获得业务成功。
 3. Norm每Core首次读取/完整参数fit/行槽/转换及固定首中尾已落实，不恢复add_vector旧Norm路线；当前Norm完成/首输出scope达10%，busy54场景failed，长行两遍HBM仍未实现，R>1即零launch也诊断不可用。正式接入前的主要依赖仍R>1真实非服务窗口和region物化barrier；先研究能保持资源竞争/无Q等待且符合固定复杂度的表示，不前置R×wait、不作资源/PRIVATE替身、不逐K/tile/wave/repeat或周期/Program，不能只删status或guard。长行两遍、WR/其它向量/Attention/FFN和OS二阶/odd-row按真实收益推进。
-4. 最新速度整套failed：GEMM cold和J8/J32仍超；热查询本次所测通过但此前cost27.25μs失败保留。临时向量复用已减12次update分配，不重复做；继续诊断候选Runtime路径分布、JSON审计/候选构建等主要成本，必要时只延迟loser诊断或复用可靠轻量字段，不能跳过结构/硬件校验、改变软件候选或公平。不要假设malloc数少必然尾延迟低；物理模型/校准不为CPU噪声调整。elementwise长16/48完成全10%仍24busy失败/首输出1项11.379%未接受，原17仍27联合失败；未受影响范围沿原证据且不声称新重跑。新变更或具体concern才重测，不挑最好样本。
+4. 最新速度仍failed：cold128³4.635381ms、J32 79.227μs，旧cold2.149/2.550ms、J8 134.268μs、hot cost27.25μs失败保留。已确认并优化LP矩阵复制/逐行分配，不重复做；候选生成诊断约0.52ms/7460次分配仍大。可继续评估只为胜者物化完整诊断，复用同一builder，不另写时间公式；必须对每个候选保留u128→u64/EqWork溢出、硬件/结构/资源/credit/描述预算及status类型验证，保留候选顺序和rank tie，不能因延迟JSON省略正确性检查。公开enumerator/最终Plan、ABI/快照/handles应原样兼容并真实等值验证。物理模型/校准不为CPU噪声调整；其余精度失败按原scope保留，不挑最好样本。
 5. 模型稳定后才正式publisher；再做五仓完整业务、双ABI/配置与端到端CPU预算。旧SDK通过不冒充新SDK通过，R3拒绝通过不冒充R3支持；JOINT provider/live/sh30仍受保护。target raw/heldout与当前Runtime同合同TX8硬件入口仍缺，不造profile或重拟目标效率。
 6. 有意义检查点保存全部有效源/日志，安全提交并核实GitHub；持续自主开发，不按提交或阶段停止。
 
