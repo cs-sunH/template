@@ -1,0 +1,43 @@
+{
+  "status": "prepared_only_not_compiled_or_run_not_adopted",
+  "observed_head": "9fc4a6a88c03f8e4ca6ce318968f152d18732a9a",
+  "baseline": {
+    "Execution.cc": "3c9d58a0ed8c6b64450b86cac1059b3a1dba7b604caf67b31f00034c673e3043",
+    "Mapping.cc": "a5208b17d7f017c62f691a4d0196c46b6cea4b1fa62a2e353880e68708996289",
+    "PackingAllocation.hh": "6fca2771bd406db3c12a0fffa6dddbc08392d6f4647368250a5547899316c75f"
+  },
+  "candidate": {
+    "Execution.cc": "1cc1879fedf9a006a31b9e6145edb34db8d5e99c9a84459e54bff1cf634ea4ba",
+    "Mapping.cc": "b8c104bba98abf6ce8276495d018e397d4352bce7aedcbcd5c30b1fdc90372b2",
+    "PackingAllocation.hh": "dbae885b8c21f6c46037fe46f2c6745222076a3c4bd605aeeb38e86bf9887711"
+  },
+  "patch_sha256": {
+    "01-stable-ref-compaction.patch": "50e51143502dc0f1d9684fb24c8c83cd02af097caa2ed817fbc2b50dc00c4a74",
+    "02-gemm-trial-audit.patch": "301612f26e1e5bd7b27331aa5320578dde5941c120e7558310d1a325cfc9bf97",
+    "03-packing-scratch-reuse.patch": "b5db9169b43291f3a97972b3177e87081158606e7d5aff94cbfc086841967857"
+  },
+  "production_still_matches_baseline": {
+    "Execution.cc": true,
+    "Mapping.cc": true,
+    "PackingAllocation.hh": true
+  },
+  "current_production_still_matches_baseline": {
+    "Execution.cc": true,
+    "Mapping.cc": true,
+    "PackingAllocation.hh": true
+  },
+  "patch_applicability_check": {
+    "01-stable-ref-compaction.patch": {
+      "return_code": 0,
+      "stderr": ""
+    },
+    "02-gemm-trial-audit.patch": {
+      "return_code": 0,
+      "stderr": ""
+    },
+    "03-packing-scratch-reuse.patch": {
+      "return_code": 0,
+      "stderr": ""
+    }
+  }
+}

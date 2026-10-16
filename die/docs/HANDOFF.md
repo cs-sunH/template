@@ -25,6 +25,15 @@
 - FACE Python首次85pass/1fail：唯一遗漏是工程点已从旧硬件变为显式10x10后仍钉旧6197ns。保存真实七项ABI分解得到6191.5343845817139ns，独立Decimal ceil=6192，与scheduler相同；只修测试期望/注释，复制独立完整FACE消费者、仅该测试文件不同，使用本次fresh库后 **86/86零skip**。初始失败和完整来源均保留；不是重拟时间模型。另FACE-LRU80/80、WSCLLM64/64、JOINT92/92；WSCLLM-LRU实际62pass/1skip（仓内未实现可选oracle客户端），严格零skip工具记failed而非抹去缺口。
 - 证据总表 `evidence/core-resume-20261016/integration-public-checkpoint.json`；五仓真实C++/native消费者正构建，不是完整业务/CPU通过。性能候选仅在work/perf-audit准备，生产模型未改。当前仍未publisher、未集成main、工程NOT ACCEPTED，继续源码/数值和接入依赖。
 
+### 本次继续：实际消费者失败、存储优化对照与 Runtime red
+
+- 五仓隔离native已完成FACE及FACE-LRU的fresh真实构建，两仓消费者各 **3/4通过、1失败、0skip**。Lifecycle保留原emitter的FFN、2层×2pass=R4，真实parser及来源断言通过后被完整预测guard拒绝；其后的workspace/cancel等分支尚未执行，不记通过。完整FACE证据在 `evidence/core-resume-20261016/native-face/`；执行连接中断时WSCLLM配置已通过、build未完成，继续工具接续，不把部分日志当通过。
+- WSLRU未实现的optional客户端skip仍保留；新工具 `analysis/core-resume-20261016/probe_wslru_existing_producer.py` 使用其真实producer和现存FACE协议客户端做**测试桥接**：原五op/TP4/rank1/span/2层×2pass不改，legacy R4五项往返成功、coarse R1五项成功、原coarse R4五项按guard拒绝。不是WSLRU生产客户端或完整业务验收，全部身份/初次依赖失败/正式重跑见 `evidence/core-resume-20261016/wslru-producer/`。
+- 三个仅减少临时存储分配的独立候选仍未进生产。fresh完整构建与最终 **51/51**、1092候选完整物化、两硬件配置×28公开输入及8条真实竞争/取消/容量/快照轨迹逐字段全等，含cache字节与错误。隔离lab首次漏五份消费者policy头而50/51，已补原文件并完整重验；原失败保留，未改测试或policy。
+- 候选的两份无并行构建正常30样本预算仍 **failed**，两次cgroup新增throttle均0。example cold128³ P95 **3.911060ms**、OS J8/J32 **372.908/101.309us**；工程点cold/热查询及更新多项超门槛，完整raw与失败列表在 `evidence/core-resume-20261016/perf-candidate/`，不重采选最好、不声称优化已验收。继续分配计数和thread-CPU诊断区分机制，墙钟门槛保持不变。
+- 新对照发现工程点8执行split-owner的fork因已发布rate与canonical重算约5ULP差而拒绝，基线和候选**同一错误**且父world不变。该基线缺陷未修、不是snapshot通过；具体wire/error均存于api原始对照。
+- 归档tiny-credit断言逐byte不改，用本次fresh公共库重新编译后实际red，半秒credit-unit缩放边界仍失败；同步三活动缩减真实执行pass，不能冒充已复现原多epochNorm死锁。Runtime最小修复在独立work研究，不直接套归档sub-epsilon末补丁，不声称长行、busy、R>1或数值已解决。生产公共代码仍为保存迁移版本，正式SDK和main状态仍同上。
+
 ## 此前已保存交接记录（保留原始验证范围）
 
 ## 当前有效交接：唯一Core迁移已安全保存，未激活（2026-10-16）

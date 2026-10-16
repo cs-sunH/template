@@ -1,0 +1,141 @@
+{
+  "status": "completed_FACE_native_consumer_matrix_failed",
+  "scope": "read-only review of completed FACE evidence/source; no test/build/performance rerun; no other matrix phase completion inferred",
+  "completed_phases": [
+    {
+      "phase": "configure",
+      "status": "passed",
+      "return_code": 0,
+      "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+      "runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+      "original_log_sha256": "fb4f274b45ed33101fd223aa904beee819850f53bfd0d3314522e05bdf284383"
+    },
+    {
+      "phase": "build",
+      "status": "passed",
+      "return_code": 0,
+      "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+      "runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+      "original_log_sha256": "e36233291a99055abc2e7664879523e39aee51d6c5de36efd3a4c7292f0655da"
+    },
+    {
+      "phase": "consumers",
+      "status": "failed",
+      "return_code": 8,
+      "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+      "runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+      "original_log_sha256": "51a075949c022a90581290410382688352a9000d375ffdf0276c054d6832406b"
+    }
+  ],
+  "ctest": {
+    "tests_ran": 4,
+    "passed": 3,
+    "failed": 1,
+    "skipped": 0,
+    "return_code": 8,
+    "failed_test": "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+    "failure": "uncaught std::invalid_argument: prediction_not_available: prediction_status marks body-only timing; a complete latency prediction is required"
+  },
+  "cause_review": {
+    "classification": "current repeated-region R4 availability guard; actual integration remains failed",
+    "observed_before_abort": [
+      "Case J fixture provenance and original emitted FFN identity assertion passed",
+      "Case J real GraphBatch parser preserved raw FFN JSON and diagnostic DieSpec assertion passed"
+    ],
+    "source_call_chain": [
+      "die_execution_lifecycle_test.cc Case J first workload.issue_dep_free_nodes()",
+      "Workload::issue_dep_free_nodes() calls DieModelAdapter::prepare_coarse_plan before try_acquire_workspace",
+      "prepare_coarse_plan compiles actual original task then calls coarse_die::require_complete_prediction",
+      "Mapping region_ready_overheads: instances=layer_instances*weight_passes; complete requires instances==1; incomplete sets prediction_status=not_available",
+      "Prediction.hh require_complete_prediction throws the exact observed error when prediction_status=not_available"
+    ],
+    "original_task": {
+      "op_kind": "ffn_region",
+      "layer_count": 2,
+      "weight_passes": 2,
+      "R": 4,
+      "TP": 2,
+      "spans": 2,
+      "fixture_payload_unchanged": true
+    },
+    "not_reached": [
+      "Case J capacity admission/headroom, workspace lease, completion/cancellation assertions after the first issue call",
+      "later lifecycle cases, including explicit R1 unavailable-marker boundary Case Q"
+    ],
+    "limitations": "No stack debugger or test rerun was performed; exact observed guard message, original R4 fixture and source call ordering establish the guard path. Do not claim subsequent workspace/cancellation assertions passed or that a R1 replacement certifies this R4 task."
+  },
+  "matching_frozen_sources_sha256": {
+    "astra-sim-face/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc": "3dc340137fe40e33e2f23871e570bf17939dbd5ef1af17e39b6ae8b1f805dd14",
+    "astra-sim-face/astra-sim/workload/execution_driven/tests/testdata/face_emitted_ffn_region.json": "7b940d8285debf6aae38c78c91e04f8597ba7044d970eb931feef75a234d2473",
+    "astra-sim-face/astra-sim/workload/Workload.cc": "2581e7abd378fea6d4da56782ca3f47d5e0196bac64b9a2c5d653db4e47df480",
+    "astra-sim-face/astra-sim/workload/DieModelAdapter.cc": "bc12b2c22079b33a0e8914e01e6dfdaaf3c6e65002d10837d87fae0f91537d16",
+    "astra-sim-face/extern/die_model/coarse/include/coarse_die/Prediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "astra-sim-face/extern/die_model/coarse/src/Mapping.cc": "a5208b17d7f017c62f691a4d0196c46b6cea4b1fa62a2e353880e68708996289",
+    "astra-sim-face/extern/die_model/coarse/src/Compiler.cc": "64ebea9e2fb5c17de30fdea1197867dd721b415679f7b9d457d09148bf3e9ab2"
+  },
+  "current_test_executable_sha256_no_ELF_copied": {
+    "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face/frontend/AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest": "f3b0a01b356fd83ebb011c95655df1e215d265d063126b7dfc73832abeec1106",
+    "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": "11cb39516a721dcd7f8d6d0e4ab51f1557d5e4a393736f299a3b15934267753f",
+    "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": "951350ddfa936816a3f24cfc7d904fd21a6591e0d3143e3f8bde68d8b5638f43",
+    "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": "b8495e91043cd796dd8ab98a1e9f9f085f22585e50cc514f59b4b98f86d3a4ea"
+  },
+  "files": [
+    {
+      "source": "work/core-resume-sdk-validation/native/astra-sim-face-native-configure/identity.json",
+      "saved": "native-face/configure/identity.json",
+      "sha256": "bfd7b2bab2291494b5a612104edcb581d20ba9d74a7f3fef80eb76c376d2c199",
+      "bytes": 3096
+    },
+    {
+      "source": "work/core-resume-sdk-validation/native/astra-sim-face-native-configure/run.log",
+      "saved": "native-face/configure/run.log",
+      "sha256": "fb4f274b45ed33101fd223aa904beee819850f53bfd0d3314522e05bdf284383",
+      "bytes": 1011
+    },
+    {
+      "source": "work/core-resume-sdk-validation/native/astra-sim-face-native-build/identity.json",
+      "saved": "native-face/build/identity.json",
+      "sha256": "f2cd47d8f3453b0c792a69828a28e3823f87f72186820809952ad72d898b122a",
+      "bytes": 3483
+    },
+    {
+      "source": "work/core-resume-sdk-validation/native/astra-sim-face-native-build/run.log",
+      "saved": "native-face/build/run.log",
+      "sha256": "e36233291a99055abc2e7664879523e39aee51d6c5de36efd3a4c7292f0655da",
+      "bytes": 53799
+    },
+    {
+      "source": "work/core-resume-sdk-validation/native/astra-sim-face-native-consumers/identity.json",
+      "saved": "native-face/consumers/identity.json",
+      "sha256": "9d32509e695dd08bcedcce357aa08f388dd71205b97f434ca9a73cdc2d563489",
+      "bytes": 3493
+    },
+    {
+      "source": "work/core-resume-sdk-validation/native/astra-sim-face-native-consumers/run.log",
+      "saved": "native-face/consumers/run.log",
+      "sha256": "51a075949c022a90581290410382688352a9000d375ffdf0276c054d6832406b",
+      "bytes": 1534
+    },
+    {
+      "source": "work/core-resume-sdk/build-native/astra-sim-face/Testing/Temporary/LastTest.log",
+      "saved": "native-face/CTest-LastTest.log",
+      "sha256": "cdff27f13973e10b2ec849a130fb9484a3fdb6c5b70a4199adbc96c3a8d401d5",
+      "bytes": 7317
+    },
+    {
+      "source": "work/core-resume-sdk/build-native/astra-sim-face/Testing/Temporary/LastTestsFailed.log",
+      "saved": "native-face/CTest-LastTestsFailed.log",
+      "sha256": "0a21377d0517060920d0a10a2e3e394a0b190a74253a7f79ae0464a2533d4a9e",
+      "bytes": 66
+    },
+    {
+      "source": "work/core-resume-sdk/stage-root/astra-sim-face/astra-sim/workload/execution_driven/tests/testdata/face_emitted_ffn_region.json",
+      "saved": "native-face/face_emitted_ffn_region.json",
+      "sha256": "7b940d8285debf6aae38c78c91e04f8597ba7044d970eb931feef75a234d2473",
+      "bytes": 2652
+    }
+  ]
+}

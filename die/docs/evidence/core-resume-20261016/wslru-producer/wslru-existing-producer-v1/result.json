@@ -1,0 +1,46 @@
+{
+  "scope": "test-only existing producer/protocol/client bridge; not a new production WSLRU client, full Online, timing accuracy or CPU-budget acceptance",
+  "command": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "-B",
+    "/workspace/template/work/core-resume/work/integration-audit/probe_wslru_existing_producer.py",
+    "--snapshot",
+    "work/core-resume-sdk",
+    "--output",
+    "work/integration-audit/wslru-existing-producer-v1"
+  ],
+  "cwd": "/workspace/template/work/core-resume",
+  "started_unix": 1792152294.9401248,
+  "probe_sha256": "040f08988b488c2f12c7ac972dffceb043f758f53e34bd6eeb61204c87069e60",
+  "status": "failed",
+  "checks": {
+    "four_relevant_sources_match_frozen_snapshot": true,
+    "fresh_wslru_abi_build_was_successful": true,
+    "both_libraries_match_fresh_wslru_build_identity": true,
+    "coarse_release_matches_build_identity": true,
+    "original_optional_client_still_absent": true
+  },
+  "identity": {
+    "snapshot_manifest": "/workspace/template/work/core-resume/work/core-resume-sdk/manifest.json",
+    "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+    "public_release_source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+    "sources_sha256": {
+      "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py": "1b301106833303138c8d94100e747309f8a3153cdeca808c96d7aaed6bdfaca4",
+      "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_die_model_adapter.py": "5a442374e16ec9ac552153e8ef8f9b3296dcbb2f4308c88551d98beec3c6e89f",
+      "astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py": "1080cc7a589dbc9599b512f696be8b5442d894e26a7d89774364c1775c8198ea",
+      "astra-sim-wscllm-LRU/extern/die_model/coarse/configs/example_hardware.json": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a"
+    },
+    "libraries_sha256": {
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm-LRU/lib/libdie_model_cabi.so": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+      "/workspace/template/work/core-resume/work/core-resume-sdk/build-abi/astra-sim-wscllm-LRU/lib/libcoarse_die_cabi.so": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6"
+    },
+    "fresh_abi_build_identity": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/abi/astra-sim-wscllm-LRU-abi-build/identity.json",
+    "fresh_abi_build_identity_sha256": "a71e5632c3b55df9ecce2663803fd26bd7bed823ae7d1ed86ff7439808dc32fa",
+    "actual_producer_path": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py",
+    "borrowed_existing_protocol_client_path": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-face/sh_test_mesh/workload/llama2_7b_inference/online/die_model_oracle.py",
+    "coarse_config_path": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm-LRU/extern/die_model/coarse/configs/example_hardware.json"
+  },
+  "exception": "ModuleNotFoundError(\"No module named 'google'\")",
+  "traceback": "Traceback (most recent call last):\n  File \"/workspace/template/work/core-resume/work/integration-audit/probe_wslru_existing_producer.py\", line 84, in main\n    fixture = load_module('wslru_original_adapter_fixture', fixture_path)\n              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/template/work/core-resume/work/integration-audit/probe_wslru_existing_producer.py\", line 29, in load_module\n    spec.loader.exec_module(module)\n  File \"<frozen importlib._bootstrap_external>\", line 999, in exec_module\n  File \"<frozen importlib._bootstrap>\", line 488, in _call_with_frames_removed\n  File \"/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/test_die_model_adapter.py\", line 31, in <module>\n    from online.die_model_adapter import (  # noqa: E402\n  File \"/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py\", line 75, in <module>\n    from generate_trace import shard_extent  # noqa: E402\n    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_trace.py\", line 29, in <module>\n    from extern.graph_frontend.chakra.schema.protobuf.et_def_pb2 import (  # noqa: E402\n  File \"/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm-LRU/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py\", line 5, in <module>\n    from google.protobuf.internal import builder as _builder\nModuleNotFoundError: No module named 'google'\n",
+  "finished_unix": 1792152295.333168
+}

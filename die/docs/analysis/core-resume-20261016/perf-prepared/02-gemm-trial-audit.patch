@@ -1,0 +1,93 @@
+--- a/die/src/Mapping.cc
++++ b/die/src/Mapping.cc
+@@ -893,7 +893,8 @@
+ void append_os_service_curve(Plan& plan, const Hardware& hw, const Topology& topo,
+     const gemm_os_geometry::GemmOSGeometry& geometry,
+     const gemm_tail_budget::Input& budget, Flow load, Flow compute, Flow store,
+-    u64 executions, u64 active, const std::string& name) {
++    u64 executions, u64 active, const std::string& name,
++    bool ranking_only = false) {
+   const u64 inputs=as_u64(mul128(mul128(geometry.output_tile_count(),
+       geometry.k_tiles(),"OS K consumption units"),executions,"OS K consumption units"),
+       "OS K consumption units");
+@@ -995,22 +996,37 @@
+   append("_store_last",{}, {},final_store,{{0,static_cast<double>(drain_units)}},last.active_cores);
+   const auto descriptions=service_description_count(plan)-description_begin;
+   if(descriptions>8)fail("mapping_invariant: OS curve exceeds primitive description budget");
+-  plan.summary["service_curves"].push_back({
+-      {"model","analytical_cumulative_os_v3"},{"epoch_begin",begin},
+-      {"epoch_count",plan.epochs.size()-begin},
+-      {"description_count",descriptions},{"description_budget",descriptions<=5 ? 5 : 8},
+-      {"input_unit","one_output_tile_K_consumption"},{"output_unit","one_output_tile"},
+-      {"input_units",inputs},{"output_units",outputs},
+-      {"input_capacity_units",2*active},{"output_capacity_units",2*active},
+-      {"first_load_units",first_units},{"first_output_input_units",first_compute_input_units},
+-      {"first_output_input_bytes",as_u64(first_cohort.hbm_read_bytes,"OS first output input bytes")},
+-      {"final_drain_units",drain_units},
+-      {"first_output_compute_progress",std::min(1.0,first_output_progress)},
+-      {"first_output_compute_work_s",as_double(first_compute,"OS first output work")},
+-      {"first_output_release","first_cohort_compute_terminal"},
+-      {"first_output_epoch",begin+1},
+-      {"final_output_release","compute_terminal_before_final_drain"},
+-      {"readiness_approximation","aggregate_piecewise_affine_not_discrete_tile_readiness"}});
++  if (ranking_only) {
++    // Preserve the full audit's checked conversions in their original order.
++    // The actual curves, physical work and all endpoint/budget checks above
++    // are unchanged. Runtime validates those actual activities independently.
++    (void)as_u64(first_cohort.hbm_read_bytes,"OS first output input bytes");
++    (void)as_double(first_compute,"OS first output work");
++    // finalize_summary reads model; apply_region_ready_overheads reads and
++    // updates the first primitive's epoch/description fields. The winner is
++    // rebuilt through this same helper with the complete audit below.
++    plan.summary["service_curves"].push_back({
++        {"model","analytical_cumulative_os_v3"},{"epoch_begin",begin},
++        {"epoch_count",plan.epochs.size()-begin},
++        {"description_count",descriptions},{"description_budget",descriptions<=5 ? 5 : 8}});
++  } else {
++    plan.summary["service_curves"].push_back({
++        {"model","analytical_cumulative_os_v3"},{"epoch_begin",begin},
++        {"epoch_count",plan.epochs.size()-begin},
++        {"description_count",descriptions},{"description_budget",descriptions<=5 ? 5 : 8},
++        {"input_unit","one_output_tile_K_consumption"},{"output_unit","one_output_tile"},
++        {"input_units",inputs},{"output_units",outputs},
++        {"input_capacity_units",2*active},{"output_capacity_units",2*active},
++        {"first_load_units",first_units},{"first_output_input_units",first_compute_input_units},
++        {"first_output_input_bytes",as_u64(first_cohort.hbm_read_bytes,"OS first output input bytes")},
++        {"final_drain_units",drain_units},
++        {"first_output_compute_progress",std::min(1.0,first_output_progress)},
++        {"first_output_compute_work_s",as_double(first_compute,"OS first output work")},
++        {"first_output_release","first_cohort_compute_terminal"},
++        {"first_output_epoch",begin+1},
++        {"final_output_release","compute_terminal_before_final_drain"},
++        {"readiness_approximation","aggregate_piecewise_affine_not_discrete_tile_readiness"}});
++  }
+ }
+ 
+ std::vector<u64> options(u64 dim, std::initializer_list<u64> choices) {
+@@ -1077,7 +1093,7 @@
+                     const std::string& ad, const std::string& wd,
+                     const std::string& od, u64 layers, u64 passes,
+                     const GemmChoice& choice, const std::string& label,
+-                    bool count_source = true) {
++                    bool count_source = true, bool ranking_only = false) {
+   if (!M || !N || !K) fail("unsupported_shape: GEMM M/N/K must be positive");
+   const u64 tm = choice.tm, tn = choice.tn, tk = choice.tk;
+   const u64 tM = ceildiv(M, tm), tN = ceildiv(N, tn), tK = ceildiv(K, tk);
+@@ -1250,7 +1266,7 @@
+   if (os_geometry) {
+     append_os_service_curve(plan,hw,topo,*os_geometry,budget_input,
+         std::move(load),std::move(compute),std::move(store),
+-        as_u64(executions,"OS executions"),active,label);
++        as_u64(executions,"OS executions"),active,label,ranking_only);
+     m.assumptions.push_back("analytical_cumulative_os_v3_fixed_bounded_description_budget");
+   } else {
+     append_epoch(plan,hw,std::move(load),std::move(compute),std::move(store),active,
+@@ -1888,7 +1904,7 @@
+   auto p=new_plan(hw,task);Metrics m;
+   m.assumptions={"engineering_assumption","bounded_tile_candidates","exact_per_tile_INT4_tail_packing"};
+   add_gemm_epoch(*p,m,hw,topo,M,N,K,ad,wd,od,layers,passes,choice,
+-      choice.wr ? "weight_resident_v2" : "output_stationary_v2");
++      choice.wr ? "weight_resident_v2" : "output_stationary_v2",true,ranking_only);
+   finalize_summary(*p,m,hw,ranking_only);
+   p->summary["template_id"]="gemm_"+m.dataflow;
+   p->summary["dataflow_id"]=m.dataflow;

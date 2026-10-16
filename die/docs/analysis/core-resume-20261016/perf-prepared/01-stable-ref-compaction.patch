@@ -1,0 +1,102 @@
+--- a/die/src/Execution.cc
++++ b/die/src/Execution.cc
+@@ -1234,27 +1234,29 @@
+     // sort. Store block ranges instead of allocating two maps and one vector
+     // for each owner on every arbitration update.
+     struct Block { std::size_t begin, end; unsigned boundary = 0; bool split_owner=false; };
+-    std::vector<Block> blocks;
+-    blocks.reserve(refs.size());
++    // refs.size() was checked against 96 above. These call-local arrays keep
++    // the original block and representative order without heap allocation.
++    std::array<Block,96> blocks{};
++    std::size_t block_count = 0;
+     for (std::size_t begin = 0; begin < refs.size();) {
+       std::size_t end = begin + 1;
+       while (end < refs.size() && refs[end].handle == refs[begin].handle) ++end;
+-      blocks.push_back({begin, end});
++      blocks[block_count++] = {begin, end};
+       begin = end;
+     }
+     // Detect repeated owners in bounded index storage. Sorting indices leaves
+     // the original block/representative order intact, including every tie.
+     // refs.size() was checked against 96 before constructing these blocks.
+     std::array<std::size_t,96> owner_order;
+-    std::iota(owner_order.begin(),owner_order.begin()+blocks.size(),std::size_t{0});
++    std::iota(owner_order.begin(),owner_order.begin()+block_count,std::size_t{0});
+     const auto fair_owner=[](const Ref& ref) {
+       const auto& o=ref.execution->owner;
+       return std::tie(o.node_id,o.execution_id,o.generation);
+     };
+-    std::sort(owner_order.begin(),owner_order.begin()+blocks.size(),[&](auto a,auto b) {
++    std::sort(owner_order.begin(),owner_order.begin()+block_count,[&](auto a,auto b) {
+       return fair_owner(refs[blocks[a].begin])<fair_owner(refs[blocks[b].begin]);
+     });
+-    for(std::size_t i=1;i<blocks.size();++i) {
++    for(std::size_t i=1;i<block_count;++i) {
+       auto& previous=blocks[owner_order[i-1]];auto& current=blocks[owner_order[i]];
+       if(same_fair_owner(refs[previous.begin],refs[current.begin]))
+         previous.split_owner=current.split_owner=true;
+@@ -1270,8 +1272,8 @@
+       }
+       return mask;
+     };
+-    for (auto& block : blocks)
+-      block.boundary = boundary_mask(*refs[block.begin].execution);
++    for (std::size_t i = 0; i < block_count; ++i)
++      blocks[i].boundary = boundary_mask(*refs[blocks[i].begin].execution);
+     const auto equivalent_blocks = [&](const Block& lhs, const Block& rhs) {
+       if (lhs.end - lhs.begin != rhs.end - rhs.begin ||
+           lhs.boundary != rhs.boundary) return false;
+@@ -1290,34 +1292,40 @@
+       }
+       return true;
+     };
+-    std::vector<std::size_t> representatives;
+-    std::vector<bool> merged(refs.size(), false);
+-    for (std::size_t index = 0; index < blocks.size(); ++index) {
++    std::array<std::size_t,96> representatives{};
++    std::size_t representative_count = 0;
++    std::array<bool,96> merged{};
++    for (std::size_t index = 0; index < block_count; ++index) {
+       const Block& block = blocks[index];
+       if(block.split_owner)continue;
+-      const auto match = std::find_if(representatives.begin(), representatives.end(),
++      const auto representatives_end = representatives.begin() + representative_count;
++      const auto match = std::find_if(representatives.begin(), representatives_end,
+           [&](std::size_t candidate) {
+             return equivalent_blocks(blocks[candidate], block);
+           });
+-      if (match == representatives.end()) {
+-        representatives.push_back(index);
++      if (match == representatives_end) {
++        representatives[representative_count++] = index;
+         continue;
+       }
+       const Block& representative_block = blocks[*match];
+       for (std::size_t i = 0; i < block.end - block.begin; ++i) {
+         Ref& representative = refs[representative_block.begin + i];
+         if (representative.mirrors.empty())
+-          representative.mirrors.reserve(blocks.size() - 1);
++          representative.mirrors.reserve(block_count - 1);
+         ++representative.multiplicity;
+         representative.mirrors.push_back(refs[block.begin + i].live);
+         merged[block.begin + i] = true;
+       }
+     }
+-    std::vector<Ref> reduced;
+-    reduced.reserve(refs.size());
+-    for (std::size_t i = 0; i < refs.size(); ++i)
+-      if (!merged[i]) reduced.push_back(std::move(refs[i]));
+-    refs = std::move(reduced);
++    // Stable compaction keeps every surviving representative and its mirrors
++    // in the original order. All block-index reads are complete at this point.
++    std::size_t retained = 0;
++    for (std::size_t i = 0; i < refs.size(); ++i) {
++      if (merged[i]) continue;
++      if (retained != i) refs[retained] = std::move(refs[i]);
++      ++retained;
++    }
++    refs.resize(retained);
+   }
+   const auto publish = [](Ref& ref, double rate, double alpha) {
+     ref.live->rate = rate;
