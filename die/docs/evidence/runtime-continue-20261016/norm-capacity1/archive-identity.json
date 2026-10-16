@@ -1,0 +1,11 @@
+{
+  "scope": "current-Core synthetic red and incomplete mixed relink causal experiment; no adoption",
+  "file_count": 122,
+  "checkpoint_manifest_sha256": "aeae4e0aa007b3cfc370c22aa0ff799b7ad7722aefa5619b3dbef0961056665d",
+  "archive_sha256": "d64d3c6dbe00db5b36031ba3690e1f5f899669c12deb64c09cf0458a4e38b429",
+  "archive_bytes": 305305,
+  "archiver_sha256": "10f2187ad1d7ddf9f3ad982cb56de1c336ff10280eeaaddbe28ffe38879a6659",
+  "all_files_hash_verified": true,
+  "roundtrip_byte_equal": true,
+  "production_runtime_source": "unchanged A+B; this candidate is not adopted"
+}

@@ -1,6 +1,6 @@
 # Codex Cloud 开发交接状态
 
-## 当前持续开发：恢复 A+B 并开始全新联合验证（2026-10-16）
+## 当前持续开发：A+B联合功能验证完成，继续Norm与五仓（2026-10-16）
 
 用户已重新授权持续自主开发，下方停止记录仅为历史。已 fetch 全部远端 heads，核实 `main@94d197820ad92d7671913e353e1977b0d54a99e2` 与恢复分支 `codex/die-core-resume-20261016@2750e2413b030524a56466da5e8c9b02a9d029c2`。二者实际树仅差 Execution.cc、私有声明和 tiny 测试三个文件；全部远端 heads 均为新分支祖先。新分支 `codex/die-runtime-continue-20261016` 普通 merge 保留 main，恢复 checkpoint `18de6809ca8134d3e4503b5fc89f6fe8922ed439`，没有 reset/force 或恢复旧架构。
 
@@ -8,7 +8,7 @@
 - Important Decisions：保持 A 的 subunit-only 容差收紧和 B 的一次固定冗余行 witness、原 one-ULP/严格切向/物理守卫和总256 pivot预算。当前修复不解决 capacity1 Norm、subepsilon、R>1 ready 或原busy误差。
 - Next Step / Files：A+B上述联合功能验证已执行。严格矩阵78/84，六split原exact-Fraction舍入断言仍failed但全部续跑完成；独立精确物理/PRIVATE/credit/tangent与机器账本无违规，原失败不改写。两配置正常30样本均failed（example cold128³ 6.728323ms、异构J8 100.779us；工程cold128³ 2.343980ms、OS J8 69.194us），新增throttle均0。继续完整七epoch Norm数值及五仓实际消费者。新可移植 recorder 在 `analysis/runtime-continue-20261016/`，公共文本结果已归档 `evidence/runtime-continue-20261016/public-ab/`，62项原始text/压缩映射，不含ELF；后续未归档部分不能视作跨账号可恢复。
 - Tests / Blocking Issues：新环境 GCC14.2，CMake3.31.10在work/tool-env；Protobuf3.21.12编译/开发依赖已在work隔离解包（URL/hash留存），Python6.33.5在tool venv，未替代真实消费者。正式五仓SDK已读实核均canonical24/digest23160c…7e9b，未publisher；先前22/4 native与性能失败保持原身份，当前组合隔离SDK33文件/digest25c513…1013、4493冻结文件已准备，真实五仓ABI/Python正在执行，尚未验收。独立当前Core完整7epoch在fresh main与A+B均精确复现capacity1 Norm无next-event/负output credit；不是tiny修复覆盖域，隔离候选继续，工程 **NOT ACCEPTED**。
-- Handoff Notes：这是持续开发状态，不是停止交接或发布/验收声明。先将有价值检查点提交推送并核实远端，再继续后续依赖。
+- Handoff Notes：A+B公共检查点与全部原始log已提交推送 `codex/die-runtime-continue-20261016@f476c801cf446b3db38f7ca3cadbeec81109bbdb` 并ls-remote实核，62项证据映射均hash正确且已tracked。main仍94d1978、未激活A+B；无PR/SDK发布。当前Core Norm真实red及interior-only未采用因果实验已保存[122项无二进制归档](analysis/runtime-continue-20261016/NORM-CAPACITY1.md)，首实验使7epoch完成但split末尾回归仍failed且dyadic正余量仍阻塞，不能采用。五仓FACE/FACE-LRU当前ABI、配置和Python86/80零skip已通过，其余正在执行；不是停止交接或工程验收。
 
 
 
