@@ -1,0 +1,292 @@
+--- a/die/src/Execution.cc
++++ b/die/src/Execution.cc
+@@ -30,6 +30,27 @@
+ constexpr std::size_t kMaxPlanEpochs = 64;
+ constexpr std::uint64_t kMaxAdvanceEvents = 1000000;
+ 
++// Curved credit coordinates are dimensionless model units. For a positive
++// subunit buffer, the old absolute floor of one unit can exceed its entire
++// capacity and erase substantial physical service. Narrow only those guards
++// relative to the declared capacity; retain every original ordinary/legacy
++// tolerance expression and never enlarge a finite-buffer tolerance.
++template<class T>
++T credit_boundary_tolerance(const Epoch& epoch, std::size_t buffer, T original) {
++  const double capacity = epoch.credit_capacity[buffer];
++  if (!(capacity > 0.0 && capacity < 1.0)) return original;
++  const bool curved = std::any_of(epoch.activities.begin(), epoch.activities.end(),
++      [](const Activity& activity) { return !activity.credit_curve.empty(); });
++  if (!curved) return original;
++  return static_cast<T>(kCreditTolerance) * static_cast<T>(capacity);
++}
++
++template<class T>
++T credit_boundary_tolerance(const Execution& execution, std::size_t buffer, T original) {
++  if (execution.epoch >= execution.plan->epochs.size()) return original;
++  return credit_boundary_tolerance(execution.plan->epochs[execution.epoch], buffer, original);
++}
++
+ // Curved Plans retain sub-binary64 progress so large analytic unit counts
+ // do not amplify rounding into finite-buffer violations. Legacy progress is
+ // still rounded to binary64 by integrate(), preserving its wire/trajectory.
+@@ -309,7 +330,8 @@
+       const double capacity = epoch.credit_capacity[buffer];
+       const double initial = epoch.credit_initial[buffer];
+       if (!std::isfinite(capacity) || capacity < 0.0 || !std::isfinite(initial) ||
+-          initial < 0.0 || initial > capacity + kCreditTolerance) {
++          initial < 0.0 || initial > capacity +
++          credit_boundary_tolerance(epoch,buffer,kCreditTolerance)) {
+         throw std::invalid_argument("invalid_plan: invalid initial credit or capacity");
+       }
+     }
+@@ -1041,8 +1063,9 @@
+           const auto slope = curve_derivative(live);
+           bool credit_blocked = false;
+           for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+-            const long double tolerance = static_cast<long double>(kCreditTolerance) *
+-                std::max(1.0L, static_cast<long double>(epoch.credit_capacity[buffer]));
++            const long double tolerance = credit_boundary_tolerance(epoch,buffer,
++                static_cast<long double>(kCreditTolerance) *
++                std::max(1.0L, static_cast<long double>(epoch.credit_capacity[buffer])));
+             if (std::abs(static_cast<long double>(live.definition.credit_delta[buffer]) -
+                          contribution[buffer]) > tolerance)
+               snapped_residual = false;
+@@ -1078,8 +1101,8 @@
+         }
+         for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+           const long double capacity = epoch.credit_capacity[buffer];
+-          const long double tolerance = static_cast<long double>(kCreditTolerance) *
+-              std::max(1.0L, capacity);
++          const long double tolerance = credit_boundary_tolerance(epoch,buffer,
++              static_cast<long double>(kCreditTolerance) * std::max(1.0L, capacity));
+           if (!std::isfinite(projected[buffer]) || projected[buffer] < -tolerance ||
+               projected[buffer] > capacity + tolerance) return false;
+         }
+@@ -1159,7 +1182,13 @@
+   }
+ }
+ 
+-void Runtime::allocate() {
++void Runtime::allocate() { allocate(false, nullptr); }
++
++// Import-only witness: add at most one fixed set of componentwise nonpositive
++// initial-boundary rows. They are tautologies for nonnegative progress rates.
++// Normal runtime arbitration retains the original row set and arithmetic.
++void Runtime::allocate(bool redundant_initial_boundaries,
++                       std::size_t* import_pivots) {
+   last_arbitration_={};
+   struct Ref {
+     Execution* execution = nullptr;
+@@ -1214,6 +1243,15 @@
+   if (refs.size() > 96) {
+     for (Ref& ref : refs) ref.live->rate = 0.0;
+     throw std::runtime_error("numerical_failure: active activity count exceeds 3x32 solver bound");
++  }
++  if (redundant_initial_boundaries) {
++    std::set<std::tuple<std::uint64_t,std::uint64_t,std::uint64_t>> owners;
++    for (const auto& ref : refs) {
++      const auto& owner = ref.execution->owner;
++      owners.emplace(owner.node_id, owner.execution_id, owner.generation);
++    }
++    if (owners.size() > 32)
++      throw std::invalid_argument("invalid_snapshot: redundant-row witness exceeds 32 fair owners");
+   }
+   // Complete, exactly identical owner blocks can share LP variables. The
+   // convex feasible set is invariant under their permutation, so weighted
+@@ -1262,8 +1300,8 @@
+     const auto boundary_mask = [](const Execution& execution) {
+       unsigned mask = 0;
+       for (std::size_t b = 0; b < 2; ++b) {
+-        const double tolerance = kCreditTolerance *
+-            std::max(1.0, execution.credit_capacity[b]);
++        const double tolerance = credit_boundary_tolerance(execution,b,
++            kCreditTolerance * std::max(1.0, execution.credit_capacity[b]));
+         if (execution.credit[b] <= tolerance) mask |= 1u << (2 * b);
+         if (execution.credit[b] >= execution.credit_capacity[b] - tolerance)
+           mask |= 2u << (2 * b);
+@@ -1342,7 +1380,8 @@
+           capacities_[r]/activity.work[r]/static_cast<double>(ref.multiplicity));
+     if(activity.private_time_s>0.0)rate=std::min(rate,1.0/activity.private_time_s);
+     for(std::size_t b=0;b<2;++b) {
+-      const double tolerance=kCreditTolerance*std::max(1.0,ref.execution->credit_capacity[b]);
++      const double tolerance=credit_boundary_tolerance(*ref.execution,b,
++          kCreditTolerance*std::max(1.0,ref.execution->credit_capacity[b]));
+       const double credit=ref.execution->credit[b];
+       if((credit<=tolerance&&ref.credit_slope[b]<0.0)||
+          (credit>=ref.execution->credit_capacity[b]-tolerance&&ref.credit_slope[b]>0.0))
+@@ -1393,15 +1432,33 @@
+ 
+   std::map<std::uint64_t, Execution*> active_executions;
+   for (const Ref& ref : refs) active_executions.emplace(ref.handle, ref.execution);
++  std::size_t redundant_rows = 0;
+   for (const auto& [execution_handle, execution] : active_executions) {
+     (void)execution_handle;
+     for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+       const double credit = execution->credit[buffer];
+       const double capacity = execution->credit_capacity[buffer];
+-      const double tolerance = kCreditTolerance * std::max(1.0, capacity);
++      const double tolerance = credit_boundary_tolerance(*execution,buffer,
++          kCreditTolerance * std::max(1.0, capacity));
+       const bool at_low = credit <= tolerance;
+       const bool at_high = credit >= capacity - tolerance;
+-      if (!at_low && !at_high) continue;
++      bool initial_low_witness = false, initial_high_witness = false;
++      if (redundant_initial_boundaries) {
++        const auto& epoch = execution->plan->epochs.at(execution->epoch);
++        bool all_nonnegative = true, all_nonpositive = true, nonzero = false;
++        for (const auto& ref : refs) {
++          if (ref.execution != execution) continue;
++          const double delta = ref.credit_slope[buffer];
++          all_nonnegative = all_nonnegative && delta >= 0.0;
++          all_nonpositive = all_nonpositive && delta <= 0.0;
++          nonzero = nonzero || delta != 0.0;
++        }
++        initial_low_witness = !at_low && nonzero && all_nonnegative &&
++            epoch.credit_initial[buffer] == 0.0;
++        initial_high_witness = !at_high && nonzero && all_nonpositive &&
++            epoch.credit_initial[buffer] == epoch.credit_capacity[buffer];
++      }
++      if (!at_low && !at_high && !initial_low_witness && !initial_high_witness) continue;
+       const auto add_boundary = [&](bool lower_boundary) {
+         Constraint c{std::vector<double>(count, 0.0), 0.0};
+         bool used = false;
+@@ -1416,8 +1473,15 @@
+         }
+         if (used) base.push_back(std::move(c));
+       };
++      const auto add_witness = [&](bool lower_boundary) {
++        if (++redundant_rows > 64)
++          throw std::invalid_argument("invalid_snapshot: redundant-row witness exceeds 64 extra rows");
++        add_boundary(lower_boundary);
++      };
+       if (at_low) add_boundary(true);
++      if (initial_low_witness) add_witness(true);
+       if (at_high) add_boundary(false);
++      if (initial_high_witness) add_witness(false);
+     }
+   }
+ 
+@@ -1457,7 +1521,8 @@
+   }
+   last_arbitration_.path=ArbitrationDiagnostics::Path::SignedLP;
+   last_arbitration_.constraint_rows=base.size();
+-  std::size_t pivot_count = 0;
++  const std::size_t prior_import_pivots = import_pivots ? *import_pivots : 0;
++  std::size_t pivot_count = prior_import_pivots;
+   std::vector<bool> excluded(count, false);
+   std::vector<bool> frozen(count, false);
+   std::vector<double> solved(count, 0.0);
+@@ -1469,7 +1534,8 @@
+                       const std::vector<double>& objective) -> LpResult {
+     DenseSimplex solver(rows, objective, pivot_count);
+     auto result=solver.solve();
+-    last_arbitration_.pivots=pivot_count;
++    last_arbitration_.pivots=pivot_count-prior_import_pivots;
++    if (import_pivots) *import_pivots = pivot_count;
+     return result;
+   };
+ 
+@@ -1879,8 +1945,8 @@
+   execution.credit_capacity = epoch.credit_capacity;
+   for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+     const long double capacity = epoch.credit_capacity[buffer];
+-    const long double tolerance = static_cast<long double>(kCreditTolerance) *
+-                                  std::max(1.0L, capacity);
++    const long double tolerance = credit_boundary_tolerance(execution,buffer,
++        static_cast<long double>(kCreditTolerance) * std::max(1.0L, capacity));
+     if (!std::isfinite(credit[buffer]) || credit[buffer] < -tolerance ||
+         credit[buffer] > capacity + tolerance) {
+       throw std::runtime_error("numerical_failure: credit crossed a finite buffer boundary: buffer="+
+@@ -1923,9 +1989,11 @@
+         const long double rate = credit_rate[buffer];
+         const long double credit = execution.credit[buffer];
+         const long double capacity = execution.credit_capacity[buffer];
+-        if (rate > 0.0L && credit < capacity - kCreditTolerance) {
++        const long double tolerance = credit_boundary_tolerance(execution,buffer,
++            static_cast<long double>(kCreditTolerance));
++        if (rate > 0.0L && credit < capacity - tolerance) {
+           next_delta = min_positive(next_delta, (capacity - credit) / rate * kNsPerSecond);
+-        } else if (rate < 0.0L && credit > kCreditTolerance) {
++        } else if (rate < 0.0L && credit > tolerance) {
+           next_delta = min_positive(next_delta, credit / (-rate) * kNsPerSecond);
+         }
+       }
+@@ -2043,9 +2111,11 @@
+       const long double rate = credit_rate[buffer];
+       const long double credit = execution.credit[buffer];
+       const long double capacity = execution.credit_capacity[buffer];
+-      if (rate > 0.0L && credit < capacity - kCreditTolerance) {
++      const long double tolerance = credit_boundary_tolerance(execution,buffer,
++          static_cast<long double>(kCreditTolerance));
++      if (rate > 0.0L && credit < capacity - tolerance) {
+         delta = min_positive(delta, (capacity - credit) / rate * kNsPerSecond);
+-      } else if (rate < 0.0L && credit > kCreditTolerance) {
++      } else if (rate < 0.0L && credit > tolerance) {
+         delta = min_positive(delta, credit / (-rate) * kNsPerSecond);
+       }
+     }
+@@ -2697,15 +2767,18 @@
+     if (execution.epoch < execution.plan->epochs.size()) {
+       const Epoch& current = execution.plan->epochs[execution.epoch];
+       for (std::size_t i = 0; i < 2; ++i) {
+-        if (std::abs(execution.credit_capacity[i] - current.credit_capacity[i]) > kCreditTolerance ||
+-            execution.credit[i] > execution.credit_capacity[i] + kCreditTolerance) {
++        const double tolerance = credit_boundary_tolerance(current,i,kCreditTolerance);
++        if (std::abs(execution.credit_capacity[i] - current.credit_capacity[i]) > tolerance ||
++            execution.credit[i] > execution.credit_capacity[i] + tolerance) {
+           throw std::invalid_argument("invalid_snapshot: current credit capacity differs from plan");
+         }
+       }
+       Execution check = execution;
+       recompute_credit(check);
+       for (std::size_t i = 0; i < 2; ++i) {
+-        if (std::abs(check.credit[i] - execution.credit[i]) > kCreditTolerance * std::max(1.0, execution.credit_capacity[i])) {
++        if (std::abs(check.credit[i] - execution.credit[i]) >
++            credit_boundary_tolerance(current,i,
++                kCreditTolerance * std::max(1.0, execution.credit_capacity[i]))) {
+           throw std::invalid_argument("invalid_snapshot: credit differs from activity progress");
+         }
+       }
+@@ -2933,7 +3006,20 @@
+   if (runtime->internal_events_ != saved_events) {
+     throw std::invalid_argument("invalid_snapshot: saved state was not settled at its event boundary");
+   }
+-  runtime->allocate();
++  std::size_t import_pivots = 0;
++  runtime->allocate(false, &import_pivots);
++  const auto published_matches = [&]() {
++    return std::all_of(published_allocations.begin(), published_allocations.end(),
++        [](const SavedAllocation& saved) {
++          return same_or_one_ulp(saved.rate, saved.activity->rate) &&
++                 same_or_one_ulp(saved.alpha, saved.activity->alpha);
++        });
++  };
++  if (has_published_rates && !published_matches()) {
++    // One fixed mathematical witness, never a search over boundary contexts.
++    // The same global 256-pivot budget covers both reconstruction attempts.
++    runtime->allocate(true, &import_pivots);
++  }
+   for (SavedAllocation& saved : published_allocations) {
+     saved.canonical_rate = saved.activity->rate;
+     if (!same_or_one_ulp(saved.rate, saved.activity->rate) ||
+@@ -3043,8 +3129,8 @@
+       }
+       for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+         const long double capacity = execution.credit_capacity[buffer];
+-        const long double tolerance = static_cast<long double>(kCreditTolerance) *
+-            std::max(1.0L, capacity);
++        const long double tolerance = credit_boundary_tolerance(execution,buffer,
++            static_cast<long double>(kCreditTolerance) * std::max(1.0L, capacity));
+         const bool at_low = execution.credit[buffer] <= tolerance;
+         const bool at_high = execution.credit[buffer] >= capacity - tolerance;
+         if (!at_low && !at_high) continue;
+--- a/die/include/coarse_die/Execution.hh
++++ b/die/include/coarse_die/Execution.hh
+@@ -117,6 +117,8 @@
+     bool accounting_history_complete_ = true;
+     void settle();
+     void allocate();
++    void allocate(bool redundant_initial_boundaries,
++                  std::size_t* import_pivots);
+     void integrate(long double delta_ns);
+     // Keep absolute integer time separate from sub-nanosecond integration.
+     // Adding a short deadline to a large absolute long double can otherwise

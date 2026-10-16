@@ -1,5 +1,7 @@
 # 新任务接续提示词：解析粗粒度建模
 
+> 最新停止交接：先读HANDOFF顶部。main已激活Core；未联合验证的Runtime A+B保存在 `codex/die-core-resume-20261016@6f01a6af1dc8976a8124d754e40446edbcd0b443` 及后续归档提交，未激活main。全新构建和新测试接入仍not_run，不沿用旧51/51为组合验收。
+
 > 当前接续：先 fetch 并读 HANDOFF 顶部实际 main 状态。唯一 Core 从 b8ddbcf 恢复，最终公共51/51、DOCX/192点与五仓10库/98配置通过；native22通过/4项原R4失败，性能预算仍failed。正式SDK保持canonical24。main已安全快进激活至 `6b83624600cdd13c7a8ebe72d36c48cf29873a98` 并实核远端，继续Runtime数值/快照窄修复、Norm及业务；两修复仍在隔离研究，勿把旧ELF或分离试验当最终联合验收。硬件依据新DOCX，保持Core32/L0=a及旧字段严格拒绝。
 
 

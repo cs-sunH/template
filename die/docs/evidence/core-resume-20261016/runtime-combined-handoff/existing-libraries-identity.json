@@ -1,0 +1,168 @@
+{
+  "scope": "small frozen C++ regression only; explicit existing static libraries; no AB compile, CABI or budget claim",
+  "head": "0fd015cbfad84ea9f818ebf5e779770a8502db31",
+  "runner_sha256": "6bc03720d8b67625a3887bdb4fb8353e5c1e4405d5ef7479abcb1c4d8e5ff8fa",
+  "test_sha256": "20dbbbab2d0568aba148b22e63d1e519d5925b61ad1d0e1b2fc435335c41fb9b",
+  "production_execution_before_sha256": "6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e",
+  "production_header_before_sha256": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+  "fixture_sha256": {
+    "work/runtime-combined-tests/fixture-source/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+    "work/runtime-combined-tests/fixture-source/configs/example_hardware.json": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a",
+    "work/runtime-combined-tests/fixture-source/include/coarse_die/Hardware.hh": "629892410d0b77172fedb13f8eaf1633204eea5f9650ca2bf7469cbf20f0011c",
+    "work/runtime-combined-tests/fixture-source/include/coarse_die/Plan.hh": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+    "work/runtime-combined-tests/fixture-source/include/coarse_die/Prediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "work/runtime-combined-tests/fixture-source/include/coarse_die/Memory.hh": "0a3fc4aa58d1ecd2fedb8248d55080b9d30a12b7a476864a37f9b44d6e20022c",
+    "work/runtime-combined-tests/fixture-source/include/coarse_die/Execution.hh": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea"
+  },
+  "libraries": {
+    "baseline": {
+      "path": "work/build-core-release/libcoarse_die.a",
+      "sha256": "e12c029d3a574b234a2bbcd52139d7ab94dccb040e281cfe71ab85fe31afa599",
+      "source_path": "die/docs/analysis/core-resume-20261016/runtime-subunit/baseline/Execution.cc",
+      "source_sha256": "3c9d58a0ed8c6b64450b86cac1059b3a1dba7b604caf67b31f00034c673e3043",
+      "linked_executable_sha256": "e16162809725ea38f53897fe6114f2f3842be830919f3d82cf4bbf7f07feda02",
+      "after_sha256": "e12c029d3a574b234a2bbcd52139d7ab94dccb040e281cfe71ab85fe31afa599",
+      "library_unchanged": true
+    },
+    "A_subunit": {
+      "path": "work/runtime-lab/public-build/libcoarse_die.a",
+      "sha256": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+      "source_path": "die/docs/analysis/core-resume-20261016/runtime-subunit/candidate/Execution.cc",
+      "source_sha256": "66f34d699d79b3c6dcffc5af04002799f3b1bfa4d4dcb569165825fc6a3f655a",
+      "linked_executable_sha256": "7b556809f7e955376a09f21d486d67afd5ab93469db8e53b252cd3190a3ae285",
+      "after_sha256": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+      "library_unchanged": true
+    },
+    "B_snapshot": {
+      "path": "work/snapshot-lab/libcoarse_die.a",
+      "sha256": "6573ce3f330833b9b7b05d117e05456b9f983e8554281c5dad77ec5cd90316c6",
+      "source_path": "die/docs/analysis/core-resume-20261016/snapshot-import/candidate/die/src/Execution.cc",
+      "source_sha256": "81c1152784d2f7a63d6dd6e41c48b72b419c578e4564aa8004ffa10549af8bb4",
+      "linked_executable_sha256": "5f0d9a2e70ef80813834f5c139be2a95845eed8d6c1c2c87cc1af3958c858efb",
+      "after_sha256": "6573ce3f330833b9b7b05d117e05456b9f983e8554281c5dad77ec5cd90316c6",
+      "library_unchanged": true
+    }
+  },
+  "started_unix": 1792157827.2635736,
+  "steps": [
+    {
+      "name": "compile-small-test",
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-O3",
+        "-DNDEBUG",
+        "-I",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/fixture-source/tests",
+        "-I",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/fixture-source/include",
+        "-I",
+        "/workspace/template/work/core-resume/astra-sim-wscllm/extern/helper",
+        "-DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/work/core-resume/work/runtime-combined-tests/fixture-source\"",
+        "-DCOARSE_DIE_ROOT_DIR=\"/workspace/template/work/core-resume\"",
+        "-c",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/runtime_subunit_credit_test.cc",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/runtime_subunit_credit_test.o"
+      ],
+      "started_unix": 1792157827.263623,
+      "return_code": 0,
+      "finished_unix": 1792157833.164926,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "link-baseline",
+      "command": [
+        "g++",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/runtime_subunit_credit_test.o",
+        "/workspace/template/work/core-resume/work/build-core-release/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/subunit-baseline"
+      ],
+      "started_unix": 1792157833.1658309,
+      "return_code": 0,
+      "finished_unix": 1792157833.283349,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "run-baseline",
+      "command": [
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/subunit-baseline"
+      ],
+      "started_unix": 1792157833.2852223,
+      "return_code": 1,
+      "finished_unix": 1792157833.3016162,
+      "stdout_sha256": "69628fa056c846502459a647aee9832e324603dff9cab3564a0659d1a16e0d89",
+      "stderr_sha256": "88fed012afa2b7a6101d8533f5118a871b33074a0eab63288a4f53043da832e1"
+    },
+    {
+      "name": "link-A_subunit",
+      "command": [
+        "g++",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/runtime_subunit_credit_test.o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/subunit-A_subunit"
+      ],
+      "started_unix": 1792157833.3104422,
+      "return_code": 0,
+      "finished_unix": 1792157833.425905,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "run-A_subunit",
+      "command": [
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/subunit-A_subunit"
+      ],
+      "started_unix": 1792157833.427296,
+      "return_code": 0,
+      "finished_unix": 1792157833.444764,
+      "stdout_sha256": "b309c395d02eb77466391ddf633f8b581865ee104fac520932849c46ee9c3179",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "link-B_snapshot",
+      "command": [
+        "g++",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/runtime_subunit_credit_test.o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/subunit-B_snapshot"
+      ],
+      "started_unix": 1792157833.4538357,
+      "return_code": 0,
+      "finished_unix": 1792157833.570108,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "run-B_snapshot",
+      "command": [
+        "/workspace/template/work/core-resume/work/runtime-combined-tests/subunit-B_snapshot"
+      ],
+      "started_unix": 1792157833.572379,
+      "return_code": 1,
+      "finished_unix": 1792157833.5891397,
+      "stdout_sha256": "69628fa056c846502459a647aee9832e324603dff9cab3564a0659d1a16e0d89",
+      "stderr_sha256": "88fed012afa2b7a6101d8533f5118a871b33074a0eab63288a4f53043da832e1"
+    }
+  ],
+  "test_object_sha256": "8b3fbd67d5440ff8db2cb4d54f0472ae65f8ad6087fda8d3ba24c6dd78d3df80",
+  "production_execution_after_sha256": "6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e",
+  "production_header_after_sha256": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+  "finished_unix": 1792157833.5971525,
+  "expected_regression_result": {
+    "run-baseline": 1,
+    "run-A_subunit": 0,
+    "run-B_snapshot": 1
+  },
+  "actual_regression_result": {
+    "run-baseline": 1,
+    "run-A_subunit": 0,
+    "run-B_snapshot": 1
+  },
+  "expected_result_observed": true
+}

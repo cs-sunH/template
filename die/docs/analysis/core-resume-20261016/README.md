@@ -1,4 +1,8 @@
-# Current integration audit (2026-10-16)
+# Core recovery and integration validation (2026-10-16)
+
+Current execution scope is recorded in [the five-repository table](../../evidence/core-resume-20261016/SDK-VALIDATION-SCOPE.md) and its source-bound JSON. All10 ABI libraries and98 configuration tests passed. Native C++ has22 passes/4 original R4 lifecycle failures/0 skips; JOINT additionally passed6 native Python tests. Formal vendor SDKs remain canonical24 and unpublished. The verified Core source was fast-forwarded into main at6b83624600cdd13c7a8ebe72d36c48cf29873a98; main activation is distinct from engineering acceptance. Runtime numerical/snapshot and performance experiments have their own identities and do not inherit these five-repository results. See HANDOFF for current development.
+
+## Historical initial read-only preparation scope
 
 This package adds portable reproduction tools and source-identity audit evidence. No five-repository production/vendor files were changed; no SDK was published, no build/performance run was started by this audit, and no archived build product was reused. Tools have syntax/help/dry-run checks only. Defaults write to dedicated repository work/ directories. Historical probe/aggregate bytes and original identities are recorded in `artifact-provenance.json`.
 
@@ -9,9 +13,9 @@ This package adds portable reproduction tools and source-identity audit evidence
 - All five installed SDKs still match all 24 actual files in their release manifest, digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`. This proves the historical release is unchanged; it does not validate current Core32 SDK functionality.
 - Re-executed archived `audit_source.py` against current source: DOCX SHA, 32-row JSON/Core resource constants, compiled legacy table entries and current authorized-point configs match in all five variants. Output: `../../evidence/core-resume-20261016/integration-audit/source-audit-current.json`. This is a source audit, not ABI execution.
 
-## Missing final legacy scope
+## Historical legacy gap and reproduction command
 
-Current resolver test counts are **21 + 20 + 23 + 18 + 16 = 98** for FACE / FACE-LRU / WSCLLM / WSCLLM-LRU / JOINT. WSCLLM includes the two `test_config_resolver_read_fail_closed.py` tests. The three missing variants require 57 tests, successful default engineering-point checks and fresh legacy ABI identity. Each common C++ legacy suite contains 11 tests; JOINT has four extra internal/K2 tests, total15. FACE-LRU latest unit suite was not run; its per-file C++ legacy sources equal FACE's for the changed hardware implementation, but this is not a separate FACE-LRU unit execution claim.
+At the initial audit, resolver test counts were **21 + 20 + 23 + 18 + 16 = 98** for FACE / FACE-LRU / WSCLLM / WSCLLM-LRU / JOINT. WSCLLM includes the two `test_config_resolver_read_fail_closed.py` tests. The then-missing three variants required57 tests, successful default engineering-point checks and fresh legacy ABI identity. Each common C++ legacy suite contains 11 tests; JOINT has four extra internal/K2 tests, total15. FACE-LRU latest unit suite was not run; its per-file C++ legacy sources equal FACE's for the changed hardware implementation, but this is not a separate FACE-LRU unit execution claim.
 
 Parent configured three fresh Make builds, then hit a runner directory collision before build launch. The runner is now fixed to place logs under run/phases/<phase>, keeping run/build separate. Original configure files remain untouched; use a fresh label for final validation. This was a verification-runner failure, not source/ABI failure. See `../../evidence/core-resume-20261016/integration-audit/runner-directory-collision.json`. Parent then independently started fresh full runs with label `core32-final-three-fixed`; their results are outside this source audit. Run:
 
@@ -26,7 +30,7 @@ A new label with the default phases will refuse any pre-existing build tree and 
 
 ## Isolated current SDK preparation
 
-Only run outside the parent's public performance window. These tools have received syntax/`--help`/dry-run checks only. No stage has yet been copied or hashed by them. A dry-run without a prepared snapshot explicitly reports `not_prepared_command_plan_only` and `source_digest=not_frozen_no_snapshot`; it prints paths/commands only. Preparation then freezes the actual current public source digest before execution.
+Only run outside the parent's public performance window. At the initial preparation checkpoint these tools had received syntax/`--help`/dry-run checks only, and no stage had yet been copied or hashed; the completed execution below supersedes that historical scope. A dry-run without a prepared snapshot explicitly reports `not_prepared_command_plan_only` and `source_digest=not_frozen_no_snapshot`; it prints paths/commands only. Preparation then freezes the actual current public source digest before execution.
 
 ```sh
 python3 -B die/docs/analysis/core-resume-20261016/prepare_isolated_sdk.py \
@@ -68,7 +72,7 @@ Dependencies: C++17/GCC, GNU Make, CMake>=3.22, actual `protoc`/matching C++ Pro
 
 `die/docs/evidence/core-resume-20261016/integration-audit/scope-audit.json` records the seven archived/current source comparisons and the five old SDK manifest/content checks performed earlier in this audit. It references archive members rather than copying old run outputs as new tests. `source-audit-current.json` retains the actual DOCX/table/current-config source audit; `runner-directory-collision.json` records the pre-build tooling failure. None of these files claims new ABI, full business, hardware-accuracy or CPU-budget acceptance.
 
-`integration-audit/sdk-tool-static-checks.json` under the evidence directory records that all selected Python consumer modules exist and all requested native CMake targets are registered in current source. Its status describes only that static audit; native configure/build/link/execute remain not_run by this audit.
+`integration-audit/sdk-tool-static-checks.json` under the evidence directory records that all selected Python consumer modules exist and all requested native CMake targets are registered in current source. Its status describes only the historical static audit, when native configure/build/link/execute were not_run. Later execution has separate identities and logs.
 
 ## Actual execution updates from the parent
 
@@ -85,9 +89,7 @@ failure is retained as a harness failure. The new
 `probe_coarse_hardware_consumer.py` uses JOINT's actual existing online oracle;
 it passed the Core32 identity/count checks and all eight retired-selector
 rejections. It does not claim that JOINT's authoring resolver now supports a
-coarse node. Until the running native matrix has finished, the active runner
-file is left unchanged so its recorded script SHA remains honest; the next
-runner revision must select this supported entry instead of the old helper.
+coarse node. The completed native matrix retained its original runner identity. The subsequent safe-resume runner selects this supported entry without overwriting the frozen historical helper. See SDK-RESUME.md for command/source/log/executable checks.
 
 FACE's initial Python suite found one stale legacy hardware pin (6197 ns).
 Seven actual ABI terms gave 6191.5343845817139 ns, with independent Decimal
@@ -98,7 +100,7 @@ Both original failure and complete correction identity are retained.
 FACE-LRU passed80, WSCLLM64 and JOINT92. WSCLLM-LRU passed62 and skipped one
 optional test because that repository has no Python oracle client; the strict
 zero-skip runner correctly records this as incomplete coverage, not a pass.
-Actual C++ consumers are still being built and tested.
+All actual native C++ suites have now executed:22 passes/4 original R4 lifecycle failures/0 skips. JOINT native Python passed6/6. The interruption and safe resume are separately retained in native-interrupted/ and native-resumed/; failed/partial outcomes were not converted to passes.
 
 The three real FACE/FACE-LRU/JOINT Python oracles correctly reject R3 and the
 actual emitted R4 unavailable predictions, including cost/full fallback and

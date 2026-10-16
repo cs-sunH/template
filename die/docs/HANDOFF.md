@@ -1,5 +1,23 @@
 # Codex Cloud 开发交接状态
 
+
+## 最新停止交接（2026-10-16；覆盖下方持续开发状态）
+
+用户已要求立即停止，所有新开发/实验/构建已停止。最新有效但**未联合验收**源码已推送 `codex/die-core-resume-20261016@6f01a6af1dc8976a8124d754e40446edbcd0b443`；该提交在 main 已激活的 Core32 实现上应用 Runtime A+B 窄修复及新增 tiny-credit 测试。**未从全新目录编译组合源码，未跑组合 CTest/API/性能；不能沿用此前51/51声称当前组合通过。** 新 tiny-credit test 尚未注册 CMake；snapshot 新回归仍是归档部分成果，不在生产 tests。
+
+- 远端保存：上述源码提交已 push/ls-remote 核实；本章节及全部部分成果在后续纯文档/归档提交保存，恢复时以远端恢复分支最新 HEAD 为准。
+- main 集成：唯一 Core 公共/legacy 已安全激活于 `6b83624600cdd13c7a8ebe72d36c48cf29873a98`，文档实核提交 `0fd015cbfad84ea9f818ebf5e779770a8502db31`。**main不包含此次未验收 Runtime A+B 激活源码。** 共享 main 仅同步本停止指针及完整无二进制恢复归档；无强制推送或绕过验证。
+- 已验范围：Core 保存迁移 b8ddbcf 对应 fresh 公共51/51、DOCX32行/192点、五仓隔离10库/98配置通过；native22通过/4原R4失败/0skip，JOINT10 C++与6 native Python通过。详见 `evidence/core-resume-20261016/SDK-VALIDATION-SCOPE.md`。两套公共正常30样本性能失败，四项存储优化均未采用。正式五仓 SDK 仍canonical24，publisher未运行，完整业务/CPU预算/目标实测未验收；工程 **NOT ACCEPTED**。
+- 部分成果：`analysis/core-resume-20261016/runtime-combined-handoff/` 保存精确A+B组合patch、合并来源、新tiny test及实际baseline/A/B小测脚本；对应 evidence 保存原始结果。新test baseline失败、A-only通过、B-only失败；A+B未编译。此前分离A重链接51/51、严格矩阵78/84及B原snapshot修复成功，仍各按自己的身份有效，不当作联合通过。
+- snapshot新回归：`analysis/core-resume-20261016/snapshot-regression-handoff/` 及对应 evidence 保存独立C++源码/fixture、实际baseline import/fork失败与最终B-only完整通过（无外控8/8、受控7完成/1取消及守卫）。前两次测试工具/fixture失败与后续修正均原样保留；以归档实际 identity/README为准，未加入CTest、未验证A+B。
+- Norm依赖：`analysis/core-resume-20261016/norm-next-handoff/` 只读审查及旧 `runtime-subunit/`、`snapshot-import/` 全部源码/失败证据已保留。capacity1 Norm末端死锁、真实subepsilon事件、长行、原busy和R>1 ready未解决；不能套旧末补丁。所有work ELF均为本账号分离实验来源，下一账号必须fresh构建。
+
+**下一账号最优先：**
+1. fetch/核实 main 与恢复分支、工作区及最新SHA；从恢复分支源码 6f01a6af1dc8976a8124d754e40446edbcd0b443 的后续归档 HEAD 建独立分支，安全核对main纯交接提交。A+B patch基线是已激活Core，不从旧硬件重写。
+2. 先审查未验收A+B与两个新回归；tiny测试需注册CMake，snapshot测试保留实际失败并修清测试/实现原因。全新Release构建、完整测试/公开API差异及正常30性能后决定采用；正式五仓新源码受影响范围须重新验证，不沿用冻结旧SDK证据。
+3. 再依赖推进capacity1 Norm/subepsilon、长行/原busy/R>1与五仓业务；保持解析固定分段路线、严格守卫、原预算和独立目标数据身份。停止交接完成后本账号不继续研发。
+
+
 ## 当前有效状态：唯一 Core 已安全激活 main，继续 Runtime 研发（2026-10-16）
 
 用户已恢复持续自主开发。已从唯一迁移提交 `b8ddbcfd62e03738b0c3996444355cbbe2e99b80` 建立 `codex/die-core-resume-20261016`，安全合入 main 独有交接资料，保留新版 AGENTS、PROJECT、设计文档及完整实现。2026-10-16 再次 fetch 全部远端 heads/ls-remote 核实 main 仍为 `d3a64a6c4cb23b8ce437438ed68217d7cee4af1f` 且为恢复 HEAD 祖先。没有从旧生产源码重写或复用上一账号 ELF。

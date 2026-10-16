@@ -1,0 +1,3 @@
+FAIL runtime_snapshot_split_owner_test: split-owner import: {"field_path":"invalid_snapshot","reason":"invalid_snapshot: published activity allocation differs from canonical LP: id=4 saved_rate=7.862645685395645909011e+06 rebuilt_rate=7.862645685395650565624e+06 saved_alpha=6.878048780487804325645e-01 rebuilt_alpha=6.878048780487804325645e-01","schema_version":2,"status_code":1}
+split-owner fork: {"field_path":"invalid_snapshot","reason":"invalid_snapshot: published activity allocation differs from canonical LP: id=4 saved_rate=7.862645685395645909011e+06 rebuilt_rate=7.862645685395650565624e+06 saved_alpha=6.878048780487804325645e-01 rebuilt_alpha=6.878048780487804325645e-01","schema_version":2,"status_code":1}
+
