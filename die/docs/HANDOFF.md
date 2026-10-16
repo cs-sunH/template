@@ -5,9 +5,9 @@
 - Current Status / Completed：工作分支 `codex/die-numeric-continue-20261017` 保留真实最新恢复 `9c464ca` 与main `021a47f`。当前已验证开发源码 `Execution.cc` SHA256 **`54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab`**：正小曲线事件、全活动精确整数ready、严格target/真ceil、微步前逐角色进度及原公式credit预检。未改变13资源、Q/alpha/PRIVATE、原busy/工作量或任何容差门槛；不增加tile/K/repeat状态。
 - Tests：本账号fresh来源、最终一致Release **58/58（15.02s）**，5个新测试对fresh A+B实际red；首次基线runner路径重名造成的abort另存并标无效，不计red。公开两配置×28输入/8轨迹/28符号对照：**严格全字段比较false**，13个estimate busy字段有最多4.538e-15ns/一个binary64投影1ULP差，其他字段和8实际轨迹全部相同。跨库snapshot通过；原严格矩阵 **78/84、六失败保留**，独立物理及机器账本0违规。详见[当前总表](evidence/numeric-continue-20261017/runtime-checkpoint/checkpoint-summary.json)与[复现/限制](analysis/numeric-continue-20261017/README.md)。
 - Performance：两配置各一次正常30样本，本次原预算全过；example/工程cold128³ P95 **0.987405/1.042688ms**、OS J32 **16.204/19.719us**，新增throttle均0。没有重采择优；全部历史失败保留，不称稳定完整业务/CPU验收。
-- Integration：补齐旧A+B未完成的FACE-LRU/WS/WSLRU，三仓fresh六ABI库成功、native各3/4，合计9pass/3原R4guard失败/实际0skip；旧runner误把业务单词Skipped当测试skip的原记录保留，修正摘要单列。冻结33文件digest25c513…1013及4493源实核，**只属于A+B**，[范围](analysis/numeric-continue-20261017/native/README.md)。当前新源码五仓重验尚未完成；正式canonical24共120文件实核未变，publisher未运行，main未激活，工程 **NOT ACCEPTED**。
+- Integration：补齐旧A+B未完成的FACE-LRU/WS/WSLRU，三仓fresh六ABI库成功、native各3/4，合计9pass/3原R4guard失败/实际0skip；旧runner误把业务单词Skipped当测试skip的原记录保留，修正摘要单列。冻结33文件digest25c513…1013及4493源实核，**只属于A+B**，[范围](analysis/numeric-continue-20261017/native/README.md)。当前新源码已新freeze `c734ce1`，33文件digest=`0fb24b47de6b9a3622508d59b60d86542ee2413a20d4a482add0f3cdd56ef7dc`、4493文件；**10ABI/98配置通过，Python384pass/1原optional skip，strict33阶段32pass/1failed**，五新coarse库逐byte等公共final库。当前五仓fresh native继续，未完成不算通过；[当前SDK范围](analysis/numeric-continue-20261017/sdk-current/README.md)。正式canonical24共120文件实核未变，publisher未运行，main未激活，工程 **NOT ACCEPTED**。
 - Important Decisions / Blocking Issues：容量1 Norm、原busy近似误差、长行/R>1未解。微步可能因无关慢角色不可表示而failclosed，不能声称全shape可用。保持legacy progress closure；其亚ULP正尾的更强目标仍失败，不通过改参考掩盖。严格ceil收紧旧floor-valued fractional snapshot；large-origin fractional错误态恢复不获保证，near0独立控制通过。没有必须用户决定的阻碍。
-- Next Step / Files：先保存推送当前有效源码/355项text证据，按当前源码冻结隔离SDK，继续五仓必要重验；并行先做Norm固定规模affine数值公式对保存真实progress的独立Fraction检查，再决定最窄physical-view实验，不套旧candidate2。持续自主研发，不因本检查点停止。当前355项源码/原始log/失败与预算已无ELF归档，所有SHA及解包roundtrip实核；下方均按原身份保留。
+- Next Step / Files：源码/355项text已push并ls-remote实核 `c734ce1145915279bc26367cb8e1e5076629adfe`；main纯共享入口 `9f9fa0645d6ed220b513dd19de41870597e0b662` 亦已实核并安全合回本分支，未激活main源码。继续新SDK五仓fresh native；当前Runtime真实重跑完整七epoch Norm仍5.130029297s停滞、6非法库存观察，11快照与旧A+B逐byte相同，[独立证据](analysis/numeric-continue-20261017/NORM-CURRENT.md)。1952项独立affine/Fraction首轮inventory相消改善但4个真实headroom原符号错误，明确不采用；[研究范围](analysis/numeric-continue-20261017/norm-affine/README.md)。先测固定规模乘积残量，再决定最窄physical-view实验，不套旧candidate2。持续自主研发，不因本检查点停止。当前355项源码/原始log/失败与预算已无ELF归档，所有SHA及解包roundtrip实核；下方均按原身份保留。
 
 ## 当前自主接续（2026-10-17；覆盖下方历史停止状态）
 
@@ -40,6 +40,17 @@
 - Next Step / Files：A+B上述联合功能验证已执行。严格矩阵78/84，六split原exact-Fraction舍入断言仍failed但全部续跑完成；独立精确物理/PRIVATE/credit/tangent与机器账本无违规，原失败不改写。两配置正常30样本均failed（example cold128³ 6.728323ms、异构J8 100.779us；工程cold128³ 2.343980ms、OS J8 69.194us），新增throttle均0。继续完整七epoch Norm数值及五仓实际消费者。新可移植 recorder 在 `analysis/runtime-continue-20261016/`，公共文本结果已归档 `evidence/runtime-continue-20261016/public-ab/`，62项原始text/压缩映射，不含ELF；后续未归档部分不能视作跨账号可恢复。
 - Tests / Blocking Issues：新环境 GCC14.2，CMake3.31.10在work/tool-env；Protobuf3.21.12编译/开发依赖已在work隔离解包（URL/hash留存），Python6.33.5在tool venv，未替代真实消费者。正式五仓SDK已读实核均canonical24/digest23160c…7e9b，未publisher；先前22/4 native与性能失败保持原身份，当前组合隔离SDK33文件/digest25c513…1013、4493冻结文件，真实五仓10库构建/98配置全部通过；Python384pass/1原optional skip，严格runner32阶段通过/1阶段失败，五coarse库逐byte等于本次公共库6eb9cf…8663。完整[当前SDK范围](analysis/runtime-continue-20261016/SDK-SCOPE.md)及104项text归档已保存；新native构建仍进行，业务/CPU未验收。独立当前Core完整7epoch在fresh main与A+B均精确复现capacity1 Norm无next-event/负output credit；不是tiny修复覆盖域，隔离候选继续，工程 **NOT ACCEPTED**。
 - Handoff Notes：A+B公共检查点与全部原始log已提交推送 `codex/die-runtime-continue-20261016@f476c801cf446b3db38f7ca3cadbeec81109bbdb` 并ls-remote实核，62项证据映射均hash正确且已tracked。main仍94d1978、未激活A+B；无PR/SDK发布。当前Core Norm真实red及interior-only未采用因果实验已保存[122项无二进制归档](analysis/runtime-continue-20261016/NORM-CAPACITY1.md)，首实验使7epoch完成但split末尾回归仍failed且dyadic正余量仍阻塞，不能采用。五仓ABI/Python当前范围见上；JOINT与另四仓fresh native构建正执行，不套旧22/4。两处根设计旧64种Core已文档修为当前32组资源配置，未改路线/预算。当前Norm候选2虽通过7epoch与dyadic/subepsilon强探针，负4ULP快照篡改与service_curve回归失败，明确REJECTED；生产未采用。完整数值[checkpoint2](analysis/runtime-continue-20261016/NORM-CAPACITY1.md)另保283项text，含被拒候选与实际ULP方向/角色不匹配/内部/独立公式包络证据。独立time-only候选六项mixed旧回归和可表示subepsilon强探针通过，仍仅work研究；fresh/API/速度与采用未验收，不是Norm修复。不是停止交接或工程验收。
+
+
+## 最新持续研发入口（2026-10-17；覆盖下方旧停止指针）
+
+用户已恢复持续自主研发。最新有效源码与完整证据保存在 [`codex/die-numeric-continue-20261017@c734ce1145915279bc26367cb8e1e5076629adfe`](https://github.com/cs-sunH/template/tree/c734ce1145915279bc26367cb8e1e5076629adfe)，后续接续应fetch核实该分支最新HEAD，不能仅从main推断源码进度。[权威HANDOFF](https://github.com/cs-sunH/template/blob/c734ce1145915279bc26367cb8e1e5076629adfe/die/docs/HANDOFF.md)与[当前复现/范围](https://github.com/cs-sunH/template/blob/c734ce1145915279bc26367cb8e1e5076629adfe/die/docs/analysis/numeric-continue-20261017/README.md)。
+
+- 当前分支从真实最新9c464ca续接并普通merge保留main021a47f，未重做已验A+B；修复正小事件、全活动整数ready、严格target/真ceil及微步前物理进度/credit守卫。最终Release58/58，5个新测试对fresh A+B真实red。355项无ELF源码/原始日志、失败及预算已归档/逐hash核验；上述c734ce1已push且ls-remote实核。
+- 严格矩阵仍78/84，六原精确舍入失败；完整API比较false，13个estimate busy微差（最多4.538e-15ns/一个投影1ULP），其余字段/8条实际轨迹/28ABI符号相同。两个配置各一次正常30预算当前全过，历史性能失败全部保留，不称全负载稳定验收或目标实测校准。
+- 旧A+B剩余三仓native fresh补齐，各3/4、原R4guard失败/实际0skip；属于冻结A+B身份，不能当当前新Runtime通过。新Runtime五仓重新冻结验证正继续。正式五仓canonical24 SDK未发布，publisher未运行；Norm容量1/busy/长行/R>1及完整业务/CPU/目标实测仍未验收。
+- **本main提交仅同步共享恢复入口；main生产尚未合入A+B/新数值源码，工程NOT ACCEPTED。** 远端保存、main源码集成、SDK发布与工程验收分别核实。下一步从上述分支继续当前SDK受影响验证及Norm独立固定规模affine/Fraction研究，不恢复旧Core类型/逐K路线，不因检查点停止。
+
 
 ## 最新停止交接入口（2026-10-17；覆盖下方旧状态）
 

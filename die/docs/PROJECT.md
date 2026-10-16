@@ -1,6 +1,6 @@
 # die 子项目：项目说明与验收标准
 
-2026-10-17最新数值检查点：正小曲线事件/精确ready/严格target与真ceil、微步前逐角色及credit预检，最终一致Release58/58；5个新测试对fresh A+B真实red。严格矩阵仍78/84、API13个busy微差明确保留；两配置本次各一轮正常30速度全过，历史失败不抹去。原A+B剩余native三仓各3/4保留R4 guard失败；当前源码五仓待新验证。Norm/busy/R>1及target实测未验收，正式SDK未发布、main未激活，工程NOT ACCEPTED。持续研发及下一步以[HANDOFF最新章节](HANDOFF.md)为准。
+2026-10-17最新数值检查点：正小曲线事件/精确ready/严格target与真ceil、微步前逐角色及credit预检，最终一致Release58/58；5个新测试对fresh A+B真实red。严格矩阵仍78/84、API13个busy微差明确保留；两配置本次各一轮正常30速度全过，历史失败不抹去。原A+B剩余native三仓各3/4保留R4 guard失败；当前源码新隔离SDK10ABI/98配置通过、Python384pass/1原optional skip，五仓fresh native继续；Norm七epoch本次真实重跑仍停滞/6非法库存观察，独立affine公式研究未采用。Norm/busy/R>1及target实测未验收，正式SDK未发布、main未激活，工程NOT ACCEPTED。持续研发及下一步以[HANDOFF最新章节](HANDOFF.md)为准。
 
 2026-10-17 用户恢复持续自主开发：已从真实最新 `codex/die-runtime-continue-20261016@9c464ca` 接续并保留main交接指针。A+B公共源码保持；C2实际混合ready回归失败，不采用。当前C3隔离研究及剩余三仓native推进中，以[HANDOFF顶部](HANDOFF.md)与新身份/原始证据为准；下方停止状态均历史，正式SDK未发布、工程NOT ACCEPTED。
 
@@ -8,6 +8,8 @@
 
 用户已恢复持续自主开发。`codex/die-runtime-continue-20261016` 从恢复分支2750e24安全接续并普通合并main94d1978，A+B全新Release完整53/53通过，fresh main两新测试实际red；公开API/8真实轨迹除修复的fork外逐字段相同。严格矩阵78/84保留六舍入失败，两套正常30性能均failed；新组合五仓验证和当前Core七epoch Norm数值修复仍进行中。有效状态以[HANDOFF顶部](HANDOFF.md)为准，下方停止状态均为历史。正式SDK仍canonical24，工程NOT ACCEPTED。
 
+
+2026-10-17用户恢复持续研发，当前有效数值源码和完整证据在独立 `codex/die-numeric-continue-20261017@c734ce1`，58/58与当前两配置正常30预算已执行，旧严格失败/13busy微差与模型限制均披露。main仅同步共享入口；正式SDK未发布、工程NOT ACCEPTED。请从[HANDOFF最新入口](HANDOFF.md)fetch恢复分支接续，不只从main判断研发进度，下方旧停止状态不覆盖当前授权。
 
 ## 最新停止交接指针（2026-10-16）
 
