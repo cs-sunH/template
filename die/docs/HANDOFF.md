@@ -23,6 +23,16 @@
 - Tests / Blocking Issues：新环境 GCC14.2，CMake3.31.10在work/tool-env；Protobuf3.21.12编译/开发依赖已在work隔离解包（URL/hash留存），Python6.33.5在tool venv，未替代真实消费者。正式五仓SDK已读实核均canonical24/digest23160c…7e9b，未publisher；先前22/4 native与性能失败保持原身份，当前组合隔离SDK33文件/digest25c513…1013、4493冻结文件，真实五仓10库构建/98配置全部通过；Python384pass/1原optional skip，严格runner32阶段通过/1阶段失败，五coarse库逐byte等于本次公共库6eb9cf…8663。完整[当前SDK范围](analysis/runtime-continue-20261016/SDK-SCOPE.md)及104项text归档已保存；新native构建仍进行，业务/CPU未验收。独立当前Core完整7epoch在fresh main与A+B均精确复现capacity1 Norm无next-event/负output credit；不是tiny修复覆盖域，隔离候选继续，工程 **NOT ACCEPTED**。
 - Handoff Notes：A+B公共检查点与全部原始log已提交推送 `codex/die-runtime-continue-20261016@f476c801cf446b3db38f7ca3cadbeec81109bbdb` 并ls-remote实核，62项证据映射均hash正确且已tracked。main仍94d1978、未激活A+B；无PR/SDK发布。当前Core Norm真实red及interior-only未采用因果实验已保存[122项无二进制归档](analysis/runtime-continue-20261016/NORM-CAPACITY1.md)，首实验使7epoch完成但split末尾回归仍failed且dyadic正余量仍阻塞，不能采用。五仓ABI/Python当前范围见上；JOINT与另四仓fresh native构建正执行，不套旧22/4。两处根设计旧64种Core已文档修为当前32组资源配置，未改路线/预算。当前Norm候选2虽通过7epoch与dyadic/subepsilon强探针，负4ULP快照篡改与service_curve回归失败，明确REJECTED；生产未采用。完整数值[checkpoint2](analysis/runtime-continue-20261016/NORM-CAPACITY1.md)另保283项text，含被拒候选与实际ULP方向/角色不匹配/内部/独立公式包络证据。独立time-only候选六项mixed旧回归和可表示subepsilon强探针通过，仍仅work研究；fresh/API/速度与采用未验收，不是Norm修复。不是停止交接或工程验收。
 
+## 最新停止交接入口（2026-10-17；覆盖下方旧状态）
+
+用户已要求立即停止开发。**最新有效成果保存在独立恢复分支，不要只从main恢复。**
+
+- 已实际push并ls-remote核实：[`codex/die-runtime-continue-20261016@9c464cac9447f97569e547bc7c1e7f6094cc63a1`](https://github.com/cs-sunH/template/tree/9c464cac9447f97569e547bc7c1e7f6094cc63a1)。[权威HANDOFF](https://github.com/cs-sunH/template/blob/9c464cac9447f97569e547bc7c1e7f6094cc63a1/die/docs/HANDOFF.md)及[停止详情](https://github.com/cs-sunH/template/blob/9c464cac9447f97569e547bc7c1e7f6094cc63a1/die/docs/analysis/runtime-continue-20261016/STOP-HANDOFF-20261017.md)。恢复时fetch并核对该分支最终HEAD。
+- 当前生产A+B在上述分支，fresh Release 53/53通过；严格矩阵78/84、性能失败保持。本轮五仓10库/98配置通过、Python384pass/1skip；native JOINT10 C++及6 Python通过，FACE3pass/1 R4失败，其余native未完成。详细源码身份、原始证据及未运行范围以分支HANDOFF为准，不套旧结果。
+- 499项停止text归档及之前Norm checkpoint1/2均在上述分支；C1提前ready反例真实失败，C2仅prepare未编译/测试，均未采用。先读停止详情、核验归档再继续，不覆盖当前生产。
+- **本main提交只有交接指针，没有合入A+B或研究候选。** main生产仍沿原94d1978身份；正式五仓SDK未发布，工程NOT ACCEPTED。远端保存、main源码集成、SDK发布与验收是不同状态。
+- 下一步：从恢复分支安全接续并保留main有效修改；先审查ready反例/未编译C2与审查工具重复ID，再接剩余native及Norm。遵守当前单Core权威文档与原正确性/速度门槛。本账号交接后停止。
+
 
 
 ## 最新停止交接（2026-10-16；覆盖下方持续开发状态）
