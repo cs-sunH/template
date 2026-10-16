@@ -1,0 +1,104 @@
+Internal ctest changing into directory: /workspace/template/work/build-die-canonical
+Test project /workspace/template/work/build-die-canonical
+      Start  1: coarse_compiler_summary_test
+ 1/49 Test  #1: coarse_compiler_summary_test .............   Passed    0.67 sec
+      Start  2: coarse_norm_row_accounting_test
+ 2/49 Test  #2: coarse_norm_row_accounting_test ..........   Passed    0.39 sec
+      Start  3: coarse_prediction_availability_test
+ 3/49 Test  #3: coarse_prediction_availability_test ......   Passed    0.00 sec
+      Start  4: coarse_region_delay_math_test
+ 4/49 Test  #4: coarse_region_delay_math_test ............   Passed    0.00 sec
+      Start  5: coarse_region_overhead_test
+ 5/49 Test  #5: coarse_region_overhead_test ..............   Passed    0.03 sec
+      Start  6: coarse_elementwise_service_test
+ 6/49 Test  #6: coarse_elementwise_service_test ..........   Passed    0.12 sec
+      Start  7: coarse_packing_allocator_test
+ 7/49 Test  #7: coarse_packing_allocator_test ............   Passed    0.00 sec
+      Start  8: coarse_ratio_allocator_test
+ 8/49 Test  #8: coarse_ratio_allocator_test ..............   Passed    0.08 sec
+      Start  9: coarse_os_service_curve_test
+ 9/49 Test  #9: coarse_os_service_curve_test .............   Passed    0.01 sec
+      Start 10: coarse_os_service_scaling_test
+10/49 Test #10: coarse_os_service_scaling_test ...........   Passed    0.03 sec
+      Start 11: coarse_service_curve_schema_test
+11/49 Test #11: coarse_service_curve_schema_test .........   Passed    0.00 sec
+      Start 12: coarse_service_curve_runtime_test
+12/49 Test #12: coarse_service_curve_runtime_test ........   Passed    0.03 sec
+      Start 13: coarse_capi_cost_query_test
+13/49 Test #13: coarse_capi_cost_query_test ..............   Passed    0.01 sec
+      Start 14: coarse_source_golden_test
+14/49 Test #14: coarse_source_golden_test ................   Passed    0.01 sec
+      Start 15: coarse_hardware_input_test
+15/49 Test #15: coarse_hardware_input_test ...............   Passed    0.01 sec
+      Start 16: coarse_compile_execution_test
+16/49 Test #16: coarse_compile_execution_test ............   Passed    0.03 sec
+      Start 17: coarse_compiler_credit_test
+17/49 Test #17: coarse_compiler_credit_test ..............   Passed    0.00 sec
+      Start 18: coarse_gemm_os_access_counter_test
+18/49 Test #18: coarse_gemm_os_access_counter_test .......   Passed    0.01 sec
+      Start 19: coarse_gemm_os_geometry_test
+19/49 Test #19: coarse_gemm_os_geometry_test .............   Passed    0.00 sec
+      Start 20: coarse_gemm_os_route_counter_test
+20/49 Test #20: coarse_gemm_os_route_counter_test ........   Passed    0.16 sec
+      Start 21: coarse_gemm_os_resource_facts_test
+21/49 Test #21: coarse_gemm_os_resource_facts_test .......   Passed    0.01 sec
+      Start 22: coarse_gemm_os_readiness_test
+22/49 Test #22: coarse_gemm_os_readiness_test ............   Passed    0.00 sec
+      Start 23: coarse_operator_accounting_test
+23/49 Test #23: coarse_operator_accounting_test ..........   Passed    0.03 sec
+      Start 24: coarse_gemm_accounting_test
+24/49 Test #24: coarse_gemm_accounting_test ..............   Passed    0.02 sec
+      Start 25: coarse_gemm_tail_budget_test
+25/49 Test #25: coarse_gemm_tail_budget_test .............   Passed    0.06 sec
+      Start 26: coarse_task_schema_test
+26/49 Test #26: coarse_task_schema_test ..................   Passed    0.03 sec
+      Start 27: coarse_compact_batch_semantics_test
+27/49 Test #27: coarse_compact_batch_semantics_test ......   Passed    0.02 sec
+      Start 28: coarse_equivalent_work_test
+28/49 Test #28: coarse_equivalent_work_test ..............   Passed    0.00 sec
+      Start 29: coarse_fractional_work_test
+29/49 Test #29: coarse_fractional_work_test ..............   Passed    0.01 sec
+      Start 30: coarse_fused_ffn_accounting_test
+30/49 Test #30: coarse_fused_ffn_accounting_test .........   Passed    0.01 sec
+      Start 31: coarse_attention_accounting_test
+31/49 Test #31: coarse_attention_accounting_test .........   Passed    0.23 sec
+      Start 32: coarse_endpoint_allocation_test
+32/49 Test #32: coarse_endpoint_allocation_test ..........   Passed    0.01 sec
+      Start 33: coarse_runtime_credit_scale_test
+33/49 Test #33: coarse_runtime_credit_scale_test .........   Passed    0.01 sec
+      Start 34: coarse_runtime_clock_translation_test
+34/49 Test #34: coarse_runtime_clock_translation_test ....   Passed    0.06 sec
+      Start 35: coarse_runtime_counters_test
+35/49 Test #35: coarse_runtime_counters_test .............   Passed    0.01 sec
+      Start 36: coarse_estimate_driver_test
+36/49 Test #36: coarse_estimate_driver_test ..............   Passed    0.04 sec
+      Start 37: coarse_runtime_semantics_test
+37/49 Test #37: coarse_runtime_semantics_test ............   Passed    0.01 sec
+      Start 38: coarse_oracle_granularity_test
+38/49 Test #38: coarse_oracle_granularity_test ...........   Passed    0.51 sec
+      Start 39: coarse_capi_lifecycle_test
+39/49 Test #39: coarse_capi_lifecycle_test ...............   Passed    0.01 sec
+      Start 40: coarse_capi_cache_response_test
+40/49 Test #40: coarse_capi_cache_response_test ..........   Passed    3.74 sec
+      Start 41: coarse_workspace_metadata_test
+41/49 Test #41: coarse_workspace_metadata_test ...........   Passed    0.01 sec
+      Start 42: coarse_workspace_envelope_test
+42/49 Test #42: coarse_workspace_envelope_test ...........   Passed    0.05 sec
+      Start 43: coarse_runtime_submit_transaction_test
+43/49 Test #43: coarse_runtime_submit_transaction_test ...   Passed    0.00 sec
+      Start 44: coarse_runtime_owner_symmetry_test
+44/49 Test #44: coarse_runtime_owner_symmetry_test .......   Passed    0.04 sec
+      Start 45: coarse_estimate_cli_test
+45/49 Test #45: coarse_estimate_cli_test .................   Passed    0.21 sec
+      Start 46: coarse_grouped_gemm_oracle_test
+46/49 Test #46: coarse_grouped_gemm_oracle_test ..........   Passed    0.93 sec
+      Start 47: coarse_analytical_service_oracle_test
+47/49 Test #47: coarse_analytical_service_oracle_test ....   Passed    0.10 sec
+      Start 48: coarse_owner_lp_oracle_test
+48/49 Test #48: coarse_owner_lp_oracle_test ..............   Passed   10.63 sec
+      Start 49: coarse_k_readiness_runtime_self_test
+49/49 Test #49: coarse_k_readiness_runtime_self_test .....   Passed    0.00 sec
+
+100% tests passed, 0 tests failed out of 49
+
+Total Test time (real) =  18.42 sec

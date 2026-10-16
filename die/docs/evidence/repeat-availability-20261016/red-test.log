@@ -1,0 +1,14 @@
+Internal ctest changing into directory: /workspace/template/work/build-die-canonical
+Test project /workspace/template/work/build-die-canonical
+    Start 1: coarse_repeated_region_availability_test
+1/1 Test #1: coarse_repeated_region_availability_test ...***Failed    0.00 sec
+FAIL repeated_region_availability_test: zero launch/setup cannot certify an aggregated repeated region's unmodeled barriers
+
+
+0% tests passed, 1 tests failed out of 1
+
+Total Test time (real) =   0.01 sec
+
+The following tests FAILED:
+	  1 - coarse_repeated_region_availability_test (Failed)
+Errors while running CTest
