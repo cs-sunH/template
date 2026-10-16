@@ -117,6 +117,8 @@ class Runtime {
     bool accounting_history_complete_ = true;
     void settle();
     void allocate();
+    void allocate(bool redundant_initial_boundaries,
+                  std::size_t* import_pivots);
     void integrate(long double delta_ns);
     // Keep absolute integer time separate from sub-nanosecond integration.
     // Adding a short deadline to a large absolute long double can otherwise
