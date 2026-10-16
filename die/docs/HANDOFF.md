@@ -1,8 +1,16 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。最新用户指令：立即交接并停止；本页更新后只提交/同步/核远端，不再开发或新增测试。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch实核HEAD/main为 `5caede8ca81902baf15c7d3228db70f2087302fb`，其push/fetch/ls-remote已实核main和工作分支同SHA。包含本页的Git提交为本次停止交接归档；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源；交接成功与工程验收分开。
+记录日期：2026-10-16（Asia/Shanghai；raw另存UTC/Unix）。最新用户授权持续自主开发，无停止指令。工作分支`codex/die-continue-20261016`；接手时fetch/ls-remote实核远端main为`d16b5459a46df7f54d6e4afa36e2a5debd947690`，本地9fdcad1启动快照干净并安全fast-forward，无不明修改。当前检查点由包含本段的Git提交标识，推送后须fetch/ls-remote核实共享main与工作分支，不把本地提交当远端完成。工程 **NOT ACCEPTED**，正式五仓未发布新源；旧停止交接段落仅为历史。
 
 ## Current Status
+
+### 当前检查点：零开销R>1可用性修复，继续Norm长行依赖
+
+- 新环境fresh canonical构建与公共 **49/49通过，18.42s**；实际源码是d16b545/5caede8生产版，没有使用旧work ELF。工具隔离安装work/tool-env（CMake3.31.10、Ninja1.13.2），GCC14/Python3.13；初次Ninja路径错误及真实后续构建均保留。
+- 只读审查发现通用region_ready_overheads在launch/setup均零时跳过R>1分类，真实22探针中四类型12项误报ok_assumed并被consumer接受。新增fixture对旧实际库red失败，统一检查后 **50/50通过，18.68s**。21可编译探针完整epoch/body延迟不变、5份R1完整对象不变、12个误接受修正；默认非零profile的11份完整公开API对象逐字段完全相同。没有实现R>1屏障/无Q等待，也未删除guard或增加生产事件。
+- 正常30样本速度仍 **failed**：128³cold P95 **6.128634ms**，OS J8/J32单次更新 **73.397/47.911μs**，另1×128×128及residual cold、streamed Norm cold、Attention轻量cost失败。完整失败项/样本和source/ELF在`evidence/repeat-availability-20261016/checkpoint-summary.json`及raw，J32本次通过不抹历史失败，不重采选最好。没有改变物理时间、校准、10%/20%或速度门槛。
+- 当前有效Next Step仍为Norm长行归档的审查/完善。BF16/FP32两遍统计屏障及每Core两槽经只读检查未见确定硬错误；INT4缺明确scale容量/流量账本，不能把原24账本测试视为其正确性证明。新长行计划限定BF16/FP32、R1且rows≤Core，补多Core/mixed dtype/容量阈值、真实公共回归与预算后决定采用；尚未恢复或采用归档。此前36原busy联合failed保留。
+- 五份正式SDK24实际hash仍`23160c…7e9b`，未publisher；新公共源五仓业务/CPU、R4时间模型及target raw/heldout未验收。TX8 conditional与目标先验冻结。复现与反例源码在`analysis/repeat-availability-20261016/README.md`，canonical基线日志在`evidence/norm-long-validation-20261016/`。本检查点同步后继续自主开发。
 
 ### 本次停止交接：生产保持5caede8，J32实验和长行首版完整归档
 
@@ -296,6 +304,8 @@ WS兼容修复 `ca604f5e49dc6df387888a33c75b0134642d42f3` 已正常推送main并
 
 ## Integration Branch / Last Verified Base
 
+- 2026-10-16当前：工作分支`codex/die-continue-20261016`；起始远端main实核`d16b5459a46df7f54d6e4afa36e2a5debd947690`，安全快进后独立分支开发；当前源码/证据由包含本段的检查点提交确定，需普通push及fetch核实后方可称已共享。下方旧分支/SHA保留为历史。
+
 - 共享分支 `main`；本轮工作分支 `codex/die-k-readiness-20261015`，基线 main `d1151179`。下方较早分支/SHA仅为历史实核。
 - 本次最终交接前 `git fetch origin main` 和 `git ls-remote` 核实 main/工作分支同为 `e73a378511f34c50261d6074e437e382e8ae68a2`，工作区生产源码干净；本次仅提交新诊断/证据/接力文档。前一检查点远端实核记录在 `evidence/k-readiness-20261015/previous-checkpoint-remote-verification.json`。
 - 起始远端/本地 HEAD 均 `d9cc0240e07064996b5330c5659f7f8c6866998a`，工作区起始干净。当前运行使用脏工作树，实际源码按 evidence 中逐文件 SHA 绑定，不能用起始 commit 冒充全部运行代码。
@@ -379,7 +389,16 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ## Next Step
 
-### 当前唯一接续（下一账号；本账号交接后停止）
+### 当前有效接续（持续开发，不按检查点停止）
+
+1. 零开销R>1可用性缺口已修并50/50实测；不重复硬件输入/搜索删除、候选诊断延后或已否决J32融合。不把状态修复当R>1时间模型完成，保留consumer guard。
+2. 从归档Norm长行恢复入口继续，仅采用有真实账本的BF16/FP32子域；先补mixed dtype/多Core/容量精确阈值、两阶段pause/cancel/snapshot及完整公共回归/普通预算。保留INT4 scale缺口、R1/rows≤Core限制、36busy失败，不能直接publisher。
+3. 继续真实region materialization屏障/无Q非服务窗口的有限复杂度表示。零延迟也需要屏障；新Fraction反例和review给出范围，不将单等待前置、PRIVATE替身、占空比或逐repeat路径作为已解方案。
+4. 速度沿当前全部失败记录推进，不反复选最快；轻量查询/冷编译与J≤32的各失败均单列。模型稳定后才五仓固定版/ABI/业务/CPU，缺target数据继续not_available。
+
+下方为上轮停止交接及更早历史接续；已完成部分以上述为准。
+
+### 上轮停止交接的接续记录（历史）
 
 1. fetch核最终远端main与本页归档提交，检查工作区后fresh build canonical生产模型；其源码等于5caede8，当前work目录ELF若尚存则是部分长行版，不可当main已测库。读compiler-ranking/checkpoint-summary及本次两个analysis README/handoff-summary。显式硬件、双raw memo、Norm行模型、LP scratch/连续矩阵和候选延后已完成，不重复。
 2. 长行部分成果恢复入口是`analysis/norm-long-row-20261016/README.md`：独立分支/worktree按manifest校验、check/apply patch、复制四文件再构建。先审R1/单行Core限制和全统计→apply屏障，按实际修改补完整50公共回归、普通预算/完整API兼容，保留现有36 busy失败。源码未获正式采用，不机械发布。多行/Core需明确统计张量驻留/真实HBM物化，不能沿用16B保留全部行；R>1不能通过扩大此首版范围自动支持。

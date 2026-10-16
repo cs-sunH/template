@@ -1,0 +1,222 @@
+[
+  {
+    "name": "residual_layers1_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "residual_layers2_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "residual_layers1_passes2",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "residual_layers2_passes2",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "ffn_materialized_layers1_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "ffn_materialized_layers2_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "ffn_materialized_layers1_passes2",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "ffn_materialized_layers2_passes2",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "attention_materialized_layers1_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "attention_materialized_layers2_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "attention_materialized_layers1_passes2",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "attention_materialized_layers2_passes2",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "qkv_rope_layers1_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "qkv_rope_layers2_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "qkv_rope_layers1_passes2",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "qkv_rope_layers2_passes2",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "norm_control_layers1_passes1",
+    "compiled": true,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "ok_assumed",
+    "estimate_status": "ok_assumed",
+    "consumer_policy": "accepted",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "norm_control_layers2_passes1",
+    "compiled": true,
+    "prediction_status": "not_available",
+    "alone_estimate_status": "not_available",
+    "estimate_status": "not_available",
+    "consumer_policy": "rejected",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "norm_control_layers1_passes2",
+    "compiled": true,
+    "prediction_status": "not_available",
+    "alone_estimate_status": "not_available",
+    "estimate_status": "not_available",
+    "consumer_policy": "rejected",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "norm_control_layers2_passes2",
+    "compiled": true,
+    "prediction_status": "not_available",
+    "alone_estimate_status": "not_available",
+    "estimate_status": "not_available",
+    "consumer_policy": "rejected",
+    "launch_ns": 0,
+    "error": null
+  },
+  {
+    "name": "untyped_region_ops_expected_unsupported",
+    "compiled": false,
+    "prediction_status": "<absent>",
+    "alone_estimate_status": "<absent>",
+    "estimate_status": "<absent>",
+    "consumer_policy": "<not_run>",
+    "launch_ns": null,
+    "error": "task.region_ops: untyped region_ops are unsupported; provide a supported op_kind/typed region"
+  },
+  {
+    "name": "positive_launch_residual_R2_control",
+    "compiled": true,
+    "prediction_status": "not_available",
+    "alone_estimate_status": "not_available",
+    "estimate_status": "not_available",
+    "consumer_policy": "rejected",
+    "launch_ns": 0,
+    "error": null
+  }
+]

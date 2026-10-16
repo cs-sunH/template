@@ -1,0 +1,17 @@
+{
+  "run_kind": "new_saved_rerun_of_earlier_tool_only_fraction_calculation",
+  "earlier_tool_only_output_not_saved_as_raw": true,
+  "utc_started": "2026-10-16T05:04:45.447458+00:00",
+  "utc_finished": "2026-10-16T05:04:45.476734+00:00",
+  "args": [
+    "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/bin/python3",
+    "/workspace/template/work/repeat-review/fraction_counterexamples.py"
+  ],
+  "cwd": "/workspace/template/work/repeat-review",
+  "returncode": 0,
+  "source_sha256": "e4b82ffee2593ec44c717147066c3ba5f88209744011faace300987d3a973ba5",
+  "stdout": "fraction_counterexamples.stdout",
+  "stdout_sha256": "9a8ae0940640d3e59ed2ed25c0fb6b520af43e0257f9376d942be19839ce3d3c",
+  "stderr": "fraction_counterexamples.stderr",
+  "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

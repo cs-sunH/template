@@ -24,6 +24,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 2026-10-16当前源码检查点：内部GEMM仅延后非排序JSON存储，保留所有候选overflow/EqWork/结构/资源/credit/status/预算及Runtime估值，胜者经同一builder物化一次、公开/非GEMM路径不变。最终Release49/49（21.52s），1092完整候选materialization及实际旧/新公开wire、36仲裁轨迹、11完整接口对象和Norm32/96 raw全等。初版routing字符串capacity致cache bytes少10B的比较失败已保留并修复。诊断128³完整分配16498→14447；正常30样本cold P95 1.508469ms、本次适用热/常规冷通过，但J32 77.745μs仍failed，所有历史慢点保留、不选最好样本。总表compiler-ranking/checkpoint-summary明确scope。Norm完成96/首输出160目标10%、原busy54failed，长行两遍及R>1窗口未实现。正式canonical24仍23160c…7e9b未publisher，新公共模型五仓业务/CPU not_run；旧隔离83配置/五R3拒绝与旧SDK10项沿原scope有效。继续J32真实热路径与公共模型依赖，TX8/目标先验冻结、独立target数据缺失，工程NOT ACCEPTED，持续自主开发。
 
+2026-10-16当前接续（覆盖上方历史停止状态）：已从远端d16b545安全恢复，工作分支codex/die-continue-20261016，用户授权持续自主开发。新增零开销重复region可用性修复：通用早退曾让12实际非Norm R>1探针误报ok_assumed，现明确not_available；无新活动/PRIVATE/前置总等待，body数值和21探针完整epoch不变，5R1对象及11默认完整API对象相同。真实red失败后公共50/50通过18.68s。正常30样本预算仍failed（128³cold6.128634ms、OS J8 73.397μs；J32本次47.911μs不抹历史失败），全部raw及identity保存于repeat-availability-20261016。下一步Norm长行BF16/FP32子域/mixed dtype/多Core/容量验证；INT4 scale账本缺口、R>1真正屏障与36busy失败不伪称已解。正式五仓SDK24未publisher，target raw缺失，工程NOT ACCEPTED。
+
 ## 当前强制建模路线（2026-10-15，用户确认）
 
 **解析工作量 + 固定数量的分段累计服务曲线 + 稳定区间直接积分**。完整合同见根设计§1.5、§8.2.1、§13及AGENTS。以下替代历史“恢复Program→逐K生命周期→周期证明”的接续建议：

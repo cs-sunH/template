@@ -3215,9 +3215,9 @@ std::optional<RegionReadyOverheads> region_ready_overheads(
   RegionReadyOverheads f;
   f.launch=perf(hw,"launch_ns_per_macro",0);
   f.setup=perf(hw,"memory_setup_ns_per_macro",0);
-  if(f.launch==0 && f.setup==0)return std::nullopt;
   f.instances=as_u64(mul128(getu(p.task,"layer_instances",1),
       getu(p.task,"weight_passes",1),"region overhead instances"),"region overhead instances");
+  if(f.instances==1 && f.launch==0 && f.setup==0)return std::nullopt;
   f.first_hbm=p.epochs.size();
   for(std::size_t e=0;e<p.epochs.size()&&f.first_hbm==p.epochs.size();++e)
     for(const auto& a:p.epochs[e].activities)
@@ -3228,12 +3228,13 @@ std::optional<RegionReadyOverheads> region_ready_overheads(
       p.epochs.front().activities.begin(),p.epochs.front().activities.end(),
       [](const Activity& a){return a.role==Role::Load;});
   const double applicable_setup=f.has_hbm ? f.setup : 0;
-  if(f.launch==0 && applicable_setup==0)return std::nullopt;
+  if(f.instances==1 && f.launch==0 && applicable_setup==0)return std::nullopt;
   f.per_instance=region_delay::sum(f.launch,applicable_setup,1);
   f.total=region_delay::sum(f.launch,applicable_setup,f.instances);
   f.required=f.total.ceil;
-  // Aggregated repeats do not retain each invocation's idle windows. Keep
-  // their previous body timing, but explicitly withhold a complete estimate.
+  // Aggregated repeats do not retain each invocation's materialization
+  // barriers or idle windows, even when launch/setup are zero. Keep their
+  // previous body timing, but explicitly withhold a complete estimate.
   // Charging R*delay at the front would alter real competition/readiness.
   f.complete=f.instances==1 && (!f.has_hbm||f.setup==0||independent_first_load);
   f.applied=f.complete ? f.per_instance.ceil : 0;
@@ -3273,8 +3274,10 @@ nlohmann::json region_ready_overhead_audit(const RegionReadyOverheads& f) {
         {{"lower_inclusive",0},{"upper_exclusive",1}};
   }
   if(f.has_hbm)audit["first_hbm_epoch"]=f.first_hbm;
-  if(!f.complete)audit["limitation"]=f.instances>1 ? "aggregate_bulk_does_not_retain_per_instance_ready_windows" :
-      "first_HBM_is_not_an_independent_initial_Load_epoch";
+  if(!f.complete)audit["limitation"]=f.instances>1
+      ? (f.required ? "aggregate_bulk_does_not_retain_per_instance_ready_windows" :
+          "aggregate_bulk_does_not_retain_per_instance_materialization_barriers")
+      : "first_HBM_is_not_an_independent_initial_Load_epoch";
   audit["ready_gate_description_count"]=f.applied ? 1 : 0;
   return audit;
 }
@@ -3286,13 +3289,15 @@ void apply_region_ready_overheads(const Hardware& hw,
     std::vector<std::shared_ptr<Plan>>& plans,bool defer_gemm_diagnostics) {
   for(auto& p:plans) {
     const auto facts=region_ready_overheads(hw,*p);
-    if(!facts)continue;  // Preserve zero-overhead wire/hash exactly.
+    if(!facts)continue;  // Preserve single-instance zero-overhead wire/hash.
     const auto& f=*facts;
     if(p->launch_ns!=0)fail("mapping_invariant: region ready delay already applied");
     p->launch_ns=f.applied;
     if(!f.complete) {
       p->summary["prediction_status"]="not_available";
-      p->summary["prediction_scope"]="body_timing_only_fixed_region_overheads_unmodeled";
+      p->summary["prediction_scope"]=f.instances>1 && !f.required
+          ? "body_timing_only_repeated_region_barriers_unmodeled"
+          : "body_timing_only_fixed_region_overheads_unmodeled";
     }
     p->summary["service_description_count"]=service_description_count(*p);
     if(f.applied && p->summary.contains("service_curves")) {
