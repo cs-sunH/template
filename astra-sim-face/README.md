@@ -41,7 +41,7 @@ Python 规划层有同一语义的确定性 XY 路由函数。注意：这是分
 权威映射为"一个 FACE 物理计算 die = 一个 ASTRA-sim NPU"。每颗芯粒包含：
 
 - **计算单元**：生产配置（硬件 `die` 节）下每颗芯粒是一个 die 内成本模型
-  （`extern/die_model/`：14 行核表 + HBM/面积/mesh 派生 + 阶段化资源调度），
+  （`extern/die_model/`：32 行 Core 资源表 + HBM/面积/mesh 派生 + 阶段化资源调度），
   COMP 节点按 `die_op_spec` 编译为不可变 DiePlan 并由阶段状态机计时执行
   （三后端与配置链见 §H）；显式 legacy 后端（`compute` 节 + roofline）保留
   旧 Roofline 闭式模型供回归；

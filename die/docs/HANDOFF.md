@@ -4,11 +4,18 @@
 
 用户已明确恢复持续自主开发；下方停止交接段落只记录此前状态。已实际 fetch/ls-remote 核实 main=`d3a64a6c4cb23b8ce437438ed68217d7cee4af1f`、唯一迁移分支=`b8ddbcfd62e03738b0c3996444355cbbe2e99b80`。本次从迁移提交建立独立工作树/分支 `codex/die-core-resume-20261016`，安全合入 main 独有交接资料，保留新版 AGENTS、PROJECT、设计文档及全部实现；没有从旧 main 重写硬件或复用任何旧 ELF。
 
-- Current Status / Completed：完成远端和干净工作区核验、DOCX/解析合同阅读及分叉恢复。当前提交为恢复检查点，不表示最终工程验收。
-- Next Step / Tests：从全新 work/build-core-final 配置并构建最终公共源码，51项、DOCX/32行/192对照与两套配置正常30样本性能均待本次运行；随后补齐五仓最终 W/H ABI/配置和隔离新 SDK 真实消费者，再安全集成。
+- Current Status / Completed：完成远端核验和分叉恢复；最终公共fresh Make/Release 51/51、DOCX/32行及192资源点通过；两套正常30样本预算均failed，见下方本次实际公共检查点。当前不是最终工程验收。
+- Next Step / Tests：公共构建及实际验证证据在 work/build-core-release 对应的 evidence/core-resume-20261016；三仓最终 W/H ABI/配置 fresh验证进行中，随后隔离新 SDK 真实消费者；继续诊断已保存性能失败，再安全集成已满足条件的范围。
 - Important Decisions：仅 Core、core32_v1、L0=a；旧字段严格拒绝；解析固定分段路线、10%/有据20%及原 busy/速度门槛保持。TX8工程对照点不是通用强制硬件或目标实测校准。
 - Files to Continue：die/src、configs、tests、tools；single-core-20261016 和 single-core-handoff-20261016 归档；五仓最终配置及 canonical24 隔离验证入口。
 - Blocking Issues / Handoff Notes：尚无环境阻碍；最终验证/正式新 SDK 发布仍未完成，工程 NOT ACCEPTED。本恢复分支尚未合入共享 main；不将推送检查点当作集成或验收完成。Norm/Runtime/R>1/busy 未解项目按真实依赖继续。
+
+### 本次实际公共验收检查点（最终迁移源码未再改动）
+
+- 全新 Make/Release 构建成功，最终公共 **51/51通过，32.29s**；源码/头/测试/配置与保存迁移 b8ddbcf 一致，身份按当前文件 hash 实核。直接 DOCX 32行、192点（32行×3网格×2拓扑）当前解析器重跑通过；完整数值与首版存档一致，仅排除来源常量镜像变化导致的 fingerprint。最终工程配置、旧字段任意类型拒绝、容量/工作量与既有 Runtime 合同均在本次51项范围中。
+- 两份正常30样本预算 **failed**，没有并行构建；cgroup 两次新增 throttled 均为0。example 128³cold P95 2.587118ms、OS J8 68.344us；TX8工程点 cold 2.568263ms、交替alias 56.093us、Residual cost 121.610us、multi-domain J32 63.015us、OS J8/J32 104.229/277.039us。全部原始样本保留，不重采选最好；不是完整性能验收或目标硬件校准。
+- 新环境无 Ninja，首次配置/随后构建未成功；原log/identity保留，改用独立全新 Make 目录完成实际构建。三仓最终legacy配置阶段通过；首次验证工具接续因阶段目录与build目录重名而失败，未启动ABI构建，不误记为源码失败。正在修工具并fresh接续，正式SDK不变。
+- 完整当前证据在 `evidence/core-resume-20261016/`，总表 `public-checkpoint-summary.json`。有效用户文档两处过时说明已修；迁移仍仅在本分支，main及正式新版SDK尚未激活，工程NOT ACCEPTED。继续五仓及性能/数值依赖，不按检查点停工。
 
 ## 此前已保存交接记录（保留原始验证范围）
 

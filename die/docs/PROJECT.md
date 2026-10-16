@@ -82,7 +82,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 - 依赖 C++17、CMake、Python3 和 vendored `astra-sim-wscllm/extern/helper/json/json.hpp`；TX8 工具仅 Python 标准库。
 - 下一环境应核实真实工具安装。本 Session 使用 `/workspace/cloud-setup/activate.sh`、CMake3.31.10、GCC14.2、protoc3.21.12/Python protobuf6.33.5，`PROTOBUF_FROM_SOURCE` 未设置，使用系统 Protobuf module。环境依赖不是跨账号交付；重建入口随证据保存。
 - `cmake -S die -B work/build-die -DCMAKE_BUILD_TYPE=Release` 是公共库入口；benchmark 宏缺失已修复。实际最新构建/CTest 状态以 HANDOFF 为准。
-- 独立 Runtime/hardware_search 和 TX8 审计的真实命令、日志与结果在 HANDOFF 与 `docs/evidence/`。
+- 独立 Runtime、TX8 审计及已移除硬件搜索功能的历史验证命令、日志与结果在 HANDOFF 与 `docs/evidence/`；历史搜索证据不代表当前生产接口仍支持硬件搜索。
 
 ## 验收标准
 

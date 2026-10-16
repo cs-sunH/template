@@ -1,0 +1,146 @@
+{
+  "checkpoint": "final saved Core migration, current-source public verification",
+  "production_base": "b8ddbcfd62e03738b0c3996444355cbbe2e99b80",
+  "observed_head": "3b653775842fff7fa43db3a0007029a8cbfe75c2",
+  "current_tested_source_hashes_match": true,
+  "public_tests": {
+    "status": "passed",
+    "count": 51,
+    "seconds": 32.29742884635925
+  },
+  "resources": {
+    "status": "passed",
+    "cases": 192,
+    "docx_rows": 32,
+    "grids": 3,
+    "topology_profiles": 2,
+    "failures": [],
+    "excluded_from_archived_comparison": [
+      "fingerprint: final source constant mirror changed"
+    ],
+    "reference_path": "die/docs/evidence/single-core-20261016/paired-resources/paired-resources.json.gz",
+    "reference_sha256": "e9af6e0a08f205f30dc29ea7a9f262fbb1e2c88e99ed6541d1fe2ee669870b1c",
+    "probe_sha256": "6c1db1b992b205715668018458b2c525aa3d5d7d456eb9f6caf9acd8cab4c828",
+    "raw_uncompressed_sha256": "918e6ae1e067b09b047892f0c79a30b0e33143261f97a08d3c7de097357c85c5"
+  },
+  "performance": {
+    "example": {
+      "status": "failed",
+      "failures": [
+        {
+          "case": "gemm_128x128x128.cpp_cold_compile_uncached",
+          "reason": "fixed percentile latency gate was exceeded"
+        },
+        {
+          "case": "compiled_os_credit_curve_bulk_j8",
+          "reason": "fixed 50us single-update percentile gate was exceeded"
+        }
+      ],
+      "samples_per_metric": 30,
+      "cgroup_throttle_count_delta": 0,
+      "cold_compile_p95_ns": {
+        "gemm_1x128x128": 839535,
+        "gemm_128x128x128": 2587118,
+        "residual_257": 1242693,
+        "swiglu_16x4097": 932219,
+        "norm_8x4096_cached": 611898,
+        "norm_128x19569_streamed_parameters": 744539,
+        "example_attention": 970159
+      },
+      "runtime_update_p95_ns": {
+        "homogeneous_j1": 762,
+        "homogeneous_j8": 3261,
+        "homogeneous_j32": 10125,
+        "heterogeneous_j1": 702,
+        "heterogeneous_j8": 35676,
+        "heterogeneous_j32": 11598,
+        "endpoint_hbm_j1": 531,
+        "endpoint_hbm_j8": 4170,
+        "endpoint_hbm_j32": 8040,
+        "multi_domain_j1": 634,
+        "multi_domain_j8": 8888,
+        "multi_domain_j32": 11396,
+        "compiled_os_credit_curve_bulk_j1": 9085,
+        "compiled_os_credit_curve_bulk_j8": 68344,
+        "compiled_os_credit_curve_bulk_j32": 33253
+      },
+      "raw_sha256": "dd829bc3b18022979bc6cc66fded684fe3853dac44ea507789517babb1f71cb3",
+      "identity_sha256": "9e0a3c0683c2187460798d547a86a6e4f37717940ed2261d21e6c3442cc77ca9"
+    },
+    "tx8": {
+      "status": "failed",
+      "failures": [
+        {
+          "case": "gemm_128x128x128.cpp_cold_compile_uncached",
+          "reason": "fixed percentile latency gate was exceeded"
+        },
+        {
+          "case": "gemm_128x128x128.cabi_hot_alternating_alias_compile_batch",
+          "reason": "fixed percentile latency gate was exceeded"
+        },
+        {
+          "case": "residual_257.cabi_hot_cost_only",
+          "reason": "fixed percentile latency gate was exceeded"
+        },
+        {
+          "case": "multi_domain_j32",
+          "reason": "fixed 50us single-update percentile gate was exceeded"
+        },
+        {
+          "case": "compiled_os_credit_curve_bulk_j8",
+          "reason": "fixed 50us single-update percentile gate was exceeded"
+        },
+        {
+          "case": "compiled_os_credit_curve_bulk_j32",
+          "reason": "fixed 50us single-update percentile gate was exceeded"
+        }
+      ],
+      "samples_per_metric": 30,
+      "cgroup_throttle_count_delta": 0,
+      "cold_compile_p95_ns": {
+        "gemm_1x128x128": 771297,
+        "gemm_128x128x128": 2568263,
+        "residual_257": 826343,
+        "swiglu_16x4097": 1691950,
+        "norm_8x4096_cached": 815371,
+        "norm_128x19569_streamed_parameters": 1109166,
+        "example_attention": 1116752
+      },
+      "runtime_update_p95_ns": {
+        "homogeneous_j1": 872,
+        "homogeneous_j8": 3373,
+        "homogeneous_j32": 6440,
+        "heterogeneous_j1": 506,
+        "heterogeneous_j8": 8429,
+        "heterogeneous_j32": 11176,
+        "endpoint_hbm_j1": 841,
+        "endpoint_hbm_j8": 4306,
+        "endpoint_hbm_j32": 9925,
+        "multi_domain_j1": 1640,
+        "multi_domain_j8": 14021,
+        "multi_domain_j32": 63015,
+        "compiled_os_credit_curve_bulk_j1": 18954,
+        "compiled_os_credit_curve_bulk_j8": 104229,
+        "compiled_os_credit_curve_bulk_j32": 277039
+      },
+      "raw_sha256": "b2dc5f9a21534fcd50ec54561bab6ae40468d42dac80373c723f7ef24b90e1f1",
+      "identity_sha256": "61a93bd42e41c700621dfa7d2921685b60110d6c32acda91bdf5c1b308bbbf47"
+    }
+  },
+  "engineering_status": "NOT ACCEPTED",
+  "formal_sdk_published": false,
+  "main_contains_migration": false,
+  "next": "finish final legacy W/H regressions and isolated current SDK consumers; retain and diagnose failed budgets; then integrate verified scope",
+  "evidence_sha256": {
+    "budget-example-identity.json": "9e0a3c0683c2187460798d547a86a6e4f37717940ed2261d21e6c3442cc77ca9",
+    "budget-tx8-identity.json": "61a93bd42e41c700621dfa7d2921685b60110d6c32acda91bdf5c1b308bbbf47",
+    "build-identity.json": "d5e0e8aef70ae2b16976e2b8b72170a1aea3fd586585fc0d639e72825d4bb008",
+    "build-make-identity.json": "963f7969d3eaaba0d59d8ee15fb205c7a07d4cb910c9019a10bfce2d3d7aa515",
+    "configure-identity.json": "0df9105d33baf9b3da6f5868071d52f7f605d6f1577094e9f0d343dba51171ab",
+    "configure-make-identity.json": "47d74e8bfedcfc9207ad85c843a6048b9fa18bf1a0d98b28987c53c0dbe745e1",
+    "docx-identity.json": "f870ab55603eead71982544cc679d07587e4f63f384caf1b359b551397d71460",
+    "probe-build-identity.json": "8a3bacb567329b0835c3b0f46454c0aff8a33c4d1cffd5ac275ec2dcb406e6c3",
+    "public-51-identity.json": "31702e6ede162973e3829856aac5ec56ac652f6b2f96460b1a4f998c37b026cf",
+    "resources-192-identity.json": "cc7619894805ec36be97ef9971ee04e51c48d07f3b8130aaa7907aa7e23d5a45"
+  }
+}
