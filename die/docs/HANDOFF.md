@@ -1,5 +1,15 @@
 # Codex Cloud 开发交接状态
 
+## 最新持续研发入口（2026-10-17；覆盖下方旧停止指针）
+
+用户已恢复持续自主研发。最新有效源码与完整证据保存在 [`codex/die-numeric-continue-20261017@c734ce1145915279bc26367cb8e1e5076629adfe`](https://github.com/cs-sunH/template/tree/c734ce1145915279bc26367cb8e1e5076629adfe)，后续接续应fetch核实该分支最新HEAD，不能仅从main推断源码进度。[权威HANDOFF](https://github.com/cs-sunH/template/blob/c734ce1145915279bc26367cb8e1e5076629adfe/die/docs/HANDOFF.md)与[当前复现/范围](https://github.com/cs-sunH/template/blob/c734ce1145915279bc26367cb8e1e5076629adfe/die/docs/analysis/numeric-continue-20261017/README.md)。
+
+- 当前分支从真实最新9c464ca续接并普通merge保留main021a47f，未重做已验A+B；修复正小事件、全活动整数ready、严格target/真ceil及微步前物理进度/credit守卫。最终Release58/58，5个新测试对fresh A+B真实red。355项无ELF源码/原始日志、失败及预算已归档/逐hash核验；上述c734ce1已push且ls-remote实核。
+- 严格矩阵仍78/84，六原精确舍入失败；完整API比较false，13个estimate busy微差（最多4.538e-15ns/一个投影1ULP），其余字段/8条实际轨迹/28ABI符号相同。两个配置各一次正常30预算当前全过，历史性能失败全部保留，不称全负载稳定验收或目标实测校准。
+- 旧A+B剩余三仓native fresh补齐，各3/4、原R4guard失败/实际0skip；属于冻结A+B身份，不能当当前新Runtime通过。新Runtime五仓重新冻结验证正继续。正式五仓canonical24 SDK未发布，publisher未运行；Norm容量1/busy/长行/R>1及完整业务/CPU/目标实测仍未验收。
+- **本main提交仅同步共享恢复入口；main生产尚未合入A+B/新数值源码，工程NOT ACCEPTED。** 远端保存、main源码集成、SDK发布与工程验收分别核实。下一步从上述分支继续当前SDK受影响验证及Norm独立固定规模affine/Fraction研究，不恢复旧Core类型/逐K路线，不因检查点停止。
+
+
 ## 最新停止交接入口（2026-10-17；覆盖下方旧状态）
 
 用户已要求立即停止开发。**最新有效成果保存在独立恢复分支，不要只从main恢复。**

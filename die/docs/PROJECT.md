@@ -1,5 +1,7 @@
 # die 子项目：项目说明与验收标准
 
+2026-10-17用户恢复持续研发，当前有效数值源码和完整证据在独立 `codex/die-numeric-continue-20261017@c734ce1`，58/58与当前两配置正常30预算已执行，旧严格失败/13busy微差与模型限制均披露。main仅同步共享入口；正式SDK未发布、工程NOT ACCEPTED。请从[HANDOFF最新入口](HANDOFF.md)fetch恢复分支接续，不只从main判断研发进度，下方旧停止状态不覆盖当前授权。
+
 ## 最新停止交接指针（2026-10-16）
 
 用户已要求立即停止。未验收 Runtime A+B 源码已远端保存于 `codex/die-core-resume-20261016@6f01a6af1dc8976a8124d754e40446edbcd0b443`，后续纯归档提交保存全部部分成果；组合源码 fresh构建/CTest/API/预算均not_run。main已激活唯一Core，未激活此次Runtime组合；正式SDK未发布，工程NOT ACCEPTED。恢复入口为[HANDOFF最新停止章节](HANDOFF.md)。下方持续研发描述均为停止前历史状态。
