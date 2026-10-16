@@ -1,0 +1,35 @@
+diff --git a/die/src/Execution.cc b/die/src/Execution.cc
+index 320a6cd..4d56aac 100644
+--- a/die/src/Execution.cc
++++ b/die/src/Execution.cc
+@@ -1174,13 +1174,6 @@ void Runtime::allocate() {
+     std::array<double, 2> credit_slope{};
+   };
+ 
+-  for (auto& [handle, execution] : executions_) {
+-    (void)handle;
+-    for (LiveActivity& live : execution.activities) {
+-      live.rate = 0.0;
+-      live.alpha = 0.0;
+-    }
+-  }
+   ++allocation_updates_;
+   ++generation_;
+ 
+@@ -1188,9 +1181,14 @@ void Runtime::allocate() {
+   std::map<std::string, long double> owner_q;
+   for (auto& [handle, execution] : executions_) {
+     (void)handle;
+-    if (execution.terminal || time_until(execution.ready_ns) > kTimeEpsilonNs) continue;
++    const bool ready=!execution.terminal && time_until(execution.ready_ns)<=kTimeEpsilonNs;
+     for (LiveActivity& live : execution.activities) {
+-      if (live.epoch_index != execution.epoch || live.done) continue;
++      // Reset every activity's published allocation, including past/future
++      // epochs and terminal executions, while collecting in the same pass.
++      // Ref order, owner membership and all subsequent arithmetic are intact.
++      live.rate = 0.0;
++      live.alpha = 0.0;
++      if (!ready || live.epoch_index != execution.epoch || live.done) continue;
+       bool has_service = false;
+       for (double work : live.definition.work) has_service = has_service || work > 0.0;
+       if (!has_service) continue;

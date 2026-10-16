@@ -1,0 +1,5 @@
+[ 55%] Built target coarse_die
+[ 77%] Built target coarse_die_cabi
+[ 88%] Building CXX object CMakeFiles/coarse_norm_long_row_test.dir/tests/norm_long_row_test.cc.o
+[100%] Linking CXX executable coarse_norm_long_row_test
+[100%] Built target coarse_norm_long_row_test

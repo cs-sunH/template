@@ -1,0 +1,18 @@
+{
+  "status": "PARTIAL_NOT_ADOPTED_NOT_RELEASED",
+  "base_git_head": "5caede8ca81902baf15c7d3228db70f2087302fb",
+  "existing_files_patch": "die/docs/analysis/norm-long-row-20261016/partial-existing-files.patch",
+  "patch_sha256": "81af3a02bd76c97528ab1e109a594b21f875e33dae12f3334432aa680d1d1f46",
+  "modified_existing_sha256": {
+    "die/CMakeLists.txt": "009f7e2c6edca1be3eb2023a5ab65798e5cc1091d6aad6b517c28b456deb76ef",
+    "die/src/Mapping.cc": "b04153ab4e987b7dda0304bfe4de4ed00e584c544b05ff99fa0212249fef394f",
+    "die/tests/elementwise_oracle_driver.cc": "c2985b04968ca1d058e97f6800f3f1fbebc25ebb8acbc89d5034106e800ba904"
+  },
+  "new_files_sha256": {
+    "die/src/NormLongRow.hh": "f3c3992329a2de1e44f995acf390483044afad6692a628fcd4ecd207a8fb31ec",
+    "die/tests/norm_long_row_test.cc": "4ec5303690f1f4288d1e613ebc7196abbffb1d1e55b88f3b478c4f372ac71f90",
+    "die/tests/norm_long_oracle_driver.cc": "89706857fa772ccaf47996d2a388be38dc947f15c2bf4f68084aa87dafe624f0",
+    "die/validation/norm_long_oracle.py": "67def4ce51d094080d087de7bfb3ce0806dcbc38878e76eec3a0ac4233714847"
+  },
+  "reason": "User requested immediate handoff. Only targeted unit1/1 passed after fixture correction; full50 tests, new-scope budget and integration not_run. Existing12-case oracle completed36 scenes, all joint completion/busy classified failed. All sources/tests/tools preserved; production restored to verified5caede8."
+}

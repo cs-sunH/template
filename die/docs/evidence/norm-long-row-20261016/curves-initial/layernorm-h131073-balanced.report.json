@@ -1,0 +1,290 @@
+{
+  "scope": "Offline discrete two-pass Norm; one Core/row, BF16, R1, nonbinding NoC.\n\nStatistics consumes input tiles serially without an output FIFO; the complete\nrow barrier precedes application. Application has two physical input/output\nslots. Work/bytes derive from task facts; no production curve or duration is\nused. All owner Q/alpha, resource and PRIVATE allocation uses the independently\ntested nonnegative grouped reference. No hardware calibration or fitting.\n",
+  "independent_ledger": {
+    "hbm_read_bytes_total": 1048584,
+    "hbm_write_bytes_total": 262146,
+    "source_vec_ops": 1048584,
+    "vec_equivalent_ops": 1703949,
+    "sram_read_bytes": 3932206,
+    "sram_write_bytes": 3932206,
+    "local_bus_bytes": 6553682
+  },
+  "ledger_matches": true,
+  "scenarios": {
+    "offset": {
+      "reference": {
+        "finish_s": [
+          25.055677365075486,
+          25.604946522676777
+        ],
+        "first_output_ready_s": [
+          4.662674088549089,
+          5.6983314698785605
+        ],
+        "counters": {
+          "hbm_busy_s": 25.600195312499654,
+          "hbm_shared_s": 24.555653326613978,
+          "compute_busy_s": 10.240078125000242,
+          "row_busy_s": [
+            25.600195312499654,
+            25.600195312499654
+          ],
+          "row_shared_s": [
+            24.555653326613978,
+            24.555653326613978
+          ]
+        },
+        "discrete_events": 5130,
+        "scope": "one complete row statistics barrier, then discrete application tiles; two input/output slots"
+      },
+      "comparison": {
+        "status": "failed",
+        "completion": [
+          {
+            "actual_s": 25.099081282,
+            "reference_s": 25.055677365075486,
+            "absolute_error_s": 0.04340391692451462,
+            "relative_error": 0.0017322986839307848,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          {
+            "actual_s": 25.100195313,
+            "reference_s": 25.104946522676777,
+            "absolute_error_s": 0.004751209676776114,
+            "relative_error": 0.00018925392541603085,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "first_output_readiness": [
+          {
+            "actual_s": 4.652275597,
+            "reference_s": 4.662674088549089,
+            "absolute_error_s": 0.010398491549088895,
+            "relative_error": 0.0022301562047036946,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          {
+            "actual_s": 5.16106522,
+            "reference_s": 5.1983314698785605,
+            "absolute_error_s": 0.03726624987856031,
+            "relative_error": 0.007168886804255846,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "busy_original_definition": {
+          "hbm_busy_s": {
+            "actual_s": 25.600195312500002,
+            "reference_s": 25.600195312499654,
+            "absolute_error_s": 3.481659405224491e-13,
+            "relative_error": 1.3600128290913945e-14,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "hbm_shared_s": {
+            "actual_s": 24.599081281031243,
+            "reference_s": 24.555653326613978,
+            "absolute_error_s": 0.04342795441726466,
+            "relative_error": 0.0017685521879475489,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "compute_busy_s": {
+            "actual_s": 25.587700375939406,
+            "reference_s": 10.240078125000242,
+            "absolute_error_s": 15.347622250939164,
+            "relative_error": 1.4987798006608277,
+            "target_10_percent": false,
+            "within_20_percent": false
+          }
+        },
+        "completion_target_10_percent": true,
+        "completion_within_20_percent": true,
+        "reference_shared_hbm_s": 24.555653326613978,
+        "note": "20% is diagnostic coverage, not automatic acceptance; no calibration attempts were made"
+      }
+    },
+    "solo": {
+      "reference": {
+        "finish_s": [
+          12.807723858173006
+        ],
+        "first_output_ready_s": [
+          2.585012019230737
+        ],
+        "counters": {
+          "hbm_busy_s": 12.80009765624993,
+          "hbm_shared_s": 0.0,
+          "compute_busy_s": 5.1200390625000125,
+          "row_busy_s": [
+            12.80009765624993,
+            12.80009765624993
+          ],
+          "row_shared_s": [
+            0.0,
+            0.0
+          ]
+        },
+        "discrete_events": 2565,
+        "scope": "one complete row statistics barrier, then discrete application tiles; two input/output slots"
+      },
+      "comparison": {
+        "status": "failed",
+        "completion": [
+          {
+            "actual_s": 12.800097657,
+            "reference_s": 12.807723858173006,
+            "absolute_error_s": 0.007626201173005498,
+            "relative_error": 0.0005954376638233797,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "first_output_readiness": [
+          {
+            "actual_s": 2.581942609,
+            "reference_s": 2.585012019230737,
+            "absolute_error_s": 0.003069410230736924,
+            "relative_error": 0.001187387218280841,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "busy_original_definition": {
+          "hbm_busy_s": {
+            "actual_s": 12.80009765625,
+            "reference_s": 12.80009765624993,
+            "absolute_error_s": 6.927791673660977e-14,
+            "relative_error": 5.412295952506526e-15,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "hbm_shared_s": {
+            "actual_s": 0.0,
+            "reference_s": 0.0,
+            "absolute_error_s": 0.0,
+            "relative_error": 0.0,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "compute_busy_s": {
+            "actual_s": 12.764525796609911,
+            "reference_s": 5.1200390625000125,
+            "absolute_error_s": 7.644486734109899,
+            "relative_error": 1.4930524241698362,
+            "target_10_percent": false,
+            "within_20_percent": false
+          }
+        },
+        "completion_target_10_percent": true,
+        "completion_within_20_percent": true,
+        "reference_shared_hbm_s": 0.0,
+        "note": "20% is diagnostic coverage, not automatic acceptance; no calibration attempts were made"
+      }
+    },
+    "sync": {
+      "reference": {
+        "finish_s": [
+          25.61544771634601,
+          25.61544771634601
+        ],
+        "first_output_ready_s": [
+          5.170024038461474,
+          5.170024038461474
+        ],
+        "counters": {
+          "hbm_busy_s": 25.60019531249986,
+          "hbm_shared_s": 25.60019531249986,
+          "compute_busy_s": 10.240078125000025,
+          "row_busy_s": [
+            25.60019531249986,
+            25.60019531249986
+          ],
+          "row_shared_s": [
+            25.60019531249986,
+            25.60019531249986
+          ]
+        },
+        "discrete_events": 2565,
+        "scope": "one complete row statistics barrier, then discrete application tiles; two input/output slots"
+      },
+      "comparison": {
+        "status": "failed",
+        "completion": [
+          {
+            "actual_s": 25.600195313,
+            "reference_s": 25.61544771634601,
+            "absolute_error_s": 0.015252403346011079,
+            "relative_error": 0.0005954377028623258,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          {
+            "actual_s": 25.600195313,
+            "reference_s": 25.61544771634601,
+            "absolute_error_s": 0.015252403346011079,
+            "relative_error": 0.0005954377028623258,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "first_output_readiness": [
+          {
+            "actual_s": 5.163885217,
+            "reference_s": 5.170024038461474,
+            "absolute_error_s": 0.006138821461473931,
+            "relative_error": 0.0011873874117035552,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          {
+            "actual_s": 5.163885217,
+            "reference_s": 5.170024038461474,
+            "absolute_error_s": 0.006138821461473931,
+            "relative_error": 0.0011873874117035552,
+            "target_10_percent": true,
+            "within_20_percent": true
+          }
+        ],
+        "busy_original_definition": {
+          "hbm_busy_s": {
+            "actual_s": 25.6001953125,
+            "reference_s": 25.60019531249986,
+            "absolute_error_s": 1.3855583347321954e-13,
+            "relative_error": 5.412295952506526e-15,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "hbm_shared_s": {
+            "actual_s": 25.6001953125,
+            "reference_s": 25.60019531249986,
+            "absolute_error_s": 1.3855583347321954e-13,
+            "relative_error": 5.412295952506526e-15,
+            "target_10_percent": true,
+            "within_20_percent": true
+          },
+          "compute_busy_s": {
+            "actual_s": 25.529051593223254,
+            "reference_s": 10.240078125000025,
+            "absolute_error_s": 15.28897346822323,
+            "relative_error": 1.4930524241701713,
+            "target_10_percent": false,
+            "within_20_percent": false
+          }
+        },
+        "completion_target_10_percent": true,
+        "completion_within_20_percent": true,
+        "reference_shared_hbm_s": 25.60019531249986,
+        "note": "20% is diagnostic coverage, not automatic acceptance; no calibration attempts were made"
+      }
+    }
+  },
+  "parameters_fitted": false,
+  "hardware_calibration": "not_available",
+  "raw_sha256": "6f9d39705e117ed046cdf56daff626d8fec1ae72ee0cf773a2d446ba76192ff4",
+  "oracle_sha256": "67def4ce51d094080d087de7bfb3ce0806dcbc38878e76eec3a0ac4233714847",
+  "grouped_allocator_sha256": "38534eaa90b2540fe1b7926197445694d89e057429f851807e5822daed5e1447"
+}

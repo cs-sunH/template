@@ -1,0 +1,331 @@
+{
+  "scope": "12 actual BF16 one Core/row R1 two-pass tasks / 36 synthetic scenes; no fitting/hardware calibration",
+  "driver_sha256": "9466eb4c0bbe1f479db19ce2fabc3900399e9404bedc131e0fa14c65a3a08c11",
+  "runner_sha256": "c49dc7824ac80c2c84f33b5ebb243f4c4b15b59b5bf141cba7af63ecc49ca6dd",
+  "cases": [
+    {
+      "case": "rmsnorm-h65537-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "65537",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-h65537-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "65537",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-h65537-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "65537",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-h65537-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "65537",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h65537-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "layernorm-h65537-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "65537",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h65537-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h65537-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "layernorm-h65537-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "65537",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h65537-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h65537-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "layernorm-h65537-compute",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "65537",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "compute"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h65537-compute.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h65537-compute.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "layernorm-h65537-local",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "65537",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "local"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h65537-local.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h65537-local.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-h131073-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "131073",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h131073-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h131073-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "rmsnorm-h131073-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "131073",
+        "--norm",
+        "rmsnorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h131073-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/rmsnorm-h131073-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "layernorm-h131073-balanced",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "131073",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "balanced"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h131073-balanced.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h131073-balanced.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    },
+    {
+      "case": "layernorm-h131073-memory",
+      "driver_command": [
+        "/workspace/template/work/build-die-continue/coarse_norm_long_oracle_driver",
+        "--hidden",
+        "131073",
+        "--norm",
+        "layernorm",
+        "--profile",
+        "memory"
+      ],
+      "driver_return_code": 0,
+      "report_command": [
+        "/workspace/cloud-setup/venv/bin/python",
+        "/workspace/template/die/validation/norm_long_oracle.py",
+        "--raw",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h131073-memory.raw.json",
+        "--output",
+        "/workspace/template/die/docs/evidence/norm-long-row-20261016/curves-initial/layernorm-h131073-memory.report.json"
+      ],
+      "report_return_code": 0,
+      "scenarios": {
+        "offset": "failed",
+        "solo": "failed",
+        "sync": "failed"
+      }
+    }
+  ]
+}

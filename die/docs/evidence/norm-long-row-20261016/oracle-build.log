@@ -1,0 +1,61 @@
+[  6%] Built target coarse_die
+[  8%] Built target coarse_die_cabi
+[ 10%] Built target coarse_owner_lp_oracle_driver
+[ 11%] Building CXX object CMakeFiles/coarse_elementwise_oracle_driver.dir/tests/elementwise_oracle_driver.cc.o
+[ 13%] Built target coarse_compiled_gemm_oracle_driver
+[ 15%] Built target coarse_k_readiness_runtime_driver
+[ 16%] Building CXX object CMakeFiles/coarse_norm_oracle_driver.dir/tests/norm_oracle_driver.cc.o
+[ 17%] Linking CXX executable coarse_elementwise_oracle_driver
+[ 17%] Built target coarse_elementwise_oracle_driver
+[ 18%] Building CXX object CMakeFiles/coarse_norm_long_oracle_driver.dir/tests/norm_long_oracle_driver.cc.o
+[ 18%] Linking CXX executable coarse_norm_oracle_driver
+[ 18%] Built target coarse_norm_oracle_driver
+[ 20%] Built target coarse_service_curve_benchmark
+[ 21%] Built target coarse_die_benchmark
+[ 23%] Built target coarse_norm_long_row_test
+[ 24%] Built target coarse_compiler_summary_test
+[ 26%] Built target coarse_norm_row_accounting_test
+[ 27%] Built target coarse_prediction_availability_test
+[ 29%] Built target coarse_region_delay_math_test
+[ 31%] Built target coarse_region_overhead_test
+[ 33%] Built target coarse_elementwise_service_test
+[ 35%] Built target coarse_packing_allocator_test
+[ 37%] Built target coarse_ratio_allocator_test
+[ 38%] Built target coarse_os_service_curve_test
+[ 40%] Built target coarse_os_service_scaling_test
+[ 41%] Built target coarse_service_curve_schema_test
+[ 43%] Built target coarse_service_curve_runtime_test
+[ 45%] Built target coarse_capi_cost_query_test
+[ 47%] Built target coarse_source_golden_test
+[ 48%] Built target coarse_hardware_input_test
+[ 50%] Built target coarse_compile_execution_test
+[ 52%] Built target coarse_compiler_credit_test
+[ 54%] Built target coarse_gemm_os_access_counter_test
+[ 56%] Built target coarse_gemm_os_geometry_test
+[ 58%] Built target coarse_gemm_os_route_counter_test
+[ 60%] Built target coarse_gemm_os_resource_facts_test
+[ 61%] Built target coarse_gemm_os_readiness_test
+[ 63%] Built target coarse_operator_accounting_test
+[ 65%] Built target coarse_gemm_accounting_test
+[ 67%] Built target coarse_gemm_tail_budget_test
+[ 69%] Built target coarse_task_schema_test
+[ 70%] Built target coarse_compact_batch_semantics_test
+[ 72%] Built target coarse_equivalent_work_test
+[ 74%] Built target coarse_fractional_work_test
+[ 75%] Built target coarse_fused_ffn_accounting_test
+[ 76%] Built target coarse_attention_accounting_test
+[ 77%] Built target coarse_endpoint_allocation_test
+[ 79%] Built target coarse_runtime_credit_scale_test
+[ 80%] Built target coarse_runtime_clock_translation_test
+[ 82%] Built target coarse_runtime_counters_test
+[ 84%] Built target coarse_estimate_driver_test
+[ 85%] Built target coarse_runtime_semantics_test
+[ 87%] Built target coarse_oracle_granularity_test
+[ 89%] Built target coarse_capi_lifecycle_test
+[ 91%] Built target coarse_capi_cache_response_test
+[ 93%] Built target coarse_workspace_metadata_test
+[ 95%] Built target coarse_workspace_envelope_test
+[ 97%] Built target coarse_runtime_submit_transaction_test
+[ 99%] Built target coarse_runtime_owner_symmetry_test
+[100%] Linking CXX executable coarse_norm_long_oracle_driver
+[100%] Built target coarse_norm_long_oracle_driver

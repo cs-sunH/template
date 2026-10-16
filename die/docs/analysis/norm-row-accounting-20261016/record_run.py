@@ -25,7 +25,9 @@ sources = [root / 'die/CMakeLists.txt', root / 'die/validation/norm_row_oracle.p
            root / 'die/validation/elementwise_service_oracle.py']
 for base in ['die/src', 'die/include', 'die/tests', 'die/configs', 'die/docs/analysis/norm-row-accounting-20261016',
              'die/docs/analysis/hotpath-allocation-20261016',
-             'die/docs/analysis/compiler-ranking-20261016']:
+             'die/docs/analysis/compiler-ranking-20261016',
+             'die/docs/analysis/j32-update-20261016',
+             'die/docs/analysis/norm-long-row-20261016']:
     sources += [path for path in (root / base).rglob('*') if path.is_file()
                 and path.suffix in ['.cc', '.hh', '.h', '.py', '.json', '.txt']]
 binaries = list(build.rglob('*.a')) + list(build.rglob('*.so'))

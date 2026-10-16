@@ -20,6 +20,8 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
+2026-10-16停止交接补充：生产源码保持已验证5caede8。J32融合遍历无可靠速度收益，不采用，源码patch和49项功能/失败预算证据在j32-update归档。Norm长行两遍首版（R1且每Core一行）作为partial源码/测试/oracle/SHA manifest保存于analysis/norm-long-row-20261016，未激活或发布；定向1/1通过，12synthetic任务/36场景完成及首输出60样本分别≤10%，原busy使36联合全部failed。完整50回归、新scope预算及五仓not_run。归档后work/build-die-continue仍可能含部分版本ELF，接手须fresh build；不得把这些ELF当main已测版本。本次用户要求交接后立即停止，最新具体状态与恢复入口见HANDOFF。
+
 2026-10-16当前源码检查点：内部GEMM仅延后非排序JSON存储，保留所有候选overflow/EqWork/结构/资源/credit/status/预算及Runtime估值，胜者经同一builder物化一次、公开/非GEMM路径不变。最终Release49/49（21.52s），1092完整候选materialization及实际旧/新公开wire、36仲裁轨迹、11完整接口对象和Norm32/96 raw全等。初版routing字符串capacity致cache bytes少10B的比较失败已保留并修复。诊断128³完整分配16498→14447；正常30样本cold P95 1.508469ms、本次适用热/常规冷通过，但J32 77.745μs仍failed，所有历史慢点保留、不选最好样本。总表compiler-ranking/checkpoint-summary明确scope。Norm完成96/首输出160目标10%、原busy54failed，长行两遍及R>1窗口未实现。正式canonical24仍23160c…7e9b未publisher，新公共模型五仓业务/CPU not_run；旧隔离83配置/五R3拒绝与旧SDK10项沿原scope有效。继续J32真实热路径与公共模型依赖，TX8/目标先验冻结、独立target数据缺失，工程NOT ACCEPTED，持续自主开发。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
