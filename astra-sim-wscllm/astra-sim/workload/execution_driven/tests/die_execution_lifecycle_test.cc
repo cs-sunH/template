@@ -1730,13 +1730,21 @@ int main() {
                                 free_ids.end(),
                         "H: capacity refresh admits exact workspace before take/occupy");
 
-            // Let at least one modeled Runtime event advance before live
-            // cancellation so the callback must report real served work over
-            // a positive elapsed-time denominator.
-            fixture.event_queue->proceed();
-            const auto before_cancel =
-                fixture.sys->coarse_die_runtime->counters_at(
+            // A ready-gate event may finish launch waiting without serving
+            // any work. Sample real typed compute before testing partial
+            // cancellation; keep the same task, assertions and finite bound.
+            auto before_cancel = fixture.sys->coarse_die_runtime->counters_at(
+                Sys::boostedTick());
+            for (unsigned events = 0; events < 32 &&
+                    !fixture.event_queue->finished() &&
+                    g_terminal_fires.count(70) == 0; ++events) {
+                fixture.event_queue->proceed();
+                before_cancel = fixture.sys->coarse_die_runtime->counters_at(
                     Sys::boostedTick());
+                const auto& typed = before_cancel.at("served_by_category").at("comp");
+                if (typed.at("int4_ops").get<double>() > 0.0 ||
+                    typed.at("vec_eqops").get<double>() > 0.0) break;
+            }
             const auto& comp_served =
                 before_cancel.at("served_by_category").at("comp");
             bool saw_served_work =

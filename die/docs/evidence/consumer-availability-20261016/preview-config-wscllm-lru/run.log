@@ -1,0 +1,22 @@
+test_authored_templates_do_not_duplicate_managed_hardware_fields (test_config_resolver.ConfigResolverTests.test_authored_templates_do_not_duplicate_managed_hardware_fields) ... ok
+test_impl_value_combination_gate_rejects_ring_all_to_all (test_config_resolver.ConfigResolverTests.test_impl_value_combination_gate_rejects_ring_all_to_all)
+值组合门（2026-10-01 移植）：all-to-all 只许 direct/oneDirect 族 ... ok
+test_materializes_runtime_files_from_repo_local_sources (test_config_resolver.ConfigResolverTests.test_materializes_runtime_files_from_repo_local_sources) ... ok
+test_rejects_duplicate_communicators_and_non_rectangular_groups (test_config_resolver.ConfigResolverTests.test_rejects_duplicate_communicators_and_non_rectangular_groups) ... ok
+test_resolves_values_and_profile_from_the_single_hardware_source (test_config_resolver.ConfigResolverTests.test_resolves_values_and_profile_from_the_single_hardware_source) ... ok
+test_capacity_alignment_reports_both_values (test_config_resolver.DieHardwareTests.test_capacity_alignment_reports_both_values) ... ok
+test_checked_in_die_node_is_the_ruling_point (test_config_resolver.DieHardwareTests.test_checked_in_die_node_is_the_ruling_point)
+契约 §3.5 裁定点:large / 0.75 MB / 800 mm2 / HBM 4x1 / 512 bit ... ok
+test_derived_scalars_backflow (test_config_resolver.DieHardwareTests.test_derived_scalars_backflow) ... ok
+test_die_and_compute_are_mutually_exclusive (test_config_resolver.DieHardwareTests.test_die_and_compute_are_mutually_exclusive) ... ok
+test_die_conflicts_with_roofline_template (test_config_resolver.DieHardwareTests.test_die_conflicts_with_roofline_template) ... ok
+test_die_model_config_is_managed (test_config_resolver.DieHardwareTests.test_die_model_config_is_managed) ... ok
+test_die_node_six_key_structure (test_config_resolver.DieHardwareTests.test_die_node_six_key_structure) ... ok
+test_illegal_layout_and_core_table_miss_rejected_by_library (test_config_resolver.DieHardwareTests.test_illegal_layout_and_core_table_miss_rejected_by_library) ... ok
+test_missing_compute_description_is_rejected (test_config_resolver.DieHardwareTests.test_missing_compute_description_is_rejected) ... ok
+test_resolved_die_model_and_system_injection (test_config_resolver.DieHardwareTests.test_resolved_die_model_and_system_injection) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.068s
+
+OK

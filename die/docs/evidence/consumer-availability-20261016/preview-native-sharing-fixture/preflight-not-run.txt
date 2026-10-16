@@ -1,0 +1,6 @@
+Preparatory runner failure; no compile or test was executed.
+Command: run_repeated_prepare_probe.py --root work/consumer-availability/new-sdk-consumer-boundaries/stage-root --build work/consumer-availability/new-sdk-consumer-boundaries/build/astra-sim-joint --repo astra-sim-joint --label preview-native-sharing-fixture --kind native_projection --fixture-source astra-sim-joint/astra-sim/workload/execution_driven/tests/native_coarse_projection_test.cc
+Exit: 1
+Extracted from tool output (not a separately captured subprocess log):
+FileNotFoundError: [Errno 2] No such file or directory: '/workspace/template/work/consumer-availability/new-sdk-consumer-boundaries/build/astra-sim-joint/frontend/CMakeFiles/NativeCoarseProjectionTest.dir/flags.make'
+The actual target metadata is under build/astra-sim-joint/AstraSim/CMakeFiles. Runner updated to require exactly one actual target directory. Full corrected run is in preview-native-sharing-fixture-corrected-target. The runner SHA at the initial attempt was not separately recorded.

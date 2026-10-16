@@ -1705,9 +1705,18 @@ int main() {
                                 free_ids.end(),
                         "K: exact capacity acquires the lease before take/occupy");
 
-            fixture.event_queue->proceed();
-            const auto before_cancel =
-                bridge.counters_at(Sys::boostedTick());
+            // Startup waiting is an event with no typed service. Wait for
+            // real compute before testing partial cancellation and metrics.
+            auto before_cancel = bridge.counters_at(Sys::boostedTick());
+            for (unsigned events = 0; events < 32 &&
+                    !fixture.event_queue->finished() &&
+                    g_terminal_fires.count(100) == 0; ++events) {
+                fixture.event_queue->proceed();
+                before_cancel = bridge.counters_at(Sys::boostedTick());
+                const auto& typed = before_cancel.at("served_by_category").at("comp");
+                if (typed.at("int4_ops").get<double>() > 0.0 ||
+                    typed.at("vec_eqops").get<double>() > 0.0) break;
+            }
             const auto& comp_served =
                 before_cancel.at("served_by_category").at("comp");
             bool saw_served_work =

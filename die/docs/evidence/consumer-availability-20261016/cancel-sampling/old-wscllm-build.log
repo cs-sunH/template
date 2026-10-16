@@ -1,0 +1,10 @@
+[  4%] Built target coarse_die
+[ 28%] Built target yaml-cpp
+[ 32%] Built target fmt
+[ 36%] Built target die_model
+[ 40%] Built target spdlog
+[ 48%] Built target Analytical_Congestion_Aware
+[ 88%] Built target AstraSim
+[ 88%] Building CXX object frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/workspace/template/astra-sim-wscllm/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc.o
+[ 88%] Linking CXX executable ../bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+[100%] Built target AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest

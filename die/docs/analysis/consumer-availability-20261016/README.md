@@ -6,6 +6,50 @@
 执行、workspace admission、依赖完成与成本评分不能把该数值当完整预测。
 正式五仓 vendor 仍是 canonical24，未在主工作树运行 publisher。
 
+## 最新补充：隔离五仓已完成（基于 main 4114533）
+
+`preview-complete-final-summary.json` 为当前source-bound总表，原411的
+`checkpoint-summary-final.json` 及所有原raw保持不变。五仓consumer和双ABI
+均构建成功，配置18/17/20/15/13合计 **83/83，无skip**；五份coarse CABI
+均逐byte等于公共47。32文件eb0472bf freeze始终未变，actual文件hash全对，
+公共生产源/配置/头均与当前相同，CMake仅少CLI注册（SDK testsOFF）。
+五个真实R3 compile/prepare/ready-scan probe均通过，含合法R1正例。
+正式五份24文件仍逐个吻合23160c…7e9b，没有运行正式publisher。
+
+新SDK原标准CTest四仓lifecycle在原样实际R4 FFN处failed；JOINT为5/6，
+NativeProjection原共享HBM断言failed。该矩阵整体failed，不能因ABI/config
+通过就称业务通过。两个WS fixture原来首个Runtime事件后立即取消；现在首
+事件可以只结束launch等待，测试改为最多32事件等实际compute服务。与原
+冻结生产objects链接的完整测试main中，取消/typed/两rank指标原断言全部过，
+后续原R4仍以prediction_not_available abort（真实-6、外层250）。没有改变
+生产模型、放宽断言或缩小实际R4任务。
+
+JOINT原1MiB端点50ns到达，已在计算1000ns真实launch等待内结束；专测
+sharing的parity和capacity fixture改为真实launch之后偏移50ns到达。
+硬件/shape/字节保持，direct Runtime读取相同wire时刻，capacity同tick语义
+保持；其它snapshot/cancel的早到达50ns用例不动。新SDK完整NativeProjection
+main通过，原标准失败二进制/log仍保留。初次runner错误假定target在frontend
+导致未编译/未运行，保留preflight transcript；随后从实际flags.make定位。
+
+两个WS和JOINT修正后旧SDK重建并实测2+6项通过；未变FACE两仓各1项的
+已绑定当前源证据仍有效，故当前旧SDK **10/10**。新的LastTest复制到新总表
+旁，不覆盖历史日志。新版recorder区分隔离archive和外层Git HEAD，stage的
+base_head=null，另列archive base9bb、freeze SHA、overlay核验；旧raw中
+base_head是当时外层HEAD，不能用作stage版本身份。
+
+`run_repeated_prepare_probe.py --kind lifecycle --fixture-source PATH` 链接
+完整fixture main以核取消采样，`--kind native_projection` 核JOINT完整main；
+默认仍是R3拒绝probe，均不改标准目标。汇总复现：
+
+```sh
+python3 die/docs/analysis/consumer-availability-20261016/collect_preview_results.py \
+  --output die/docs/evidence/consumer-availability-20261016/FRESH-summary.json
+```
+
+这次只有测试和证据工具变化，公共47、9bb/412性能/精度证据按原范围复用，
+不声称新测量。R>1真实窗口、busy/首输出、五仓真实负载/CPU和target raw
+仍未通过/缺失，正式发布not_published，工程NOT ACCEPTED。继续公共模型。
+
 ## 源码边界
 
 公共 `include/coarse_die/Prediction.hh` 提供一个无状态检查。仅检查 Plan

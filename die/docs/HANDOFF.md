@@ -1,10 +1,19 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch/ls-remote实核HEAD、main及工作分支均为 `9bb8c0ac74ad3b78edb0004d7ebbc61f00942dda`。包含本页的Git提交为不可用预测消费者边界检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch/ls-remote实核HEAD、main及工作分支均为 `4114533d6b25b68d93530a3af3126b6cba9880f9`。包含本页的Git提交补齐隔离五仓证据和三个测试fixture修正；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
 
 ## Current Status
 
-### 当前有效检查点：不可用预测的消费者边界与真实五仓旧SDK兼容
+### 当前有效检查点：隔离新SDK五仓完成，保留R4业务失败
+
+- 冻结32文件eb0472bf…e55a的五仓consumer及双ABI全部实际构建成功，真实配置 **83/83、无skip**（18/17/20/15/13），五份coarse CABI均与公共47 ELF逐byte相同。五仓真实R3 compile/prepare/ready-scan拒绝probe **5/5通过**，含R1冷/热正例、公共body诊断、cache/graph/tick/lease/terminal不变。32文件实际hash、归档base9bb+31overlay和当前公共源/配置/头均实核，只有隔离CMake少CLI测试注册，SDK testsOFF。正式canonical24的五份实际hash仍全部吻合23160c…7e9b，没有正式publisher。
+- 原始新SDK标准CTest为四仓lifecycle **4 failed**（原样实际R4 FFN不可用）；JOINT **5/6 passed**，NativeProjection未观察到预期shared HBM，全部失败原样保留。不是业务或工程通过。两个WS取消fixture原来只proceed一次就断言typed服务，新首事件可能仅结束启动等待；现仅测试内最多32事件等实际compute服务，所有原取消/typed/两rank指标断言保留，新SDK完整main中这些断言全过，但随后原R4仍failed（SIGABRT/-6，外层250）。没有减少layers/passes或解除guard。
+- JOINT shared-HBM fixture原端点50ns到达并在真实1000ns启动等待内结束，原断言无法验证重叠。仅专测sharing的parity/capacity样例改为首Plan真实launch之后偏移50ns，原硬件/shape/端点字节不变，direct Runtime读取同wire时刻，capacity同tick顺序保持；其它早到达snapshot/cancel时刻50ns不变。与冻结新SDK原生产objects链接的**完整NativeProjection main通过**（非删case/筛选）；原标准失败二进制和raw保留。初次runner误找frontend而未运行，单独记录，随后解析实际target目录。
+- 三个fixture改动后，旧SDK实际重建两个WS lifecycle及JOINT NativeProjection，两个WS各1/1、JOINT完整6/6通过；未改FACE两仓复用绑定当前源的各1/1，**当前旧SDK五仓10/10通过**。当前总表 `evidence/consumer-availability-20261016/preview-complete-final-summary.json`，独立复制新raw，不覆盖411的checkpoint-summary-final及历史LastTest。
+- record_cpp_run新记录区分真实source root与外层Git HEAD：隔离archive不是Git checkout，base_head为null，另列archive base/freeze SHA/overlay核验。旧raw不改写，不能把其外层HEAD误认为stage源码base。完整复现及精确scope见同名analysis README。只改测试/证据工具，公共生产源/头/配置不变，沿411公共47及9bb/412速度/模型证据；未做新性能或精度测量。
+- 新SDK的R>1非服务窗口、busy/首输出精度和完整五仓业务/CPU仍未验收，正式发布继续阻止；TX8/target先验冻结，独立target数据缺失。继续公共模型：先核Norm参数首次加载是否按消费Core和真实驻留容量收费，再落实有证据的工作量/容量修复；R>1窗口和其它模板按实际依赖推进，不恢复逐repeat/K/wave生产路线。
+
+### 已合入4114533：不可用预测的消费者边界与真实五仓旧SDK兼容
 
 - 公共新增无状态 `Prediction.hh::require_complete_prediction`，检查Plan summary顶层prediction_status/alone_estimate_status；not_available明确拒绝，非string报错，旧Plan缺字段继续兼容，nested target/heldout缺测不误拒绝。公共compile/Runtime/CABI保留body诊断，物理模型/ABI/校准不变。
 - 五仓有逐byte相同的离线兼容头，支持原canonical24。Runtime冷/热compile和submit先检查，再缓存/LRU/时钟/服务；Adapter prepare/acquire/validate先检查，再workspace/执行；JOINT native全部future Plan在advance前检查，snapshot/local sample导入及NativeProjection直编译同样封口。原provider/live/sh30 guard保留。
@@ -331,8 +340,8 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 ### 当前唯一接续（覆盖后面历史检查点）
 
 1. fetch核实包含本页的main/HEAD，读consumer-availability README/checkpoint-summary-final/冻结matrix。公共47、Python148和旧SDK五仓10项已完成；显式硬件移除、每Core槽位、九描述曲线、双raw memo均已合入，不重复。
-2. 继续当前冻结新SDK的其余四仓consumer/两ABI构建和真实测试，逐仓运行run_repeated_prepare_probe与run_config_checks；FACE18配置/R3拒绝probe通过，原样R4业务failed。原始freeze32文件eb0472bf在CLI测试注册前，当前root47的生产库与该预览FACE CABI byte-identical；后续如更新隔离CMake注册，保留前后身份和原始失败，不把digest混称同一版本。不得恢复被保护的业务或把layers/passes减为1。
-3. R>1非服务窗口/物化barrier已由真实FACE R4发射任务暴露为正式接入前依赖。按解析累计曲线/5、8、16预算继续公共模型；不前置R×wait，不逐K/tile/wave/repeat回放、周期/Program。不能仅删除status或消费者guard取得业务成功。WR/Norm/softmax/Attention/FFN、OS二阶/odd-row按真实收益和依赖推进。
+2. 隔离五仓consumer/两ABI构建、83配置及5个真实R3拒绝probe已完成，三个fixture修正/旧SDK当前10项兼容已核；不重跑或重复publisher。最新总表preview-complete-final-summary，原标准四仓R4失败和JOINT初始1项失败保留。正式SDK仍canonical24。后续公共生产模型变化时，再用新freeze/label验受影响的ABI和真实负载，不复用旧ELF声称当前源通过；不可减少layers/passes获得业务成功。
+3. 核查公共Norm参数首次读取：当前add_vector的extra_input仅整层一次，设计§6.4要求每消费Core首次读取且只有完整参数片与其它缓冲共存才复用。先用实际CABI构造M/Core/H与小SRAM反例，解析修正确认的字节/容量问题，保留校准先验及旧数值。R>1非服务窗口/物化barrier仍为正式接入前依赖；按解析累计曲线/5、8、16预算推进，不前置R×wait、不作资源/PRIVATE替身，不逐K/tile/wave/repeat回放、周期/Program，不能只删status或guard。WR/其它向量/Attention/FFN、OS二阶/odd-row按真实收益和依赖推进。
 4. 长16/48完成全10%但24busy failed/首输出1项11.379%未接受，原17仍27联合失败；保留计量/每Core硬容量/公平及真实first终态，不放宽busy/速度定义。9bb生产模型/CABI未因消费者修复变化，复用其绑定证据；只有新增模型/热路径变更或未解决具体concern才重测，不反复抽样挑最好一次。
 5. 模型稳定后才正式publisher；再做五仓完整业务、双ABI/配置与端到端CPU预算。旧SDK通过不冒充新SDK通过，R3拒绝通过不冒充R3支持；JOINT provider/live/sh30仍受保护。target raw/heldout与当前Runtime同合同TX8硬件入口仍缺，不造profile或重拟目标效率。
 6. 有意义检查点保存全部有效源/日志，安全提交并核实GitHub；持续自主开发，不按提交或阶段停止。

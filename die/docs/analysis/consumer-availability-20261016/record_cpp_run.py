@@ -34,10 +34,22 @@ artifacts += [x for x in build.rglob('*') if x.is_file() and (x.name.startswith(
 executable=pathlib.Path(command[0]);executable=executable if executable.is_absolute() else root/executable
 if executable.is_file():artifacts.append(executable)
 cache=build/'CMakeCache.txt'
-meta={'base_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip(),
+enclosing_head=subprocess.check_output(['git','rev-parse','HEAD'],cwd=root,text=True).strip()
+git_root=pathlib.Path(subprocess.check_output(['git','rev-parse','--show-toplevel'],cwd=root,text=True).strip()).resolve()
+meta={'base_head':enclosing_head if git_root==root else None,
+      'observed_enclosing_git_head':enclosing_head,'source_checkout_is_git_root':git_root==root,
+      'source_root':str(root),
       'command':command,'source_sha256':{str(x.relative_to(root)):sha(x) for x in sorted(set(paths)) if x.is_file()},
       'installed_sdk':sdk,'binary_sha256':{str(x):sha(x) for x in sorted(set(artifacts)) if x.is_file()},
       'recorder_sha256':sha(pathlib.Path(__file__)),'cmake_cache_sha256':sha(cache) if cache.is_file() else None,'started_unix':time.time()}
+freeze_path=root.parent/'stage-identity.json'
+if git_root!=root and freeze_path.is_file():
+    freeze=json.loads(freeze_path.read_text())
+    if pathlib.Path(freeze['stage_root']).resolve()!=root:
+        raise RuntimeError('isolation freeze does not identify this source root')
+    meta['isolated_archive']={'base_commit':freeze['base_commit'],'freeze_sha256':sha(freeze_path),
+        'overlay_matches_frozen_source':all((root/name).is_file() and sha(root/name)==value
+            for name,value in freeze['overlay_sha256'].items())}
 cpu=pathlib.Path('/sys/fs/cgroup/cpu.stat');meta['cpu_before']=cpu.read_text() if cpu.is_file() else None
 with pathlib.Path(str(prefix)+'.log').open('w') as log:
     try:

@@ -20,7 +20,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
-2026-10-16当前源码检查点：公共无状态Prediction policy和五仓离线兼容头阻止numeric not_available body进入真实compile/cache/submit、workspace admission与JOINT native恢复/投影；公共Runtime/CABI保留诊断。三Python oracle及CLI同样处理不可用：None+逐行错误或非零退出，合法/原生错误兄弟、旧SDK缺字段和nested缺测兼容。公共Release47/47（53.59s，并行功能环境）、旧SDK五仓10/10 CTest、Python148/148无skip、CLI同7项真实red失败/green通过；真实新CABI三消费者red/green已证，不只mock。正式vendor24仍23160c…7e9b未publisher；隔离32文件eb0472bf在CLI测试注册前冻结，FACE config18/18及真实R3拒绝probe通过，原样实际R4 FFN标准业务failed，其余四仓预览当时进行。die/src全同Git9bb、公共46/47静态/CABI及预览FACE CABI byte-identical，沿9bb缓存速度/412模型精度证据和全部历史失败，不冒充新CPU或模型测量。长R1完成改善但24busy failed、一项首输出11.379%未接受；R>1非服务窗口、其他模板及五仓真实业务/CPU待解。TX8/目标先验冻结、独立target数据缺失；下一步继续隔离验证和公共模型，详见HANDOFF及consumer-availability。工程NOT ACCEPTED，持续自主开发。
+2026-10-16当前源码检查点：消费者不可用预测guard已在main4114533；隔离新SDK五仓consumer/双ABI实际构建完成，配置83/83无skip、真实R3拒绝probe5/5，五份coarse CABI逐byte等于公共47。四仓原标准lifecycle均因原样实际R4预测不可用failed；JOINT原5/6，专测sharing的fixture改为真实launch后偏移50ns到达（原硬件/任务/字节保持），完整NativeProjection main随后通过。两个WS取消fixture等待实际compute服务后保留全部原断言，随后R4仍failed。修正后三仓旧SDK实测2+6通过，未变FACE各1复用当前源身份，当前旧SDK五仓10/10。正式vendor24仍23160c…7e9b未publisher，隔离32文件eb0472bf冻结不改；完整证据见consumer-availability的preview-complete-final-summary。此次公共生产源/头/配置不变，公共47及9bb/412速度/精度证据按原范围复用，不称新测量。长R1 busy、首输出一项11.379%、R>1非服务窗口和完整五仓业务/CPU仍未验收；TX8/target先验冻结、独立target数据缺失。下一步核Norm参数每消费Core首次读取与真实驻留容量，先修可证明的字节/容量错误，再继续有界公共模型；工程NOT ACCEPTED，持续自主开发。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
 

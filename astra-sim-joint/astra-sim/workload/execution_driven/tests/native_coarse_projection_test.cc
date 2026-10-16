@@ -72,7 +72,8 @@ json work(const std::string& id, json item, std::uint64_t ready = 0) {
         {"is_candidate", false}, {"service_leg_ids", nullptr}};
 }
 
-json envelope(bool with_endpoint, bool chain = false) {
+json envelope(bool with_endpoint, bool chain = false,
+              bool overlap_endpoint = false) {
     const auto config = hardware_config();
     const auto hardware = coarse_die::resolve_hardware(config);
     auto comp = leg("comp#0");
@@ -87,7 +88,12 @@ json envelope(bool with_endpoint, bool chain = false) {
     if (with_endpoint) {
         auto ep = leg("restore#0", "stream");
         ep["coarse_endpoint"] = endpoint();
-        works.push_back(work("restore", ep, 50));
+        // Sharing fixtures must arrive after the real startup wait. Keep
+        // their original 50 ns offset from service readiness; early-arrival
+        // snapshot/cancel fixtures retain their explicit absolute clock.
+        const auto ready = overlap_endpoint
+            ? coarse_die::compile(hardware, task())->launch_ns + 50 : 50;
+        works.push_back(work("restore", ep, ready));
     }
     return {{"projection_input", {{"now_ns", 0},
         {"resources", json::array({{{"key", "hbm:0"}, {"kind", "hbm"},
@@ -201,10 +207,13 @@ Reference direct(const json& wire, bool with_endpoint) {
     auto comp = runtime.submit(plans[0], {0, 1, 1, 1}, 0);
     std::optional<std::uint64_t> ep;
     bool arrival = !with_endpoint;
+    const auto endpoint_time = with_endpoint
+        ? wire["projection_input"]["background_works"][1]["ready_at_ns"]
+            .get<std::uint64_t>() : 0;
     Reference result;
     for (int budget = 0; budget < 512; ++budget) {
         auto next = runtime.next_event();
-        if (!arrival && (!next || *next >= 50)) next = 50;
+        if (!arrival && (!next || *next >= endpoint_time)) next = endpoint_time;
         if (!next) break;
         runtime.advance_to(*next);
         // Complete old work before the known arrival at the same tick.
@@ -224,8 +233,8 @@ Reference direct(const json& wire, bool with_endpoint) {
                 runtime.destroy_execution(*ep);
             }
         }
-        if (!arrival && *next == 50) {
-            ep = runtime.submit_endpoint(endpoint(), {0, 2, 1, 1}, 50);
+        if (!arrival && *next == endpoint_time) {
+            ep = runtime.submit_endpoint(endpoint(), {0, 2, 1, 1}, endpoint_time);
             arrival = true;
         }
     }
@@ -374,7 +383,7 @@ double served_hbm_bytes(const json& matrix) {
 }
 
 void parity(bool with_endpoint, bool chain) {
-    const auto wire = envelope(with_endpoint, chain);
+    const auto wire = envelope(with_endpoint, chain, true);
     const auto reference = direct(wire, with_endpoint);
     const auto context = NativeProjectionContext::parse(wire);
     NativeProjectionWorldSession session(context);
@@ -502,9 +511,11 @@ template<class Mutation> void rejected_snapshot_mutation(
         const json& snapshot, Mutation mutate, const char* message);
 
 void native_known_capacity_events() {
-    auto wire = envelope(true, true);
+    auto wire = envelope(true, true, true);
     const auto baseline = direct_domain(wire, true);
-    require(baseline.first_plan_finish > 50 &&
+    const auto endpoint_time = wire["projection_input"]["background_works"][1]
+        ["ready_at_ns"].get<std::uint64_t>();
+    require(baseline.first_plan_finish > endpoint_time &&
         baseline.comp > baseline.first_plan_finish + 8,
         "fixture exposes an intermediate Plan-chain capacity boundary");
     const auto span = baseline.comp - baseline.first_plan_finish;
@@ -521,8 +532,8 @@ void native_known_capacity_events() {
     // their input order and occur after the ready endpoint has entered the
     // shared Domain.
     input["coarse_capacity_events"] = json::array({
-        capacity_event(50, coarse_die::HBM1, hbm1 * 0.5),
-        capacity_event(50, coarse_die::HBM1, hbm1),
+        capacity_event(endpoint_time, coarse_die::HBM1, hbm1 * 0.5),
+        capacity_event(endpoint_time, coarse_die::HBM1, hbm1),
         capacity_event(baseline.first_plan_finish + restore_delta,
             coarse_die::HBM0, hbm0),
         capacity_event(baseline.first_plan_finish,
