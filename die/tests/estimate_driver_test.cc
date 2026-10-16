@@ -176,12 +176,11 @@ std::size_t compare_compiled_gemm_with_sealed_enumerator(
   return candidates.size();
 }
 
-Hardware small_core_hardware(double rho_sram, double kappa_quant = 4.0,
+Hardware mapped_core_hardware(double rho_sram, double kappa_quant = 4.0,
                              double kappa_acc_convert = 2.0) {
   const std::string source_dir = COARSE_DIE_SOURCE_DIR;
   json config = read_json(source_dir + "/configs/example_hardware.json");
   auto& architecture = config["architecture"];
-  architecture["core_type"] = "small";
   architecture["sram_mib_per_core"] = 0.25;
   architecture["noc_width_bits"] = 64;
   architecture["core_columns_nx"] = 1;
@@ -206,7 +205,7 @@ json gemm_semantics_task(u64 m, u64 n, u64 k, const std::string& activations,
 }
 
 void cold_compile_candidate_trials_cover_semantic_boundaries() {
-  const Hardware ordinary = small_core_hardware(0.9);
+  const Hardware ordinary = mapped_core_hardware(0.9);
   const json odd_int4_tail = gemm_semantics_task(
       3, 5, 7, "int4", "int4", "int4",
       "int4_matrix_vec_fp32_assumed_v1");
@@ -218,7 +217,7 @@ void cold_compile_candidate_trials_cover_semantic_boundaries() {
   compare_compiled_gemm_with_sealed_enumerator(
       ordinary, odd_int4_tail, "odd INT4 tails");
 
-  const Hardware fractional = small_core_hardware(0.9, 1.25, 0.75);
+  const Hardware fractional = mapped_core_hardware(0.9, 1.25, 0.75);
   const json strict_fp32_fractional = gemm_semantics_task(
       3, 5, 7, "fp32", "fp32", "int4",
       "fp32_vec_matrix_assumed_v1");
@@ -234,7 +233,7 @@ void cold_compile_candidate_trials_cover_semantic_boundaries() {
   const json repeated = gemm_semantics_task(
       128, 128, 128, "bf16", "bf16", "bf16",
       "int4_matrix_vec_fp32_assumed_v1", 2, 3);
-  const Hardware tight_sram = small_core_hardware(0.15);
+  const Hardware tight_sram = mapped_core_hardware(0.15);
   const std::size_t tight_count = compare_compiled_gemm_with_sealed_enumerator(
       tight_sram, repeated, "WR under tight SRAM with repeated layers/passes", true);
   require(tight_count > 0,
@@ -243,7 +242,7 @@ void cold_compile_candidate_trials_cover_semantic_boundaries() {
   require(repeated_plan->task.at("layer_instances") == 2 &&
               repeated_plan->task.at("weight_passes") == 3,
           "repeated GEMM task preserves layer and weight-pass multiplicity");
-  const Hardware roomy_sram = small_core_hardware(0.9);
+  const Hardware roomy_sram = mapped_core_hardware(0.9);
   const std::size_t roomy_count = compare_compiled_gemm_with_sealed_enumerator(
       roomy_sram, repeated, "WR under roomy SRAM with repeated layers/passes");
   require(roomy_count > tight_count,

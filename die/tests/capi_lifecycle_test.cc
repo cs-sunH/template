@@ -56,6 +56,20 @@ int main() {
             "hardware rejection retains a field diagnostic");
     }
 
+    for (const json& selector : {json("small"), json("large"), json("core"),
+                                 json(nullptr), json(0), json(true),
+                                 json::array(), json::object()}) {
+      auto retired_cfg = cfg;
+      retired_cfg["architecture"]["core_type"] = selector;
+      DieHandle rejected = 123456;
+      check(die_coarse_create_model_v2(retired_cfg.dump().c_str(), &rejected) ==
+                DIE_INVALID_HARDWARE && rejected == 0,
+            "retired hardware selector must not create an ABI model");
+      const auto error = json::parse(die_coarse_last_error_v2());
+      check(error.at("field_path") == "architecture.core_type",
+            "retired selector rejection retains its precise hardware field");
+    }
+
     DieHandle model = 0;
     DieHandle runtime = 0;
     DieHandle execution = 0;

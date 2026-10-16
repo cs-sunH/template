@@ -144,7 +144,7 @@ const char* kDieNodeJson = R"({
   "profile": "mesh_die_v1",
   "die": {
     "sram-mb-per-core": 0.75,
-    "core-type": "large",
+    "mesh-nx": 23, "mesh-ny": 23,
     "compute-area-mm2": 800,
     "hbm-per-side": 4,
     "hbm-sides": 1,

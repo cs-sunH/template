@@ -4,6 +4,12 @@ Source workbook: `TX8_单die建模_精简版.xlsx` (SHA-256 `eba181c80a2d51bd5a6
 
 The workbook overview states that the original nine records were removed. Its 13 group values are a mixture of one reported anchor, a reused Norm anchor, one conditional reinterpretation, and model estimates/attributions. The 19 math-node rows do not provide 19 independent timing samples. No raw timing logs or repeat distributions are present.
 
+## Current hardware and simulation-policy boundary
+
+The current target hardware authority is [架构建模_单Core版_严格复核修订.docx](../../架构建模_单Core版_严格复核修订.docx), source revision `41f119135fd2d4cc87292f59b4b00adc918eece0`. It defines one Core design: `configs/core32.json`/`core32_v1` has 32 SRAM/NoC rows and the Core edge is always `L0=a`. Public hardware input rejects `architecture.core_type` for every value. This hardware migration changes neither the workbook cells nor the historical reference equations, raw values and evidence below.
+
+The DOCX supplies hardware assumptions; the root simulator design §1.5/§1.6/§8.2.1/§13 retains the analytical production route, bounded cumulative curves, 10% target with a documented 20% fallback, and speed budgets. Target INT4/FP32 engineering priors remain separate from TX8 BF16/FP32 reference parameters. These retained reference results are not calibration or acceptance of the new Core hardware; independent target measurements remain unavailable.
+
 ## Source cache audit
 
 `计时组13行!B16` contains formula `SUM(B2:B14)` and cached XML value `11897.602619368336` (11897.602619368335581 μs). The tool recomputes B2:B14 as 11897.602619368333762 μs, a difference of -1.82e-12 μs. `计时组13行!B15` is a separate hardcoded value `11897.60261936833` (11897.602619368330124 μs), differing from the formula cache by -5.46e-12 μs. The formula cell and its cache are preserved verbatim in `tx8_samples.json`.

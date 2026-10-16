@@ -155,7 +155,7 @@ DieModel::DieStage pe_stage(const char* label, std::uint64_t repeat,
   pe.resource = DieModel::StageResource::PE;
   pe.wave_repeat = repeat;
   if (repeat > 1) pe.deps.emplace_back(0, 1);
-  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double rate = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   pe.pe_core_flop = work_ns * rate / 1e9 * (1.0 - 1e-12);
   return pe;
 }

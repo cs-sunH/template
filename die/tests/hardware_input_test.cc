@@ -59,6 +59,21 @@ void test_explicit_single_die_inputs_and_legacy_compatibility() {
   require(hardware.derived.at("system").at("status") == "not_requested",
           "omitting system-region fields must not require or invent Wafer placement");
 
+  require(!hardware.input.at("source_constants").contains("module_interconnect_fraction"),
+          "a historical system-layout assumption is not a DOCX hardware constant");
+  auto withRegionInput = input;
+  withRegionInput["architecture"]["system_region_width_mm"] = 215.0;
+  withRegionInput["architecture"]["system_region_height_mm"] = 215.0;
+  const auto withRegion = resolve_hardware(withRegionInput);
+  require(withRegion.derived.at("system").at("layout_profile") ==
+              "legacy_region_fit_10pct_v1" &&
+              withRegion.derived.at("system").at("layout_provenance") ==
+              "compatibility_assumption_not_hardware_docx" &&
+              withRegion.derived.at("system").at("module_interconnect_fraction") == 0.10,
+          "optional legacy geometry must retain its explicit assumption identity");
+  require(withRegion.rates == hardware.rates,
+          "a system-layout diagnostic must not change single-Die service rates");
+
   auto consistentScalarMirrors = input;
   consistentScalarMirrors["architecture"]["die_area_mm2"] = 609.0;
   consistentScalarMirrors["architecture"]["core_count"] = 88;
@@ -104,7 +119,7 @@ void test_explicit_single_die_inputs_and_legacy_compatibility() {
           "an explicit W/H must remain authoritative with a legacy resolved-geometry marker");
 
   auto legacySearchMetadata = input;
-  legacySearchMetadata["search_profile"] = legacy.at("search_profile");
+  legacySearchMetadata["search_profile"] = json::object();
   legacySearchMetadata["search_profile"]["nx_range"] = {1, 1};
   legacySearchMetadata["search_profile"]["ny_range"] = {1, 1};
   legacySearchMetadata["search_profile"]["hbm_n_range"] = {1, 1};
@@ -118,14 +133,17 @@ void test_explicit_single_die_inputs_and_legacy_compatibility() {
               withMetadata.rates == hardware.rates,
           "legacy search metadata must neither constrain nor alter an explicit instance");
 
-  // Existing shipped configurations remain accepted through deterministic legacy
-  // geometry interpretation. This compatibility path does not enumerate alternatives.
-  const auto legacyHardware = resolve_hardware(legacy);
+  // A named legacy geometry remains a deterministic compatibility decoder.
+  auto namedGeometry = legacy;
+  namedGeometry["architecture"].erase("die_width_mm");
+  namedGeometry["architecture"].erase("die_height_mm");
+  namedGeometry["architecture"]["die_geometry"] = "minimum_grid";
+  const auto legacyHardware = resolve_hardware(namedGeometry);
   require(legacyHardware.derived.at("die").at("geometry_candidate") == "minimum_grid" &&
               legacyHardware.derived.at("core").at("N_core") == 88,
-          "the existing no-W/H example config must keep its legacy geometry interpretation");
+          "a named geometry decodes exactly one specified grid");
   require(legacyHardware.derived.at("system").at("module_count").get<long long>() > 0,
-          "legacy configurations that provide a system region may retain that diagnostic");
+          "an optional system region retains its compatibility diagnostic");
 }
 
 void test_optional_validation_and_invalid_hardware_inputs() {
@@ -247,6 +265,25 @@ void test_optional_validation_and_invalid_hardware_inputs() {
   require(stableTopologyError,
           "missing explicit topology must retain the stable diagnostic");
 
+  // Retired selectors must never silently reinterpret another hardware design.
+  for (const json selector : {json("small"), json("large"), json("core"),
+                             json(nullptr), json(0), json(true), json::array(),
+                             json::object()}) {
+    auto retired = valid;
+    retired["architecture"]["core_type"] = selector;
+    const auto original = retired;
+    bool namedError = false;
+    try { (void)resolve_hardware(retired); }
+    catch (const std::invalid_argument& error) {
+      namedError = std::string(error.what()).find("architecture.core_type") != std::string::npos;
+    }
+    require(namedError && retired == original,
+            "a retired selector must fail explicitly without changing hardware");
+  }
+  auto oldIdentity = valid;
+  oldIdentity["core_resource_table"]["id"] = "core64_v2";
+  require_invalid(oldIdentity, "retired source tables must not enter the new Core model");
+
   auto badConstant = valid;
   badConstant["source_constants"]["hbm_stack_peak_bytes_per_s"] = 1.0;
   require_invalid(badConstant,
@@ -255,7 +292,7 @@ void test_optional_validation_and_invalid_hardware_inputs() {
   badDigest["core_resource_table"]["rows_sha256"] =
       "8e7d393ff9a96dd556088fa7c98a6fd80ed0b277e03cde7c3909a0f118e45f37";
   require_invalid(badDigest,
-                  "the compiled Core64 resource table digest must be validated");
+                  "the compiled Core32 resource table digest must be validated");
 
   auto mirrored = valid;
   mirrored["derived"] = baseline.derived;
@@ -273,11 +310,31 @@ void test_optional_validation_and_invalid_hardware_inputs() {
           "rejecting an inconsistent mirror must not mutate the caller's JSON");
 }
 
+void test_explicit_compute_reference_design() {
+  const auto input = read_json(std::string(COARSE_DIE_SOURCE_DIR) +
+                               "/configs/tx8_compute_matched_hardware.json");
+  const auto hw = resolve_hardware(input);
+  const auto& core = hw.derived.at("core");
+  require(core.at("N_core") == 100 && core.at("N_pe") == 633 && core.at("N_vec") == 32,
+          "the authorized compute-reference point uses the exact DOCX resource row");
+  require(hw.derived.at("die").at("width_mm") == 25 &&
+              hw.derived.at("die").at("height_mm") == 32 &&
+              hw.derived.at("die").at("area_mm2") == 800,
+          "the engineering example preserves its explicit 25x32 mm Die");
+  require_close(hw.derived.at("hardware_summary").at("peak_int4_ops_per_s").get<double>(),
+                126.6e12, 0.1, "the chosen point has 126.6 INT4 TOPS architectural peak");
+  require_close(hw.derived.at("hardware_summary").at("peak_vec_fp32_eq_ops_per_s").get<double>(),
+                12.65728e12, 0.1, "Vec is independently reported and is not matched to TX8");
+  require(hw.input.at("performance_profile").at("calibration_status") == "assumed",
+          "compute peak matching must not mark the target as hardware calibrated");
+}
+
 }  // namespace
 
 int main() {
   return run_test("hardware_input_test", [] {
     test_explicit_single_die_inputs_and_legacy_compatibility();
     test_optional_validation_and_invalid_hardware_inputs();
+    test_explicit_compute_reference_design();
   });
 }

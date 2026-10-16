@@ -1,0 +1,77 @@
+Internal ctest changing into directory: /workspace/template/work/single-core-rebuild/work/build-single-core
+Test project /workspace/template/work/single-core-rebuild/work/build-single-core
+    Start 15: coarse_source_golden_test
+Could not find executable /workspace/template/work/single-core-rebuild/work/build-single-core/coarse_source_golden_test
+Looked in the following places:
+/workspace/template/work/single-core-rebuild/work/build-single-core/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Release/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Release/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Debug/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Debug/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/MinSizeRel/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/MinSizeRel/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/RelWithDebInfo/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/RelWithDebInfo/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Deployment/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Deployment/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Development/coarse_source_golden_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Development/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Release/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Release/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Debug/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Debug/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/MinSizeRel/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/MinSizeRel/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/RelWithDebInfo/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/RelWithDebInfo/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Deployment/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Deployment/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Development/coarse_source_golden_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Development/coarse_source_golden_test
+Unable to find executable: /workspace/template/work/single-core-rebuild/work/build-single-core/coarse_source_golden_test
+1/2 Test #15: coarse_source_golden_test ........***Not Run   0.00 sec
+    Start 16: coarse_hardware_input_test
+Could not find executable /workspace/template/work/single-core-rebuild/work/build-single-core/coarse_hardware_input_test
+Looked in the following places:
+/workspace/template/work/single-core-rebuild/work/build-single-core/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Release/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Release/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Debug/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Debug/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/MinSizeRel/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/MinSizeRel/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/RelWithDebInfo/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/RelWithDebInfo/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Deployment/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Deployment/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Development/coarse_hardware_input_test
+/workspace/template/work/single-core-rebuild/work/build-single-core/Development/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Release/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Release/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Debug/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Debug/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/MinSizeRel/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/MinSizeRel/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/RelWithDebInfo/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/RelWithDebInfo/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Deployment/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Deployment/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Development/coarse_hardware_input_test
+workspace/template/work/single-core-rebuild/work/build-single-core/Development/coarse_hardware_input_test
+Unable to find executable: /workspace/template/work/single-core-rebuild/work/build-single-core/coarse_hardware_input_test
+2/2 Test #16: coarse_hardware_input_test .......***Not Run   0.00 sec
+
+0% tests passed, 2 tests failed out of 2
+
+Total Test time (real) =   0.00 sec
+
+The following tests FAILED:
+	 15 - coarse_source_golden_test (Not Run)
+	 16 - coarse_hardware_input_test (Not Run)
+Errors while running CTest

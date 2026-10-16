@@ -9,7 +9,7 @@ and configs/*.json (contract §1: the JSON files are the documented source of
 truth; the library embeds the same values and this test forces both sides to
 stay identical):
 
-  configs/core_table.json                 == core_table() (14 rows);
+  configs/core_table.json                 == core_table() (32 rows);
   configs/calibration_mesh_die_v1.json    == the mesh profile coefficients
                                             of make_hardware();
   configs/calibration_tx8_reference_v1.json == the TX8 reference constants
@@ -77,24 +77,23 @@ nlohmann::json read_json(const std::string& path) {
 int main() {
   const std::string dir = DIE_MODEL_CONFIGS_DIR;
 
-  // --- core table: 14 rows, same order, same values ---
+  // --- core table: 32 rows, same order, same values ---
   const nlohmann::json table = read_json(dir + "/core_table.json");
   const std::vector<DieModel::CoreTableEntry> rows = DieModel::core_table();
-  expect(table.at("rows").size() == 14, "core table has 14 rows");
-  expect(rows.size() == 14, "core_table() returns 14 rows");
+  expect(table.at("rows").size() == 32, "core table has 32 rows");
+  expect(rows.size() == 32, "core_table() returns 32 rows");
   for (std::size_t i = 0; i < rows.size() && i < table.at("rows").size();
        ++i) {
     const nlohmann::json& r = table.at("rows")[i];
     const std::string what = "core_table row " + std::to_string(i);
     expect_double(r.at("sram-mb-per-core").get<double>(),
                   rows[i].sram_mb_per_core, (what + " sram").c_str());
-    expect(r.at("core-type").get<std::string>() ==
-               DieModel::to_string(rows[i].core_type),
-           (what + " type").c_str());
+    expect(r.at("noc-width-bits").get<std::uint64_t>() == rows[i].noc_width_bits,
+           (what + " NoC width").c_str());
     expect_double(r.at("vec-g-eqop-per-core").get<double>(),
                   rows[i].vec_g_eqop_per_core, (what + " vec").c_str());
-    expect_double(r.at("pe-gflops-per-core").get<double>(),
-                  rows[i].pe_gflops_per_core, (what + " pe").c_str());
+    expect_double(r.at("pe-int4-gops-per-core").get<double>(),
+                  rows[i].pe_int4_gops_per_core, (what + " pe").c_str());
     expect_double(r.at("side-ref-um").get<double>(), rows[i].core_side_ref_um,
                   (what + " side").c_str());
   }
@@ -103,7 +102,8 @@ int main() {
   // (HBM 3x2 keeps area 800 inside the design doc §3.1 layout table).
   nlohmann::json die;
   die["sram-mb-per-core"] = 0.75;
-  die["core-type"] = "large";
+  die["mesh-nx"] = 23u;
+  die["mesh-ny"] = 23u;
   die["compute-area-mm2"] = 800;
   die["hbm-per-side"] = 3u;
   die["hbm-sides"] = 2u;

@@ -104,8 +104,8 @@ def die_derived_face_hardware(
     2026-10-03)。
 
     peak_perf_tflops / local_hbm_bandwidth_gbps 改由 oracle.hardware_summary()
-    的 derived 块提供(契约 §3.4 派生标量回流;face_case5 die 点 =
-    261.12 -> 1492.05 TFLOPS、1640 GB/s 不变)。mesh 几何、HBM 容量
+    的 derived 块提供(legacy兼容标量回流；PE字段为废弃的INT4 TOPS兼容值，
+    不表示BF16/FP32实测吞吐)。mesh 几何、HBM 容量
     (capacity-profile 口径,契约 §3.4)、D2D 带宽/时延与 local HBM 时延
     (契约 §3.4 沿用 hardware JSON)保持调用方传入值。backend=legacy 的
     调用方不经过本函数(回归保护:仍从 hardware JSON 读)。

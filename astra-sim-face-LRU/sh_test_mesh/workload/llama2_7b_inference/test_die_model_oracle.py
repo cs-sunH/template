@@ -7,8 +7,8 @@ License: MIT (see LICENSE in the repository root).
   - 发现序与缺库 fail-closed(绝不静默回退 roofline);
   - resolved_die_model.json 缺位 fail-closed;
   - estimate 批量 + 坏 spec 错误位(好位不受坏位影响);
-  - hardware_summary 派生块(face_case5 die 点:35x35/1225 核/
-    1492.05 TFLOPS/1.64e12 B/s);
+  - hardware_summary 派生块(face_case5 die 点:explicit 23x23/529 Cores/
+    669.714 INT4 TOPS compatibility scalar/1.64e12 B/s);
   - 同一 spec 两次估值确定(逐字段相等);
   - config 路径解析序(显式 → env → 仓内发现 → manifest);
   - close() 生命周期。
@@ -51,7 +51,7 @@ from die_model_oracle import (  # noqa: E402
     resolve_die_model_config_path,
 )
 
-# face_case5 die 点(契约 §3.5 裁定:large / 0.75 MB SRAM / 800 mm² /
+# face_case5 die 点(契约 §3.5 显式fixture:23×23 / 0.75 MiB SRAM / 800 mm² /
 # noc 512 bit / HBM 4x1 单侧)。wrapped resolved_die_model.json 形态
 # (契约 §3.3;derived 由库派生,回灌可忽略)。
 FACE_CASE5_DIE_CONFIG = {
@@ -59,7 +59,7 @@ FACE_CASE5_DIE_CONFIG = {
     "profile": "mesh_die_v1",
     "die": {
         "sram-mb-per-core": 0.75,
-        "core-type": "large",
+        "mesh-nx": 23, "mesh-ny": 23,
         "compute-area-mm2": 800,
         "hbm-per-side": 4,
         "hbm-sides": 1,
@@ -156,9 +156,9 @@ class DieModelOracleTests(_TempConfigMixin, unittest.TestCase):
             derived = summary["derived"]
             self.assertEqual(summary["schema_version"], 1)
             self.assertEqual(summary["profile"], "mesh_die_v1")
-            self.assertEqual(derived["mesh_n"], 35)
-            self.assertEqual(derived["cores"], 1225)
-            self.assertAlmostEqual(derived["pe_peak_tflops"], 1492.05)
+            self.assertEqual(derived["mesh_n"], 23)
+            self.assertEqual(derived["cores"], 529)
+            self.assertAlmostEqual(derived["pe_peak_tflops"], 669.714)
             self.assertAlmostEqual(derived["hbm_bandwidth_bytes"], 1.64e12)
             # 摘要缓存:两次调用同一对象且非空(构造期自检的读取路径)。
             self.assertIs(oracle.hardware_summary(), summary)
@@ -229,7 +229,7 @@ class DieModelOracleTests(_TempConfigMixin, unittest.TestCase):
         broken = Path(self._temp.name) / "broken_die_model.json"
         broken.write_text(json.dumps({
             "schema_version": 1, "profile": "mesh_die_v1",
-            "die": {"sram-mb-per-core": 0.75, "core-type": "large",
+            "die": {"sram-mb-per-core": 0.75, "mesh-nx": 23, "mesh-ny": 23,
                     "compute-area-mm2": 7000, "hbm-per-side": 4,
                     "hbm-sides": 1, "noc-width-bits": 512},
         }), encoding="utf-8")

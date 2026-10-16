@@ -4,14 +4,31 @@
 
 `die/` is the canonical source for a coarse architectural model of one Die: a source-derived hardware resolver, a task-to-plan compiler, a shared service runtime, and a C ABI. Results describe a versioned set of engineering assumptions. They are not target-device measurements or a claim of silicon prediction accuracy.
 
+The hardware authority is [架构建模_单Core版_严格复核修订.docx](../架构建模_单Core版_严格复核修订.docx), source revision `41f119135fd2d4cc87292f59b4b00adc918eece0`. There is one Core design. SRAM capacity and NoC width select one of the 32 rows in `configs/core32.json` (`core32_v1`); the Core edge is always the SRAM long edge, `L0=a`. `architecture.core_type` is removed from the public input: its presence is an error for every value. Prior hardware descriptors, cached Plans and snapshots retain their historical identities and cannot be relabeled as this hardware revision.
+
+The hardware DOCX does not define simulator timing policy. The root simulator design §1.5, §1.6, §8.2.1 and §13 continue to specify analytical workload, bounded cumulative service curves, accuracy and speed requirements. Hardware-document migration alone establishes no new verification result.
+
 The TX8 reconstruction is a separate reference profile. The workbook has cached values and formulas but no auditable raw timing log; its 246 μs RMSNorm point is a reported anchor, while 3363 μs is a conditional whole-FFN interpretation. The exact reproduction of those source values is accounting verification, not accuracy validation. See [calibration/report.md](calibration/report.md) and [calibration/per_operator.csv](calibration/per_operator.csv).
 
-`configs/engineering_prior.json` records the §9.2 engineering prior for target INT4/FP32 work. The v2 target prior remains separate from the TX8 reference efficiencies. `configs/example_hardware_explicit.json` is the recommended complete single-Die input; `configs/example_hardware.json` remains an old-format compatibility example; the standalone prior file is metadata and must not be passed as a complete hardware descriptor.
+`configs/engineering_prior.json` records the §9.2 engineering prior for target INT4/FP32 work. The v2 target prior remains separate from the TX8 reference efficiencies. Both `configs/example_hardware_explicit.json` and `configs/example_hardware.json` now provide explicit 21×29 mm single-Die inputs without a type field or `search_profile`. The latter also retains an optional 215×215 mm historical system-region diagnostic, labeled `derived.system.layout_profile=legacy_region_fit_10pct_v1` with `layout_provenance=compatibility_assumption_not_hardware_docx`; its 10% space reservation is not a source constant, single-Die prerequisite or hardware-selection rule. The standalone prior file is metadata and must not be passed as a complete hardware descriptor.
+
+The user-authorized compute-reference example is
+[`configs/tx8_compute_matched_hardware.json`](configs/tx8_compute_matched_hardware.json):
+0.75 MiB, 512-bit NoC, 10×10 Core, and a 25×32 mm Die (800 mm²). Its
+126.6 INT4 TOPS nominal matrix peak differs numerically by 1.09375% from the
+TX8 128 BF16 TFLOPS reference; the operation types differ, so this is an
+engineering comparison point, not equivalent measured throughput. Its Vec
+peak is separately 12.65728 trillion FP32-equivalent operations/s; Vec and
+memory are not matched to TX8. The public example explicitly uses four DOCX
+HBM3E stacks, while the five legacy examples retain their stated four-stack
+16 GB/410 GB/s compatibility profile. Neither is a target hardware calibration.
+The choice was made once under user authorization; the simulator still does not
+select hardware. See the [design record](docs/evidence/single-core-20261016/tx8-compute-design.json).
 
 ## Hardware is supplied by the user
 
 Provide Die width/height and the Core grid (`core_columns_nx`, `core_rows_ny`),
-along with Core type, SRAM, NoC width, HBM and the explicit performance profile.
+along with SRAM, NoC width, HBM and the explicit performance profile.
 The resolver derives area, capacities and the 13 resource rates for that one
 instance. It does not enumerate hardware, choose an area/grid, or recommend a
 Pareto winner. Wafer geometry and `search_profile` are not required. Optional
@@ -105,3 +122,5 @@ Apply the same configure/build/test sequence to `astra-sim-wscllm`, `astra-sim-w
 | New active joint | Additive coarse adapter/runtime work uses `astra-sim-joint`; `astra-sim-joint_old` was removed and must not be restored. Current verification scope is in HANDOFF. |
 
 The engineering project remains incomplete. Follow the design §1.4 formula-first principle: auxiliary details that are not directly tied to hardware design or software task inputs use simple mathematical formulas where sufficient. Necessary parameter coverage, readiness and shared-resource constraints remain required. Current source-bound evidence and reproduction entries are in [docs/HANDOFF.md](docs/HANDOFF.md), including [consumer availability](docs/analysis/consumer-availability-20261016/README.md) and the retained model/performance failures.
+
+The evidence above retains its original source scope. Historical fixtures and published five-repository SDKs do not become validation of `core32_v1` through a documentation or identity change; the migration needs its own source-bound checks before publication. Existing legacy geometry decoding is compatibility behavior, not the input rule for a new hardware instance.

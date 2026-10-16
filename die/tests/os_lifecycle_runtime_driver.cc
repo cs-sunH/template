@@ -203,7 +203,6 @@ json read_json(const std::string& path) {
 Hardware synthetic_hardware() {
   json input = read_json(std::string(COARSE_DIE_SOURCE_DIR) +
                          "/configs/example_hardware.json");
-  input["architecture"]["core_type"] = "small";
   input["architecture"]["sram_mib_per_core"] = 0.25;
   input["architecture"]["noc_width_bits"] = 64;
   input["architecture"]["core_columns_nx"] = 1;

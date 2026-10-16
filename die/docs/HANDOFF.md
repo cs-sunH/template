@@ -1,5 +1,24 @@
 # Codex Cloud 开发交接状态
 
+## 当前有效交接：唯一 Core 迁移部分成果，用户要求立即停止（2026-10-16）
+
+- 工作分支 `codex/die-single-core-20261016`，独立工作树；接手及交接fetch确认main为 `41f119135fd2d4cc87292f59b4b00adc918eece0`。原 `codex/die-continue-20261016` 的未提交长行/数值实验没有覆盖，全部有效新增源码、patch和raw已归档 `analysis/pre-core-migration-20261016/`（656文件、manifest）。
+- 最新硬件权威为根 `架构建模_单Core版_严格复核修订.docx`，SHA `b4382bc7a655b7a3bf9a531b583ce8b52f8d1036883796db8a52b26b4cae4ad3`；旧MD已由用户删除。已写唯一Core32行/L0=a、删除类型分支及型号设计、公共旧字段明确拒绝、相关文档迁移。解析路线/10%目标与有据20%规则/速度合同保留。
+- 公共首版真实Release **51/51通过22.82s**；直接DOCX核32行；192显式硬件资源对照完全一致。正常30样本此版本通过：轻量hot最大P95 5.429us，cold最大1.839841ms，更新最大26.038us。原始source/ELF/CPU/命令见 `evidence/single-core-20261016/`。首次构建未完成误触2项CTest为not_run，原log保留。之后移除非DOCX的10%系统占位source_constant、补legacy诊断身份及新工程点fixture，**最终公共源码未重新构建/51回归/预算：not_run**，不能把首版结果当最终源码验收。
+- 用户随后授权按TX8参考算力由助手设计单一工程点：保留0.75MiB/512bit/800mm²，10×10 Core，25×32mm。峰值126.6 INT4 TOPS，仅数值距128 BF16 TFLOPS参考1.09375%；跨精度不等效实测，Vec12.65728T与memory未匹配。公共完整配置 `configs/tx8_compute_matched_hardware.json`，计算依据 `evidence/single-core-20261016/tx8-compute-design.json`。目标先验未拟合，TX8仍conditional，独立target raw/heldout not_available。
+- 五仓legacy删除CoreType、按新32行资源、MiB、显式网格；保留JOINT扩展。授权点之前五ABI实际构建，FACE11/11、JOINT15/15、配置总93/93无skip。旧signed-int测试fixture和JOINT独有字段引用编译失败均保留，已修。最新可选W/H严格校验及默认10×10/25×32后：FACE ABI+11/11+21配置/默认成功，FACE-LRU ABI+20配置/默认成功；WSCLLM新构建被用户停止中断，另外两仓新scope not_run。完整脚本/raw/identity/授权前源码在 `evidence/single-core-20261016/integration/integration-artifacts.tar.gz`，无ELF/o/cache。
+- **正式五仓coarse SDK仍canonical24/digest `23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b`，未运行publisher**；其中旧硬件实现尚未迁移。公共/legacy两套HBM profile分别4×36GB和旧4×16GB，均明示，不能称memory匹配。真实五仓新SDK业务/CPU not_run；R>1真正窗口、busy精度、Norm长行/数值bug未解，不解除availability guard。
+- 所有本次源码是**部分成果，工程NOT ACCEPTED**。先安全推送本分支；main采用完整可恢复归档+交接指针，不激活未经一致验证的五仓变更。main归档提交及最终远端SHA由main交接页记录。用户已要求立即停止，交接后不继续任务。
+
+### 下一账号直接执行的有效 Next Step
+
+1. 从main本段及归档定位远端 `codex/die-single-core-20261016` 的保存提交，先检查远端/工作区/源码身份；在该分支的新分支继续，不用旧build ELF。完整patch备份应在main交接归档中。
+2. fresh构建公共die并跑51项（包含最终来源元数据及工程点fixture），正常30样本预算分别使用常规example和新TX8对照配置；不改精度/速度门槛。补齐WSCLLM、WSCLLM-LRU、JOINT最新W/H ABI/配置回归；FACE/FACE-LRU已测scope有identity可核，源码变化后按范围重验。
+3. 公共源稳定后先隔离验证五仓新coarse SDK/真实consumer，再决定正式publisher；目前不要称已发布。R4等不可用业务必须如实失败，不缩小任务或清除guard以过测。
+4. 硬件迁移稳定后再接Norm/Runtime依赖：pre-core archive中tiny-credit/synchronous red、91/92长行oracle及失败数值原型全部保留。最后数值候选仍失败7/8，末候选只编译not_run，生产Execution从未采用；不要直接套patch，先适配唯一Core字段/身份。参考精度记录仅synthetic，不等于硬件校准。
+
+## 下方均为此前历史检查点（不覆盖上方有效 Next Step）
+
 记录日期：2026-10-16（Asia/Shanghai；raw另存UTC/Unix）。最新用户授权持续自主开发，无停止指令。工作分支`codex/die-continue-20261016`；接手时fetch/ls-remote实核远端main为`d16b5459a46df7f54d6e4afa36e2a5debd947690`，本地9fdcad1启动快照干净并安全fast-forward，无不明修改。当前检查点由包含本段的Git提交标识，推送后须fetch/ls-remote核实共享main与工作分支，不把本地提交当远端完成。工程 **NOT ACCEPTED**，正式五仓未发布新源；旧停止交接段落仅为历史。
 
 ## Current Status

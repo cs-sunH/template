@@ -1,10 +1,14 @@
 # 单 die 仿真器设计文档：最粗粒度参数响应版
 
 版本：coarse_die_v2（审查修订，待实现）  
-日期：2026-10-13；解析路线及硬件输入/10%—20%精度要求更新：2026-10-15<br>
+日期：2026-10-13；解析路线及硬件输入/10%—20%精度要求更新：2026-10-15；单一 Core 硬件依据更新：2026-10-16<br>
 推荐实现：C++17 公共库，C ABI，五仓库各保留薄适配层  
 建议源码位置：template/die/；交付给各仓库的固定版本位于 extern/die_model/  
-资料基线：cs-sunH/template，提交 9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8
+硬件资料基线：cs-sunH/template，提交 41f119135fd2d4cc87292f59b4b00adc918eece0 的《架构建模_单Core版_严格复核修订.docx》；SHA-256 `b4382bc7a655b7a3bf9a531b583ce8b52f8d1036883796db8a52b26b4cae4ad3`
+
+当前硬件只有一种 Core 设计，由 SRAM 容量与 NoC 位宽选取资源行，不再提供 Core 类型选择。公共输入禁止 `architecture.core_type`，任何值均报错，不设置默认值或兼容映射。资源表为 `die/configs/core32.json`，id=`core32_v1`，共 4 档 NoC × 8 档 SRAM 的 32 行；Core 边长始终为 SRAM 长边 `L0=a`。旧硬件设计和旧测试仅保留历史证据身份，不是当前设计依据。
+
+DOCX 负责硬件几何、资源与用户给定的系统组织；本文 §1.5、§1.6、§8.2.1、§13 继续负责用户确认的解析生产路线、精度、累计服务曲线与速度合同。DOCX 不含这些仿真条款，不能因更新硬件文档而撤销它们。实现和验收进度以 `die/docs/HANDOFF.md` 的真实源码与日志为准。
 
 本次修订根据外部评价补齐模型假设和实施契约。没有新增硬件实测，也没有把参考公式复算计为新仿真器验收。
 
@@ -22,7 +26,7 @@
 
 ### 1.1 本文要实现什么
 
-建立一个能嵌入五个 Astra-sim 仓库的单 die 性能后端。输入《架构建模新.md》的全部架构自变量，以及该 die 实际承担的本地工作负载；输出独占估计延迟、运行时完成事件、资源工作量、容量需求和上层已有指标需要的数据。
+建立一个能嵌入五个 Astra-sim 仓库的单 die 性能后端。输入《架构建模_单Core版_严格复核修订.docx》中与当前单 Die 范围有关的架构自变量，以及该 die 实际承担的本地工作负载；输出独占估计延迟、运行时完成事件、资源工作量、容量需求和上层已有指标需要的数据。Wafer 系统组织仅在上层显式提供时诊断，不是单 Die 输入前提。
 
 粒度取“保留这些自变量影响所需的最粗粒度”：
 
@@ -39,13 +43,13 @@
 
 ### 1.2 依据优先级
 
-1. 硬件自变量、Core 面积与安装数、Die/HBM/Wafer 几何及 bump/D2D 预算，以《架构建模新.md》为准。
+1. 硬件自变量、唯一 Core 设计的面积与安装数、Die/HBM/Wafer 几何及 bump/D2D 预算，以《架构建模_单Core版_严格复核修订.docx》为准。
 2. 本文定义源文没有规定的性能执行假设、工作量规则、聚合服务域和接入接口。
 3. 五仓库现有代码决定请求、KV 所有权、网络端点、图依赖和调度业务的含义。
 4. TX8 工作簿提供参考数据和条件性校准约束，不覆盖目标硬件定义。
 5. 两份旧“动态建模版”文档只作历史背景；与以上规则冲突的部分不沿用。
 
-《架构建模新.md》没有给出完整微架构时序。本文新增的带宽效率、输入映射和流水近似必须明确标注为性能模型假设，不能反称源文已提供这些参数。
+硬件 DOCX 没有给出完整微架构时序，也不替代本文的仿真合同。本文新增的带宽效率、输入映射和流水近似必须明确标注为性能模型假设，不能反称硬件源文已提供这些参数。
 
 ### 1.3 参数响应不等于所有参数都改变延迟
 
@@ -55,7 +59,7 @@
 - HBM 颗数增加后，若入口或内部互连已饱和，延迟可以不再下降。
 - SRAM 增大但没有跨过分块或驻留阈值，某个算子的时间可以相同。
 - 用户给定的同一硬件实例与任务必须产生相同时间；不生成或推荐面积/Core排列的硬件候选。
-- 源文只给几何等价的两种 HBM 摆放。本文若根据入口位置产生时间差异，依据是显式的聚合入口假设，不是两种外廓大小不同。
+- 源文的上下两排 HBM 只是几何示例，不强制数量或摆放。本文支持的具体摆放与入口 profile 是显式的仿真范围；位置时序差异须来自声明的路由/入口假设，不能从二维外廓推断 PHY。
 
 验收检查的是“参数是否通过正确机制影响模型”，不要求给所有参数人为添加非零延迟系数。
 
@@ -83,7 +87,7 @@
 
 本节优先于本文及历史交接中有关硬件搜索、3%/5%门槛的旧要求。仿真器是用户架构研究的工具：**用户输入一套硬件配置和实际本地任务，公共库预测其延迟；不替用户搜索或决定Die面积、Core行列数或Wafer的Die排列。** 当前实现范围到单Die面积/外形及Nx×Ny Core网格即可，Wafer级铺排不作必填项或前置条件。源架构文中的研究搜索表/结论保留作用户资料，不构成仿真器功能。
 
-移除生产硬件候选枚举、Core-first/Wafer-first搜索、Pareto/最优面积推荐及相应CLI/API。给定Core类型、每核SRAM、NoC位宽、Die宽高、Core行列、HBM及性能profile后，只做输入一致性、几何/容量合法性和资源服务率推导，不自动扩大Die、改变网格或选择另一套硬件。给定硬件下的算子tile、驻留/融合等软件映射选择仍保留。
+移除生产硬件候选枚举、Core-first/Wafer-first搜索、Pareto/最优面积推荐及相应CLI/API。给定每核SRAM、NoC位宽、Die宽高、Core行列、HBM及性能profile后，只做输入一致性、几何/容量合法性和资源服务率推导，不自动扩大Die、改变网格或选择另一套硬件。Core 只有一种设计，不接受类型字段。给定硬件下的算子tile、驻留/融合等软件映射选择仍保留。
 
 **延迟预测与已有模型近似对照的目标相对误差为10%；多次有记录的合理测试与超参调整仍难达到时，20%以内也可接受。** 这一决定替代原独占3%、并发完成/busy5%的硬门槛。沿用独占、逐请求并发完成和原busy对照口径并逐项报告，busy仍为正服务时间的并集/共享积分；不以平均利用率替换。参考非零时报告相对及绝对误差；参考为零时单报绝对值与覆盖，不能以任意分母制造通过。
 
@@ -100,7 +104,7 @@
 | 对象 | 表示方式 | 为什么保留 |
 |---|---|---|
 | 一个 die | 一个 Hardware 对象及一个资源仲裁域 | 与 Astra-sim rank 业务映射相容 |
-| Core 配置 | 64 行整数资源表中的一行 | 保留大小核、SRAM、B 对安装数的影响 |
+| Core 配置 | `core32_v1` 的 32 行整数资源表中的一行 | 保留 SRAM、B 对安装数的影响 |
 | Core 网格 | Nx、Ny 两个整数 | 保留同核数不同矩形的方向与截面差异 |
 | SRAM | 每核容量；聚合读、写服务域 | 容量决定复用，带宽决定操作数供应 |
 | Core 内互连 | 按活跃核比例折算的聚合服务域 | 同一个 B 必须影响 SRAM↔PE/Vec |
@@ -111,7 +115,7 @@
 | 重复 tile | 数量及最多八类尾块统计 | 不产生与 tile 数成比例的事件 |
 | 运行阶段 | 最多 L/C/S 三个独立活动、有限缓冲状态 | 完成的活动立即释放资源，不摊长访存 |
 
-两排 HBM 不是两条复制出来的免费总线。具体是否共享入口、从哪一侧进入，由显式 timing_topology_profile 决定；源文只规定等外廓摆放，未规定实际端口。所有 profile 仍保留真实 HBM 字节、片上访问和相应互连约束。
+两排 HBM 不是两条复制出来的免费总线。具体是否共享入口、从哪一侧进入，由显式 timing_topology_profile 决定；硬件 DOCX 的两排几何示例未规定实际端口。所有 profile 仍保留真实 HBM 字节、片上访问和相应互连约束。
 
 ### 2.2 计算区域的边界
 
@@ -145,30 +149,29 @@
 
 | 字段 | 域/源文设定 | 作用 |
 |---|---|---|
-| core_type | small / large | 读取相应整数资源表 |
 | sram_mib_per_core | 0.25、0.50、…、2.00 MiB | 面积、每核容量、分块和复用 |
 | noc_width_bits | 64 / 128 / 256 / 512 | 同时影响 Core 内互连、Core 间 Mesh 及 PE/Vec 安装数 |
 | core_columns_nx | 正整数 | Core 列数、X/Y 截面和几何 |
 | core_rows_ny | 正整数 | Core 行数、X/Y 截面和几何 |
 | die_width_mm、die_height_mm | 用户给定的正数宽高 | 面积由W×H派生；不自动选择或扩展外形 |
 | die_geometry | explicit；旧标记仅作迁移兼容 | 使用给定W/H，不生成最低面积边界候选 |
-| core_pitch_x_mm、core_pitch_y_mm | 源文示例为 0 | Core 间几何余量 |
-| die_extra_width_mm、die_extra_height_mm | 源文示例每轴总余量 0.10 mm | 最小 Die 外形；不是两边各 0.10 |
-| hbm_stacks_per_row | n；源文主搜索 1…14 | 两排总 2n 栈、容量和理论带宽 |
-| hbm_placement_mode | same_side_two_rows / two_sides_one_row_each | 源外廓相同；只有指定接入profile时才产生位置时序差异 |
+| core_pitch_x_mm、core_pitch_y_mm | 用户给定非负值；配置示例为 0 | Core 间几何余量 |
+| die_extra_width_mm、die_extra_height_mm | 用户给定非负的每轴总外围预留 | 只检查阵列能否装入 Die；示例 0.10 mm 不是 DOCX 强制值 |
+| hbm_stacks_per_row | n；当前两排模型支持 1…14 | 两排总 2n 栈、容量和理论带宽；此实现范围不是源文搜索要求 |
+| hbm_placement_mode | same_side_two_rows / two_sides_one_row_each | 当前仿真 profile 的两种布局标记；共享外廓公式，位置时序依接入假设 |
 | system_region_width_mm、system_region_height_mm | 可选历史系统诊断，不是单Die必填输入 | 不决定Die实例、rank数或单Die延迟 |
 
-用户必须给定一套明确的Die外形与Core网格，resolver只解析和校验这一套实例。只给面积不能确定宽高或Nx×Ny；缺少必要尺寸/网格就返回缺字段诊断，不反推“最优”配置或floor(sqrt(area))方阵。若同时附带面积、Core总数等镜像字段，只检查其与W×H、Nx×Ny一致。
+用户必须给定一套明确的Die外形与Core网格，resolver只解析和校验这一套实例。只给面积不能确定宽高或Nx×Ny；缺少必要尺寸/网格就返回缺字段诊断，不反推“最优”配置或floor(sqrt(area))方阵。若同时附带面积、Core总数等镜像字段，只检查其与W×H、Nx×Ny一致。`architecture.core_type` 已从公共输入删除；出现该键就明确拒绝，包括字符串、空值、数字及其它值，不猜测类型或静默忽略。
 
 ### 3.3 实例校验与旧搜索配置迁移
 
 面积/曝光场/长宽比/D2D预算等研究约束可由用户显式启用，用来接受或拒绝当前实例；不调整输入、不返回另一套硬件。Nx/Ny/HBM范围、geometry_search_mode、area_extension_rules、wafer范围、objective及Pareto选择不属于生产仿真接口。旧配置携带这些字段时，只按明确迁移规则兼容读取；不得触发候选枚举，也不得要求新配置提供它们。
 
-Core64源表可用于解析用户指定Core类型/SRAM/B对应的资源数，这不是硬件方案搜索。无Wafer/system字段时正常解析单Die；已有上层提供的系统诊断可保留，但不反向约束或自动改写单Die输入。
+`core32.json`（id=`core32_v1`）只按用户指定 SRAM/B 解析资源数，这不是硬件方案搜索。无Wafer/system字段时正常解析单Die；已有上层提供的系统诊断可保留，但不反向约束或自动改写单Die输入。旧类型字段不参与旧几何解码，必须拒绝；旧硬件描述、Plan 和快照不能冒用新硬件身份或沿用时间缓存。
 
 ### 3.4 版本化常量
 
-以下常量按源文保存。可以在独立敏感性版本中修改，但修改后必须重新生成资源表或几何结果，不能保留原 64 行却更换底层面积常量。
+以下常量按硬件 DOCX 保存。可以在独立敏感性版本中修改，但修改后必须重新生成资源表或几何结果，不能保留原 32 行却更换底层面积常量。
 
 | 项目 | 源文数值 |
 |---|---|
@@ -184,7 +187,7 @@ Core64源表可用于解析用户指定Core类型/SRAM/B对应的资源数，这
 | HBM 外廓 | 10.98×10.98 mm；厚 0.78 mm 不进入二维铺排 |
 | HBM/模块间隙 | 0.15 mm |
 | bump | pitch 0.055 mm；40% 通信；2.5 Gb/s/bump |
-| 模块间 NoC 占位 | 扩展后模块总占位的 10% |
+| 系统模块间距与互连占位 | 用户按实际系统确定；不设统一固定比例 |
 
 模型输入可携带这些常量的完整镜像和 source_revision，用于追溯；标准 profile 对与源文不一致的值报错。扩展 profile 必须有单独名称和资源表摘要。
 
@@ -192,11 +195,10 @@ Core64源表可用于解析用户指定Core类型/SRAM/B对应的资源数，这
 
 ### 4.1 Core 资源表
 
-构建或离线生成时读取源文 §1.3 的 64 行 N_vec、N_pe。运行时 O(1) 查表，不重做整数几何搜索。L0 按源文公式从 a、b 计算；不使用附录中四舍五入的 Die 尺寸做 floor。
+构建或离线生成时读取硬件 DOCX §1.3 的 32 行 N_vec、N_pe，保存为 `die/configs/core32.json`，id=`core32_v1`；行键只有 `(sram_mib_per_core, noc_width_bits)`，不含类型。运行时 O(1) 查表，不重做整数几何搜索。Core 外形始终固定为对应 SRAM 长边 `L0=a`，不同 B 不重新求 Core 边长。
 
 ~~~text
-small: L0 = a
-large: L0 = (a + sqrt(a*a - 0.6*a*b)) / 0.3
+L0 = a
 A_noc = 0.15 * L0*L0 * (0.20 + 0.80*noc_width_bits/256)
 N_core = Nx * Ny
 P_int4_per_core = 2 * N_pe * 1e9          integer-op/s
@@ -231,32 +233,34 @@ Core 数只随显式 Nx、Ny 改变，不因增加 Die 留白自动增长。HBM 
 
 W_die、H_die、Nx、Ny均由用户给定。W_min/H_min只用于检查Core网格能否装入该Die；bump与HBM扣除预算按给定面积解析计算。不得按面积下界自动grow_width/grow_height/isotropic，不要求输入恰好落在旧搜索产生的三个边界点上。可选研究约束拒绝不合法实例时，返回原因并保持输入，不推荐替代方案。
 
-### 4.3 可选历史系统诊断（不属于当前单Die前置条件）
+### 4.3 用户给定的系统组织与可选历史诊断（不属于单Die前置条件）
+
+硬件 DOCX §3 的系统排列由用户给定 Mx、My，模块间距、互连和封装边界另行核查；没有固定系统铺排区域或统一互连占比。系统总量只按显式的 Die 阵列统计：
 
 ~~~text
-W_effective = W_module / sqrt(0.90)
-H_effective = H_module / sqrt(0.90)
-Mx = floor(system_region_width / W_effective)
-My = floor(system_region_height / H_effective)
 N_module = Mx*My
-
 system_core_count = N_module*N_core
 system_hbm_capacity = N_module*HBM_capacity
 system_peak_int4 = N_module*N_core*P_int4_per_core
 system_peak_vec_fp32 = N_module*N_core*P_vec_per_core
 ~~~
 
-面积利用率按源文分开：Core/Die、Core/系统区域、含 HBM 与分摊互连的模块占位率。10% 模块间 NoC 只影响空间占位，不成为内部 NoC 减速系数。
+单 Die 输入不需要这些系统参数。面积统计分别记录 Core/Die、Core/用户给定系统区域、模块与互连预留，不能把不同口径合成一个“面积效率”。系统组织不等于圆形制造晶圆上的良品 Die 排布，N_module 不自动覆盖五仓 rank_count。
+
+既有 `system_region_width_mm/system_region_height_mm` 诊断仍可按明确的历史兼容 profile 读取。有该诊断时，`derived.system.layout_profile=legacy_region_fit_10pct_v1`、`layout_provenance=compatibility_assumption_not_hardware_docx`、`module_interconnect_fraction=0.10` 明确记录其10%占位假设；该比例不属于 `source_constants`。只执行以下历史公式，它不是新 DOCX 的硬件约束，不用于选择硬件，不改写用户给定的系统阵列：
 
 ~~~text
+W_effective_legacy = W_module / sqrt(0.90)
+H_effective_legacy = H_module / sqrt(0.90)
+Mx_legacy = floor(system_region_width / W_effective_legacy)
+My_legacy = floor(system_region_height / H_effective_legacy)
+N_module_legacy = Mx_legacy*My_legacy
 eta_core_die = Nx*Ny*L0*L0/A_die
-eta_core_region = N_module*Nx*Ny*L0*L0/(region_width*region_height)
-eta_module_region = N_module*W_module*H_module/(0.90*region_width*region_height)
+eta_core_region_legacy = N_module_legacy*Nx*Ny*L0*L0/(region_width*region_height)
+eta_module_region_legacy = N_module_legacy*W_module*H_module/(0.90*region_width*region_height)
 ~~~
 
-这些字段只在用户显式提供系统区域并请求诊断时派生，不合成一个“面积效率”，也不成为单Die延迟API必填条件。
-
-源文的系统区域不是圆形制造晶圆。N_module 不自动覆盖五仓库 rank_count；创建系统拓扑属于上层显式步骤。
+历史空间预留不成为内部 NoC 减速系数。未声明适用 profile 的其它模块间距/封装方案不能套此公式；创建系统拓扑属于上层显式步骤。
 
 ## 5. 工作负载输入与精度执行
 
@@ -532,7 +536,7 @@ edge的north平均dy=E[y]，south为Ny−1−E[y]；截面用对应目的另一�
 
 ### 7.6 空白几何与原文没有的线长延迟
 
-pitch、外围预留、HBM 间隙、扩展 W/H 和 10% 模块间 NoC 只进入源文的几何链。原文没有距离到传播延迟的公式，第一版不添加每毫米延迟超参。
+pitch、外围预留、HBM 间隙和用户给定的模块/系统占位只影响相应几何与预算；可选历史10%互连占位也只影响该兼容诊断，不是硬件DOCX的固定规则。DOCX没有距离到传播延迟的公式，第一版不添加每毫米延迟超参。
 
 在相同 Nx/Ny、Core 资源和映射下，单纯增加 Die 留白应保持本地时间；bump/D2D 预算与系统模块数仍重新计算。
 
@@ -652,9 +656,9 @@ COMP、COMM、RESTORE、POOL的本地HBM端点共用同一仲裁域。HBM↔Core
 
 ### 9.1 允许少量自由度，禁止逐架构/逐算子追平
 
-超参存放在独立 calibration.json，包含单位、范围、来源、适用 profile、执行模板、拟合样本和版本。64 行 Core 几何与资源数、HBM 理论规格、bump 及 10% 系统占位均不参与时间拟合。
+超参存放在独立 calibration.json，包含单位、范围、来源、适用 profile、执行模板、拟合样本和版本。32 行 Core 几何与资源数、HBM 理论规格及 bump 均不参与时间拟合；用户给定的系统空间预留和历史兼容诊断也不能充当时间拟合参数。
 
-不为 64 种 Core 各拟合一套效率，也不为每一行 Excel 设独立延迟乘数。一个参数应对应明确资源或执行行为，并在适用域内共享。
+不为 32 种 SRAM/NoC 配置各拟合一套效率，也不为每一行 Excel 设独立延迟乘数。一个参数应对应明确资源或执行行为，并在适用域内共享。
 
 ### 9.2 超参清单
 
@@ -795,7 +799,7 @@ Norm 两次、Residual 两次；Q/K/V/O 分列；RoPE 和 softmax 组分别合�
 | active_cores / output_round_count / consumption_wave_count / tile_choice | 分块、利用率、重算与容量阈值解释 |
 | sram_peak_bytes_per_core | 当前区域工作集峰值 |
 | hbm_workspace_peak_bytes | 临时外存需求；只返回增量，不重复申请原权重/KV |
-| derived_hardware | 64行资源、几何、bump/D2D、模块和系统资源 |
+| derived_hardware | 32行资源、几何、bump/D2D、模块和显式系统资源 |
 | hardware_fingerprint / calibration_revision | 完整配置与执行假设身份 |
 | evidence_flags / validation_statuses | source_model、engineering_assumption、TX8_conditional、derived；按9.5逐层报not_run/不可用/通过 |
 | topology / routing / granularity_identity | 入口/路由/epoch/证书身份与coverage，不能只报总延迟 |
@@ -869,7 +873,7 @@ metrics_postprocess.py目前对DIE三种active_kernel_die利用率做fail-closed
 | die/src/Hardware.cc、Mapping.cc、AccessCounter.cc | 源资源、确定候选/循环、动作与生命周期账本 |
 | die/src/Compiler.cc、Arbiter.cc | 最小已验证计划；独立活动、credit与实跑/投影共同算法 |
 | die/src/Tx8Reference.cc | 分离的TX8参考重建 |
-| die/configs/ | Core64、schema、结构情景、工程先验与校准证书 |
+| die/configs/ | core32.json（core32_v1）、schema、结构情景、工程先验与校准证书 |
 | die/tools/、die/tests/ | 离线导入/拟合、离散oracle、变量/事件/兼容/开销报告 |
 
 C++17与现有项目统一；离线XLSX/拟合可用Python，运行时不启动Python、不读Excel、不联网。JSON复用现有依赖，仅配置/批量compile/导出使用，热路径为固定数组和结构体。
@@ -939,7 +943,7 @@ callback只在外层DONE/CANCELLED终结各发一次；内部活动完成不释�
 
 ### 11.4 身份、缓存与重现
 
-hardware_fingerprint含完整源参数/派生资源、source revision、Core64、topology/route及服务profile；plan_fingerprint再含本地shape、dtype、spans/TP、数据流、驻留、转换、循环/credit、细分级别/证书和校准版本。snapshot额外记录clock/event-order/fairness/rounding版本。任何结构/模板改变不得复用旧时间缓存。
+hardware_fingerprint含完整源参数/派生资源、source revision、core32_v1及其32行摘要、topology/route及服务profile；plan_fingerprint再含本地shape、dtype、spans/TP、数据流、驻留、转换、循环/credit、细分级别/证书和校准版本。snapshot额外记录clock/event-order/fairness/rounding版本。任何结构/模板改变不得复用旧时间缓存；旧硬件身份的 Plan/快照与新身份严格区分。
 
 旧search_profile只作迁移元数据另记；预测由同一给定硬件实例与任务决定，不执行硬件搜索。缓存仅放不可变Plan，默认4096条或64MiB双上限按实际字节淘汰；不缓存执行句柄。新schema拒绝把mesh_die_v1/scalar state或coarse_die_v1单phi快照作为v2恢复。
 
@@ -1148,22 +1152,21 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 
 ### 14.1 原文资源黄金检查
 
-1. 64行N_pe/N_vec与源文逐项一致，INT4/FP32分别核算。
-2. B=256、0.25MiB小核：L0=0.40662mm、N_vec=2、N_pe=40；每核PE=80GOPS、Vec=7.9108等效GFLOPS。
+1. core32_v1的32行N_pe/N_vec与硬件DOCX逐项一致，行键只有SRAM/B，INT4/FP32分别核算；公共输入出现architecture.core_type任意值均拒绝。
+2. B=256、0.25MiB：L0=a=0.40662mm、N_vec=2、N_pe=40；每核PE=80GOPS、Vec=7.9108等效GFLOPS。
 3. 同一Core四档B不重新求L0；g(B)=0.4、0.6、1.0、1.8。
 4. Nx×Ny矩形不被改成floor(sqrt(C))方阵。
 5. n=1/2/3的HBM颗数=2/4/6，容量=72/144/216GB，峰值=2355.2/4710.4/7065.6GB/s。
-6. 每轴0.10mm是总外围预留，不能变成0.20mm。
-7. HBM超宽采用max外廓；源文两个摆放的模块外廓相同。
+6. 用户给定的extra_width/height是每轴总外围预留；配置示例0.10mm不能变成0.20mm，也不能当作源文强制值。
+7. HBM超宽在当前两排几何profile下采用max外廓；其它摆放需独立公式，不能将该profile的等外廓假设推广为源文要求。
 8. bump扣理论HBM后得D2D双向/单向预算，不用实际被限速吞吐替换扣除项。
-9. 10%模块间互连按除sqrt(0.9)扩外廓；不再从Core面积扣一次。
+9. 系统间距/互连预留由用户确定；显式历史10%占位诊断才使用除sqrt(0.9)公式，不能再从Core面积扣一次或作为单Die前提。
 10. 所有floor前使用未四舍五入值；Wafer系统模块数不自动改rank_count。
 
 ### 14.2 自变量响应矩阵
 
 | 变化 | 必须观察到的响应 | 不要求的响应 |
 |---|---|---|
-| small↔large | 源表资源/几何、每核有效容量、并行与局部供数重新核算 | 每个算子都单调加速 |
 | SRAM档位 | 资源表、tile/驻留阈值、重读/中间访问可能改变 | 未跨阈值也强制改变时间 |
 | B | source层N_pe/N_vec与面积必重算；timing层在固定单拍/route profile下重算local/Mesh，入口按所选profile | “B越大一定快”或任意PHY随B变化 |
 | Nx、Ny | 核数、尾波、方向截面/映射、最小外形变 | 同核数只换形状必然总时间不同 |
@@ -1172,7 +1175,7 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 | W/H留白、pitch、ex/ey | 原文几何与系统预算变 | 相同资源/网格下凭空提升算力 |
 | 用户给定W/H与可选曝光/长宽比约束 | 当前实例合法性及派生预算；非法时明确拒绝 | 自动改变面积/网格或生成替代硬件 |
 | 无search_profile/Wafer字段 | 正常解析完整的给定单Die配置 | 自动搜索或必须先铺排Wafer |
-| 系统区域/Mx/My/10%占位 | 模块数、整片容量/峰值与面积指标变 | 单die执行器生成整片事件 |
+| 用户给定Mx/My、模块间距/系统边界；可选历史区域诊断 | 按相应profile统计整片容量/峰值与占位，并标明依据 | 单die执行器生成整片事件或自动选择系统铺排 |
 
 分别验证source-required静态响应与profile-conditional时间响应。SRAM命中向量/GEMM固定计算率、构造LOCAL瓶颈再扫B；HBM-only端点扫n；薄长网格及转置网格构造Mesh瓶颈。服务率应按profile变化，端到端时间只在对应域受限时必须改变。普通算子不响应时报告容量/工作/瓶颈，不能强加惩罚因子。
 
@@ -1224,7 +1227,7 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 
 | 步骤 | 交付 | 进入下一步的条件 |
 |---|---|---|
-| 1 | 源变量schema、Core64、resolver与显式结构profile | 全部源变量有消费者；几何/峰值黄金一致；未知入口不伪称事实 |
+| 1 | 源变量schema、core32_v1、resolver与显式结构profile | SRAM/B共32行与L0=a黄金一致；类型字段拒绝；未知入口不伪称事实 |
 | 2 | 确定候选/循环、动作与缓冲编译器 | dtype/重算/causal/GQA/尾块/驻留/byte精确与hash稳定 |
 | 3 | 独立L/C/S、credit、仲裁与v2 ABI | 动态反例、公平、依赖/取消/释放、数值失败语义通过 |
 | 4 | 独立离散oracle、最小E证书、入口联合敏感性 | 粒度误差/排序/事件数量通过，结构未验证状态保留 |
@@ -1240,14 +1243,13 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 
 ## 16. 输入示例
 
-以下是用户给定单Die配置的示例，不声称最优；无需search_profile或Wafer字段。explicit输入迁移尚待代码实现，数据类型以更新后的schema定义为准。
+以下是用户给定单Die配置的示例，不声称最优；无需search_profile或Wafer字段。硬件身份对应当前单一Core设计；精确schema及已运行范围另见die/docs/implementation.md与HANDOFF。
 
 ~~~json
 {
   "schema": "coarse_die_v2",
-  "source_revision": "9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8",
+  "source_revision": "41f119135fd2d4cc87292f59b4b00adc918eece0",
   "architecture": {
-    "core_type": "large",
     "sram_mib_per_core": 0.25,
     "noc_width_bits": 256,
     "core_columns_nx": 8,
@@ -1287,7 +1289,7 @@ v2引入带符号credit约束，不能沿用v1的O(R²J+J log J)承诺。采用�
 }
 ~~~
 
-resolver按源公式求L0及最小容纳宽高，只检查给定21×29mm能否容纳8×11网格；不改输入，不查找更优尺寸。面积为609mm²，得到88核、4栈、144GB及4710.4GB/s理论峰值；HBM行宽22.11mm、模块诊断外廓约22.41×51.56mm。没有系统区域输入就不派生Wafer模块铺排。L0和中间计算保留未舍入精度，不能用显示的2.56355mm近似值执行floor。
+resolver直接取L0=a=0.40662mm及最小容纳宽高，只检查给定21×29mm能否容纳8×11网格；本例包含0.10mm每轴总外围预留，所需最小宽高为3.35296×4.57282mm。不改输入，不查找更优尺寸。面积为609mm²，得到88核、4栈、144GB及4710.4GB/s理论峰值；HBM行宽22.11mm、模块诊断外廓约22.41×51.56mm。没有系统区域输入就不派生Wafer模块铺排。L0和中间计算保留源数据精度，不用经显示再舍入的尺寸执行floor。
 
 示例显式选distributed_ideal_v2探索情景，不增加无证据的入口限速，仍受HBM、Mesh、SRAM与LOCAL约束；最终时间不能只按4710.4GB/s计算。若改选edge_single_word_v2，北/南各179.2GB/s、合计358.4GB/s，比HBM理论峰值低约13.14倍。这只证明原入口假设很可能主导该情景，不能证明实际芯片只有358.4GB/s；入口/路由联合敏感性必须另跑并报告配置排序是否反转。
 
@@ -1305,7 +1307,7 @@ resolver按源公式求L0及最小容纳宽高，只检查给定21×29mm能否�
 
 ## 18. 依据和代码定位
 
-所有硬件公式以[架构建模新.md](https://github.com/cs-sunH/template/blob/9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8/架构建模新.md)为准：§1为Core64与分精度峰值，§2为动态Die/HBM/bump，§3为系统模块占位。该源文的性能缺项由本文显式假设补齐。
+硬件依据为[架构建模_单Core版_严格复核修订.docx](架构建模_单Core版_严格复核修订.docx)，source_revision=`41f119135fd2d4cc87292f59b4b00adc918eece0`：§1为唯一Core设计、32行SRAM/B资源与分精度峰值，§2为用户给定Die/Core阵列、HBM及bump，§3为用户给定系统阵列与物理核查边界。旧硬件文档仅属历史资料，不提供当前公式或类型选项。该DOCX的性能缺项由本文显式假设补齐；解析路线/精度/累计曲线/速度合同分别仍以本文§1.5/§1.6/§8.2.1/§13为准。
 
 校准数据为[TX8_单die建模_精简版.xlsx](https://github.com/cs-sunH/template/blob/9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8/TX8_单die建模_精简版.xlsx)，参考其总览、硬件配置、维度定义、计时组13行及FFN工作集。
 

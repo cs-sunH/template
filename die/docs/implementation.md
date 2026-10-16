@@ -2,7 +2,9 @@
 
 > This is an implementation description, not an acceptance certificate. [HANDOFF.md](HANDOFF.md) is the current progress and defect ledger. Described intentions below must not be read as passed features.
 
-This page describes the canonical files currently under `die/`, including what the implementation consumes and what its reported results mean. The v2 resolver validates the fixed source revision and Core table recorded in `configs/example_hardware.json`; changing the architecture source table, task template, event ordering, or rounding contract requires a version change and corresponding evidence. This is not a build, accuracy, or release claim. The five Astra-Sim vendored copies have not yet been synchronized to the current hardware-input changes.
+This page describes the canonical hardware contract and model interfaces under `die/`, including what inputs and reported results mean. The current hardware authority is [架构建模_单Core版_严格复核修订.docx](../../架构建模_单Core版_严格复核修订.docx), source revision `41f119135fd2d4cc87292f59b4b00adc918eece0`, SHA-256 `b4382bc7a655b7a3bf9a531b583ce8b52f8d1036883796db8a52b26b4cae4ad3`. There is one Core design, whose edge is the SRAM long edge `L0=a`. The 32-row resource table is `configs/core32.json`, id `core32_v1`, indexed only by SRAM capacity and NoC width. Changing the architecture source table, task template, event ordering, or rounding contract requires a version change and corresponding evidence. This is not a build, accuracy, or release claim. Historical evidence below retains its original source scope; the five Astra-Sim vendored copies have not been synchronized to this hardware revision.
+
+The DOCX supplies hardware geometry/resources and user-chosen system organization. It does not contain simulator policy. The root simulator design §1.5, §1.6, §8.2.1 and §13 remain the contracts for analytical workload, bounded cumulative service curves, accuracy and speed. Their validity is not changed by the hardware-document migration.
 
 ## Build and verification commands
 
@@ -16,7 +18,7 @@ cmake --build build/coarse_die_v2 -j
 ctest --test-dir build/coarse_die_v2 --output-on-failure
 ./die/tools/estimate.py \
   --library build/coarse_die_v2/lib/libcoarse_die_cabi.so \
-  --hardware die/configs/example_hardware.json \
+  --hardware die/configs/example_hardware_explicit.json \
   --tasks die/configs/example_tasks.json \
   --output -
 ```
@@ -38,16 +40,17 @@ The first verifies the workbook cache and reference reconstruction. The second c
 
 The descriptor is a JSON object with `schema: "coarse_die_v2"`, the immutable `source_revision`, and required `architecture` and `performance_profile` objects. The architecture describes one supplied Die: `core_columns_nx` and `core_rows_ny` identify the Core grid, and `die_width_mm` plus `die_height_mm` identify its outline. These values are validated and used to derive resources; the resolver does not generate or rank hardware candidates, require Wafer inputs, or change the supplied hardware. `core_resource_table` and `source_constants` are optional mirrors; if supplied, they must match the compiled source exactly. The canonical resolved descriptor includes these mirrors and a content fingerprint.
 
+`architecture.core_type` is no longer an input field. Its presence is rejected for every value, including null, numeric or previously used strings; there is no default type, compatibility alias or silent removal. The source/table/fingerprint changes also prevent old hardware Plans, snapshots and timing-cache entries from being relabeled as this revision. Existing old SDKs and raw evidence retain their own source identity.
+
 `validation_constraints` is an optional instance check. It can impose an area interval, a reticle outline and rotation rule, a maximum aspect ratio, nonnegative bump-minus-HBM D2D budget, or an HBM-row-within-Die check. It accepts only the corresponding `die_area_min_mm2`, `die_area_max_mm2`, `reticle_width_mm`, `reticle_height_mm`, `allow_reticle_rotation`, `die_max_aspect_ratio`, `require_nonnegative_d2d_budget`, and `require_hbm_row_within_die` keys. A failing constraint rejects that supplied instance; it never selects, resizes, or replaces it. New descriptors should use this field when they need such checks.
 
-For compatibility, an existing descriptor without W/H may still be decoded when it names a supported deterministic legacy `die_geometry` (`minimum_grid`, `grow_width`, `grow_height`, `isotropic`, or `resolved_source_boundary`; the last also identifies its legacy `geometry_candidate`). This path decodes a specific old outline; it does not generate candidates. Legacy `search_profile` values are not required for a new descriptor and do not constrain a supplied W/H outline; old fields are read only on the no-W/H compatibility path. `configs/example_hardware.json` still uses that legacy form, so new descriptors should provide explicit W/H. The five vendored copies remain pending synchronization.
+For compatibility, an existing descriptor without W/H may still be decoded when it names a supported deterministic legacy `die_geometry` (`minimum_grid`, `grow_width`, `grow_height`, `isotropic`, or `resolved_source_boundary`; the last also identifies its legacy `geometry_candidate`). This path decodes a specific old outline; it does not generate candidates or make a removed type field legal. Legacy `search_profile` values are not required for a new descriptor and do not constrain a supplied W/H outline; old fields are read only on the no-W/H compatibility path. Both current `example_hardware*.json` files provide explicit W=21/H=29 mm and omit `search_profile`; `example_hardware.json` additionally retains an optional 215×215 mm historical region diagnostic. New descriptors should provide explicit W/H. The five vendored copies remain pending synchronization.
 
 | Input field | Accepted values / units | Consumer and effect |
 |---|---|---|
-| `source_revision` | Exact revision in `configs/example_hardware.json` | Rejects a descriptor from a different architecture source revision. |
-| `core_resource_table.id`, `.rows_sha256` | `core64_v2` and the compiled 64-row digest | Identifies/checks the source-derived `(core_type, SRAM, NoC width) → N_vec, N_pe` table. |
+| `source_revision` | `41f119135fd2d4cc87292f59b4b00adc918eece0` | Rejects a descriptor from a different architecture source revision. |
+| `core_resource_table.id`, `.rows_sha256` | `core32_v1` and the compiled 32-row digest | Identifies/checks `configs/core32.json`: `(SRAM, NoC width) → N_vec, N_pe`, four NoC widths × eight SRAM capacities. |
 | `source_constants` | Full exact mirror when present | Checks the assumptions recorded by the source; it does not expose run-time free parameters. The complete current set is in `configs/example_hardware.json`. |
-| `architecture.core_type` | `small` or `large` | Selects Core-edge formula and one of the two source table families. |
 | `architecture.sram_mib_per_core` | One of 0.25–2.00 MiB in 0.25 MiB steps | Selects the Core table row, SRAM capacity, and Core L0 edge. MiB uses 2²⁰ bytes. |
 | `architecture.noc_width_bits` | 64, 128, 256, or 512 | Selects the source table row and per-link/local-bus width used by resource-rate formulas. |
 | `architecture.core_columns_nx`, `core_rows_ny` | Positive integer counts | User-supplied rectangular Core grid. Sets core count, mesh directions, edge count, and the minimum outline that the supplied Die must contain. Core assignment and routing profiles use this shape. |
@@ -59,7 +62,7 @@ For compatibility, an existing descriptor without W/H may still be decoded when 
 | `architecture.geometry_candidate` | Legacy only for `resolved_source_boundary` | Identifies the specific old deterministic boundary to decode; it does not request candidate generation. |
 | `architecture.hbm_stacks_per_row` | 1–14 | Sets two-row HBM capacity and raw row bandwidth; each row has `n` stacks. |
 | `architecture.hbm_placement_mode` | `same_side_two_rows` or `two_sides_one_row_each` | Controls row-to-ingress mapping for bounded ingress profiles; it does not change HBM capacity or raw bandwidth. |
-| `architecture.system_region_width_mm`, `system_region_height_mm` | Optional positive mm pair | If supplied, derives module-fit and system capacity/peak summaries. They are not required to resolve or simulate one Die and do not represent a Wafer search. |
+| `architecture.system_region_width_mm`, `system_region_height_mm` | Optional positive mm pair | If supplied, derives a historical module-fit diagnostic with `derived.system.layout_profile=legacy_region_fit_10pct_v1`, `layout_provenance=compatibility_assumption_not_hardware_docx`, and `module_interconnect_fraction=0.10`. This fraction is not a source constant. These fields are not required to simulate one Die and do not represent a Wafer search. |
 | `validation_constraints.*` | Optional instance-only checks listed above | Rejects an invalid supplied outline without generating or selecting a different one. |
 | Legacy `search_profile` | Optional only for old no-W/H descriptors | Compatibility input for decoding a named old outline. Its candidate ranges, search mode, Wafer ranges, and objective do not invoke hardware search. Prefer `validation_constraints` for current instance checks. |
 | `performance_profile.execution_profile`, `calibration_status` | Version/profile labels | Record the assumed compute templates and evidence status. `assumed` is not promoted by a successful estimate. |
@@ -73,7 +76,7 @@ For compatibility, an existing descriptor without W/H may still be decoded when 
 | `kappa_quant_eqops`, `kappa_acc_convert_eqops` | Non-negative equivalent operations per item | Price the fixed target quantization/packing and accumulator-conversion templates. They are not universal instruction counts. |
 | `performance_profile.explicit_ingress` | Required only for `explicit_ingress_v2` | Supplies source identity, two raw B/s rates, row→ingress mapping, shared-group IDs, enabled flags, and weighted source columns. Shared resources must agree on their declared rate. |
 
-The 64 Core rows are compiled from the source architecture document and checked against the `core64_v2` digest. The resolver derives `N_core=Nx×Ny`, `L0`, INT4 and Vec peaks, SRAM capacity, metrics for the supplied Die geometry, two HBM rows, and bump/D2D budgets. If a system region is supplied, it also derives module-fit and system totals. For the current source formulas, one HBM stack contributes 36×10⁹ bytes and 1.1776×10¹² B/s; `n` stacks per row means `2n` stacks total. The source Vec rate is 3.9554×10⁹ FP32-equivalent operations/s per lane. These are source inputs, not measured target rates.
+The 32 Core rows are compiled from hardware DOCX §1.3 and checked against the `core32_v1` digest. The only edge formula is `L0=a`: the SRAM long edge selects the Core outline, and a NoC-width change does not change that outline. The resolver derives `N_core=Nx×Ny`, INT4 and Vec peaks, SRAM capacity, metrics for the supplied Die geometry, two HBM rows, and bump/D2D budgets. If a historical system-region diagnostic is supplied, it also derives its profile-specific module-fit and system totals. The DOCX instead leaves actual system dimensions, module spacing and interconnect allocation to the user; an existing 10% legacy space reservation is not a hardware rule or a single-Die prerequisite. For the current source formulas, one HBM stack contributes 36×10⁹ bytes and 1.1776×10¹² B/s; `n` stacks per row means `2n` stacks total. The source Vec rate is 3.9554×10⁹ FP32-equivalent operations/s per lane. These are source inputs, not measured target rates.
 
 ## Accuracy and busy reporting
 
@@ -174,18 +177,18 @@ bash die/docs/analysis/native-world-snapshot-20261014/run_checks.sh
 
 The complete Online build and tiny workload runner are in [the Online reproduction package](analysis/native-local-projection-20261014/online-reproduction/README.md); the [native snapshot package](analysis/native-world-snapshot-20261014/README.md) describes its same-frozen-input session scope. Production Sys/ledger/network/pool live import is not established by these focused checks. Use each other active repository's own documented entry point and suite. The required evidence is per repository: same shared-source digest, build with the v2 C ABI, C++/C ABI plan identity, actual workload behavior, one-owner endpoint accounting, cancellation/drain/release, and snapshot/import/fork replay. A green legacy suite alone does not meet this gate.
 
-## Evidence ledger
+## Evidence ledger and source scope
 
-These statuses are evidence labels, not completion claims. Update them only from logs created by the source revision being described.
+These statuses are retained historical evidence labels, not acceptance of the new hardware revision. Update them only from logs created by the source revision being described. Current `core32_v1` source/build/tests and migration failures belong in HANDOFF with their actual identities; the table below must not be promoted through a source-id edit alone.
 
 | Gate | Current status | What the status supports |
 |---|---|---|
 | XLSX cached cells and formula reconciliation | `passed` for `./die/tools/calibrate_tx8.py` | Reproduces workbook cache/source accounting, with `<1e-6 μs` reference-formula closure. No device-accuracy conclusion. |
 | TX8 reconstruction (13 groups, Attention/FFN/block) | `passed` as a source reconstruction | Stable AV/PV source mapping and no duplicate block total. Anchor/conditional identities remain explicit. |
 | Compiler/Mapping/Plan syntax checks | `passed` as individual translation-unit checks | This is source syntax evidence only; it does not establish linkability, operator-count correctness, or runtime semantics. |
-| Public Release build and C ABI compatibility | `passed`: 30/30 CTest; 62/62 Plan hash/summary replay; old envelope 224 responses and 16 errors unchanged | Linked public source and the specified compatibility fixtures are verified. |
+| Historical public Release build and C ABI compatibility | `passed` at that checkpoint: 30/30 CTest; 62/62 Plan hash/summary replay; old envelope 224 responses and 16 errors unchanged | That linked source and its specified compatibility fixtures were verified; this does not verify the new Core hardware identity. |
 | Runtime and LRU admission integration | Public/focused tests and two actual LRU Online fixtures pass | 480/560 typed Plans fit the immutable manifest bounds; remote-store pressure and every business path are not covered by these Online runs. |
-| v2 granularity/discrete oracle | `failed` for production E5; E8/E16 unavailable | Original 3%/5% limits remain unchanged. Research prototypes do not replace this gate. |
+| Historical v2 granularity/discrete oracle | `failed` for that production E5; E8/E16 unavailable | The original raw 3%/5% assessment is retained. Current acceptance follows §1.6's 10% target/recorded 20% fallback; a new review needs separate metrics and the original raw values. Research prototypes do not replace this gate. |
 | Five v2 repository integrations | `in_progress`; release sync, five builds, full CTest, and COMP+COMM/RESTORE metric fixtures are not complete | Existing CMake and adapter tests that exercise legacy `DieModel` do not establish v2 integration. |
 | Held-out target hardware accuracy | `not_available` | No eligible independent target measurements are in this workspace. |
 | Legacy joint baseline | `passed` pre-change only: CTest 28/28; pytest 72 passed and 12 subtests passed | The log used previously built old binaries, so it is a regression baseline only. |

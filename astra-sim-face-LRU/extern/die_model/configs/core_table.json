@@ -1,20 +1,237 @@
 {
   "schema_version": 1,
   "profile": "core_table",
+  "source_document": {
+    "path": "架构建模_单Core版_严格复核修订.docx",
+    "sha256": "b4382bc7a655b7a3bf9a531b583ce8b52f8d1036883796db8a52b26b4cae4ad3"
+  },
+  "core_resource_table_id": "core32_v1",
+  "capacity_unit": "MiB (legacy sram-mb-per-core key spelling retained)",
+  "pe_unit": "INT4 GOPS; architectural assumption, not measured BF16 throughput",
   "rows": [
-    {"sram-mb-per-core": 0.25, "core-type": "small", "vec-g-eqop-per-core": 1.9775, "pe-gflops-per-core": 26, "side-ref-um": 260.3},
-    {"sram-mb-per-core": 0.5, "core-type": "small", "vec-g-eqop-per-core": 3.955, "pe-gflops-per-core": 36, "side-ref-um": 360.98},
-    {"sram-mb-per-core": 0.75, "core-type": "small", "vec-g-eqop-per-core": 17.7975, "pe-gflops-per-core": 188, "side-ref-um": 537.42},
-    {"sram-mb-per-core": 1.0, "core-type": "small", "vec-g-eqop-per-core": 69.2125, "pe-gflops-per-core": 740, "side-ref-um": 702.86},
-    {"sram-mb-per-core": 1.25, "core-type": "small", "vec-g-eqop-per-core": 118.65, "pe-gflops-per-core": 1224, "side-ref-um": 879.29},
-    {"sram-mb-per-core": 1.5, "core-type": "small", "vec-g-eqop-per-core": 193.795, "pe-gflops-per-core": 2128, "side-ref-um": 1063.84},
-    {"sram-mb-per-core": 2.0, "core-type": "small", "vec-g-eqop-per-core": 249.165, "pe-gflops-per-core": 2220, "side-ref-um": 1385.22},
-    {"sram-mb-per-core": 0.25, "core-type": "large", "vec-g-eqop-per-core": 23.73, "pe-gflops-per-core": 204, "side-ref-um": 388.859567},
-    {"sram-mb-per-core": 0.5, "core-type": "large", "vec-g-eqop-per-core": 23.73, "pe-gflops-per-core": 276, "side-ref-um": 532.324227},
-    {"sram-mb-per-core": 0.75, "core-type": "large", "vec-g-eqop-per-core": 124.5825, "pe-gflops-per-core": 1218, "side-ref-um": 787.260242},
-    {"sram-mb-per-core": 1.0, "core-type": "large", "vec-g-eqop-per-core": 249.165, "pe-gflops-per-core": 2700, "side-ref-um": 1076.754654},
-    {"sram-mb-per-core": 1.25, "core-type": "large", "vec-g-eqop-per-core": 195.7725, "pe-gflops-per-core": 1740, "side-ref-um": 1142.281725},
-    {"sram-mb-per-core": 1.5, "core-type": "large", "vec-g-eqop-per-core": 348.04, "pe-gflops-per-core": 3798, "side-ref-um": 1544.891946},
-    {"sram-mb-per-core": 2.0, "core-type": "large", "vec-g-eqop-per-core": 741.5625, "pe-gflops-per-core": 7872, "side-ref-um": 1759.693467}
+    {
+      "sram-mb-per-core": 0.25,
+      "noc-width-bits": 64,
+      "vec-g-eqop-per-core": 7.9108,
+      "pe-int4-gops-per-core": 80.0,
+      "side-ref-um": 406.62
+    },
+    {
+      "sram-mb-per-core": 0.5,
+      "noc-width-bits": 64,
+      "vec-g-eqop-per-core": 59.331,
+      "pe-int4-gops-per-core": 594.0,
+      "side-ref-um": 813.24
+    },
+    {
+      "sram-mb-per-core": 0.75,
+      "noc-width-bits": 64,
+      "vec-g-eqop-per-core": 158.216,
+      "pe-int4-gops-per-core": 1582.0,
+      "side-ref-um": 1219.86
+    },
+    {
+      "sram-mb-per-core": 1.0,
+      "noc-width-bits": 64,
+      "vec-g-eqop-per-core": 304.5658,
+      "pe-int4-gops-per-core": 3046.0,
+      "side-ref-um": 1626.48
+    },
+    {
+      "sram-mb-per-core": 1.25,
+      "noc-width-bits": 64,
+      "vec-g-eqop-per-core": 498.3804,
+      "pe-int4-gops-per-core": 4984.0,
+      "side-ref-um": 2033.1000000000001
+    },
+    {
+      "sram-mb-per-core": 1.5,
+      "noc-width-bits": 64,
+      "vec-g-eqop-per-core": 806.9016,
+      "pe-int4-gops-per-core": 8070.0,
+      "side-ref-um": 2439.72
+    },
+    {
+      "sram-mb-per-core": 1.75,
+      "noc-width-bits": 64,
+      "vec-g-eqop-per-core": 1107.512,
+      "pe-int4-gops-per-core": 11076.0,
+      "side-ref-um": 2846.34
+    },
+    {
+      "sram-mb-per-core": 2.0,
+      "noc-width-bits": 64,
+      "vec-g-eqop-per-core": 1455.5872,
+      "pe-int4-gops-per-core": 14556.0,
+      "side-ref-um": 3252.96
+    },
+    {
+      "sram-mb-per-core": 0.25,
+      "noc-width-bits": 128,
+      "vec-g-eqop-per-core": 7.9108,
+      "pe-int4-gops-per-core": 80.0,
+      "side-ref-um": 406.62
+    },
+    {
+      "sram-mb-per-core": 0.5,
+      "noc-width-bits": 128,
+      "vec-g-eqop-per-core": 59.331,
+      "pe-int4-gops-per-core": 594.0,
+      "side-ref-um": 813.24
+    },
+    {
+      "sram-mb-per-core": 0.75,
+      "noc-width-bits": 128,
+      "vec-g-eqop-per-core": 158.216,
+      "pe-int4-gops-per-core": 1582.0,
+      "side-ref-um": 1219.86
+    },
+    {
+      "sram-mb-per-core": 1.0,
+      "noc-width-bits": 128,
+      "vec-g-eqop-per-core": 304.5658,
+      "pe-int4-gops-per-core": 3046.0,
+      "side-ref-um": 1626.48
+    },
+    {
+      "sram-mb-per-core": 1.25,
+      "noc-width-bits": 128,
+      "vec-g-eqop-per-core": 498.3804,
+      "pe-int4-gops-per-core": 4984.0,
+      "side-ref-um": 2033.1000000000001
+    },
+    {
+      "sram-mb-per-core": 1.5,
+      "noc-width-bits": 128,
+      "vec-g-eqop-per-core": 783.1692,
+      "pe-int4-gops-per-core": 7832.0,
+      "side-ref-um": 2439.72
+    },
+    {
+      "sram-mb-per-core": 1.75,
+      "noc-width-bits": 128,
+      "vec-g-eqop-per-core": 1079.8242,
+      "pe-int4-gops-per-core": 10798.0,
+      "side-ref-um": 2846.34
+    },
+    {
+      "sram-mb-per-core": 2.0,
+      "noc-width-bits": 128,
+      "vec-g-eqop-per-core": 1423.944,
+      "pe-int4-gops-per-core": 14240.0,
+      "side-ref-um": 3252.96
+    },
+    {
+      "sram-mb-per-core": 0.25,
+      "noc-width-bits": 256,
+      "vec-g-eqop-per-core": 7.9108,
+      "pe-int4-gops-per-core": 80.0,
+      "side-ref-um": 406.62
+    },
+    {
+      "sram-mb-per-core": 0.5,
+      "noc-width-bits": 256,
+      "vec-g-eqop-per-core": 59.331,
+      "pe-int4-gops-per-core": 594.0,
+      "side-ref-um": 813.24
+    },
+    {
+      "sram-mb-per-core": 0.75,
+      "noc-width-bits": 256,
+      "vec-g-eqop-per-core": 158.216,
+      "pe-int4-gops-per-core": 1582.0,
+      "side-ref-um": 1219.86
+    },
+    {
+      "sram-mb-per-core": 1.0,
+      "noc-width-bits": 256,
+      "vec-g-eqop-per-core": 276.878,
+      "pe-int4-gops-per-core": 2768.0,
+      "side-ref-um": 1626.48
+    },
+    {
+      "sram-mb-per-core": 1.25,
+      "noc-width-bits": 256,
+      "vec-g-eqop-per-core": 462.7818,
+      "pe-int4-gops-per-core": 4628.0,
+      "side-ref-um": 2033.1000000000001
+    },
+    {
+      "sram-mb-per-core": 1.5,
+      "noc-width-bits": 256,
+      "vec-g-eqop-per-core": 711.972,
+      "pe-int4-gops-per-core": 7120.0,
+      "side-ref-um": 2439.72
+    },
+    {
+      "sram-mb-per-core": 1.75,
+      "noc-width-bits": 256,
+      "vec-g-eqop-per-core": 996.7608,
+      "pe-int4-gops-per-core": 9968.0,
+      "side-ref-um": 2846.34
+    },
+    {
+      "sram-mb-per-core": 2.0,
+      "noc-width-bits": 256,
+      "vec-g-eqop-per-core": 1329.0144,
+      "pe-int4-gops-per-core": 13290.0,
+      "side-ref-um": 3252.96
+    },
+    {
+      "sram-mb-per-core": 0.25,
+      "noc-width-bits": 512,
+      "vec-g-eqop-per-core": 7.9108,
+      "pe-int4-gops-per-core": 80.0,
+      "side-ref-um": 406.62
+    },
+    {
+      "sram-mb-per-core": 0.5,
+      "noc-width-bits": 512,
+      "vec-g-eqop-per-core": 47.4648,
+      "pe-int4-gops-per-core": 474.0,
+      "side-ref-um": 813.24
+    },
+    {
+      "sram-mb-per-core": 0.75,
+      "noc-width-bits": 512,
+      "vec-g-eqop-per-core": 126.5728,
+      "pe-int4-gops-per-core": 1266.0,
+      "side-ref-um": 1219.86
+    },
+    {
+      "sram-mb-per-core": 1.0,
+      "noc-width-bits": 512,
+      "vec-g-eqop-per-core": 221.5024,
+      "pe-int4-gops-per-core": 2216.0,
+      "side-ref-um": 1626.48
+    },
+    {
+      "sram-mb-per-core": 1.25,
+      "noc-width-bits": 512,
+      "vec-g-eqop-per-core": 391.5846,
+      "pe-int4-gops-per-core": 3916.0,
+      "side-ref-um": 2033.1000000000001
+    },
+    {
+      "sram-mb-per-core": 1.5,
+      "noc-width-bits": 512,
+      "vec-g-eqop-per-core": 617.0424,
+      "pe-int4-gops-per-core": 6170.0,
+      "side-ref-um": 2439.72
+    },
+    {
+      "sram-mb-per-core": 1.75,
+      "noc-width-bits": 512,
+      "vec-g-eqop-per-core": 830.634,
+      "pe-int4-gops-per-core": 8306.0,
+      "side-ref-um": 2846.34
+    },
+    {
+      "sram-mb-per-core": 2.0,
+      "noc-width-bits": 512,
+      "vec-g-eqop-per-core": 1075.8688,
+      "pe-int4-gops-per-core": 10758.0,
+      "side-ref-um": 3252.96
+    }
   ]
 }

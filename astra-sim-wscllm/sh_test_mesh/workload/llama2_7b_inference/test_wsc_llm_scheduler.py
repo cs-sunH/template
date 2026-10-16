@@ -306,7 +306,7 @@ class WscLlmSchedulerTests(unittest.TestCase):
 
         die 推广数值更新(2026-10-03):checked-in 硬件带 die 节后,容量/
         profile/峰值算力随 die 点派生(64 GB / validation-die-64g /
-        1492.05 TFLOPS,契约 §3.4/§3.5 同 face 裁定);system.json 增三
+        126.6 INT4 TOPS compatibility scalar,契约 §3.4/§3.5 同 face 裁定);system.json 增三
         die 键。"""
         skip_without_die_cost_library(self)
         config, topology = checked_in_topology()
@@ -327,9 +327,9 @@ class WscLlmSchedulerTests(unittest.TestCase):
         with config.system_config.open(encoding="utf-8") as source:
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        # die 后端:峰值算力为库派生 PE_peak_die(1225 核 x 1218 GFLOPS);
+        # die 后端:峰值算力为库派生 PE_peak_die(100 Cores x 1266 INT4 GOPS);
         # 261.12 是 legacy compute 节口径,已随 die 节退役。
-        self.assertEqual(system_raw["peak-perf"], 1492.05)
+        self.assertEqual(system_raw["peak-perf"], 126.6)
         # die 三键(契约 §3.2):backend 声明 + 派生配置绝对路径。
         self.assertEqual(system_raw["compute-cost-model"], "die")
         self.assertEqual(system_raw["die-model-profile"], "mesh_die_v1")

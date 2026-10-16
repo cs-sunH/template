@@ -12,7 +12,7 @@ static Hardware clock_hardware() {
   auto config = read_json(std::string(COARSE_DIE_SOURCE_DIR) +
                           "/configs/example_hardware.json");
   auto& a = config["architecture"];
-  a["core_type"] = "small"; a["sram_mib_per_core"] = 0.25;
+  a["sram_mib_per_core"] = 0.25;
   a["noc_width_bits"] = 64; a["core_columns_nx"] = 1;
   a["core_rows_ny"] = 1; a["die_geometry"] = "isotropic";
   config["performance_profile"]["eta_vec"] = 0.02;

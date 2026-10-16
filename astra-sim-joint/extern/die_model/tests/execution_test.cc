@@ -176,14 +176,14 @@ DieStage memnoc_stage(const char* label, double mem_ns, double noc_ns,
   return s;
 }
 
-// A PE stage of exactly `ns` nanoseconds on the default die's large cores.
+// A PE stage of exactly `ns` nanoseconds on the explicit compatibility-test Core fixture.
 DieStage pe_stage(const char* label, std::uint64_t repeat, double ns,
                   std::vector<DieStageDep> deps) {
   DieStage s;
   s.label = label;
   s.resource = StageResource::PE;
   s.wave_repeat = repeat;
-  s.pe_core_flop = ns * 1e-9 * 0.9079551923877489 * 1218e9 * kExactNudge;
+  s.pe_core_flop = ns * 1e-9 * 0.9079551923877489 * 1266e9 * kExactNudge;
   s.deps = std::move(deps);
   return s;
 }
@@ -301,7 +301,7 @@ void test_full_speed_parity(Checker& ck) {
         DieModel::OpKind::Norm, DieModel::Phase::Prefill, 1024, 1024, 0, 0);
     spec.layer_count = 3;
     const DieModel::Hardware tx8 = DieModel::make_hardware(die_test::wrapped(
-        die_test::die_node(0.75, "large", 800, 4, 1, 512),
+        die_test::die_node(0.75, 800, 4, 1, 512),
         "tx8_reference_v1"));
     std::shared_ptr<const DiePlan> plan = DieModel::compile(spec, tx8);
     const CostResult est = DieModel::estimate_alone(*plan);

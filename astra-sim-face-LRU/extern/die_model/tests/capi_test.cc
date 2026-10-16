@@ -37,7 +37,7 @@ const char* kConfig = R"JSON({
   "schema_version": 1,
   "profile": "mesh_die_v1",
   "die": {
-    "sram-mb-per-core": 0.75, "core-type": "large",
+    "sram-mb-per-core": 0.75, "mesh-nx": 23, "mesh-ny": 23,
     "compute-area-mm2": 800, "hbm-per-side": 4, "hbm-sides": 1,
     "noc-width-bits": 512
   }
@@ -130,7 +130,7 @@ int main() {
               "create_model: last error message present");
     die_destroy_model(bad);  // NULL is a no-op
     void* bad2 = die_create_model(
-        R"({"die": {"sram-mb-per-core": 0.75, "core-type": "large",
+        R"({"die": {"sram-mb-per-core": 0.75, "mesh-nx": 23, "mesh-ny": 23,
                      "compute-area-mm2": 799, "hbm-per-side": 4,
                      "hbm-sides": 1, "noc-width-bits": 512}})");
     ck.expect(bad2 == nullptr,
@@ -143,7 +143,7 @@ int main() {
   void* model = die_create_model(kConfig);
   ck.expect(model != nullptr, "create_model: wrapped form accepted");
   void* bare = die_create_model(
-      R"({"sram-mb-per-core": 0.75, "core-type": "large",
+      R"({"sram-mb-per-core": 0.75, "mesh-nx": 23, "mesh-ny": 23,
           "compute-area-mm2": 800, "hbm-per-side": 4, "hbm-sides": 1,
           "noc-width-bits": 512})");
   ck.expect(bare != nullptr, "create_model: bare die node accepted");
@@ -159,9 +159,9 @@ int main() {
               "hardware_summary: schema_version/profile");
     ck.expect(j.at("die").at("hbm-per-side") == 4u,
               "hardware_summary: die node verbatim");
-    ck.expect(j.at("derived").at("mesh_n") == 35u &&
-                  j.at("derived").at("cores") == 1225u,
-              "hardware_summary: mesh 35x35");
+    ck.expect(j.at("derived").at("mesh_n") == 23u &&
+                  j.at("derived").at("cores") == 529u,
+              "hardware_summary: explicit 23x23 grid");
     bandwidth = j.at("derived").at("hbm_bandwidth_bytes");
     ck.expect(bandwidth == 1.64e12,
               "hardware_summary: hbm bandwidth = 4x410 GB/s");

@@ -584,7 +584,7 @@ double stage_instance_seconds(const DieStage& s, const Hardware& hw) {
     }
     return 0.0;
   }
-  const double p_core = hw.core_row.pe_gflops_per_core * 1e9;
+  const double p_core = hw.core_row.pe_int4_gops_per_core * 1e9;
   const double v_core = hw.core_row.vec_g_eqop_per_core * 1e9;
   switch (s.resource) {
     case StageResource::PE:
@@ -1404,10 +1404,14 @@ std::string plan_cache_hardware_key(const Hardware& hw) {
   // mixed by callers that share caches across model instances).
   std::string s = "hw{";
   s += to_string(hw.profile);
-  s += "," + std::to_string(hw.sram_mb_per_core) + "," + to_string(hw.core_type);
+  s += "," + std::to_string(hw.sram_mb_per_core);
   s += "," + std::to_string(hw.compute_area_mm2) + "," +
        std::to_string(hw.hbm_per_side) + "," + std::to_string(hw.hbm_sides) +
        "," + std::to_string(hw.noc_width_bits);
+  if (hw.explicit_die_dimensions) {
+    s += ",shape{" + std::to_string(hw.die_width_mm) + "," +
+         std::to_string(hw.die_height_mm) + "}";
+  }
   s += ",d{" + std::to_string(hw.mesh_n) + "," + std::to_string(hw.cores) + "," +
        std::to_string(hw.pe_peak_die) + "," + std::to_string(hw.vec_peak_die) +
        "," + std::to_string(hw.sram_usable_bytes_per_core) + "," +

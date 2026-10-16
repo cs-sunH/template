@@ -50,7 +50,6 @@ class DieModelError : public std::runtime_error {
 // ---------------------------------------------------------------------------
 // String-backed enums (contract §2 enum spellings; design doc §3.1)
 
-enum class CoreType { Small, Large };
 enum class Profile { MeshDieV1, Tx8ReferenceV1 };
 enum class OpKind {
   Norm,
@@ -95,7 +94,6 @@ enum class FusionPolicy { Auto, None };
     return false;                                                           \
   }
 
-DIE_MODEL_ENUM_FN(CoreType, "small", "large")
 DIE_MODEL_ENUM_FN(Profile, "mesh_die_v1", "tx8_reference_v1")
 DIE_MODEL_ENUM_FN(OpKind, "norm", "qkv_rope", "qk", "scale_mask", "softmax",
                   "av", "o_proj", "residual", "attention_region", "mlp_up",
@@ -169,28 +167,30 @@ inline constexpr double kLaunchUsPerMacroGroup = 1.0;
 // ---------------------------------------------------------------------------
 // Hardware (design doc §3.1; contract §3.1/§3.3)
 
-// One row of the 14-row core table (design doc §3.1 table).
+// One row of the 32-row core table (design doc §3.1 table).
 struct CoreTableEntry {
   double sram_mb_per_core = 0.0;
-  CoreType core_type = CoreType::Small;
+  std::uint64_t noc_width_bits = 0;
   double vec_g_eqop_per_core = 0.0;  // G eq-op/s per core
-  double pe_gflops_per_core = 0.0;   // GFLOP/s per core
+  double pe_int4_gops_per_core = 0.0;   // INT4 GOPS per core; architectural peak assumption
   double core_side_ref_um = 0.0;     // reference core edge length, um
 };
 
-// The full 14-row core table, embedded in the library (design doc §3.1).
+// The full 32-row core table, embedded in the library (design doc §3.1).
 // configs/core_table.json mirrors the same values; configs_consistency_test
 // enforces code == json.
 std::vector<CoreTableEntry> core_table();
 
-// Per-die hardware description: the six §3.1 inputs, the matched core table
+// Per-die hardware description: the explicit hardware inputs, the matched core table
 // row (cache), the derived resource scalars (contract §3.3 "derived") and the
 // profile calibration coefficients.
 struct Hardware {
-  // --- six die inputs (contract §3.1 keys, values verbatim) ---
+  // --- hardware inputs (contract §3.1 keys, values verbatim) ---
   double sram_mb_per_core = 0.0;
-  CoreType core_type = CoreType::Large;
   double compute_area_mm2 = 0.0;
+  bool explicit_die_dimensions = false;
+  double die_width_mm = 0.0;
+  double die_height_mm = 0.0;
   std::uint64_t hbm_per_side = 0;
   std::uint64_t hbm_sides = 0;
   std::uint64_t noc_width_bits = 0;
@@ -201,11 +201,11 @@ struct Hardware {
 
   // --- derived (design doc §3.1 code block; frequency fixed at 1 GHz) ---
   double acore_mm2 = 0.0;  // Acore, mm^2
-  std::uint64_t mesh_n = 0;  // n, mesh side length in cores
+  std::uint64_t mesh_n = 0;  // explicit mesh-nx == mesh-ny, Cores per side
   std::uint64_t cores = 0;   // n*n
-  double pe_peak_die = 0.0;  // FLOP/s
+  double pe_peak_die = 0.0;  // INT4 op/s (legacy scalar field name retained)
   double vec_peak_die = 0.0;  // eq-op/s
-  double sram_usable_bytes_per_core = 0.0;  // 0.90 * sram_mb * 1e6
+  double sram_usable_bytes_per_core = 0.0;  // 0.90 * sram_mib * 1048576
   double link_peak_bytes = 0.0;  // byte/s, one directed intra-die link
   std::uint64_t hbm_count = 0;
   double hbm_capacity_bytes = 0.0;

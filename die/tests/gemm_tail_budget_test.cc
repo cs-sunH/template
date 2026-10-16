@@ -33,7 +33,6 @@ Hardware hardware_with_cores(u64 cores) {
   auto config = read_json(std::string(COARSE_DIE_SOURCE_DIR) +
                           "/configs/example_hardware.json");
   auto& architecture = config["architecture"];
-  architecture["core_type"] = "small";
   architecture["sram_mib_per_core"] = 0.25;
   architecture["noc_width_bits"] = 64;
   const u64 columns = cores == 4 ? 2 : cores;

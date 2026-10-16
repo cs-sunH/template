@@ -252,10 +252,16 @@ facade 时仍为 1ns 事件；有 die_spec → DieModelAdapter；真 COMP 缺 sp
 分类与 join 生命周期保持原口径。销毁 HBM facade 时保留 marker 已服务字节前缀并静默
 取消，不分发 Runtime 中已就绪的 graph completion callbacks。
 
-**配置链五步**：硬件 JSON `die` 节（六参数，本仓默认点 large/0.75MB SRAM/800mm²/
-NoC 512bit/HBM 4×1 单侧；与 `compute` 节互斥，remote-memory 节正交保留）→
-`config_resolver` 经 ctypes 调 `libdie_model_cabi.so` 派生（核网 35×35=1225、PE 1492.05
-TFLOPS、B=1640 GB/s 与旧硬件**严格连续**、容量 64 GB；Python 零派生公式）→
+**配置链五步**：硬件 JSON 使用最新 DOCX 的唯一 Core 设计；SRAM容量与NoC位宽
+决定32行资源表中的安装数量，Core外形固定为SRAM长边。legacy `die` 节要求
+用户显式 `mesh-nx`/`mesh-ny` 方阵，矩形使用 `coarse_die_v2`，不从面积推导或修改网格。
+用户本次授权制定的工程对照输入为10×10 Core、25×32 mm Die（800 mm²）、
+0.75 MiB/Core/512 bit/legacy HBM4×1。126.6 INT4 TOPS数值距TX8参考128 BF16 TFLOPS
+为1.09375%，不代表精度等价或实测校准；Vec12.65728 T与TX8参考1 T未匹配。
+可选die-width-mm/die-height-mm必须成对、乘积等于面积并分别容纳Core网格；
+无宽高旧输入仅为面积正方形兼容检查。型号选择字段已经移除。经 `config_resolver` 调 `libdie_model_cabi.so`
+派生；PE以INT4 TOPS报告，旧`pe_peak_tflops`仅为废弃兼容标量，不是BF16实测。
+legacy HBM保持每stack16 GB/410 GB/s历史参考，不冒称当前DOCX的HBM3E。→
 物化 `resolved_die_model.json`（runtime_config 四小件同目录）+ system.json 注入
 `compute-cost-model`/`die-model-profile`/`die-model-config`（managed 绝对路径）+
 容量档硬校验（die 节下 profile bytes 必须等于派生容量，本仓 die 对齐档

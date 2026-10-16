@@ -251,16 +251,18 @@ DieModel::Hardware random_hw(Rng& r) {
   static const Lay lays[] = {
       {300, 2, 1}, {300, 2, 2}, {500, 2, 1}, {500, 3, 1}, {500, 2, 2},
       {500, 3, 2}, {800, 3, 1}, {800, 4, 1}, {800, 3, 2}, {800, 4, 2}};
-  static const double sram[] = {0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0};
-  static const std::uint64_t widths[] = {64, 128, 256, 512, 1024};
+  static const double sram[] = {0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0};
+  static const std::uint64_t widths[] = {64, 128, 256, 512};
   const Lay& l = lays[r.u64(0, sizeof(lays) / sizeof(lays[0]) - 1)];
   nlohmann::json die;
-  die["sram-mb-per-core"] = sram[r.u64(0, 6)];
-  die["core-type"] = r.chance(0.5) ? "small" : "large";
+  die["sram-mb-per-core"] = sram[r.u64(0, 7)];
+  const auto n = r.u64(1, 4);
+  die["mesh-nx"] = n;
+  die["mesh-ny"] = n;
   die["compute-area-mm2"] = l.area;
   die["hbm-per-side"] = l.per_side;
   die["hbm-sides"] = l.sides;
-  die["noc-width-bits"] = widths[r.u64(0, 4)];
+  die["noc-width-bits"] = widths[r.u64(0, 3)];
   return DieModel::make_hardware(die_test::wrapped(die, "mesh_die_v1"));
 }
 

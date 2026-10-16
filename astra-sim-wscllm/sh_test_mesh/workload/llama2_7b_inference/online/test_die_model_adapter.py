@@ -262,7 +262,7 @@ class BuildSpecTests(unittest.TestCase):
         self.resolved = Path(self._temp.name) / "resolved_die_model.json"
         self.resolved.write_text(json.dumps({
             "schema_version": 1, "profile": "mesh_die_v1",
-            "die": {"sram-mb-per-core": 0.75, "core-type": "large",
+            "die": {"sram-mb-per-core": 0.75, "mesh-nx": 23, "mesh-ny": 23,
                     "compute-area-mm2": 800, "hbm-per-side": 4,
                     "hbm-sides": 1, "noc-width-bits": 512},
             "derived": {}}))

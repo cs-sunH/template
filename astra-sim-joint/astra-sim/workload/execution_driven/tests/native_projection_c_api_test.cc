@@ -281,7 +281,7 @@ int main() {
         const nlohmann::json hardware = {
             {"schema_version", 1}, {"profile", "mesh_die_v1"},
             {"die", {{"sram-mb-per-core", 0.75},
-                {"core-type", "large"}, {"compute-area-mm2", 800},
+                {"mesh-nx", 23u}, {"mesh-ny", 23u}, {"compute-area-mm2", 800},
                 {"hbm-per-side", 4}, {"hbm-sides", 1},
                 {"noc-width-bits", 512}}}};
         const nlohmann::json candidate = nlohmann::json::array({{

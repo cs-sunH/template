@@ -279,9 +279,9 @@ class FaceSchedulerTests(unittest.TestCase):
             system_raw = json.load(source)
         # die 模型数值更新(阶段 C 派生标量回流,契约 §3.4,规则不变):
         # local-mem-bw 保持严格连续(1640 GB/s);peak-perf 261.12 ->
-        # 1492.05(die 库派生 PE 峰值)。
+        # 126.6(die 库派生 PE 峰值)。
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["peak-perf"], 1492.05)
+        self.assertEqual(system_raw["peak-perf"], 126.6)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)
         self.assertEqual({len(group.ranks) for group in config.inference_groups}, {6})
@@ -1061,7 +1061,8 @@ FACE_CASE5_DIE_CONFIG = {
     "profile": "mesh_die_v1",
     "die": {
         "sram-mb-per-core": 0.75,
-        "core-type": "large",
+        "mesh-nx": 10, "mesh-ny": 10,
+        "die-width-mm": 25, "die-height-mm": 32,
         "compute-area-mm2": 800,
         "hbm-per-side": 4,
         "hbm-sides": 1,
@@ -1282,9 +1283,9 @@ class DieModelEstimateTests(unittest.TestCase):
         hardware = FaceHardware(3, 2, 100, 1.0, 2.0, 1.0, 5, 100,
                                 label="FACE")
         derived = die_derived_face_hardware(hardware, self.oracle)
-        # 派生标量注入(契约 §3.4):face die 点 = 1492.05 TFLOPS、
+        # 派生标量注入(契约 §3.4):face die 点 = 126.6 INT4 TOPS compatibility scalar、
         # 1640 GB/s;其余字段保持 hardware JSON 读数。
-        self.assertAlmostEqual(derived.peak_perf_tflops, 1492.05)
+        self.assertAlmostEqual(derived.peak_perf_tflops, 126.6)
         self.assertAlmostEqual(derived.local_hbm_bandwidth_gbps, 1640.0)
         self.assertEqual(derived.mesh_rows, hardware.mesh_rows)
         self.assertEqual(derived.mesh_cols, hardware.mesh_cols)
@@ -1322,7 +1323,7 @@ class DieModelEstimateTests(unittest.TestCase):
             cost_oracle=self.oracle)
         self.assertIs(die.cost_oracle, self.oracle)
         self.assertAlmostEqual(die.estimate_hardware.peak_perf_tflops,
-                               1492.05)
+                               126.6)
         self.assertAlmostEqual(
             die.topology.hardware.local_hbm_bandwidth_gbps, 1640.0)
         # mesh 几何/KV 容量不随 die 标量注入改变。
@@ -1345,7 +1346,7 @@ class DieModelEstimateTests(unittest.TestCase):
             manifest=die_manifest, config=config, graph=graph)
         self.assertIsNotNone(direct.cost_oracle)
         self.assertAlmostEqual(direct.estimate_hardware.peak_perf_tflops,
-                               1492.05)
+                               126.6)
         direct.close()  # 调度器自有的 oracle 在此释放(注入的不归它管)
         # 注入 oracle 与 manifest 配置不一致 -> fail-closed。
         other_config = Path(self._temp.name) / "other_die_model.json"

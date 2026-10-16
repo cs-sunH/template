@@ -5,7 +5,10 @@
   "mesh": {
     "rows": 9,
     "columns": 6,
-    "topology-by-network-dimension": ["Line", "Line"]
+    "topology-by-network-dimension": [
+      "Line",
+      "Line"
+    ]
   },
   "local-hbm": {
     "bandwidth-gbps": 1640.0,
@@ -40,19 +43,22 @@
   },
   "die": {
     "sram-mb-per-core": 0.75,
-    "core-type": "large",
     "compute-area-mm2": 800,
     "hbm-per-side": 4,
     "hbm-sides": 1,
-    "noc-width-bits": 512
+    "noc-width-bits": 512,
+    "mesh-nx": 10,
+    "mesh-ny": 10,
+    "die-width-mm": 25,
+    "die-height-mm": 32
   },
   "notes": [
     "The physical mesh is row-major with 9 rows and 6 columns.",
     "The analytical network lists dimensions as columns then rows.",
-    "The die node replaces the legacy compute.peak-perf-tflops description (mutually exclusive, contract section 3.1): large cores / 0.75 MB SRAM per core / 800 mm2 compute area / HBM 4 stacks on one side / 512-bit die NoC. Derived: 35x35 = 1225 cores, 1492.05 TFLOPS PE peak, 1640 GB/s (strictly continuous with the former 1640 GB/s local-hbm bandwidth), 64 GB HBM capacity.",
     "D2D latency is modeled as a per-hop adjacent-link latency.",
     "The remote-memory pool is attached to every physical mesh-boundary NPU.",
     "The 512 GB/s remote-memory bandwidth and 100 ns latency are shared simulator assumptions.",
-    "The capacity profile describes local HBM placement per NPU."
+    "The capacity profile describes local HBM placement per NPU.",
+    "User-authorized engineering comparison point (2026-10-16): 10 x 10 Core grid on a 25 mm x 32 mm compute Die (800 mm2), 0.75 MiB SRAM/Core and 512-bit NoC. Architectural PE peak is 126.6 INT4 TOPS, numerically compared with the TX8 128 BF16 TFLOPS reference; precision and independent measurement are not equivalent. Vec FP32-equivalent peak is 12.65728 T eq-op/s, not the TX8 1 T reference. Legacy HBM remains the preserved 4 x 16 GB / 410 GB/s per-stack reference (64 GB and 1640 GB/s), not current DOCX HBM3E."
   ]
 }

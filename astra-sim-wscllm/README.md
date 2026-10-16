@@ -229,15 +229,25 @@ marker 在两种后端下都保持旧微作业语义原样（本仓 marker 唯�
 
 **die 配置链（唯一硬件源 → resolver → 运行时）**：
 
-1. 硬件 `face_case5_config_c.json` 的 `die` 节（六参数：sram-mb-per-core / core-type /
-   compute-area-mm2 / hbm-per-side / hbm-sides / noc-width-bits；与旧 `compute.peak-perf-tflops`
-   **互斥出现**，die 节出现时 compute 键退役）。本仓默认点 = large / 0.75 MB SRAM /
-   800 mm² / NoC 512 bit / HBM 4×1 单侧（派生 35×35=1225 核、PE 峰值 1492.05 TFLOPS、
-   HBM 容量 64e9 B、带宽 1640 GB/s——与旧硬件严格连续；与 face 参考实现同点）。
+1. 硬件只使用根目录最新 DOCX 定义的唯一 Core；SRAM 容量与 NoC 位宽决定
+   32 行资源表中的安装单元，Core 外形固定为 SRAM 长边。已移除型号选择字段。
+   legacy `die` 输入保留 `sram-mb-per-core`（数值单位为 MiB）、`compute-area-mm2`、
+   `hbm-per-side`、`hbm-sides`、`noc-width-bits`，并要求用户明确给出
+   `mesh-nx`、`mesh-ny`。此兼容后端仅支持相等的正方阵，矩形网格使用
+   `coarse_die_v2`；不从面积推导、搜索或修改 Core 数量。
+   用户本次已授权按TX8参考算力匹配原则制定一套工程对照输入：默认采用
+   10×10 Core、25×32 mm Die（800 mm²）、0.75 MiB/Core、512 bit、legacy HBM4×1。
+   其126.6 INT4 TOPS仅在数值上接近TX8的128 BF16 TFLOPS（相差1.09375%），
+   不表示不同精度的性能等价或硬件实测校准；Vec12.65728 T与TX8参考1 T未匹配。
+   可选 `die-width-mm`/`die-height-mm`必须成对、乘积等于面积且分别容纳Core网格；
+   未给宽高的旧输入仅保留面积正方形兼容检查，summary明确标识范围。
+   legacy HBM 仍为每 stack 16 GB、410 GB/s 的显式历史参考，不能冒称新 DOCX
+   的 HBM3E 配置。PE 峰值以 INT4 TOPS 报告；为旧消费者保留的
+   `pe_peak_tflops` 数值是废弃的 INT4 兼容标量，不是 BF16/FP32 实测吞吐。
 2. `config_resolver.py` 经 ctypes 调 `libdie_model_cabi.so` 的 `die_hardware_summary`
    取派生值（Python 侧零派生公式），写 `resolved_die_model.json`（入库
    generated/runtime_config/<slug>/，可 round-trip 回灌）；并把派生标量回流既有键
-   （`peak-perf`＝PE 峰值 TFLOPS、`local-mem-bw`＝HBM 总带宽 GB/s；latency 沿用
+   （`peak-perf`＝废弃的 INT4 峰值兼容标量、`local-mem-bw`＝HBM 总带宽 GB/s；latency 沿用
    hardware `local-hbm.latency-ns`）。
 3. system.json 三键（来自 die system 模板 + resolver 注入）：
    `compute-cost-model: "die"`、`die-model-profile: "mesh_die_v1"`（或

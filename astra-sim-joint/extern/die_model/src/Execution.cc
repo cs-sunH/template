@@ -115,7 +115,7 @@ std::uint64_t physical_stage_min_ns(const DieStage& stage,
     work = stage.pe_core_flop;
     peak = hardware.profile == Profile::Tx8ReferenceV1
         ? hardware.tx8_matrix_peak_flop_s
-        : hardware.core_row.pe_gflops_per_core * 1e9;
+        : hardware.core_row.pe_int4_gops_per_core * 1e9;
   } else if (stage.resource == StageResource::VEC) {
     work = stage.vec_core_eqop;
     peak = hardware.profile == Profile::Tx8ReferenceV1

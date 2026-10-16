@@ -48,7 +48,7 @@ DieModel::DieStage pe_stage(const std::uint64_t repeat,
   stage.label = "test-pe";  // classification must use typed resource/work.
   stage.resource = DieModel::StageResource::PE;
   stage.wave_repeat = repeat;
-  const double peak = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double peak = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   stage.pe_core_flop = static_cast<double>(ns) * peak / 1e9 * kNudge;
   return stage;
 }

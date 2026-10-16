@@ -314,12 +314,20 @@ restore/pool/远端 KV 计费照旧。
 
 ### H.2 die 配置链（五步）
 
-1. 硬件 JSON `die` 节（与 `compute` 节互斥；本仓裁定点 = large/0.75MB/800mm²/
-   NoC 512bit/HBM 4×1：带宽 1640 GB/s 与旧硬件严格连续，容量派生 64 GB）；
+1. 硬件只使用最新 DOCX 的唯一 Core；SRAM容量与NoC位宽决定32行资源表中的
+   安装单元，Core外形固定为SRAM长边。型号选择字段已经移除。legacy `die` 节
+   要求用户明确 `mesh-nx`/`mesh-ny` 方阵，矩形网格使用 `coarse_die_v2`。
+   本次用户授权制定工程对照输入：10×10 Core、25×32 mm Die（800 mm²）、
+   0.75 MiB/Core/512 bit/legacy HBM4×1。126.6 INT4 TOPS只在数值上接近TX8参考
+   128 BF16 TFLOPS（差1.09375%），不代表精度等价或实测校准；Vec12.65728 T与
+   TX8参考1 T未匹配。可选die-width-mm/die-height-mm必须成对、乘积等于面积且
+   分别容纳Core网格；无宽高旧输入只保留面积正方形兼容检查。legacy HBM仍为每stack16 GB/
+   410 GB/s历史参考，不冒称当前DOCX的HBM3E；PE以INT4 TOPS报告，旧字段
+   `pe_peak_tflops`只是废弃兼容标量，不表示BF16/FP32硬件实测吞吐；
 2. `config_resolver` 经 ctypes 调 `libdie_model_cabi.so` 取派生
    （`discover_cabi_library` 发现序：env `DIE_MODEL_CABI_PATH` → 仓内
    `build/astra_analytical/build_congestion_aware/{lib,bin}/` → fail-closed；
-   **Python 零派生公式**）；派生回流 `peak-perf`（1492.05 TFLOPS）与
+   **Python 零派生公式**）；派生回流 `peak-perf`（废弃的INT4兼容标量）与
    `local-mem-bw`（1640.0）；**容量对齐硬校验**：所选 capacity-profile bytes
    必须等于派生 HBM 容量（本仓 `validation-die-64g`）——容量与 KV 账本耦合，
    对齐后准入/逐出随 64 GB 变化，远程池/迁移机制照常兜底（不判请求失败）；

@@ -82,14 +82,9 @@ Hardware hardware_with_sram(double sram_mib) {
   auto input = read_json(std::string(COARSE_DIE_SOURCE_DIR) +
                          "/configs/example_hardware.json");
   input["architecture"]["sram_mib_per_core"] = sram_mib;
-  // Large-Core L0 grows with SRAM. Reusing the 0.25-MiB 8x11 grid at
-  // 2 MiB is physically outside the source's reticle/area window.
+  // Hold a legal, explicit outline fixed while varying SRAM capacity.
   input["architecture"]["core_columns_nx"] = 1;
   input["architecture"]["core_rows_ny"] = 1;
-  const double a = 0.40662 * (sram_mib / 0.25);
-  const double l0 = (a + std::sqrt(a*a - 0.6*a*0.13925)) / 0.3;
-  input["architecture"]["die_geometry"] =
-      (l0 + 0.1)*(l0 + 0.1) >= 200.0 ? "minimum_grid" : "isotropic";
   return resolve_hardware(input);
 }
 

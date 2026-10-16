@@ -32,6 +32,11 @@ if(COARSE_DIE_BUILD_TESTS)
       add_test(NAME coarse_${t} COMMAND coarse_${t})
     endif()
   endforeach()
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_core_source.py")
+    find_package(Python3 REQUIRED COMPONENTS Interpreter)
+    add_test(NAME coarse_core_docx_source_test
+      COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_core_source.py")
+  endif()
   if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/tests/estimate_cli_test.py")
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     add_test(NAME coarse_estimate_cli_test

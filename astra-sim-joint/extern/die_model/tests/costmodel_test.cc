@@ -54,7 +54,7 @@ int main() {
 
   // --- vector-class lower bound (norm) on the small point too.
   {
-    const DieModel::Hardware small = die_test::hw_small();
+    const DieModel::Hardware small = die_test::hw_low_sram();
     const DieModel::DieOpSpec s = die_test::spec_of(
         OpKind::Norm, Phase::Prefill, 2048, 2048, 0, 0, 1, 1);
     const auto plan = DieModel::compile(s, small);
@@ -131,7 +131,7 @@ int main() {
     // bytes divide evenly across the 4 stacks, so the §6.2 granularity rule
     // is exactly sum(U_j).
     const DieModel::Hardware hw4 = DieModel::make_hardware(die_test::wrapped(
-        die_test::die_node(0.75, "large", 500, 2, 2, 256), "mesh_die_v1"));
+        die_test::die_node(0.75, 500, 2, 2, 256, 18, 18), "mesh_die_v1"));
     t.expect_uint(hw4.hbm_count, 4, "4-stack point");
     const DieModel::DieOpSpec s = die_test::spec_of(OpKind::Norm,
                                                     Phase::Decode, 1, 1024,
@@ -167,8 +167,8 @@ int main() {
   //     directed edge carries 2 x 16384/4 = 8192 bytes.
   {
     const DieModel::Hardware hw4 = DieModel::make_hardware(die_test::wrapped(
-        die_test::die_node(0.75, "large", 500, 2, 2, 256), "mesh_die_v1"));
-    t.expect_uint(hw4.mesh_n, 29, "29x29 mesh on the 4-stack point");
+        die_test::die_node(0.75, 500, 2, 2, 256, 18, 18), "mesh_die_v1"));
+    t.expect_uint(hw4.mesh_n, 18, "explicit 18x18 mesh on the 4-stack fixture");
     const DieModel::DieOpSpec s = die_test::spec_of(OpKind::Residual,
                                                     Phase::Decode, 1, 1, 0,
                                                     0);
@@ -208,7 +208,7 @@ int main() {
     b.tp_slice.q_heads_local = 16;
     t.expect(DieModel::plan_cache_key(b, big) != k1,
              "cache key distinguishes TP shards");
-    t.expect(DieModel::plan_cache_key(a, die_test::hw_small()) != k1,
+    t.expect(DieModel::plan_cache_key(a, die_test::hw_low_sram()) != k1,
              "cache key distinguishes hardware");
 
     DieModel::PlanCache cache(2);

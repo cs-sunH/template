@@ -280,8 +280,8 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
         self.assertEqual(system_raw["remote-mem-bw"], 512)
         # die 派生标量回流(契约 §3.4):peak-perf = PE_peak_die(face die 点
-        # 261.12 → 1492.05;local-mem-bw 1640.0 严格连续不变)。
-        self.assertEqual(system_raw["peak-perf"], 1492.05)
+        # 261.12 → 126.6;local-mem-bw 1640.0 严格连续不变)。
+        self.assertEqual(system_raw["peak-perf"], 126.6)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)
         self.assertEqual({len(group.ranks) for group in config.inference_groups}, {6})

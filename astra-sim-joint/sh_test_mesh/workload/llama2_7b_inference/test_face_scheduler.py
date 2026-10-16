@@ -1055,7 +1055,7 @@ class FaceSchedulerTests(unittest.TestCase):
 
     def test_default_config_uses_die_backend_and_one_million_reserve(self) -> None:
         # die 推广第一期（2026-10-03）：checked-in 硬件默认切换为 die 节
-        # （0.75/large/800/4x1/512 裁定点）+ validation-die-64g 容量档 +
+        # （0.75 MiB / explicit-grid / 800 / HBM 4x1 / 512 裁定点）+ validation-die-64g 容量档 +
         # die 系统模板。加载链需要 libdie_model_cabi.so（resolver 经
         # ctypes 取派生值，fail-closed）——库不可发现且 checked-in 硬件
         # 带 die 节时 SkipTest（裸仓在集成构建出 .so 前是合法中间态）。
@@ -1124,9 +1124,9 @@ class FaceSchedulerTests(unittest.TestCase):
         self.assertTrue(Path(system_raw["die-model-config"]).is_file())
         self.assertNotIn("roofline-enabled", system_raw)
         # §3.4 回流：local-mem-bw/peak-perf = die 派生值（1640.0 GB/s 与
-        # legacy 硬件严格连续；1492.05 TFLOPS = PE_peak_die）。
+        # legacy 硬件严格连续；126.6 INT4 TOPS compatibility scalar = PE_peak_die）。
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["peak-perf"], 1492.05)
+        self.assertEqual(system_raw["peak-perf"], 126.6)
         # P11 死键清除回归钉（2026-09-23）：local-mem-capacity-bytes
         # 写入链已退役（C++ 零读者），system.json 不再含该键。
         self.assertNotIn("local-mem-capacity-bytes", system_raw)

@@ -11,7 +11,7 @@ Fixture: a real Sys in online mode over a NodeStoreGraphSource, a fake
 AstraNetworkAPI backed by a real analytical EventQueue (time actually
 advances), a stub AstraRemoteMemoryAPI (this repository's Sys requires the
 remote-memory backend; no MEM node is issued here), the default die point of
-contract §3.5 (0.75 MB large / 800 mm2 / HBM 4x1 / 512 bit,
+explicit fixture (0.75 MiB / 23x23 / 800 mm2 / HBM 4x1 / 512 bit,
 resolved_die_model.json written next to the system config), and
 CompletionObserver terminal collection. LoggerFactory is never initialized
 (null sinks, same shape as statistics_online_compaction_test); the forked
@@ -154,7 +154,7 @@ const char* kDieNodeJson = R"({
   "profile": "mesh_die_v1",
   "die": {
     "sram-mb-per-core": 0.75,
-    "core-type": "large",
+    "mesh-nx": 23, "mesh-ny": 23,
     "compute-area-mm2": 800,
     "hbm-per-side": 4,
     "hbm-sides": 1,
@@ -351,7 +351,7 @@ int main() {
                     "A: roofline stays off under the die backend");
         expect_true(sys.workload->local_hbm_bandwidth_model != nullptr,
                     "A: HBM fluid model stays on (contention default)");
-        const double expect_peak = 1225.0 * 1218.0 * 1e9;  // FLOP/s
+        const double expect_peak = 529.0 * 1266.0 * 1e9;  // FLOP/s
         const double expect_bw = 4.0 * 410e9;              // byte/s
         expect_true(std::abs(sys.peak_perf - expect_peak) <= 1e-6 * expect_peak,
                     "A: peak_perf filled from the library (PE_peak_die)");

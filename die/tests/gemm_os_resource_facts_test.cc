@@ -14,7 +14,6 @@ namespace access = coarse_die::detail::gemm_os_access_counter;
 
 int main() {
   auto config=read_json(std::string(COARSE_DIE_SOURCE_DIR)+"/configs/example_hardware.json");
-  config["architecture"]["core_type"]="small";
   config["architecture"]["sram_mib_per_core"]=0.25;
   config["architecture"]["noc_width_bits"]=64;
   config["architecture"]["core_columns_nx"]=1;

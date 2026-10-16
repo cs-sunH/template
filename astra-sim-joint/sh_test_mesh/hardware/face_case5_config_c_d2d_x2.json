@@ -46,21 +46,25 @@
   "notes": [
     "The physical mesh is row-major with 9 rows and 6 columns.",
     "The analytical network lists dimensions as columns then rows.",
-    "The die node (die rollout stage 1, 2026-10-03) replaces compute.peak-perf-tflops: peak compute, local-mem bandwidth and capacity are derived by the shared die cost library (mutually exclusive with a compute node); the die point matches the base hardware (large / 0.75 MB / 800 mm2 / 512 bit / HBM 4x1, bandwidth continuous with 1640 GB/s).",
+    "The die node (die rollout stage 1, 2026-10-03) replaces compute.peak-perf-tflops: peak compute, local-mem bandwidth and capacity are derived by the shared die cost library (mutually exclusive with a compute node); the die point matches the base hardware (0.75 MiB / user grid required / 800 mm2 / 512 bit / legacy HBM 4x1 at 1640 GB/s).",
     "D2D latency is modeled as a per-hop adjacent-link latency.",
     "The remote-memory pool is attached to every physical mesh-boundary NPU.",
     "The 512 GB/s remote-memory bandwidth and 100 ns latency are shared simulator assumptions.",
     "The capacity profile describes local HBM placement per NPU.",
     "D2D bandwidth twin of face_case5_config_c.json (WP7 hardware twin set): only d2d.bandwidth-gbps differs from the base source (4050.0 -> 8100.0 GB/s, x2); every other field is identical.",
     "Derived rho = B_D2D/B_HBM = 8100.0/1640.0 ~= 4.9390 (simplified analytical anchor, design doc section 1.2); the anchor's parity band d <= rho widens versus the base configuration's 4050/1640 ~= 2.4695.",
-    "Twin set: _d2d_x05 (2025 GB/s) / _d2d_x2 (8100 GB/s) / _d2d_sub (1200 GB/s). The _d2d_sub tier is a rho < 1 configuration: the anchor's bandwidth-parity condition fails even for a single flow; this does not preclude system-level gains from lower remote compute load or smaller target capacity pressure, the benefit direction is not preset, and the selection-rate-profile domain shape is an open research question (C20 item 5)."
+    "Twin set: _d2d_x05 (2025 GB/s) / _d2d_x2 (8100 GB/s) / _d2d_sub (1200 GB/s). The _d2d_sub tier is a rho < 1 configuration: the anchor's bandwidth-parity condition fails even for a single flow; this does not preclude system-level gains from lower remote compute load or smaller target capacity pressure, the benefit direction is not preset, and the selection-rate-profile domain shape is an open research question (C20 item 5).",
+    "User-authorized engineering comparison point (2026-10-16): 10 x 10 Core grid on a 25 mm x 32 mm compute Die (800 mm2), 0.75 MiB SRAM/Core and 512-bit NoC. Architectural PE peak is 126.6 INT4 TOPS, numerically compared with the TX8 128 BF16 TFLOPS reference; precision and independent measurement are not equivalent. Vec FP32-equivalent peak is 12.65728 T eq-op/s, not the TX8 1 T reference. Legacy HBM remains the preserved 4 x 16 GB / 410 GB/s per-stack reference (64 GB and 1640 GB/s), not current DOCX HBM3E."
   ],
   "die": {
     "sram-mb-per-core": 0.75,
-    "core-type": "large",
     "compute-area-mm2": 800,
     "hbm-per-side": 4,
     "hbm-sides": 1,
-    "noc-width-bits": 512
+    "noc-width-bits": 512,
+    "mesh-nx": 10,
+    "mesh-ny": 10,
+    "die-width-mm": 25,
+    "die-height-mm": 32
   }
 }

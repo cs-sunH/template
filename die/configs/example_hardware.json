@@ -1,9 +1,9 @@
 {
   "schema": "coarse_die_v2",
-  "source_revision": "9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8",
+  "source_revision": "41f119135fd2d4cc87292f59b4b00adc918eece0",
   "core_resource_table": {
-    "id": "core64_v2",
-    "rows_sha256": "8e7d393ff9a96dd556088fa7c98a6fd80ed0b277e03cde7c3909a0f118e45f36"
+    "id": "core32_v1",
+    "rows_sha256": "d66b4a76122742ed91102d75305e01f10a8241213c96ed2289ecd51a1f7aa346"
   },
   "source_constants": {
     "process_node_nm": 7,
@@ -32,13 +32,9 @@
     "bump_pitch_mm": 0.055,
     "bump_communication_fraction": 0.4,
     "bump_rate_bits_per_s": 2500000000.0,
-    "module_interconnect_fraction": 0.1,
-    "sram_quarter_mib_long_side_mm": 0.40662,
-    "large_core_geometry_discriminant_scale": 0.6,
-    "large_core_geometry_root_denominator": 0.3
+    "sram_quarter_mib_long_side_mm": 0.40662
   },
   "architecture": {
-    "core_type": "large",
     "sram_mib_per_core": 0.25,
     "noc_width_bits": 256,
     "core_columns_nx": 8,
@@ -47,40 +43,13 @@
     "core_pitch_y_mm": 0,
     "die_extra_width_mm": 0.1,
     "die_extra_height_mm": 0.1,
-    "die_geometry": "minimum_grid",
+    "die_geometry": "explicit",
     "hbm_stacks_per_row": 2,
     "hbm_placement_mode": "two_sides_one_row_each",
     "system_region_width_mm": 215,
-    "system_region_height_mm": 215
-  },
-  "search_profile": {
-    "die_area_min_mm2": 200,
-    "die_area_max_mm2": 800,
-    "reticle_width_mm": 26,
-    "reticle_height_mm": 33,
-    "allow_reticle_rotation": true,
-    "die_max_aspect_ratio": 2,
-    "require_nonnegative_d2d_budget": true,
-    "require_hbm_row_within_die": false,
-    "nx_range": {
-      "min": 1,
-      "max": 12
-    },
-    "ny_range": {
-      "min": 1,
-      "max": 16
-    },
-    "hbm_n_range": {
-      "min": 1,
-      "max": 14
-    },
-    "geometry_search_mode": "core_first",
-    "area_extension_rules": [
-      "grow_width",
-      "grow_height",
-      "isotropic"
-    ],
-    "objective": "compute_peak"
+    "system_region_height_mm": 215,
+    "die_width_mm": 21,
+    "die_height_mm": 29
   },
   "performance_profile": {
     "execution_profile": "int4_matrix_vec_fp32_assumed_v1",

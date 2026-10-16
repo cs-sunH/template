@@ -114,7 +114,6 @@ Hardware hardware_for_grid(std::uint64_t nx, std::uint64_t ny) {
   auto& architecture = config["architecture"];
   // A small square Core keeps every requested square grid within the source
   // file's original isotropic, aspect-ratio, area, and reticle constraints.
-  architecture["core_type"] = "small";
   architecture["sram_mib_per_core"] = 0.25;
   architecture["core_columns_nx"] = nx;
   architecture["core_rows_ny"] = ny;

@@ -43,8 +43,8 @@ extern "C" {
 
 /* Creates a model handle from a hardware configuration JSON.  Accepted
 shapes: the wrapped resolved_die_model.json form ({"schema_version":1,
-"profile":"mesh_die_v1"|"tx8_reference_v1","die":{...six keys...}, plus an
-optional ignored "derived" mirror}) or the bare die node (profile defaults
+"profile":"mesh_die_v1"|"tx8_reference_v1","die":{...explicit hardware keys including mesh-nx/mesh-ny...}, plus an
+optional ignored "derived" mirror and optional strictly validated "source_identity"}) or the bare die node (profile defaults
 to mesh_die_v1); exactly the forms make_hardware() accepts.  The handle
 owns the Hardware plus a plan cache; destroy it with die_destroy_model().
 Returns NULL on any parse/validation error (see die_last_error()). */

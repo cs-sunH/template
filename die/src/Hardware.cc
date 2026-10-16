@@ -10,7 +10,6 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
-#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -19,42 +18,32 @@ namespace {
 
 using Json = nlohmann::json;
 
-constexpr char kSourceRevision[] = "9fdcad1f8a1640d3e91558e3b2d11c55c66b53c8";
-constexpr char kCoreTableId[] = "core64_v2";
+constexpr char kSourceRevision[] = "41f119135fd2d4cc87292f59b4b00adc918eece0";
+constexpr char kCoreTableId[] = "core32_v1";
 constexpr char kCoreTableSha256[] =
-    "8e7d393ff9a96dd556088fa7c98a6fd80ed0b277e03cde7c3909a0f118e45f36";
+    "d66b4a76122742ed91102d75305e01f10a8241213c96ed2289ecd51a1f7aa346";
 constexpr std::array<double, 8> kSramMiB =
     {{0.25, 0.50, 0.75, 1.00, 1.25, 1.50, 1.75, 2.00}};
 constexpr std::array<int, 4> kNocWidths = {{64, 128, 256, 512}};
-constexpr std::array<double, 8> kSmallL0DisplayMm =
+constexpr std::array<double, 8> kL0DisplayMm =
     {{0.40662, 0.81324, 1.21986, 1.62648, 2.03310, 2.43972, 2.84634, 3.25296}};
-constexpr std::array<double, 8> kLargeL0DisplayMm =
-    {{2.56355, 5.27858, 7.99068, 10.70211, 13.41329, 16.12434, 18.83531, 21.54624}};
 
-// Values transcribed from all four NoC tables in 架构建模新.md §1.3.
-constexpr int kNVec[4][2][8] = {
-    {{2, 15, 40, 77, 126, 204, 280, 368},
-     {243, 1037, 2382, 4276, 6749, 9832, 13422, 17534}},
-    {{2, 15, 40, 77, 126, 198, 273, 360},
-     {236, 1005, 2310, 4145, 6534, 9524, 12990, 16978}},
-    {{2, 15, 40, 70, 117, 180, 252, 336},
-     {221, 920, 2135, 3854, 6052, 8856, 12096, 15840}},
-    {{2, 12, 32, 56, 99, 156, 210, 272},
-     {187, 805, 1855, 3290, 5192, 7632, 10332, 13536}},
+// All 32 rows from 架构建模_单Core版_严格复核修订.docx §1.3.
+// SRAM capacity and NoC width select resources within the one Core design.
+constexpr int kNVec[4][8] = {
+    {2, 15, 40, 77, 126, 204, 280, 368},
+    {2, 15, 40, 77, 126, 198, 273, 360},
+    {2, 15, 40, 70, 117, 180, 252, 336},
+    {2, 12, 32, 56, 99, 156, 210, 272},
 };
-constexpr int kNPe[4][2][8] = {
-    {{40, 297, 791, 1523, 2492, 4035, 5538, 7278},
-     {4806, 20509, 47109, 84566, 133475, 194447, 265447, 346770}},
-    {{40, 297, 791, 1523, 2492, 3916, 5399, 7120},
-     {4667, 19876, 45685, 81976, 129223, 188356, 256903, 335774}},
-    {{40, 297, 791, 1384, 2314, 3560, 4984, 6645},
-     {4371, 18195, 42224, 76221, 119690, 175145, 239223, 313268}},
-    {{40, 237, 633, 1108, 1958, 3085, 4153, 5379},
-     {3698, 15920, 36686, 65066, 102682, 150938, 204336, 267701}},
+constexpr int kNPe[4][8] = {
+    {40, 297, 791, 1523, 2492, 4035, 5538, 7278},
+    {40, 297, 791, 1523, 2492, 3916, 5399, 7120},
+    {40, 297, 791, 1384, 2314, 3560, 4984, 6645},
+    {40, 237, 633, 1108, 1958, 3085, 4153, 5379},
 };
 
 struct CoreRow {
-  std::string_view core_type;
   double sram_mib;
   int noc_width_bits;
   int n_vec;
@@ -62,24 +51,19 @@ struct CoreRow {
   double displayed_l0_mm;
 };
 
-std::array<CoreRow, 64> makeCoreRows() {
-  std::array<CoreRow, 64> rows{};
+std::array<CoreRow, 32> makeCoreRows() {
+  std::array<CoreRow, 32> rows{};
   std::size_t cursor = 0;
   for (std::size_t b = 0; b < kNocWidths.size(); ++b) {
-    for (std::size_t type = 0; type < 2; ++type) {
-      for (std::size_t s = 0; s < kSramMiB.size(); ++s) {
-        rows[cursor++] = CoreRow{type == 0 ? "small" : "large",
-                                kSramMiB[s], kNocWidths[b], kNVec[b][type][s],
-                                kNPe[b][type][s],
-                                type == 0 ? kSmallL0DisplayMm[s]
-                                          : kLargeL0DisplayMm[s]};
-      }
+    for (std::size_t s = 0; s < kSramMiB.size(); ++s) {
+      rows[cursor++] = CoreRow{kSramMiB[s], kNocWidths[b],
+                              kNVec[b][s], kNPe[b][s], kL0DisplayMm[s]};
     }
   }
   return rows;
 }
 
-const std::array<CoreRow, 64>& coreRows() {
+const std::array<CoreRow, 32>& coreRows() {
   static const auto rows = makeCoreRows();
   return rows;
 }
@@ -173,8 +157,6 @@ Json sourceConstants() {
               {"pe_area_mm2", 0.0000376},
               {"pe_int4_ops_per_mac", 2},
               {"pe_per_vec_ratio", 19.777},
-              {"large_core_geometry_discriminant_scale", 0.60},
-              {"large_core_geometry_root_denominator", 0.30},
               {"noc_base_area_fraction", 0.15},
               {"noc_fixed_fraction", 0.20},
               {"noc_width_fraction", 0.80},
@@ -190,8 +172,7 @@ Json sourceConstants() {
               {"hbm_gap_mm", 0.15},
               {"bump_pitch_mm", 0.055},
               {"bump_communication_fraction", 0.40},
-              {"bump_rate_bits_per_s", 2.5e9},
-              {"module_interconnect_fraction", 0.10}};
+              {"bump_rate_bits_per_s", 2.5e9}};
 }
 
 void validateSourceConstants(const Json& input) {
@@ -316,8 +297,7 @@ std::string sha256(std::string_view input) {
 Json coreRowsJson() {
   Json rows = Json::array();
   for (const auto& row : coreRows()) {
-    rows.push_back(Json{{"core_type", std::string(row.core_type)},
-                        {"sram_mib_per_core", row.sram_mib},
+    rows.push_back(Json{{"sram_mib_per_core", row.sram_mib},
                         {"noc_width_bits", row.noc_width_bits},
                         {"n_vec", row.n_vec},
                         {"n_pe", row.n_pe},
@@ -328,47 +308,33 @@ Json coreRowsJson() {
 
 void validateCoreTable() {
   static const bool validated = [] {
-    const auto& rows = coreRows();
     const auto digest = sha256(coreRowsJson().dump());
-    if (rows.size() != 64 || digest != kCoreTableSha256)
-      throw std::logic_error("compiled core64_v2 table does not match its source SHA-256: " + digest);
-    std::set<std::tuple<std::string, double, int>> seen;
-    std::size_t smallCount = 0;
-    std::size_t largeCount = 0;
-    for (const auto& row : rows) {
-      const auto key = std::make_tuple(std::string(row.core_type), row.sram_mib,
-                                       row.noc_width_bits);
-      if (!seen.insert(key).second) throw std::logic_error("duplicate row in core64_v2");
+    if (coreRows().size() != 32 || digest != kCoreTableSha256)
+      throw std::logic_error("compiled core32_v1 table does not match its source SHA-256: " + digest);
+    std::set<std::pair<double, int>> seen;
+    for (const auto& row : coreRows()) {
+      if (!seen.emplace(row.sram_mib, row.noc_width_bits).second)
+        throw std::logic_error("duplicate row in core32_v1");
       if (row.n_pe != static_cast<int>(std::floor(19.777 * row.n_vec + 0.5)))
         throw std::logic_error("PE count violates the source round-half-up rule");
-      if (row.core_type == "small") ++smallCount;
-      else if (row.core_type == "large") ++largeCount;
-      else throw std::logic_error("unknown core type in core64_v2");
     }
-    if (smallCount != 32 || largeCount != 32 || seen.size() != 64)
-      throw std::logic_error("core64_v2 must contain exactly 32 small and 32 large rows");
     return true;
   }();
   (void)validated;
 }
 
-const CoreRow& findCoreRow(const std::string& type, double sram, int noc) {
+const CoreRow& findCoreRow(double sram, int noc) {
   validateCoreTable();
   for (const auto& row : coreRows()) {
-    if (row.core_type == type && nearlyEqual(row.sram_mib, sram, 0.0, 1.0e-12) &&
+    if (nearlyEqual(row.sram_mib, sram, 0.0, 1.0e-12) &&
         row.noc_width_bits == noc)
       return row;
   }
-  invalid("architecture", "configuration has no matching row in core64_v2");
+  invalid("architecture", "configuration has no matching row in core32_v1");
 }
 
-double coreEdgeMm(const std::string& type, double sramMiB) {
-  const double a = sramMiB * 0.40662 / 0.25;
-  constexpr double b = 0.13925;
-  if (type == "small") return a;
-  const double radicand = a * a - 0.6 * a * b;
-  if (radicand <= 0.0) invalid("architecture.sram_mib_per_core", "produces an invalid large-core geometry");
-  return (a + std::sqrt(radicand)) / 0.3;
+double coreEdgeMm(double sramMiB) {
+  return sramMiB * 0.40662 / 0.25;
 }
 
 // Constraints validate one supplied instance; they never generate hardware.
@@ -493,11 +459,10 @@ void checkCoreTableReference(const Json& input) {
   const std::string digest = stringField(*it, "rows_sha256", "core_resource_table");
   if (id != kCoreTableId) invalid("core_resource_table.id", "unknown source table identity");
   if (digest != kCoreTableSha256)
-    invalid("core_resource_table.rows_sha256", "does not match the validated 64-row source table");
+    invalid("core_resource_table.rows_sha256", "does not match the validated 32-row source table");
 }
 
 struct Architecture {
-  std::string coreType;
   double sramMiB;
   int nocBits;
   int nx;
@@ -517,9 +482,8 @@ struct Architecture {
 
 Architecture parseArchitecture(const Json& a) {
   Architecture arch{};
-  arch.coreType = stringField(a, "core_type", "architecture");
-  if (arch.coreType != "small" && arch.coreType != "large")
-    invalid("architecture.core_type", "must be small or large");
+  if (a.contains("core_type"))
+    invalid("architecture.core_type", "is no longer supported; specify SRAM and NoC width for the single Core design");
   arch.sramMiB = positiveNumberField(a, "sram_mib_per_core", "architecture");
   bool validSram = false;
   for (const double s : kSramMiB) validSram = validSram || nearlyEqual(s, arch.sramMiB, 0.0, 1.0e-12);
@@ -698,8 +662,8 @@ Hardware resolve_hardware(const nlohmann::json& input) {
       ? validateConstraints(input.at("validation_constraints"), "validation_constraints")
       : legacyConstraints;
   const PerformanceProfile perf = validatePerformanceProfile(pJson);
-  const CoreRow& core = findCoreRow(arch.coreType, arch.sramMiB, arch.nocBits);
-  const double l0 = coreEdgeMm(arch.coreType, arch.sramMiB);
+  const CoreRow& core = findCoreRow(arch.sramMiB, arch.nocBits);
+  const double l0 = coreEdgeMm(arch.sramMiB);
   if (!nearlyEqual(l0, core.displayed_l0_mm, 0.0, 5.1e-6))
     throw std::logic_error("source L0 formula disagrees with the §1.3 displayed Core edge");
 
@@ -858,8 +822,7 @@ Hardware resolve_hardware(const nlohmann::json& input) {
   if (moduleCount > std::numeric_limits<long long>::max() / coreCount)
     invalid("architecture.system_region_width_mm/system_region_height_mm", "overflow the optional system Core count");
   const long long systemCoreCount = moduleCount * coreCount;
-  Json coreDerived{{"core_type", arch.coreType},
-                   {"sram_mib_per_core", arch.sramMiB},
+  Json coreDerived{{"sram_mib_per_core", arch.sramMiB},
                    {"noc_width_bits", arch.nocBits},
                    {"N_vec", core.n_vec},
                    {"N_pe", core.n_pe},
@@ -904,7 +867,10 @@ Hardware resolve_hardware(const nlohmann::json& input) {
                                           : Json(rowToIngress)},
                   {"ingress_evidence", ingressEvidence}};
   Json systemDerived;
-  if (arch.hasRegion) systemDerived = Json{{"region_width_mm", arch.regionWidth},
+  if (arch.hasRegion) systemDerived = Json{{"layout_profile", "legacy_region_fit_10pct_v1"},
+                     {"layout_provenance", "compatibility_assumption_not_hardware_docx"},
+                     {"module_interconnect_fraction", 0.10},
+                     {"region_width_mm", arch.regionWidth},
                      {"region_height_mm", arch.regionHeight},
                      {"effective_module_width_mm", effectiveW},
                      {"effective_module_height_mm", effectiveH},

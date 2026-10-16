@@ -1,0 +1,23 @@
+{
+  "status": "engineering_design_reference_match_not_hardware_calibration",
+  "authorization": "2026-10-16 user asks assistant to choose one hardware point using TX8 compute-reference matching principle",
+  "selection": "retain SRAM=0.75MiB/NoC=512/DieArea=800mm2; explicit 10x10 grid and 25x32mm outline; no production hardware search interface",
+  "source_core": {
+    "N_pe": 633,
+    "N_vec": 32,
+    "L0_mm": "1.21986"
+  },
+  "target_nominal_int4_TOPS": 126.6,
+  "tx8_nominal_BF16_TFLOPS_reference": 128,
+  "nominal_operation_rate_numeric_difference_fraction": 0.0109375,
+  "target_nominal_fp32_equivalent_TOPS": 12.65728,
+  "tx8_nominal_vector_equivalent_TOPS_reference": 1,
+  "target_eta_pe_engineering_prior": 0.9,
+  "tx8_reference_eta_compute": 0.907955192387749,
+  "effective_operation_rate_numeric_difference_fraction": 0.01960332683482013,
+  "comparability": "INT4 integer operations and BF16 FLOPs are different; numeric peak matching is not accuracy evidence or same-precision throughput matching",
+  "vector_match": "not_matched; fixed Core PE/Vec ratio is about10 while reference ratio is128; one grid cannot match both",
+  "memory_match": "not_claimed; legacy default retains4x16GB/410GBps per stack; new canonical example explicitly uses4x36GB/1177.6GBps per stack",
+  "target_raw_hardware_measurements": "not_available",
+  "heldout_hardware_accuracy": "not_available"
+}

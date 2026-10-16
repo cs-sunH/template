@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "cases": 192,
+  "rows": 32,
+  "grids": 3,
+  "topology_profiles": 2,
+  "differences_excluded": [
+    "retired selector",
+    "source_revision",
+    "core_resource_table",
+    "hardware fingerprint"
+  ],
+  "numeric_resources_geometry_and_summary_identical": true,
+  "mismatched_case_indices": [],
+  "raw_uncompressed_sha256": "49d1b595dfbadd945f3296d1f3d34d5d6fd9db0673febdb956757210b3f470d0",
+  "binary_sha256": {
+    "work/single-core-migration-20261016/before-hardware-probe": "94fb926e7bf1578d0d0beddb65c66171763547c1c771dae0b7abcf81a56a7474",
+    "work/single-core-migration-20261016/after-hardware-probe": "7e40f32bccc20c589e596ebb4a1eee84b5108c2406ffe1f1d2e2378fd64a04ed"
+  }
+}

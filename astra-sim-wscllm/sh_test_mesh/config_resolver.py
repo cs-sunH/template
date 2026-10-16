@@ -100,14 +100,16 @@ _COARSE_CABI_LIBRARY_ENV = "DIE_COARSE_CABI_PATH"
 _DIE_NODE_KEYS = frozenset(
     {
         "sram-mb-per-core",
-        "core-type",
+        "mesh-nx",
+        "mesh-ny",
         "compute-area-mm2",
         "hbm-per-side",
         "hbm-sides",
         "noc-width-bits",
     }
 )
-_LEGAL_NOC_WIDTH_BITS = frozenset({64, 128, 256, 512, 1024})
+_DIE_OPTIONAL_KEYS = frozenset({"die-width-mm", "die-height-mm"})
+_LEGAL_NOC_WIDTH_BITS = frozenset({64, 128, 256, 512})
 _CACHED_CABI: dict[str, Any] = {}
 
 
@@ -169,9 +171,9 @@ def _cabi_last_error(library: ctypes.CDLL) -> str:
 def derive_die_hardware(die_node: dict[str, Any]) -> dict[str, Any]:
     """调 die_create_model + die_hardware_summary 取派生硬件(契约 §3.3)。
 
-    die 六参数的值域校验(合法 (面积,每侧,侧数) 布局表、位宽集合、
-    (sram,核型) 命中核表)全部由库内 make_hardware 承担——本函数只做
-    结构检查(六键齐全/基础类型),库报错原文透传(ValueError)。返回
+    die 显式硬件参数的值域校验(合法 (面积,每侧,侧数) 布局表、位宽集合、
+    (SRAM容量,NoC位宽) 命中唯一Core资源表)全部由库内 make_hardware 承担——本函数只做
+    结构检查(显式网格/基础类型),库报错原文透传(ValueError)。返回
     库的 §3.3 摘要 dict(schema_version/profile/die/derived)。"""
     library = _load_cabi_library()
     config_json = json.dumps(
@@ -253,22 +255,28 @@ def derive_coarse_die_hardware(config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _validate_die_node_structure(die: dict[str, Any]) -> None:
-    """die 节六键的结构检查(键集/基础类型/枚举;值域由库校验)。"""
+    """die 节显式网格的结构检查(键集/基础类型/枚举;值域由库校验)。"""
     context = "Hardware configuration.die"
     if not isinstance(die, dict):
         raise ValueError(f"{context} must be an object")
     actual = set(die)
-    if actual != set(_DIE_NODE_KEYS):
+    if (_DIE_NODE_KEYS - actual) or (actual - _DIE_NODE_KEYS - _DIE_OPTIONAL_KEYS):
         missing = sorted(_DIE_NODE_KEYS - actual)
-        extra = sorted(actual - _DIE_NODE_KEYS)
+        extra = sorted(actual - _DIE_NODE_KEYS - _DIE_OPTIONAL_KEYS)
         raise ValueError(
             f"{context} has invalid keys (missing {', '.join(missing)}; "
-            f"unexpected {', '.join(extra)})")
+            f"unexpected {', '.join(extra)}); explicit mesh-nx/mesh-ny are required, never inferred from area")
     _require_number(die["sram-mb-per-core"], f"{context}.sram-mb-per-core", positive=True)
-    core_type = die["core-type"]
-    if not isinstance(core_type, str) or core_type not in {"small", "large"}:
-        raise ValueError(f"{context}.core-type must be 'small' or 'large'")
+    nx = _require_int(die["mesh-nx"], f"{context}.mesh-nx", positive=True)
+    ny = _require_int(die["mesh-ny"], f"{context}.mesh-ny", positive=True)
+    if nx != ny:
+        raise ValueError(f"{context} requires equal mesh-nx/mesh-ny; use coarse_die_v2 for rectangular grids")
     _require_number(die["compute-area-mm2"], f"{context}.compute-area-mm2", positive=True)
+    if ("die-width-mm" in die) != ("die-height-mm" in die):
+        raise ValueError(f"{context}.die-width-mm and die-height-mm must be provided together")
+    if "die-width-mm" in die:
+        _require_number(die["die-width-mm"], f"{context}.die-width-mm", positive=True)
+        _require_number(die["die-height-mm"], f"{context}.die-height-mm", positive=True)
     _require_int(die["hbm-per-side"], f"{context}.hbm-per-side", positive=True)
     _require_int(die["hbm-sides"], f"{context}.hbm-sides", positive=True)
     noc_width = _require_int(die["noc-width-bits"], f"{context}.noc-width-bits", positive=True)
@@ -295,7 +303,7 @@ class ResolvedHardware:
     remote_memory_type: str
     peak_perf_tflops: Optional[float]
     metadata: dict[str, object]
-    # die 后端(契约 §3.1/§3.3):die 节存在时非 None——die 六参数原文 +
+    # die 后端(契约 §3.1/§3.3):die 节存在时非 None——die 显式硬件参数原文 +
     # 库派生摘要(derived 全字段);peak_perf_tflops /
     # local_hbm_bandwidth_gbps 此时来自 derived(PE_peak_die/1e12、HBM
     # 总带宽/1e9),legacy 路径两值为空/沿用 compute 节。
@@ -557,7 +565,7 @@ def load_hardware_config(path: Path, capacity_profile: str) -> ResolvedHardware:
             raise ValueError(
                 f"Capacity profile {capacity_profile!r}.bytes ({capacity}) "
                 "does not match the die-derived HBM capacity "
-                f"({derived_capacity} = hbm-sides x hbm-per-side x 16 GiB); "
+                f"({derived_capacity} = hbm-sides x hbm-per-side x 16 GB); "
                 "select a die-aligned capacity profile (contract "
                 "section 3.4)")
         peak_perf = derived_peak

@@ -197,20 +197,30 @@ class DieHardwareTests(unittest.TestCase):
                 + " -> ".join(str(p) for p in cabi_library_candidates()) + ")")
 
     def setUp(self) -> None:
-        self.source = json.loads(_HARDWARE_SOURCE.read_text(encoding="utf-8"))
+        # Explicit validation fixture; the checked-in research hardware stays
+        # unmodified and requires the user's mesh-nx/mesh-ny choice.
+        self._grid_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._grid_temp.cleanup)
+        data = json.loads(_HARDWARE_SOURCE.read_text(encoding="utf-8"))
+        data["die"].pop("die-width-mm", None)
+        data["die"].pop("die-height-mm", None)
+        data["die"].update({"mesh-nx": 23, "mesh-ny": 23})
+        self.fixture_source = Path(self._grid_temp.name) / "explicit_grid_fixture.json"
+        self.fixture_source.write_text(json.dumps(data), encoding="utf-8")
+        self.source = json.loads(self.fixture_source.read_text(encoding="utf-8"))
 
-    def test_checked_in_die_source_resolves_derived_scalars(self) -> None:
-        hardware = load_hardware_config(_HARDWARE_SOURCE, "validation-die-64g")
+    def test_explicit_fixture_resolves_derived_scalars(self) -> None:
+        hardware = load_hardware_config(self.fixture_source, "validation-die-64g")
         derived = hardware.die_derived
         self.assertIsNotNone(derived)
-        self.assertEqual(derived["mesh_n"], 35)
-        self.assertEqual(derived["cores"], 1225)
-        self.assertAlmostEqual(hardware.peak_perf_tflops, 1492.05, places=9)
+        self.assertEqual(derived["mesh_n"], 23)
+        self.assertEqual(derived["cores"], 529)
+        self.assertAlmostEqual(hardware.peak_perf_tflops, 669.714, places=9)
         self.assertAlmostEqual(
             hardware.local_hbm_bandwidth_gbps, 1640.0, places=9)
         self.assertEqual(hardware.local_hbm_capacity_bytes, 64_000_000_000)
         self.assertEqual(hardware.die_profile, "mesh_die_v1")
-        # 派生带宽与 legacy compute 形态严格连续（0.75/large/800/4x1/512
+        # 派生带宽与 legacy compute 形态严格连续（0.75 MiB/23x23/800/4x1/512
         # 裁定点；1640 GB/s 与原 local-hbm 配置值逐位相等）。
         self.assertEqual(
             hardware.local_hbm_bandwidth_gbps,
@@ -221,7 +231,7 @@ class DieHardwareTests(unittest.TestCase):
             path = _legacy_hardware_copy(Path(temporary))
             source = json.loads(path.read_text(encoding="utf-8"))
             source["die"] = json.loads(
-                _HARDWARE_SOURCE.read_text(encoding="utf-8"))["die"]
+                self.fixture_source.read_text(encoding="utf-8"))["die"]
             path.write_text(json.dumps(source, indent=2) + "\n")
             with self.assertRaisesRegex(
                     ValueError, "both 'die' and 'compute.peak-perf-tflops'"):
@@ -242,9 +252,9 @@ class DieHardwareTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "bad_die.json"
             die = dict(json.loads(
-                _HARDWARE_SOURCE.read_text(encoding="utf-8"))["die"])
+                self.fixture_source.read_text(encoding="utf-8"))["die"])
             source = json.loads(
-                _HARDWARE_SOURCE.read_text(encoding="utf-8"))
+                self.fixture_source.read_text(encoding="utf-8"))
             del source["die"]
             source["compute"] = None
             del source["compute"]
@@ -255,12 +265,12 @@ class DieHardwareTests(unittest.TestCase):
                 load_hardware_config(path, "validation-die-64g")
 
     def test_illegal_layout_and_core_table_miss_fail_closed(self) -> None:
-        base = json.loads(_HARDWARE_SOURCE.read_text(encoding="utf-8"))
+        base = json.loads(self.fixture_source.read_text(encoding="utf-8"))
         with tempfile.TemporaryDirectory() as temporary:
             for mutate, needle in (
                     (lambda d: d.update({"hbm-per-side": 2, "hbm-sides": 2}),
                      "rejected by the die_model cost library"),
-                    (lambda d: d.update({"sram-mb-per-core": 1.75}),
+                    (lambda d: d.update({"sram-mb-per-core": 3.0}),
                      "rejected by the die_model cost library"),
                     (lambda d: d.update({"noc-width-bits": 300}),
                      "noc-width-bits"),
@@ -276,10 +286,10 @@ class DieHardwareTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 ValueError,
                 r"171798691840.*64000000000|64000000000.*171798691840"):
-            load_hardware_config(_HARDWARE_SOURCE, "validation-160gib")
+            load_hardware_config(self.fixture_source, "validation-160gib")
 
     def test_resolved_die_model_and_system_keys_materialize(self) -> None:
-        hardware = load_hardware_config(_HARDWARE_SOURCE, "validation-die-64g")
+        hardware = load_hardware_config(self.fixture_source, "validation-die-64g")
         with tempfile.TemporaryDirectory() as temporary:
             paths = materialize_runtime_configs(
                 hardware=hardware,
@@ -294,11 +304,11 @@ class DieHardwareTests(unittest.TestCase):
             self.assertEqual(resolved["profile"], "mesh_die_v1")
             self.assertEqual(resolved["die"], hardware.die_node)
             self.assertEqual(
-                resolved["derived"]["cores"], 1225)
+                resolved["derived"]["cores"], 529)
             # 库摘要原文可 round-trip 重装载（make_hardware 接受 wrapped
             # 形态；此处经 resolver 路径再走一遍）。
             self.assertEqual(
-                load_hardware_config(_HARDWARE_SOURCE,
+                load_hardware_config(self.fixture_source,
                                      "validation-die-64g").die_summary,
                 resolved)
             system = json.loads(paths.system.read_text(encoding="utf-8"))
@@ -308,11 +318,11 @@ class DieHardwareTests(unittest.TestCase):
                 system["die-model-config"].startswith(str(Path(temporary))))
             self.assertNotIn("roofline-enabled", system)
             # §3.4 回流：peak-perf/local-mem-bw 由派生值填充写入。
-            self.assertEqual(system["peak-perf"], 1492.05)
+            self.assertEqual(system["peak-perf"], 669.714)
             self.assertEqual(system["local-mem-bw"], 1640.0)
 
     def test_roofline_template_conflicts_with_die_hardware(self) -> None:
-        hardware = load_hardware_config(_HARDWARE_SOURCE, "validation-die-64g")
+        hardware = load_hardware_config(self.fixture_source, "validation-die-64g")
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaisesRegex(
                     ValueError, "roofline-enabled=1"):
@@ -334,6 +344,38 @@ class DieHardwareTests(unittest.TestCase):
                             return_value=tuple()):
                 with self.assertRaisesRegex(RuntimeError, "die_model_cabi"):
                     discover_cabi_library()
+
+
+    def test_checked_in_authorized_engineering_point(self) -> None:
+        original = json.loads(_HARDWARE_SOURCE.read_text(encoding="utf-8"))
+        self.assertNotIn("core-type", original["die"])
+        self.assertEqual((original["die"]["mesh-nx"], original["die"]["mesh-ny"]), (10, 10))
+        self.assertEqual((original["die"]["die-width-mm"], original["die"]["die-height-mm"]), (25, 32))
+        hardware = load_hardware_config(_HARDWARE_SOURCE, "validation-die-64g")
+        self.assertEqual(hardware.die_derived["cores"], 100)
+        self.assertAlmostEqual(hardware.die_derived["pe_peak_int4_tops"], 126.6)
+        self.assertEqual(hardware.die_derived["die_geometry_mode"], "explicit_width_height")
+
+    def test_optional_dimensions_are_paired_and_physically_checked(self) -> None:
+        source = json.loads(self.fixture_source.read_text(encoding="utf-8"))
+        for dimensions, needle in (({"die-width-mm": 25}, "provided together"),
+                ({"die-width-mm": 25, "die-height-mm": 33}, "must equal"),
+                ({"die-width-mm": 10, "die-height-mm": 80}, "independently")):
+            current = json.loads(json.dumps(source))
+            current["die"].update(dimensions)
+            path = Path(self._grid_temp.name) / "invalid_dimensions.json"
+            path.write_text(json.dumps(current), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, needle):
+                load_hardware_config(path, "validation-die-64g")
+
+    def test_obsolete_core_selector_is_rejected_without_conversion(self) -> None:
+        for value in ("small", "large", "core"):
+            source = json.loads(self.fixture_source.read_text(encoding="utf-8"))
+            source["die"]["core-type"] = value
+            path = Path(self._grid_temp.name) / "obsolete_core_selector.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "core-type"):
+                load_hardware_config(path, "validation-die-64g")
 
 
 if __name__ == "__main__":

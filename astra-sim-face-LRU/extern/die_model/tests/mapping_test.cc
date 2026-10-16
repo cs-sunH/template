@@ -44,7 +44,7 @@ double sram_gemm(double e, std::uint64_t m, std::uint64_t k, std::uint64_t n,
 int main() {
   Checker t;
   const DieModel::Hardware big = die_test::hw_default();
-  const DieModel::Hardware small = die_test::hw_small();
+  const DieModel::Hardware small = die_test::hw_low_sram();
 
   // --- SRAM budget changes the legal tile set (§5.1/§5.2/§10.2).
   {
@@ -142,7 +142,7 @@ int main() {
     t.expect_near(plan_dec->summary().weight_hbm_bytes, w_once, 1e-9,
                   "M=1 decode reads the weights exactly once");
 
-    // M=8192 prefill (T_m = 64 > mesh_n = 35 row blocks): output-resident
+    // M=8192 prefill (T_m = 64 > mesh_n = 23 row blocks): output-resident
     // needs ceil(T_m/rb) >= 2 weight sweeps; weight-resident pays
     // partial/output traffic.  The chosen plan must pay at least one of the
     // two (§5.2 "不能同时免费获得全部权重复用与全部输出驻留").

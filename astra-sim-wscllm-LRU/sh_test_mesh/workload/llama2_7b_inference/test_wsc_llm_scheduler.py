@@ -242,9 +242,9 @@ class WscLlmSchedulerTests(unittest.TestCase):
             system_raw = json.load(source)
         self.assertEqual(system_raw["local-mem-bw"], 1640.0)
         self.assertEqual(system_raw["remote-mem-bw"], 512)
-        # die 后端(2026-10-03):peak-perf 由 die 库派生回流(1492.05
-        # TFLOPS;旧 compute.peak-perf-tflops=261.12 随 compute 节退役)。
-        self.assertEqual(system_raw["peak-perf"], 1492.05)
+        # die 后端(2026-10-03):peak-perf 由 die 库派生回流(126.6
+        # INT4 TOPS compatibility scalar;旧 compute.peak-perf-tflops=261.12 随 compute 节退役)。
+        self.assertEqual(system_raw["peak-perf"], 126.6)
         self.assertIn("npus_count: [ 6, 9 ]", config.network_config.read_text())
         self.assertEqual(len(config.inference_groups), 9)
         self.assertEqual(tuple(group.ranks for group in config.inference_groups), EXPECTED_RANKS)

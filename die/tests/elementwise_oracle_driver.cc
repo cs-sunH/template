@@ -72,7 +72,6 @@ Hardware hardware(const Args& a) {
   std::ifstream file(std::string(COARSE_DIE_SOURCE_DIR)+"/configs/example_hardware_explicit.json");
   if(!file)throw std::runtime_error("cannot open explicit hardware fixture");
   json cfg=json::parse(file);
-  cfg["architecture"]["core_type"]="small";
   cfg["architecture"]["core_columns_nx"]=1;
   cfg["architecture"]["core_rows_ny"]=1;
   cfg["performance_profile"]["eta_vec"]=1.0;

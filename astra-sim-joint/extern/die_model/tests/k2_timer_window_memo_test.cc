@@ -111,7 +111,7 @@ std::shared_ptr<const DieModel::DiePlan> sequential_pe_then_mem_plan(
   pe.resource = DieModel::StageResource::PE;
   pe.wave_repeat = repeat;
   pe.deps.emplace_back(0, 1);  // wave i follows wave i-1
-  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double rate = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   pe.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
 
   DieModel::DieStage mem;
@@ -136,7 +136,7 @@ std::shared_ptr<const DieModel::DiePlan> repeated_pe_plan() {
   pe.label = "k2-parallel-pe";
   pe.resource = DieModel::StageResource::PE;
   pe.wave_repeat = 2;
-  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double rate = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   pe.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
   auto data = std::make_shared<DieModel::DiePlanData>();
   data->spec = std::make_shared<const DieModel::DieOpSpec>(

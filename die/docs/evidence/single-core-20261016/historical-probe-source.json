@@ -1,0 +1,32 @@
+{
+  "source_git_object": "41f1191:die/src/Hardware.cc",
+  "source_sha256": "7a6fb8761770e5960eba2dcee19f99c0a8314caea76622bdf92a534225c0fd83",
+  "probe_source": "die/docs/analysis/single-core-20261016/hardware_probe.cc",
+  "probe_source_sha256": "27fd8e395e1e81aa7b4deb2f8b1ce38416dbb618b5631baa272ba51079047d4f",
+  "before_compile": [
+    "g++",
+    "-std=c++17",
+    "-O2",
+    "-I",
+    "die/include",
+    "-I",
+    "astra-sim-wscllm/extern/helper",
+    "die/docs/analysis/single-core-20261016/hardware_probe.cc",
+    "work/single-core-migration-20261016/before-Hardware.cc",
+    "-o",
+    "work/single-core-migration-20261016/before-hardware-probe"
+  ],
+  "after_compile": [
+    "g++",
+    "-std=c++17",
+    "-O2",
+    "-I",
+    "die/include",
+    "-I",
+    "astra-sim-wscllm/extern/helper",
+    "die/docs/analysis/single-core-20261016/hardware_probe.cc",
+    "work/build-single-core/libcoarse_die.a",
+    "-o",
+    "work/single-core-migration-20261016/after-hardware-probe"
+  ]
+}

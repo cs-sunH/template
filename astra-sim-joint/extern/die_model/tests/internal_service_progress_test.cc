@@ -51,7 +51,7 @@ std::shared_ptr<const DieModel::DiePlan> repeated_pe_plan() {
   pe.label = "ignored-by-eligibility";
   pe.resource = DieModel::StageResource::PE;
   pe.wave_repeat = 2;
-  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double rate = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   pe.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
   auto data = std::make_shared<DieModel::DiePlanData>();
   data->spec = std::make_shared<const DieModel::DieOpSpec>(
@@ -68,7 +68,7 @@ std::shared_ptr<const DieModel::DiePlan> repeated_pe_then_mem_plan() {
   pe.label = "preview-pe";
   pe.resource = DieModel::StageResource::PE;
   pe.wave_repeat = 2;
-  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double rate = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   pe.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
 
   DieModel::DieStage mem;
@@ -95,7 +95,7 @@ std::shared_ptr<const DieModel::DiePlan> sequential_pe_then_mem_plan(
   pe.resource = DieModel::StageResource::PE;
   pe.wave_repeat = repeat;
   pe.deps.emplace_back(0, 1);  // wave i follows wave i-1
-  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double rate = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   pe.pe_core_flop = 1000.0 * rate / 1e9 * (1.0 - 1e-12);
 
   DieModel::DieStage mem;
@@ -702,7 +702,7 @@ void test_same_end_timer_batch_compacts_once_and_preserves_boundary() {
 std::shared_ptr<const DieModel::DiePlan> events_heavy_frontier_plan(
     const std::uint64_t bulk_stages, const std::uint64_t waves) {
   const auto hw = die_test::hw_default();
-  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double rate = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   auto data = std::make_shared<DieModel::DiePlanData>();
   data->spec = std::make_shared<const DieModel::DieOpSpec>(
       die_test::spec_of(DieModel::OpKind::LocalRegion,
@@ -744,7 +744,7 @@ std::shared_ptr<const DieModel::DiePlan> events_heavy_frontier_plan(
 std::shared_ptr<const DieModel::DiePlan> heap_heavy_frontier_plan(
     const std::uint64_t bulk_stages, const std::uint64_t waves) {
   const auto hw = die_test::hw_default();
-  const double rate = hw.core_row.pe_gflops_per_core * 1e9 * hw.eta_pe;
+  const double rate = hw.core_row.pe_int4_gops_per_core * 1e9 * hw.eta_pe;
   auto data = std::make_shared<DieModel::DiePlanData>();
   data->spec = std::make_shared<const DieModel::DieOpSpec>(
       die_test::spec_of(DieModel::OpKind::LocalRegion,

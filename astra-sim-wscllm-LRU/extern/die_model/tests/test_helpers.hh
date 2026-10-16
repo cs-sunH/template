@@ -4,14 +4,10 @@ LICENSE file in the root directory of this source tree.
 *******************************************************************************/
 
 /*
-test_helpers.hh -- shared fixtures of the stage A2 unit tests (repository
-fixture style: no gtest).  The two hardware points every A2 test must cover
-(contract: the §3.5 default die point plus at least one small-SRAM point):
-
-  hw_default: (0.75 MB, large, 800 mm2, HBM 4x1, 512 bit) -- the §3.5 face
-              default die point (mesh 35x35);
-  hw_small:   (0.25 MB, small, 300 mm2, HBM 2x1, 256 bit) -- a small-SRAM /
-              small-area point from the same §3.1 legal tables.
+Shared explicit hardware fixtures for legacy ABI compatibility tests.
+0.75 MiB / 800 mm2 / 512 bit / 23x23 and 0.25 MiB / 300 mm2 /
+256 bit / 23x23 are test inputs, not selected or recommended architectures.
+The production typed model and this compatibility layer use one Core design.
 */
 
 #pragma once
@@ -82,12 +78,14 @@ struct Checker {
   }
 };
 
-inline nlohmann::json die_node(double sram, const char* type, double area,
+inline nlohmann::json die_node(double sram, double area,
                                std::uint64_t per_side, std::uint64_t sides,
-                               std::uint64_t width) {
+                               std::uint64_t width, std::uint64_t nx = 23,
+                               std::uint64_t ny = 23) {
   nlohmann::json die;
   die["sram-mb-per-core"] = sram;
-  die["core-type"] = type;
+  die["mesh-nx"] = nx;
+  die["mesh-ny"] = ny;
   die["compute-area-mm2"] = area;
   die["hbm-per-side"] = per_side;
   die["hbm-sides"] = sides;
@@ -104,23 +102,23 @@ inline nlohmann::json wrapped(const nlohmann::json& die,
   return j;
 }
 
-// The §3.5 default die point.
+// The explicit 23x23 compatibility-test fixture.
 inline DieModel::Hardware hw_default() {
   return DieModel::make_hardware(wrapped(
-      die_node(0.75, "large", 800, 4, 1, 512), "mesh_die_v1"));
+      die_node(0.75, 800, 4, 1, 512), "mesh_die_v1"));
 }
 
 // A small-SRAM / small-area legal point.
-inline DieModel::Hardware hw_small() {
+inline DieModel::Hardware hw_low_sram() {
   return DieModel::make_hardware(
-      wrapped(die_node(0.25, "small", 300, 2, 1, 256), "mesh_die_v1"));
+      wrapped(die_node(0.25, 300, 2, 1, 256), "mesh_die_v1"));
 }
 
 // A legal point with six HBM stacks but the SAME mesh geometry as
-// hw_default() (800 mm2, 0.75/large, 512 bit) for the sweep-validity check.
+// hw_default() (800 mm2, 0.75 MiB, 512 bit) for the sweep-validity check.
 inline DieModel::Hardware hw_default_6hbm() {
   return DieModel::make_hardware(
-      wrapped(die_node(0.75, "large", 800, 3, 2, 512), "mesh_die_v1"));
+      wrapped(die_node(0.75, 800, 3, 2, 512), "mesh_die_v1"));
 }
 
 // One-span spec builder.

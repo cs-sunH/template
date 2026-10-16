@@ -31,7 +31,7 @@ int main() {
   // The hardware geometry is irrelevant to the reference profile (the §2.1
   // constants are die-independent); reuse a legal wrapped node.
   const DieModel::Hardware hw = DieModel::make_hardware(die_test::wrapped(
-      die_test::die_node(0.75, "large", 800, 3, 2, 512), "tx8_reference_v1"));
+      die_test::die_node(0.75, 800, 3, 2, 512), "tx8_reference_v1"));
   const DieModel::Tx8Result ref = DieModel::tx8_reference_block();
 
   // op_kind -> reference group index (§2.3 order).
