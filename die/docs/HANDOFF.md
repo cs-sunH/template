@@ -1,5 +1,16 @@
 # Codex Cloud 开发交接状态
 
+## 最新停止交接入口（2026-10-17；覆盖下方旧状态）
+
+用户已要求立即停止开发。**最新有效成果保存在独立恢复分支，不要只从main恢复。**
+
+- 已实际push并ls-remote核实：[`codex/die-runtime-continue-20261016@9c464cac9447f97569e547bc7c1e7f6094cc63a1`](https://github.com/cs-sunH/template/tree/9c464cac9447f97569e547bc7c1e7f6094cc63a1)。[权威HANDOFF](https://github.com/cs-sunH/template/blob/9c464cac9447f97569e547bc7c1e7f6094cc63a1/die/docs/HANDOFF.md)及[停止详情](https://github.com/cs-sunH/template/blob/9c464cac9447f97569e547bc7c1e7f6094cc63a1/die/docs/analysis/runtime-continue-20261016/STOP-HANDOFF-20261017.md)。恢复时fetch并核对该分支最终HEAD。
+- 当前生产A+B在上述分支，fresh Release 53/53通过；严格矩阵78/84、性能失败保持。本轮五仓10库/98配置通过、Python384pass/1skip；native JOINT10 C++及6 Python通过，FACE3pass/1 R4失败，其余native未完成。详细源码身份、原始证据及未运行范围以分支HANDOFF为准，不套旧结果。
+- 499项停止text归档及之前Norm checkpoint1/2均在上述分支；C1提前ready反例真实失败，C2仅prepare未编译/测试，均未采用。先读停止详情、核验归档再继续，不覆盖当前生产。
+- **本main提交只有交接指针，没有合入A+B或研究候选。** main生产仍沿原94d1978身份；正式五仓SDK未发布，工程NOT ACCEPTED。远端保存、main源码集成、SDK发布与验收是不同状态。
+- 下一步：从恢复分支安全接续并保留main有效修改；先审查ready反例/未编译C2与审查工具重复ID，再接剩余native及Norm。遵守当前单Core权威文档与原正确性/速度门槛。本账号交接后停止。
+
+
 
 ## 最新停止交接（2026-10-16；覆盖下方持续开发状态）
 
