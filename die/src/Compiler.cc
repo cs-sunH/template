@@ -642,6 +642,8 @@ std::shared_ptr<const Plan> compile_normalized_impl(
     return key(a)<key(b);
   });
   std::shared_ptr<Plan> selected=winner->plan;
+  if(gemm_candidates_are_unsealed)
+    selected=detail::materialize_gemm_compile_candidate(hardware,*selected);
   selected->summary["estimated_latency_ns"]=winner->latency;
   selected->summary["alone_estimate_status"]=
       selected->summary.value("prediction_status",std::string("ok_assumed"));

@@ -1,10 +1,18 @@
 # Codex Cloud 开发交接状态
 
-记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch实核HEAD/main为 `3cf579f1aaddd7d12ae6aad8124b126ee1b54ed6`，其push/fetch/ls-remote已实核main和工作分支同SHA。包含本页的Git提交为连续simplex表检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
+记录日期：2026-10-16（Asia/Shanghai；raw时间另存UTC/Unix）。用户授权持续自主开发，历史停止指令不适用。工作分支 `codex/die-explicit-continue-20261015`；写入本页前fetch实核HEAD/main为 `22c4106281bc44da49bf1ba44f5df6d3c43c9e4b`，其push/fetch/ls-remote已实核main和工作分支同SHA。包含本页的Git提交为候选排序诊断延后生成检查点；必须以实际fetch/ls-remote及祖先关系确认其已共享，不以本地提交冒充远端。没有不明修改，未覆盖外部成果；有效源/测试/失败均保留。工程 **NOT ACCEPTED**，正式五仓vendor仍未发布新源，继续自主开发。
 
 ## Current Status
 
-### 当前有效检查点：simplex连续矩阵、全部候选轨迹等价，尾延迟仍failed
+### 当前有效检查点：候选诊断延后生成，完整合同等值，J32尾部仍failed
+
+- 只在内部top-level GEMM排序候选中延后存储非排序JSON，仍逐候选执行原结构/硬件/work/credit/overflow/EqWork/status/描述预算和Runtime估值。完整OS audit保留；不改候选、排序tie或模型。选中后同一builder按原tile/dataflow物化一次，核身份/launch/status/九排序键；公开enumerator/非GEMM完整路径和最终Plan不变。
+- 最终一致Release **49/49通过，21.52s**。新增64任务/1092候选完整materialization wire/hash等值、四极值错误一致、rank drift原子拒绝。实际Git22c旧库与新公开枚举1092完整wire逐byte相同，15.46MB原始一份确定gzip保留；36候选完整延迟/仲裁轨迹/枢轴/切向轮次、11完整公开对象（含cache bytes）与旧库全等。最终Norm32/96实际重跑128份raw/report/stderr/log同保留v2内容，source/ELF/命令及fresh suite另存；仍completion96/first-output160目标10%、原busy54failed，不是硬件校准。
+- 初版routing profile具名字符串使实际JSON capacity30→20、cache bytes少10B；初版完整对象比较失败保留，恢复原full expression后完整全等。scratch诊断初次include不存在头未运行、suite含命令/ELF不可byte比较的事实明确保留，不掩盖失败。生产无新状态、ABI/物理公平/先验不变。
+- 100样本诊断128³枚举分配7460→5038、完整16498→14447，少2051次/109514B请求；Runtime仍7293次。完整thread CPU中位1.470→1.340ms，诊断不替代预算。最终正常30样本cold128³ P95 **1.508469ms**，本次适用热/常规冷门槛通过，但整套仍 **failed**：OS J1/J8/J32 **14.792/24.476/77.745μs**。初版cold1.564922ms/J32 56.073μs及所有历史慢点保留，不选最快或宣布全域稳定通过。
+- 当前CABI SHA `e134763079d36e30f1f9ad06785847421bde1f05c330e8896f7008b6cd43a3c6`；总表 `evidence/compiler-ranking-20261016/checkpoint-summary.json`，复现见同名analysis README。正式canonical24五份仍23160c…7e9b实核未publisher，新公共模型五仓业务/CPU not_run；R>1窗口/长行/busy/target raw缺口保持，工程NOT ACCEPTED，继续自主开发。
+
+### 已合入22c4106：simplex连续矩阵、全部候选轨迹等价，尾延迟仍failed
 
 - 真正的candidate路径诊断发现128³的28候选有30次signed-LP仲裁，主要是保留legacy语义的WR，不为速度放开ratio入口。task identity批量复制约16μs、winner公开序列化约55μs，非主要成本。新`Execution.cc`用单个连续double数组保留tableau原行列索引，直接读原RatioRow，去掉a矩阵/b向量中转深拷贝；缩放、有限性/列数检查、目标、基/非基编号、枢轴/舍入/预算和物理公平全部不变。行数由同一行结构决定，不再有不可表示的split-vector row-count mismatch；无新算法/模型状态。
 - 一致公共Release **48/48通过，19.44s**，实际全部生产/头/测试源匹配。36候选（8+28）的完整完成时间、仲裁路径、枢轴及切向轮次逐字段全等；11真实完整公开对象与Git3cf保存库全等。新Norm32/96再实际重跑，128份raw/report/stderr/log同原保留内容，当前源/ELF/命令另存。因此模型精度scope不变：Norm完成96目标/首输出160目标、原busy54failed；不冒充真实硬件校准。
@@ -364,12 +372,11 @@ Python原KV snapshot继续KV-only，workspace仅扣physical fit并唤醒既有ca
 
 ### 当前唯一接续（覆盖后面历史检查点）
 
-1. fetch核实包含本页的main/HEAD，先读hotpath-allocation README/flat-simplex-checkpoint-summary及norm-row-accounting总表，再看consumer-availability的preview-complete-final-summary和冻结matrix。当前模型公共48已过、36候选轨迹/11公开对象/96 Norm新源重跑全等；比率临时复用与连续simplex已完成，不重复。Python148、旧SDK五仓10项、显式硬件移除、每Core槽位、九描述elementwise曲线、双raw memo均已完成，不机械执行历史待办。
-2. 隔离五仓consumer/两ABI构建、83配置及5个真实R3拒绝probe已完成，三个fixture修正/旧SDK当前10项兼容已核；不重跑或重复publisher。最新总表preview-complete-final-summary，原标准四仓R4失败和JOINT初始1项失败保留。正式SDK仍canonical24。后续公共生产模型变化时，再用新freeze/label验受影响的ABI和真实负载，不复用旧ELF声称当前源通过；不可减少layers/passes获得业务成功。
-3. Norm每Core首次读取/完整参数fit/行槽/转换及固定首中尾已落实，不恢复add_vector旧Norm路线；当前Norm完成/首输出scope达10%，busy54场景failed，长行两遍HBM仍未实现，R>1即零launch也诊断不可用。正式接入前的主要依赖仍R>1真实非服务窗口和region物化barrier；先研究能保持资源竞争/无Q等待且符合固定复杂度的表示，不前置R×wait、不作资源/PRIVATE替身、不逐K/tile/wave/repeat或周期/Program，不能只删status或guard。长行两遍、WR/其它向量/Attention/FFN和OS二阶/odd-row按真实收益推进。
-4. 最新速度仍failed：cold128³4.635381ms、J32 79.227μs，旧cold2.149/2.550ms、J8 134.268μs、hot cost27.25μs失败保留。已确认并优化LP矩阵复制/逐行分配，不重复做；候选生成诊断约0.52ms/7460次分配仍大。可继续评估只为胜者物化完整诊断，复用同一builder，不另写时间公式；必须对每个候选保留u128→u64/EqWork溢出、硬件/结构/资源/credit/描述预算及status类型验证，保留候选顺序和rank tie，不能因延迟JSON省略正确性检查。公开enumerator/最终Plan、ABI/快照/handles应原样兼容并真实等值验证。物理模型/校准不为CPU噪声调整；其余精度失败按原scope保留，不挑最好样本。
-5. 模型稳定后才正式publisher；再做五仓完整业务、双ABI/配置与端到端CPU预算。旧SDK通过不冒充新SDK通过，R3拒绝通过不冒充R3支持；JOINT provider/live/sh30仍受保护。target raw/heldout与当前Runtime同合同TX8硬件入口仍缺，不造profile或重拟目标效率。
-6. 有意义检查点保存全部有效源/日志，安全提交并核实GitHub；持续自主开发，不按提交或阶段停止。
+1. fetch核实包含本页的main/HEAD，读compiler-ranking README/checkpoint-summary及norm-row-accounting总表，再看consumer-availability preview-complete-final-summary和冻结matrix。当前公共49、1092完整候选物化、36仲裁轨迹/11公开对象/96 Norm新源重跑均已完成；比率scratch复用、连续simplex和候选诊断延后不重复。Python148、旧SDK五仓10项、显式硬件移除、每Core槽位、九活动elementwise、双raw memo不机械重做。
+2. 最新速度整套仍failed：cold128³1.508469ms本次通过，J32 77.745μs失败。所有历史cold/J8/hot失败保留。继续先定位J32真实update调用中的advance/settle、曲线导数/块对称性/分配器开销，再选择能保持数值顺序、公平与快照的低复杂度修复；不能省略update的事件/计数语义或跳过旧速率结算，不为CPU噪声调物理参数。若无可靠受益转回公共模型依赖，不用反复跑最快样本替代优化。
+3. 正式接入主要依赖仍R>1真实非服务窗口和region物化barrier。保持资源竞争/无Q等待及固定描述复杂度，不前置R×wait、不作资源/PRIVATE替身、不逐K/tile/wave/repeat或周期/Program，不只删status/consumer guard。Norm每Core首次参数/完整fit/行槽/转换/首中尾已落实；长行两遍HBM未实现，R>1零launch仍不可用；busy54failed，WR/其它向量/Attention/FFN及OS二阶/odd-row按实际依赖推进。
+4. 隔离五仓consumer/双ABI、83配置和五R3拒绝probe已完成，三个fixture修正/旧SDK当前10项兼容已核，不重复publisher。原标准四仓R4失败和JOINT初始失败保留。正式SDK仍canonical24；公共模型稳定后新freeze/label验受影响ABI、原样业务及端到端CPU，旧ELF不冒充当前源，不减layers/passes取得成功。JOINT provider/live/sh30继续保护。
+5. target raw/heldout与当前Runtime同合同TX8硬件入口仍缺，不造profile、不把oracle当硬件、不重拟目标效率。保存全部有效源/日志，有意义检查点安全提交核实GitHub；持续自主开发，不按提交或阶段停止。
 
 下方为历史接续记录，冲突时以上为准。
 

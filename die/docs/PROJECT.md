@@ -20,7 +20,7 @@ TX8 当前工作簿只能提供条件参考校准和工作量回归，不能作�
 
 开发以有意义的验证检查点同步 GitHub。本轮继续获得源码开发授权；先按最新用户要求同步硬件输入/10%—20%设计，再自主实施。检查点同步不等于模型精度或五仓工程验收。
 
-2026-10-16当前源码检查点：simplex直接读原约束并用连续double矩阵，去掉中转深拷贝/逐行分配；原缩放、有限性检查、枢轴/舍入/物理公平和legacy入口不变。Release48/48（19.44s），36候选完整仲裁路径/枢轴/延迟、11公开对象及真实新Norm32/96 raw均与改前全等。诊断128³少3100次/124000B请求，但正常30样本仍failed：cold P95 4.635381ms（中位1.668726ms）、J32 79.227μs，全部慢点及历史失败保留，不把诊断CPU下降冒充预算通过。当前hotpath-allocation/flat-simplex总表明确scope。Norm行/每Core参数/转换/容量已落实，离线96完成/160首输出≤10%，busy54failed，长行两遍和R>1窗口未实现。正式vendor24仍23160c…7e9b未publisher，旧隔离五仓83配置/五R3拒绝probe及旧SDK10项兼容按原scope有效，新模型五仓业务/CPU not_run。继续候选生成/诊断等实际成本与公共模型依赖；TX8/目标先验冻结、独立target数据缺失，工程NOT ACCEPTED，持续自主开发。
+2026-10-16当前源码检查点：内部GEMM仅延后非排序JSON存储，保留所有候选overflow/EqWork/结构/资源/credit/status/预算及Runtime估值，胜者经同一builder物化一次、公开/非GEMM路径不变。最终Release49/49（21.52s），1092完整候选materialization及实际旧/新公开wire、36仲裁轨迹、11完整接口对象和Norm32/96 raw全等。初版routing字符串capacity致cache bytes少10B的比较失败已保留并修复。诊断128³完整分配16498→14447；正常30样本cold P95 1.508469ms、本次适用热/常规冷通过，但J32 77.745μs仍failed，所有历史慢点保留、不选最好样本。总表compiler-ranking/checkpoint-summary明确scope。Norm完成96/首输出160目标10%、原busy54failed，长行两遍及R>1窗口未实现。正式canonical24仍23160c…7e9b未publisher，新公共模型五仓业务/CPU not_run；旧隔离83配置/五R3拒绝与旧SDK10项沿原scope有效。继续J32真实热路径与公共模型依赖，TX8/目标先验冻结、独立target数据缺失，工程NOT ACCEPTED，持续自主开发。
 
 ## 当前强制建模路线（2026-10-15，用户确认）
 

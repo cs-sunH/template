@@ -24,7 +24,8 @@ sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 sources = [root / 'die/CMakeLists.txt', root / 'die/validation/norm_row_oracle.py',
            root / 'die/validation/elementwise_service_oracle.py']
 for base in ['die/src', 'die/include', 'die/tests', 'die/configs', 'die/docs/analysis/norm-row-accounting-20261016',
-             'die/docs/analysis/hotpath-allocation-20261016']:
+             'die/docs/analysis/hotpath-allocation-20261016',
+             'die/docs/analysis/compiler-ranking-20261016']:
     sources += [path for path in (root / base).rglob('*') if path.is_file()
                 and path.suffix in ['.cc', '.hh', '.h', '.py', '.json', '.txt']]
 binaries = list(build.rglob('*.a')) + list(build.rglob('*.so'))

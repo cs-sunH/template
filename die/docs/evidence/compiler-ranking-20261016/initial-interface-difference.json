@@ -1,0 +1,73 @@
+{
+  "status": "failed_full_object_equality_then_corrected",
+  "cause": "Full routing_evidence.profile JSON construction copied a named string instead of moving the original temporary; actual retained string capacity30 became20. No physical, latency, Plan wire, hash, cache limit, or accounting formula change. Restored original full expression; initial raw retained.",
+  "cases": [
+    {
+      "case": 0,
+      "old_cache_bytes": 27383,
+      "initial_cache_bytes": 27373,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 1,
+      "old_cache_bytes": 31664,
+      "initial_cache_bytes": 31654,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 2,
+      "old_cache_bytes": 42027,
+      "initial_cache_bytes": 42017,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 3,
+      "old_cache_bytes": 24755,
+      "initial_cache_bytes": 24745,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 4,
+      "old_cache_bytes": 31769,
+      "initial_cache_bytes": 31759,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 5,
+      "old_cache_bytes": 34573,
+      "initial_cache_bytes": 34563,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 6,
+      "old_cache_bytes": 30489,
+      "initial_cache_bytes": 30479,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 7,
+      "old_cache_bytes": 28094,
+      "initial_cache_bytes": 28084,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 8,
+      "old_cache_bytes": 29168,
+      "initial_cache_bytes": 29158,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 9,
+      "old_cache_bytes": 33500,
+      "initial_cache_bytes": 33490,
+      "remaining_complete_fields_equal": true
+    },
+    {
+      "case": 10,
+      "old_cache_bytes": 34086,
+      "initial_cache_bytes": 34076,
+      "remaining_complete_fields_equal": true
+    }
+  ],
+  "diagnostic_initial_launch_failure": "Scratch capture_retained.cc initially included non-existent Compiler.hh, so neither diagnostic binary ran; replaced with real Plan.hh. This was diagnostic-only, not a model test failure."
+}

@@ -1,0 +1,2299 @@
+[
+  {
+    "@fingerprint_capacity": 64,
+    "@hardware_fingerprint_capacity": 71,
+    "@retained_plan_bytes": 22018,
+    "summary/activity_units": {
+      "capacity": 210,
+      "value": "physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal"
+    },
+    "summary/activity_work_semantics": {
+      "capacity": 159,
+      "value": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1"
+    },
+    "summary/alone_estimate_status": {
+      "capacity": 15,
+      "value": "ok_assumed"
+    },
+    "summary/candidate_estimate_source": {
+      "capacity": 37,
+      "value": "estimate_alone(shared_runtime_engine)"
+    },
+    "summary/dataflow_id": {
+      "capacity": 20,
+      "value": "output_stationary_v2"
+    },
+    "summary/evidence_flags/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/evidence_flags/1": {
+      "capacity": 23,
+      "value": "hardware_source_derived"
+    },
+    "summary/evidence_flags/@capacity": 2,
+    "summary/fixed_region_overheads/key:applied_ready_delay_ns": 22,
+    "summary/fixed_region_overheads/key:first_hbm_epoch": 15,
+    "summary/fixed_region_overheads/key:hbm_instances": 15,
+    "summary/fixed_region_overheads/key:instances": 15,
+    "summary/fixed_region_overheads/key:launch_ns_per_instance": 22,
+    "summary/fixed_region_overheads/key:memory_setup_ns_per_hbm_instance": 32,
+    "summary/fixed_region_overheads/key:model": 15,
+    "summary/fixed_region_overheads/key:modeled_instances": 17,
+    "summary/fixed_region_overheads/key:quantization": 15,
+    "summary/fixed_region_overheads/key:quantization_error_ns": 21,
+    "summary/fixed_region_overheads/key:ready_gate_description_count": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_ceil": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_whole": 29,
+    "summary/fixed_region_overheads/key:scope": 15,
+    "summary/fixed_region_overheads/key:timing_status": 15,
+    "summary/fixed_region_overheads/model": {
+      "capacity": 25,
+      "value": "region_ready_overheads_v1"
+    },
+    "summary/fixed_region_overheads/quantization": {
+      "capacity": 52,
+      "value": "ceil_combined_region_delay_once_to_public_integer_ns"
+    },
+    "summary/fixed_region_overheads/scope": {
+      "capacity": 54,
+      "value": "one_complete_source_region_not_internal_kernel_or_tile"
+    },
+    "summary/fixed_region_overheads/timing_status": {
+      "capacity": 29,
+      "value": "modeled_integer_ns_ready_gate"
+    },
+    "summary/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/key:active_cores": 15,
+    "summary/key:activity_units": 15,
+    "summary/key:activity_work_semantics": 23,
+    "summary/key:alone_estimate_status": 21,
+    "summary/key:candidate_count": 15,
+    "summary/key:candidate_estimate_source": 25,
+    "summary/key:consumption_wave_count": 22,
+    "summary/key:conversion_elements": 19,
+    "summary/key:dataflow_id": 15,
+    "summary/key:estimated_latency_ns": 20,
+    "summary/key:evidence_flags": 15,
+    "summary/key:executed_int4_ops": 17,
+    "summary/key:executed_matrix_ops": 19,
+    "summary/key:executed_score_slots": 20,
+    "summary/key:fixed_region_overheads": 22,
+    "summary/key:granularity_validation": 22,
+    "summary/key:hbm_read_bytes_total": 20,
+    "summary/key:hbm_workspace_peak_bytes": 24,
+    "summary/key:hbm_write_bytes_total": 21,
+    "summary/key:int4_input_bytes": 16,
+    "summary/key:kind": 15,
+    "summary/key:local_bus_bytes": 15,
+    "summary/key:logical_tensor_bytes": 20,
+    "summary/key:mapping_assumptions": 19,
+    "summary/key:output_round_count": 18,
+    "summary/key:physical_transfer_bytes": 23,
+    "summary/key:probability_bytes": 17,
+    "summary/key:recompute_matrix_ops": 20,
+    "summary/key:recomputed_matrix_ops": 21,
+    "summary/key:routing_evidence": 16,
+    "summary/key:score_bytes": 15,
+    "summary/key:selected_template": 17,
+    "summary/key:selection_rule": 15,
+    "summary/key:service_curves": 15,
+    "summary/key:service_description_count": 25,
+    "summary/key:service_model_revision": 22,
+    "summary/key:source_matrix_ops": 17,
+    "summary/key:source_vec_ops": 15,
+    "summary/key:sram_capacity_bytes_per_core": 28,
+    "summary/key:sram_peak_bytes_per_core": 24,
+    "summary/key:sram_read_bytes": 15,
+    "summary/key:sram_write_bytes": 16,
+    "summary/key:template_id": 15,
+    "summary/key:tf": 15,
+    "summary/key:th": 15,
+    "summary/key:tk": 15,
+    "summary/key:tm": 15,
+    "summary/key:tn": 15,
+    "summary/key:valid_score_pairs": 17,
+    "summary/key:vec_equivalent_ops": 18,
+    "summary/key:wave_count": 15,
+    "summary/kind": {
+      "capacity": 15,
+      "value": "gemm"
+    },
+    "summary/mapping_assumptions/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/mapping_assumptions/1": {
+      "capacity": 23,
+      "value": "bounded_tile_candidates"
+    },
+    "summary/mapping_assumptions/2": {
+      "capacity": 32,
+      "value": "exact_per_tile_INT4_tail_packing"
+    },
+    "summary/mapping_assumptions/3": {
+      "capacity": 60,
+      "value": "analytical_cumulative_os_v3_fixed_bounded_description_budget"
+    },
+    "summary/mapping_assumptions/@capacity": 4,
+    "summary/routing_evidence/key:profile": 15,
+    "summary/routing_evidence/key:status": 15,
+    "summary/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/selected_template": {
+      "capacity": 30,
+      "value": "gemm_output_stationary_v2"
+    },
+    "summary/selection_rule": {
+      "capacity": 115,
+      "value": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th"
+    },
+    "summary/service_curves/0/final_output_release": {
+      "capacity": 35,
+      "value": "compute_terminal_before_final_drain"
+    },
+    "summary/service_curves/0/first_output_release": {
+      "capacity": 29,
+      "value": "first_cohort_compute_terminal"
+    },
+    "summary/service_curves/0/input_unit": {
+      "capacity": 29,
+      "value": "one_output_tile_K_consumption"
+    },
+    "summary/service_curves/0/key:description_budget": 18,
+    "summary/service_curves/0/key:description_count": 17,
+    "summary/service_curves/0/key:epoch_begin": 15,
+    "summary/service_curves/0/key:epoch_count": 15,
+    "summary/service_curves/0/key:final_drain_units": 17,
+    "summary/service_curves/0/key:final_output_release": 20,
+    "summary/service_curves/0/key:first_load_units": 16,
+    "summary/service_curves/0/key:first_output_compute_progress": 29,
+    "summary/service_curves/0/key:first_output_compute_work_s": 27,
+    "summary/service_curves/0/key:first_output_epoch": 18,
+    "summary/service_curves/0/key:first_output_input_bytes": 24,
+    "summary/service_curves/0/key:first_output_input_units": 24,
+    "summary/service_curves/0/key:first_output_release": 20,
+    "summary/service_curves/0/key:input_capacity_units": 20,
+    "summary/service_curves/0/key:input_unit": 15,
+    "summary/service_curves/0/key:input_units": 15,
+    "summary/service_curves/0/key:model": 15,
+    "summary/service_curves/0/key:output_capacity_units": 21,
+    "summary/service_curves/0/key:output_unit": 15,
+    "summary/service_curves/0/key:output_units": 15,
+    "summary/service_curves/0/key:readiness_approximation": 23,
+    "summary/service_curves/0/key:region_ready_gate_descriptions": 30,
+    "summary/service_curves/0/model": {
+      "capacity": 27,
+      "value": "analytical_cumulative_os_v3"
+    },
+    "summary/service_curves/0/output_unit": {
+      "capacity": 15,
+      "value": "one_output_tile"
+    },
+    "summary/service_curves/0/readiness_approximation": {
+      "capacity": 54,
+      "value": "aggregate_piecewise_affine_not_discrete_tile_readiness"
+    },
+    "summary/service_curves/@capacity": 1,
+    "summary/service_model_revision": {
+      "capacity": 27,
+      "value": "analytical_cumulative_os_v3"
+    },
+    "summary/template_id": {
+      "capacity": 30,
+      "value": "gemm_output_stationary_v2"
+    },
+    "task/execution_profile": {
+      "capacity": 31,
+      "value": "int4_matrix_vec_fp32_assumed_v1"
+    },
+    "task/fusion_policy": {
+      "capacity": 15,
+      "value": "auto"
+    },
+    "task/key:execution_profile": 17,
+    "task/key:fusion_policy": 15,
+    "task/key:layer_instances": 15,
+    "task/key:op_kind": 15,
+    "task/key:phase": 15,
+    "task/key:schema": 15,
+    "task/key:spans": 15,
+    "task/key:storage_dtype": 15,
+    "task/key:tensor_shapes": 15,
+    "task/key:tp_slice": 15,
+    "task/key:weight_passes": 15,
+    "task/op_kind": {
+      "capacity": 15,
+      "value": "gemm"
+    },
+    "task/phase": {
+      "capacity": 15,
+      "value": "prefill"
+    },
+    "task/schema": {
+      "capacity": 18,
+      "value": "coarse_die_task_v2"
+    },
+    "task/spans/@capacity": 0,
+    "task/storage_dtype/accumulator": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/activations": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/key:accumulator": 15,
+    "task/storage_dtype/key:activations": 15,
+    "task/storage_dtype/key:kv": 15,
+    "task/storage_dtype/key:output": 15,
+    "task/storage_dtype/key:parameters": 15,
+    "task/storage_dtype/key:scores": 15,
+    "task/storage_dtype/key:weights": 15,
+    "task/storage_dtype/kv": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/output": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/parameters": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/scores": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/weights": {
+      "capacity": 15,
+      "value": "int4"
+    },
+    "task/tensor_shapes/key:k": 15,
+    "task/tensor_shapes/key:m": 15,
+    "task/tensor_shapes/key:n": 15,
+    "task/tp_slice/key:tensor_parallel": 15,
+    "task/tp_slice/key:tensor_parallel_rank": 20
+  },
+  {
+    "@fingerprint_capacity": 64,
+    "@hardware_fingerprint_capacity": 71,
+    "@retained_plan_bytes": 26242,
+    "summary/activity_units": {
+      "capacity": 197,
+      "value": "physical work/bytes/ops are epoch totals; each service_curves entry defines separate input/output credit units; credit_curve overrides affine delta*p; final output released only at compute terminal"
+    },
+    "summary/activity_work_semantics": {
+      "capacity": 159,
+      "value": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1"
+    },
+    "summary/alone_estimate_status": {
+      "capacity": 15,
+      "value": "ok_assumed"
+    },
+    "summary/candidate_estimate_source": {
+      "capacity": 37,
+      "value": "estimate_alone(shared_runtime_engine)"
+    },
+    "summary/dataflow_id": {
+      "capacity": 15,
+      "value": "none"
+    },
+    "summary/evidence_flags/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/evidence_flags/1": {
+      "capacity": 23,
+      "value": "hardware_source_derived"
+    },
+    "summary/evidence_flags/@capacity": 2,
+    "summary/fixed_region_overheads/key:applied_ready_delay_ns": 22,
+    "summary/fixed_region_overheads/key:first_hbm_epoch": 15,
+    "summary/fixed_region_overheads/key:hbm_instances": 15,
+    "summary/fixed_region_overheads/key:instances": 15,
+    "summary/fixed_region_overheads/key:launch_ns_per_instance": 22,
+    "summary/fixed_region_overheads/key:memory_setup_ns_per_hbm_instance": 32,
+    "summary/fixed_region_overheads/key:model": 15,
+    "summary/fixed_region_overheads/key:modeled_instances": 17,
+    "summary/fixed_region_overheads/key:quantization": 15,
+    "summary/fixed_region_overheads/key:quantization_error_ns": 21,
+    "summary/fixed_region_overheads/key:ready_gate_description_count": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_ceil": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_whole": 29,
+    "summary/fixed_region_overheads/key:scope": 15,
+    "summary/fixed_region_overheads/key:timing_status": 15,
+    "summary/fixed_region_overheads/model": {
+      "capacity": 25,
+      "value": "region_ready_overheads_v1"
+    },
+    "summary/fixed_region_overheads/quantization": {
+      "capacity": 52,
+      "value": "ceil_combined_region_delay_once_to_public_integer_ns"
+    },
+    "summary/fixed_region_overheads/scope": {
+      "capacity": 54,
+      "value": "one_complete_source_region_not_internal_kernel_or_tile"
+    },
+    "summary/fixed_region_overheads/timing_status": {
+      "capacity": 29,
+      "value": "modeled_integer_ns_ready_gate"
+    },
+    "summary/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/key:active_cores": 15,
+    "summary/key:activity_units": 15,
+    "summary/key:activity_work_semantics": 23,
+    "summary/key:alone_estimate_status": 21,
+    "summary/key:candidate_count": 15,
+    "summary/key:candidate_estimate_source": 25,
+    "summary/key:consumption_wave_count": 22,
+    "summary/key:conversion_elements": 19,
+    "summary/key:dataflow_id": 15,
+    "summary/key:estimated_latency_ns": 20,
+    "summary/key:evidence_flags": 15,
+    "summary/key:executed_int4_ops": 17,
+    "summary/key:executed_matrix_ops": 19,
+    "summary/key:executed_score_slots": 20,
+    "summary/key:fixed_region_overheads": 22,
+    "summary/key:granularity_validation": 22,
+    "summary/key:hbm_read_bytes_total": 20,
+    "summary/key:hbm_workspace_peak_bytes": 24,
+    "summary/key:hbm_write_bytes_total": 21,
+    "summary/key:int4_input_bytes": 16,
+    "summary/key:kind": 15,
+    "summary/key:local_bus_bytes": 15,
+    "summary/key:logical_tensor_bytes": 20,
+    "summary/key:mapping_assumptions": 19,
+    "summary/key:norm_row_ledger": 15,
+    "summary/key:output_round_count": 18,
+    "summary/key:physical_transfer_bytes": 23,
+    "summary/key:probability_bytes": 17,
+    "summary/key:recompute_matrix_ops": 20,
+    "summary/key:recomputed_matrix_ops": 21,
+    "summary/key:routing_evidence": 16,
+    "summary/key:score_bytes": 15,
+    "summary/key:selected_template": 17,
+    "summary/key:selection_rule": 15,
+    "summary/key:service_curves": 15,
+    "summary/key:service_description_count": 25,
+    "summary/key:service_model_revision": 22,
+    "summary/key:source_matrix_ops": 17,
+    "summary/key:source_vec_ops": 15,
+    "summary/key:sram_capacity_bytes_per_core": 28,
+    "summary/key:sram_peak_bytes_per_core": 24,
+    "summary/key:sram_read_bytes": 15,
+    "summary/key:sram_write_bytes": 16,
+    "summary/key:template_id": 15,
+    "summary/key:tf": 15,
+    "summary/key:th": 15,
+    "summary/key:tk": 15,
+    "summary/key:tm": 15,
+    "summary/key:tn": 15,
+    "summary/key:valid_score_pairs": 17,
+    "summary/key:vec_equivalent_ops": 18,
+    "summary/key:wave_count": 15,
+    "summary/kind": {
+      "capacity": 15,
+      "value": "norm"
+    },
+    "summary/mapping_assumptions/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/mapping_assumptions/1": {
+      "capacity": 35,
+      "value": "fixed_equivalent_operation_template"
+    },
+    "summary/mapping_assumptions/2": {
+      "capacity": 77,
+      "value": "complete_row_resident_statistics_then_apply_with_per_core_parameter_ownership"
+    },
+    "summary/mapping_assumptions/@capacity": 3,
+    "summary/norm_row_ledger/key:input_hbm_passes": 16,
+    "summary/norm_row_ledger/key:input_sram_passes": 17,
+    "summary/norm_row_ledger/key:mapping": 15,
+    "summary/norm_row_ledger/key:metadata_bytes_per_core": 23,
+    "summary/norm_row_ledger/key:multi_pass_hbm_rows": 19,
+    "summary/norm_row_ledger/key:parameter_buffer_bytes_per_core": 31,
+    "summary/norm_row_ledger/key:parameter_bytes_per_load": 24,
+    "summary/norm_row_ledger/key:parameter_cache": 15,
+    "summary/norm_row_ledger/key:parameter_hbm_loads": 19,
+    "summary/norm_row_ledger/key:parameter_vectors": 17,
+    "summary/norm_row_ledger/key:reduction_state_bytes_per_core": 30,
+    "summary/norm_row_ledger/key:row_input_bytes": 15,
+    "summary/norm_row_ledger/key:row_output_bytes": 16,
+    "summary/norm_row_ledger/key:sram_peak_bytes_per_core": 24,
+    "summary/norm_row_ledger/mapping": {
+      "capacity": 38,
+      "value": "invocation_local_row_id_mod_core_count"
+    },
+    "summary/norm_row_ledger/multi_pass_hbm_rows": {
+      "capacity": 15,
+      "value": "not_implemented"
+    },
+    "summary/norm_row_ledger/parameter_cache": {
+      "capacity": 42,
+      "value": "complete_fp32_gamma_beta_per_consumer_core"
+    },
+    "summary/routing_evidence/key:profile": 15,
+    "summary/routing_evidence/key:status": 15,
+    "summary/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/selected_template": {
+      "capacity": 30,
+      "value": "norm_row_resident_v1"
+    },
+    "summary/selection_rule": {
+      "capacity": 115,
+      "value": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th"
+    },
+    "summary/service_curves/0/first_output_release": {
+      "capacity": 51,
+      "value": "first_row_compute_terminal_after_complete_row_input"
+    },
+    "summary/service_curves/0/input_unit": {
+      "capacity": 42,
+      "value": "one_complete_input_row_at_most_loaded_core"
+    },
+    "summary/service_curves/0/key:allocated_input_slots_per_core": 30,
+    "summary/service_curves/0/key:allocated_output_slots_per_core": 31,
+    "summary/service_curves/0/key:description_budget": 18,
+    "summary/service_curves/0/key:description_count": 17,
+    "summary/service_curves/0/key:epoch_begin": 15,
+    "summary/service_curves/0/key:epoch_count": 15,
+    "summary/service_curves/0/key:first_output_activity_id": 24,
+    "summary/service_curves/0/key:first_output_epoch": 18,
+    "summary/service_curves/0/key:first_output_release": 20,
+    "summary/service_curves/0/key:input_unit": 15,
+    "summary/service_curves/0/key:input_units": 15,
+    "summary/service_curves/0/key:model": 15,
+    "summary/service_curves/0/key:output_unit": 15,
+    "summary/service_curves/0/key:output_units": 15,
+    "summary/service_curves/0/key:readiness_approximation": 23,
+    "summary/service_curves/0/key:region_ready_gate_descriptions": 30,
+    "summary/service_curves/0/key:reserved_last_output_slots_per_core": 35,
+    "summary/service_curves/0/model": {
+      "capacity": 34,
+      "value": "analytical_cumulative_norm_rows_v1"
+    },
+    "summary/service_curves/0/output_unit": {
+      "capacity": 46,
+      "value": "one_visible_normalized_row_at_most_loaded_core"
+    },
+    "summary/service_curves/0/readiness_approximation": {
+      "capacity": 48,
+      "value": "remaining_rows_affine_with_withheld_final_output"
+    },
+    "summary/service_curves/@capacity": 1,
+    "summary/service_model_revision": {
+      "capacity": 34,
+      "value": "analytical_cumulative_norm_rows_v1"
+    },
+    "summary/template_id": {
+      "capacity": 20,
+      "value": "norm_row_resident_v1"
+    },
+    "task/execution_profile": {
+      "capacity": 31,
+      "value": "int4_matrix_vec_fp32_assumed_v1"
+    },
+    "task/fusion_policy": {
+      "capacity": 15,
+      "value": "auto"
+    },
+    "task/key:execution_profile": 17,
+    "task/key:fusion_policy": 15,
+    "task/key:kv_identity": 15,
+    "task/key:layer_instances": 15,
+    "task/key:op_kind": 15,
+    "task/key:phase": 15,
+    "task/key:schema": 15,
+    "task/key:spans": 15,
+    "task/key:storage_dtype": 15,
+    "task/key:tensor_shapes": 15,
+    "task/key:tp_slice": 15,
+    "task/key:weight_passes": 15,
+    "task/kv_identity": {
+      "capacity": 15,
+      "value": "local"
+    },
+    "task/op_kind": {
+      "capacity": 15,
+      "value": "norm"
+    },
+    "task/phase": {
+      "capacity": 15,
+      "value": "prefill"
+    },
+    "task/schema": {
+      "capacity": 18,
+      "value": "coarse_die_task_v2"
+    },
+    "task/spans/0/key:count": 15,
+    "task/spans/0/key:kv_start_pos": 15,
+    "task/spans/0/key:kv_start_stride": 15,
+    "task/spans/0/key:kv_stride": 15,
+    "task/spans/0/key:kv_tokens": 15,
+    "task/spans/0/key:q_start_pos": 15,
+    "task/spans/0/key:q_start_stride": 15,
+    "task/spans/0/key:q_tokens": 15,
+    "task/spans/@capacity": 1,
+    "task/storage_dtype/accumulator": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/activations": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/key:accumulator": 15,
+    "task/storage_dtype/key:activations": 15,
+    "task/storage_dtype/key:kv": 15,
+    "task/storage_dtype/key:output": 15,
+    "task/storage_dtype/key:parameters": 15,
+    "task/storage_dtype/key:scores": 15,
+    "task/storage_dtype/key:weights": 15,
+    "task/storage_dtype/kv": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/output": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/parameters": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/scores": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/weights": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/tensor_shapes/key:ffn": 15,
+    "task/tensor_shapes/key:head_dim": 15,
+    "task/tensor_shapes/key:hidden": 15,
+    "task/tensor_shapes/key:kv_heads": 15,
+    "task/tensor_shapes/key:m": 15,
+    "task/tensor_shapes/key:mlp_variant": 15,
+    "task/tensor_shapes/key:norm_type": 15,
+    "task/tensor_shapes/key:position_encoding": 17,
+    "task/tensor_shapes/key:q_heads": 15,
+    "task/tensor_shapes/key:vocab": 15,
+    "task/tensor_shapes/mlp_variant": {
+      "capacity": 15,
+      "value": "swiglu"
+    },
+    "task/tensor_shapes/norm_type": {
+      "capacity": 15,
+      "value": "rmsnorm"
+    },
+    "task/tensor_shapes/position_encoding": {
+      "capacity": 15,
+      "value": "rope"
+    },
+    "task/tp_slice/key:ffn_local": 15,
+    "task/tp_slice/key:kv_heads_local": 15,
+    "task/tp_slice/key:q_heads_local": 15,
+    "task/tp_slice/key:tensor_parallel": 15,
+    "task/tp_slice/key:tensor_parallel_rank": 20,
+    "task/tp_slice/key:vocab_local": 15
+  },
+  {
+    "@fingerprint_capacity": 64,
+    "@hardware_fingerprint_capacity": 71,
+    "@retained_plan_bytes": 34953,
+    "summary/activity_units": {
+      "capacity": 132,
+      "value": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]"
+    },
+    "summary/activity_work_semantics": {
+      "capacity": 159,
+      "value": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1"
+    },
+    "summary/alone_estimate_status": {
+      "capacity": 15,
+      "value": "ok_assumed"
+    },
+    "summary/candidate_estimate_source": {
+      "capacity": 37,
+      "value": "estimate_alone(shared_runtime_engine)"
+    },
+    "summary/dataflow_id": {
+      "capacity": 18,
+      "value": "weight_resident_v2"
+    },
+    "summary/evidence_flags/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/evidence_flags/1": {
+      "capacity": 23,
+      "value": "hardware_source_derived"
+    },
+    "summary/evidence_flags/@capacity": 2,
+    "summary/fixed_region_overheads/key:applied_ready_delay_ns": 22,
+    "summary/fixed_region_overheads/key:first_hbm_epoch": 15,
+    "summary/fixed_region_overheads/key:hbm_instances": 15,
+    "summary/fixed_region_overheads/key:instances": 15,
+    "summary/fixed_region_overheads/key:launch_ns_per_instance": 22,
+    "summary/fixed_region_overheads/key:memory_setup_ns_per_hbm_instance": 32,
+    "summary/fixed_region_overheads/key:model": 15,
+    "summary/fixed_region_overheads/key:modeled_instances": 17,
+    "summary/fixed_region_overheads/key:quantization": 15,
+    "summary/fixed_region_overheads/key:quantization_error_ns": 21,
+    "summary/fixed_region_overheads/key:ready_gate_description_count": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_ceil": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_whole": 29,
+    "summary/fixed_region_overheads/key:scope": 15,
+    "summary/fixed_region_overheads/key:timing_status": 15,
+    "summary/fixed_region_overheads/model": {
+      "capacity": 25,
+      "value": "region_ready_overheads_v1"
+    },
+    "summary/fixed_region_overheads/quantization": {
+      "capacity": 52,
+      "value": "ceil_combined_region_delay_once_to_public_integer_ns"
+    },
+    "summary/fixed_region_overheads/scope": {
+      "capacity": 54,
+      "value": "one_complete_source_region_not_internal_kernel_or_tile"
+    },
+    "summary/fixed_region_overheads/timing_status": {
+      "capacity": 29,
+      "value": "modeled_integer_ns_ready_gate"
+    },
+    "summary/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/key:active_cores": 15,
+    "summary/key:activity_units": 15,
+    "summary/key:activity_work_semantics": 23,
+    "summary/key:alone_estimate_status": 21,
+    "summary/key:candidate_count": 15,
+    "summary/key:candidate_estimate_source": 25,
+    "summary/key:consumption_wave_count": 22,
+    "summary/key:conversion_elements": 19,
+    "summary/key:dataflow_id": 15,
+    "summary/key:estimated_latency_ns": 20,
+    "summary/key:evidence_flags": 15,
+    "summary/key:executed_int4_ops": 17,
+    "summary/key:executed_matrix_ops": 19,
+    "summary/key:executed_score_slots": 20,
+    "summary/key:fixed_region_overheads": 22,
+    "summary/key:granularity_validation": 22,
+    "summary/key:hbm_read_bytes_total": 20,
+    "summary/key:hbm_workspace_peak_bytes": 24,
+    "summary/key:hbm_write_bytes_total": 21,
+    "summary/key:int4_input_bytes": 16,
+    "summary/key:kind": 15,
+    "summary/key:local_bus_bytes": 15,
+    "summary/key:logical_tensor_bytes": 20,
+    "summary/key:mapping_assumptions": 19,
+    "summary/key:output_round_count": 18,
+    "summary/key:physical_transfer_bytes": 23,
+    "summary/key:position_encoding": 17,
+    "summary/key:primitive_kernels": 17,
+    "summary/key:probability_bytes": 17,
+    "summary/key:recompute_matrix_ops": 20,
+    "summary/key:recomputed_matrix_ops": 21,
+    "summary/key:rope_eqops": 15,
+    "summary/key:routing_evidence": 16,
+    "summary/key:score_bytes": 15,
+    "summary/key:selected_template": 17,
+    "summary/key:selection_rule": 15,
+    "summary/key:service_description_count": 25,
+    "summary/key:source_matrix_ops": 17,
+    "summary/key:source_vec_ops": 15,
+    "summary/key:sram_capacity_bytes_per_core": 28,
+    "summary/key:sram_peak_bytes_per_core": 24,
+    "summary/key:sram_read_bytes": 15,
+    "summary/key:sram_write_bytes": 16,
+    "summary/key:template_id": 15,
+    "summary/key:tf": 15,
+    "summary/key:th": 15,
+    "summary/key:tk": 15,
+    "summary/key:tm": 15,
+    "summary/key:tn": 15,
+    "summary/key:valid_score_pairs": 17,
+    "summary/key:vec_equivalent_ops": 18,
+    "summary/key:wave_count": 15,
+    "summary/kind": {
+      "capacity": 15,
+      "value": "qkv_rope"
+    },
+    "summary/mapping_assumptions/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/mapping_assumptions/1": {
+      "capacity": 23,
+      "value": "bounded_tile_candidates"
+    },
+    "summary/mapping_assumptions/2": {
+      "capacity": 32,
+      "value": "exact_per_tile_INT4_tail_packing"
+    },
+    "summary/mapping_assumptions/@capacity": 3,
+    "summary/position_encoding": {
+      "capacity": 15,
+      "value": "rope"
+    },
+    "summary/primitive_kernels/0/activity_units": {
+      "capacity": 132,
+      "value": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]"
+    },
+    "summary/primitive_kernels/0/dataflow_id": {
+      "capacity": 18,
+      "value": "weight_resident_v2"
+    },
+    "summary/primitive_kernels/0/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/primitive_kernels/0/key:active_cores": 15,
+    "summary/primitive_kernels/0/key:activity_units": 15,
+    "summary/primitive_kernels/0/key:consumption_wave_count": 22,
+    "summary/primitive_kernels/0/key:conversion_elements": 19,
+    "summary/primitive_kernels/0/key:dataflow_id": 15,
+    "summary/primitive_kernels/0/key:executed_int4_ops": 17,
+    "summary/primitive_kernels/0/key:executed_matrix_ops": 19,
+    "summary/primitive_kernels/0/key:executed_score_slots": 20,
+    "summary/primitive_kernels/0/key:granularity_validation": 22,
+    "summary/primitive_kernels/0/key:hbm_read_bytes_total": 20,
+    "summary/primitive_kernels/0/key:hbm_workspace_peak_bytes": 24,
+    "summary/primitive_kernels/0/key:hbm_write_bytes_total": 21,
+    "summary/primitive_kernels/0/key:int4_input_bytes": 16,
+    "summary/primitive_kernels/0/key:kind": 15,
+    "summary/primitive_kernels/0/key:local_bus_bytes": 15,
+    "summary/primitive_kernels/0/key:logical_tensor_bytes": 20,
+    "summary/primitive_kernels/0/key:mapping_assumptions": 19,
+    "summary/primitive_kernels/0/key:output_round_count": 18,
+    "summary/primitive_kernels/0/key:physical_transfer_bytes": 23,
+    "summary/primitive_kernels/0/key:probability_bytes": 17,
+    "summary/primitive_kernels/0/key:recompute_matrix_ops": 20,
+    "summary/primitive_kernels/0/key:recomputed_matrix_ops": 21,
+    "summary/primitive_kernels/0/key:routing_evidence": 16,
+    "summary/primitive_kernels/0/key:score_bytes": 15,
+    "summary/primitive_kernels/0/key:source_matrix_ops": 17,
+    "summary/primitive_kernels/0/key:source_vec_ops": 15,
+    "summary/primitive_kernels/0/key:sram_capacity_bytes_per_core": 28,
+    "summary/primitive_kernels/0/key:sram_peak_bytes_per_core": 24,
+    "summary/primitive_kernels/0/key:sram_read_bytes": 15,
+    "summary/primitive_kernels/0/key:sram_write_bytes": 16,
+    "summary/primitive_kernels/0/key:template_id": 15,
+    "summary/primitive_kernels/0/key:tf": 15,
+    "summary/primitive_kernels/0/key:th": 15,
+    "summary/primitive_kernels/0/key:tk": 15,
+    "summary/primitive_kernels/0/key:tm": 15,
+    "summary/primitive_kernels/0/key:tn": 15,
+    "summary/primitive_kernels/0/key:valid_score_pairs": 17,
+    "summary/primitive_kernels/0/key:vec_equivalent_ops": 18,
+    "summary/primitive_kernels/0/key:wave_count": 15,
+    "summary/primitive_kernels/0/kind": {
+      "capacity": 15,
+      "value": "gemm"
+    },
+    "summary/primitive_kernels/0/mapping_assumptions/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/primitive_kernels/0/mapping_assumptions/1": {
+      "capacity": 23,
+      "value": "bounded_tile_candidates"
+    },
+    "summary/primitive_kernels/0/mapping_assumptions/2": {
+      "capacity": 32,
+      "value": "exact_per_tile_INT4_tail_packing"
+    },
+    "summary/primitive_kernels/0/mapping_assumptions/@capacity": 3,
+    "summary/primitive_kernels/0/routing_evidence/key:profile": 15,
+    "summary/primitive_kernels/0/routing_evidence/key:status": 15,
+    "summary/primitive_kernels/0/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/primitive_kernels/0/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/primitive_kernels/0/template_id": {
+      "capacity": 23,
+      "value": "gemm_weight_resident_v2"
+    },
+    "summary/primitive_kernels/1/activity_units": {
+      "capacity": 132,
+      "value": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]"
+    },
+    "summary/primitive_kernels/1/dataflow_id": {
+      "capacity": 15,
+      "value": "none"
+    },
+    "summary/primitive_kernels/1/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/primitive_kernels/1/key:active_cores": 15,
+    "summary/primitive_kernels/1/key:activity_units": 15,
+    "summary/primitive_kernels/1/key:consumption_wave_count": 22,
+    "summary/primitive_kernels/1/key:conversion_elements": 19,
+    "summary/primitive_kernels/1/key:dataflow_id": 15,
+    "summary/primitive_kernels/1/key:executed_int4_ops": 17,
+    "summary/primitive_kernels/1/key:executed_matrix_ops": 19,
+    "summary/primitive_kernels/1/key:executed_score_slots": 20,
+    "summary/primitive_kernels/1/key:granularity_validation": 22,
+    "summary/primitive_kernels/1/key:hbm_read_bytes_total": 20,
+    "summary/primitive_kernels/1/key:hbm_workspace_peak_bytes": 24,
+    "summary/primitive_kernels/1/key:hbm_write_bytes_total": 21,
+    "summary/primitive_kernels/1/key:int4_input_bytes": 16,
+    "summary/primitive_kernels/1/key:kind": 15,
+    "summary/primitive_kernels/1/key:local_bus_bytes": 15,
+    "summary/primitive_kernels/1/key:logical_tensor_bytes": 20,
+    "summary/primitive_kernels/1/key:mapping_assumptions": 19,
+    "summary/primitive_kernels/1/key:output_round_count": 18,
+    "summary/primitive_kernels/1/key:physical_transfer_bytes": 23,
+    "summary/primitive_kernels/1/key:probability_bytes": 17,
+    "summary/primitive_kernels/1/key:recompute_matrix_ops": 20,
+    "summary/primitive_kernels/1/key:recomputed_matrix_ops": 21,
+    "summary/primitive_kernels/1/key:routing_evidence": 16,
+    "summary/primitive_kernels/1/key:score_bytes": 15,
+    "summary/primitive_kernels/1/key:source_matrix_ops": 17,
+    "summary/primitive_kernels/1/key:source_vec_ops": 15,
+    "summary/primitive_kernels/1/key:sram_capacity_bytes_per_core": 28,
+    "summary/primitive_kernels/1/key:sram_peak_bytes_per_core": 24,
+    "summary/primitive_kernels/1/key:sram_read_bytes": 15,
+    "summary/primitive_kernels/1/key:sram_write_bytes": 16,
+    "summary/primitive_kernels/1/key:template_id": 15,
+    "summary/primitive_kernels/1/key:tf": 15,
+    "summary/primitive_kernels/1/key:th": 15,
+    "summary/primitive_kernels/1/key:tk": 15,
+    "summary/primitive_kernels/1/key:tm": 15,
+    "summary/primitive_kernels/1/key:tn": 15,
+    "summary/primitive_kernels/1/key:valid_score_pairs": 17,
+    "summary/primitive_kernels/1/key:vec_equivalent_ops": 18,
+    "summary/primitive_kernels/1/key:wave_count": 15,
+    "summary/primitive_kernels/1/kind": {
+      "capacity": 15,
+      "value": "qkv_rope"
+    },
+    "summary/primitive_kernels/1/mapping_assumptions/@capacity": 0,
+    "summary/primitive_kernels/1/routing_evidence/key:profile": 15,
+    "summary/primitive_kernels/1/routing_evidence/key:status": 15,
+    "summary/primitive_kernels/1/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/primitive_kernels/1/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/primitive_kernels/1/template_id": {
+      "capacity": 20,
+      "value": "rope_materialized_v2"
+    },
+    "summary/primitive_kernels/@capacity": 2,
+    "summary/routing_evidence/key:profile": 15,
+    "summary/routing_evidence/key:status": 15,
+    "summary/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/selected_template": {
+      "capacity": 30,
+      "value": "qkv_materialized_rope_v2"
+    },
+    "summary/selection_rule": {
+      "capacity": 115,
+      "value": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th"
+    },
+    "summary/template_id": {
+      "capacity": 24,
+      "value": "qkv_materialized_rope_v2"
+    },
+    "task/execution_profile": {
+      "capacity": 31,
+      "value": "int4_matrix_vec_fp32_assumed_v1"
+    },
+    "task/fusion_policy": {
+      "capacity": 15,
+      "value": "auto"
+    },
+    "task/key:execution_profile": 17,
+    "task/key:fusion_policy": 15,
+    "task/key:kv_identity": 15,
+    "task/key:layer_instances": 15,
+    "task/key:op_kind": 15,
+    "task/key:phase": 15,
+    "task/key:schema": 15,
+    "task/key:spans": 15,
+    "task/key:storage_dtype": 15,
+    "task/key:tensor_shapes": 15,
+    "task/key:tp_slice": 15,
+    "task/key:weight_passes": 15,
+    "task/kv_identity": {
+      "capacity": 15,
+      "value": "local"
+    },
+    "task/op_kind": {
+      "capacity": 15,
+      "value": "qkv_rope"
+    },
+    "task/phase": {
+      "capacity": 15,
+      "value": "prefill"
+    },
+    "task/schema": {
+      "capacity": 18,
+      "value": "coarse_die_task_v2"
+    },
+    "task/spans/0/key:count": 15,
+    "task/spans/0/key:kv_start_pos": 15,
+    "task/spans/0/key:kv_start_stride": 15,
+    "task/spans/0/key:kv_stride": 15,
+    "task/spans/0/key:kv_tokens": 15,
+    "task/spans/0/key:q_start_pos": 15,
+    "task/spans/0/key:q_start_stride": 15,
+    "task/spans/0/key:q_tokens": 15,
+    "task/spans/@capacity": 1,
+    "task/storage_dtype/accumulator": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/activations": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/key:accumulator": 15,
+    "task/storage_dtype/key:activations": 15,
+    "task/storage_dtype/key:kv": 15,
+    "task/storage_dtype/key:output": 15,
+    "task/storage_dtype/key:parameters": 15,
+    "task/storage_dtype/key:scores": 15,
+    "task/storage_dtype/key:weights": 15,
+    "task/storage_dtype/kv": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/output": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/parameters": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/scores": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/weights": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/tensor_shapes/key:ffn": 15,
+    "task/tensor_shapes/key:head_dim": 15,
+    "task/tensor_shapes/key:hidden": 15,
+    "task/tensor_shapes/key:kv_heads": 15,
+    "task/tensor_shapes/key:m": 15,
+    "task/tensor_shapes/key:mlp_variant": 15,
+    "task/tensor_shapes/key:norm_type": 15,
+    "task/tensor_shapes/key:position_encoding": 17,
+    "task/tensor_shapes/key:q_heads": 15,
+    "task/tensor_shapes/key:vocab": 15,
+    "task/tensor_shapes/mlp_variant": {
+      "capacity": 15,
+      "value": "swiglu"
+    },
+    "task/tensor_shapes/norm_type": {
+      "capacity": 15,
+      "value": "rmsnorm"
+    },
+    "task/tensor_shapes/position_encoding": {
+      "capacity": 15,
+      "value": "rope"
+    },
+    "task/tp_slice/key:ffn_local": 15,
+    "task/tp_slice/key:kv_heads_local": 15,
+    "task/tp_slice/key:q_heads_local": 15,
+    "task/tp_slice/key:tensor_parallel": 15,
+    "task/tp_slice/key:tensor_parallel_rank": 20,
+    "task/tp_slice/key:vocab_local": 15
+  },
+  {
+    "@fingerprint_capacity": 64,
+    "@hardware_fingerprint_capacity": 71,
+    "@retained_plan_bytes": 20361,
+    "summary/activity_units": {
+      "capacity": 132,
+      "value": "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]"
+    },
+    "summary/activity_work_semantics": {
+      "capacity": 159,
+      "value": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1"
+    },
+    "summary/alone_estimate_status": {
+      "capacity": 15,
+      "value": "ok_assumed"
+    },
+    "summary/candidate_estimate_source": {
+      "capacity": 37,
+      "value": "estimate_alone(shared_runtime_engine)"
+    },
+    "summary/dataflow_id": {
+      "capacity": 21,
+      "value": "fused_q_head_shard_v2"
+    },
+    "summary/evidence_flags/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/evidence_flags/1": {
+      "capacity": 23,
+      "value": "hardware_source_derived"
+    },
+    "summary/evidence_flags/@capacity": 2,
+    "summary/fixed_region_overheads/key:applied_ready_delay_ns": 22,
+    "summary/fixed_region_overheads/key:first_hbm_epoch": 15,
+    "summary/fixed_region_overheads/key:hbm_instances": 15,
+    "summary/fixed_region_overheads/key:instances": 15,
+    "summary/fixed_region_overheads/key:launch_ns_per_instance": 22,
+    "summary/fixed_region_overheads/key:memory_setup_ns_per_hbm_instance": 32,
+    "summary/fixed_region_overheads/key:model": 15,
+    "summary/fixed_region_overheads/key:modeled_instances": 17,
+    "summary/fixed_region_overheads/key:quantization": 15,
+    "summary/fixed_region_overheads/key:quantization_error_ns": 21,
+    "summary/fixed_region_overheads/key:ready_gate_description_count": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_ceil": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_whole": 29,
+    "summary/fixed_region_overheads/key:scope": 15,
+    "summary/fixed_region_overheads/key:timing_status": 15,
+    "summary/fixed_region_overheads/model": {
+      "capacity": 25,
+      "value": "region_ready_overheads_v1"
+    },
+    "summary/fixed_region_overheads/quantization": {
+      "capacity": 52,
+      "value": "ceil_combined_region_delay_once_to_public_integer_ns"
+    },
+    "summary/fixed_region_overheads/scope": {
+      "capacity": 54,
+      "value": "one_complete_source_region_not_internal_kernel_or_tile"
+    },
+    "summary/fixed_region_overheads/timing_status": {
+      "capacity": 29,
+      "value": "modeled_integer_ns_ready_gate"
+    },
+    "summary/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/key:active_cores": 15,
+    "summary/key:activity_units": 15,
+    "summary/key:activity_work_semantics": 23,
+    "summary/key:alone_estimate_status": 21,
+    "summary/key:candidate_count": 15,
+    "summary/key:candidate_estimate_source": 25,
+    "summary/key:consumption_wave_count": 22,
+    "summary/key:conversion_elements": 19,
+    "summary/key:dataflow_id": 15,
+    "summary/key:estimated_latency_ns": 20,
+    "summary/key:evidence_flags": 15,
+    "summary/key:executed_int4_ops": 17,
+    "summary/key:executed_matrix_ops": 19,
+    "summary/key:executed_score_slots": 20,
+    "summary/key:fixed_region_overheads": 22,
+    "summary/key:granularity_validation": 22,
+    "summary/key:hbm_read_bytes_total": 20,
+    "summary/key:hbm_workspace_peak_bytes": 24,
+    "summary/key:hbm_write_bytes_total": 21,
+    "summary/key:int4_input_bytes": 16,
+    "summary/key:kind": 15,
+    "summary/key:local_bus_bytes": 15,
+    "summary/key:logical_tensor_bytes": 20,
+    "summary/key:mapping_assumptions": 19,
+    "summary/key:output_round_count": 18,
+    "summary/key:physical_transfer_bytes": 23,
+    "summary/key:probability_bytes": 17,
+    "summary/key:recompute_matrix_ops": 20,
+    "summary/key:recomputed_matrix_ops": 21,
+    "summary/key:routing_evidence": 16,
+    "summary/key:score_bytes": 15,
+    "summary/key:selected_template": 17,
+    "summary/key:selection_rule": 15,
+    "summary/key:service_description_count": 25,
+    "summary/key:source_matrix_ops": 17,
+    "summary/key:source_vec_ops": 15,
+    "summary/key:sram_capacity_bytes_per_core": 28,
+    "summary/key:sram_peak_bytes_per_core": 24,
+    "summary/key:sram_read_bytes": 15,
+    "summary/key:sram_write_bytes": 16,
+    "summary/key:template_id": 15,
+    "summary/key:tf": 15,
+    "summary/key:th": 15,
+    "summary/key:tk": 15,
+    "summary/key:tm": 15,
+    "summary/key:tn": 15,
+    "summary/key:valid_score_pairs": 17,
+    "summary/key:vec_equivalent_ops": 18,
+    "summary/key:wave_count": 15,
+    "summary/kind": {
+      "capacity": 30,
+      "value": "attention_region"
+    },
+    "summary/mapping_assumptions/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/mapping_assumptions/1": {
+      "capacity": 16,
+      "value": "GQA_head_mapping"
+    },
+    "summary/mapping_assumptions/2": {
+      "capacity": 29,
+      "value": "absolute_position_causal_mask"
+    },
+    "summary/mapping_assumptions/3": {
+      "capacity": 30,
+      "value": "not_run_granularity_validation"
+    },
+    "summary/mapping_assumptions/@capacity": 4,
+    "summary/routing_evidence/key:profile": 15,
+    "summary/routing_evidence/key:status": 15,
+    "summary/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/selected_template": {
+      "capacity": 30,
+      "value": "fused_q_head_shard_v2"
+    },
+    "summary/selection_rule": {
+      "capacity": 115,
+      "value": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th"
+    },
+    "summary/template_id": {
+      "capacity": 21,
+      "value": "fused_q_head_shard_v2"
+    },
+    "task/execution_profile": {
+      "capacity": 31,
+      "value": "int4_matrix_vec_fp32_assumed_v1"
+    },
+    "task/fusion_policy": {
+      "capacity": 15,
+      "value": "auto"
+    },
+    "task/key:execution_profile": 17,
+    "task/key:fusion_policy": 15,
+    "task/key:kv_identity": 15,
+    "task/key:layer_instances": 15,
+    "task/key:op_kind": 15,
+    "task/key:phase": 15,
+    "task/key:schema": 15,
+    "task/key:spans": 15,
+    "task/key:storage_dtype": 15,
+    "task/key:tensor_shapes": 15,
+    "task/key:tp_slice": 15,
+    "task/key:weight_passes": 15,
+    "task/kv_identity": {
+      "capacity": 15,
+      "value": "local"
+    },
+    "task/op_kind": {
+      "capacity": 16,
+      "value": "attention_region"
+    },
+    "task/phase": {
+      "capacity": 15,
+      "value": "prefill"
+    },
+    "task/schema": {
+      "capacity": 18,
+      "value": "coarse_die_task_v2"
+    },
+    "task/spans/0/key:count": 15,
+    "task/spans/0/key:kv_start_pos": 15,
+    "task/spans/0/key:kv_start_stride": 15,
+    "task/spans/0/key:kv_stride": 15,
+    "task/spans/0/key:kv_tokens": 15,
+    "task/spans/0/key:q_start_pos": 15,
+    "task/spans/0/key:q_start_stride": 15,
+    "task/spans/0/key:q_tokens": 15,
+    "task/spans/@capacity": 1,
+    "task/storage_dtype/accumulator": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/activations": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/key:accumulator": 15,
+    "task/storage_dtype/key:activations": 15,
+    "task/storage_dtype/key:kv": 15,
+    "task/storage_dtype/key:output": 15,
+    "task/storage_dtype/key:parameters": 15,
+    "task/storage_dtype/key:scores": 15,
+    "task/storage_dtype/key:weights": 15,
+    "task/storage_dtype/kv": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/output": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/parameters": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/scores": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/weights": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/tensor_shapes/key:ffn": 15,
+    "task/tensor_shapes/key:head_dim": 15,
+    "task/tensor_shapes/key:hidden": 15,
+    "task/tensor_shapes/key:kv_heads": 15,
+    "task/tensor_shapes/key:m": 15,
+    "task/tensor_shapes/key:mlp_variant": 15,
+    "task/tensor_shapes/key:norm_type": 15,
+    "task/tensor_shapes/key:position_encoding": 17,
+    "task/tensor_shapes/key:q_heads": 15,
+    "task/tensor_shapes/key:vocab": 15,
+    "task/tensor_shapes/mlp_variant": {
+      "capacity": 15,
+      "value": "swiglu"
+    },
+    "task/tensor_shapes/norm_type": {
+      "capacity": 15,
+      "value": "rmsnorm"
+    },
+    "task/tensor_shapes/position_encoding": {
+      "capacity": 15,
+      "value": "rope"
+    },
+    "task/tp_slice/key:ffn_local": 15,
+    "task/tp_slice/key:kv_heads_local": 15,
+    "task/tp_slice/key:q_heads_local": 15,
+    "task/tp_slice/key:tensor_parallel": 15,
+    "task/tp_slice/key:tensor_parallel_rank": 20,
+    "task/tp_slice/key:vocab_local": 15
+  },
+  {
+    "@fingerprint_capacity": 64,
+    "@hardware_fingerprint_capacity": 71,
+    "@retained_plan_bytes": 26343,
+    "summary/activity_units": {
+      "capacity": 197,
+      "value": "physical work/bytes/ops are epoch totals; each service_curves entry defines separate input/output credit units; credit_curve overrides affine delta*p; final output released only at compute terminal"
+    },
+    "summary/activity_work_semantics": {
+      "capacity": 159,
+      "value": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1"
+    },
+    "summary/alone_estimate_status": {
+      "capacity": 15,
+      "value": "ok_assumed"
+    },
+    "summary/candidate_estimate_source": {
+      "capacity": 37,
+      "value": "estimate_alone(shared_runtime_engine)"
+    },
+    "summary/dataflow_id": {
+      "capacity": 15,
+      "value": "none"
+    },
+    "summary/evidence_flags/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/evidence_flags/1": {
+      "capacity": 23,
+      "value": "hardware_source_derived"
+    },
+    "summary/evidence_flags/@capacity": 2,
+    "summary/fixed_region_overheads/key:applied_ready_delay_ns": 22,
+    "summary/fixed_region_overheads/key:first_hbm_epoch": 15,
+    "summary/fixed_region_overheads/key:hbm_instances": 15,
+    "summary/fixed_region_overheads/key:instances": 15,
+    "summary/fixed_region_overheads/key:launch_ns_per_instance": 22,
+    "summary/fixed_region_overheads/key:memory_setup_ns_per_hbm_instance": 32,
+    "summary/fixed_region_overheads/key:model": 15,
+    "summary/fixed_region_overheads/key:modeled_instances": 17,
+    "summary/fixed_region_overheads/key:quantization": 15,
+    "summary/fixed_region_overheads/key:quantization_error_ns": 21,
+    "summary/fixed_region_overheads/key:ready_gate_description_count": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_ceil": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_whole": 29,
+    "summary/fixed_region_overheads/key:scope": 15,
+    "summary/fixed_region_overheads/key:timing_status": 15,
+    "summary/fixed_region_overheads/model": {
+      "capacity": 25,
+      "value": "region_ready_overheads_v1"
+    },
+    "summary/fixed_region_overheads/quantization": {
+      "capacity": 52,
+      "value": "ceil_combined_region_delay_once_to_public_integer_ns"
+    },
+    "summary/fixed_region_overheads/scope": {
+      "capacity": 54,
+      "value": "one_complete_source_region_not_internal_kernel_or_tile"
+    },
+    "summary/fixed_region_overheads/timing_status": {
+      "capacity": 29,
+      "value": "modeled_integer_ns_ready_gate"
+    },
+    "summary/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/key:active_cores": 15,
+    "summary/key:activity_units": 15,
+    "summary/key:activity_work_semantics": 23,
+    "summary/key:alone_estimate_status": 21,
+    "summary/key:candidate_count": 15,
+    "summary/key:candidate_estimate_source": 25,
+    "summary/key:consumption_wave_count": 22,
+    "summary/key:conversion_elements": 19,
+    "summary/key:dataflow_id": 15,
+    "summary/key:estimated_latency_ns": 20,
+    "summary/key:evidence_flags": 15,
+    "summary/key:executed_int4_ops": 17,
+    "summary/key:executed_matrix_ops": 19,
+    "summary/key:executed_score_slots": 20,
+    "summary/key:fixed_region_overheads": 22,
+    "summary/key:granularity_validation": 22,
+    "summary/key:hbm_read_bytes_total": 20,
+    "summary/key:hbm_workspace_peak_bytes": 24,
+    "summary/key:hbm_write_bytes_total": 21,
+    "summary/key:int4_input_bytes": 16,
+    "summary/key:kind": 15,
+    "summary/key:local_bus_bytes": 15,
+    "summary/key:logical_tensor_bytes": 20,
+    "summary/key:mapping_assumptions": 19,
+    "summary/key:output_round_count": 18,
+    "summary/key:physical_transfer_bytes": 23,
+    "summary/key:probability_bytes": 17,
+    "summary/key:recompute_matrix_ops": 20,
+    "summary/key:recomputed_matrix_ops": 21,
+    "summary/key:routing_evidence": 16,
+    "summary/key:score_bytes": 15,
+    "summary/key:selected_template": 17,
+    "summary/key:selection_rule": 15,
+    "summary/key:service_curves": 15,
+    "summary/key:service_description_count": 25,
+    "summary/key:service_model_revision": 22,
+    "summary/key:source_matrix_ops": 17,
+    "summary/key:source_vec_ops": 15,
+    "summary/key:sram_capacity_bytes_per_core": 28,
+    "summary/key:sram_peak_bytes_per_core": 24,
+    "summary/key:sram_read_bytes": 15,
+    "summary/key:sram_write_bytes": 16,
+    "summary/key:template_id": 15,
+    "summary/key:tf": 15,
+    "summary/key:th": 15,
+    "summary/key:tk": 15,
+    "summary/key:tm": 15,
+    "summary/key:tn": 15,
+    "summary/key:valid_score_pairs": 17,
+    "summary/key:vec_equivalent_ops": 18,
+    "summary/key:wave_count": 15,
+    "summary/kind": {
+      "capacity": 15,
+      "value": "residual"
+    },
+    "summary/mapping_assumptions/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/mapping_assumptions/1": {
+      "capacity": 35,
+      "value": "fixed_equivalent_operation_template"
+    },
+    "summary/mapping_assumptions/2": {
+      "capacity": 53,
+      "value": "fixed_256_elementwise_blocks_exact_storage_packing_v1"
+    },
+    "summary/mapping_assumptions/@capacity": 3,
+    "summary/routing_evidence/key:profile": 15,
+    "summary/routing_evidence/key:status": 15,
+    "summary/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/selected_template": {
+      "capacity": 15,
+      "value": "residual_vec_v3"
+    },
+    "summary/selection_rule": {
+      "capacity": 115,
+      "value": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th"
+    },
+    "summary/service_curves/0/first_output_release": {
+      "capacity": 38,
+      "value": "first_cohort_compute_activity_terminal"
+    },
+    "summary/service_curves/0/hbm_row_striping": {
+      "capacity": 61,
+      "value": "input_streams_concatenated_per_block_invocation_restarts_row0"
+    },
+    "summary/service_curves/0/input_unit": {
+      "capacity": 39,
+      "value": "one_elementwise_input_block_all_streams"
+    },
+    "summary/service_curves/0/key:allocated_input_slots_per_core": 30,
+    "summary/service_curves/0/key:allocated_output_slots_per_core": 31,
+    "summary/service_curves/0/key:block_elements": 15,
+    "summary/service_curves/0/key:blocks_per_invocation": 21,
+    "summary/service_curves/0/key:description_budget": 18,
+    "summary/service_curves/0/key:description_count": 17,
+    "summary/service_curves/0/key:epoch_begin": 15,
+    "summary/service_curves/0/key:epoch_count": 15,
+    "summary/service_curves/0/key:executions": 15,
+    "summary/service_curves/0/key:final_drain_units": 17,
+    "summary/service_curves/0/key:first_load_elements": 19,
+    "summary/service_curves/0/key:first_load_units": 16,
+    "summary/service_curves/0/key:first_output_activity_id": 24,
+    "summary/service_curves/0/key:first_output_compute_work_s": 27,
+    "summary/service_curves/0/key:first_output_epoch": 18,
+    "summary/service_curves/0/key:first_output_input_bytes": 24,
+    "summary/service_curves/0/key:first_output_release": 20,
+    "summary/service_curves/0/key:full_blocks_per_invocation": 26,
+    "summary/service_curves/0/key:hbm_row_striping": 16,
+    "summary/service_curves/0/key:input_capacity_units": 20,
+    "summary/service_curves/0/key:input_streams": 15,
+    "summary/service_curves/0/key:input_unit": 15,
+    "summary/service_curves/0/key:input_units": 15,
+    "summary/service_curves/0/key:mapping": 15,
+    "summary/service_curves/0/key:model": 15,
+    "summary/service_curves/0/key:output_capacity_units": 21,
+    "summary/service_curves/0/key:output_unit": 15,
+    "summary/service_curves/0/key:output_units": 15,
+    "summary/service_curves/0/key:readiness_approximation": 23,
+    "summary/service_curves/0/key:region_ready_gate_descriptions": 30,
+    "summary/service_curves/0/key:routing": 15,
+    "summary/service_curves/0/key:sram_allocation": 15,
+    "summary/service_curves/0/key:tail_elements": 15,
+    "summary/service_curves/0/mapping": {
+      "capacity": 47,
+      "value": "invocation_local_round_robin_256_element_blocks"
+    },
+    "summary/service_curves/0/model": {
+      "capacity": 36,
+      "value": "analytical_cumulative_elementwise_v1"
+    },
+    "summary/service_curves/0/output_unit": {
+      "capacity": 28,
+      "value": "one_elementwise_output_block"
+    },
+    "summary/service_curves/0/readiness_approximation": {
+      "capacity": 53,
+      "value": "aggregate_bulk_affine_including_invocation_boundaries"
+    },
+    "summary/service_curves/0/routing": {
+      "capacity": 43,
+      "value": "byte_weighted_full_prefix_and_tail_point_v1"
+    },
+    "summary/service_curves/0/sram_allocation": {
+      "capacity": 46,
+      "value": "fixed_max_block_slots_plus_one_fp32_work_block"
+    },
+    "summary/service_curves/@capacity": 1,
+    "summary/service_model_revision": {
+      "capacity": 36,
+      "value": "analytical_cumulative_elementwise_v1"
+    },
+    "summary/template_id": {
+      "capacity": 15,
+      "value": "residual_vec_v3"
+    },
+    "task/execution_profile": {
+      "capacity": 31,
+      "value": "int4_matrix_vec_fp32_assumed_v1"
+    },
+    "task/fusion_policy": {
+      "capacity": 15,
+      "value": "auto"
+    },
+    "task/key:execution_profile": 17,
+    "task/key:fusion_policy": 15,
+    "task/key:kv_identity": 15,
+    "task/key:layer_instances": 15,
+    "task/key:op_kind": 15,
+    "task/key:phase": 15,
+    "task/key:schema": 15,
+    "task/key:spans": 15,
+    "task/key:storage_dtype": 15,
+    "task/key:tensor_shapes": 15,
+    "task/key:tp_slice": 15,
+    "task/key:weight_passes": 15,
+    "task/kv_identity": {
+      "capacity": 15,
+      "value": "local"
+    },
+    "task/op_kind": {
+      "capacity": 15,
+      "value": "residual"
+    },
+    "task/phase": {
+      "capacity": 15,
+      "value": "prefill"
+    },
+    "task/schema": {
+      "capacity": 18,
+      "value": "coarse_die_task_v2"
+    },
+    "task/spans/0/key:count": 15,
+    "task/spans/0/key:kv_start_pos": 15,
+    "task/spans/0/key:kv_start_stride": 15,
+    "task/spans/0/key:kv_stride": 15,
+    "task/spans/0/key:kv_tokens": 15,
+    "task/spans/0/key:q_start_pos": 15,
+    "task/spans/0/key:q_start_stride": 15,
+    "task/spans/0/key:q_tokens": 15,
+    "task/spans/@capacity": 1,
+    "task/storage_dtype/accumulator": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/activations": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/key:accumulator": 15,
+    "task/storage_dtype/key:activations": 15,
+    "task/storage_dtype/key:kv": 15,
+    "task/storage_dtype/key:output": 15,
+    "task/storage_dtype/key:parameters": 15,
+    "task/storage_dtype/key:scores": 15,
+    "task/storage_dtype/key:weights": 15,
+    "task/storage_dtype/kv": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/output": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/parameters": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/scores": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/weights": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/tensor_shapes/key:ffn": 15,
+    "task/tensor_shapes/key:head_dim": 15,
+    "task/tensor_shapes/key:hidden": 15,
+    "task/tensor_shapes/key:kv_heads": 15,
+    "task/tensor_shapes/key:m": 15,
+    "task/tensor_shapes/key:mlp_variant": 15,
+    "task/tensor_shapes/key:norm_type": 15,
+    "task/tensor_shapes/key:position_encoding": 17,
+    "task/tensor_shapes/key:q_heads": 15,
+    "task/tensor_shapes/key:vocab": 15,
+    "task/tensor_shapes/mlp_variant": {
+      "capacity": 15,
+      "value": "swiglu"
+    },
+    "task/tensor_shapes/norm_type": {
+      "capacity": 15,
+      "value": "rmsnorm"
+    },
+    "task/tensor_shapes/position_encoding": {
+      "capacity": 15,
+      "value": "rope"
+    },
+    "task/tp_slice/key:ffn_local": 15,
+    "task/tp_slice/key:kv_heads_local": 15,
+    "task/tp_slice/key:q_heads_local": 15,
+    "task/tp_slice/key:tensor_parallel": 15,
+    "task/tp_slice/key:tensor_parallel_rank": 20,
+    "task/tp_slice/key:vocab_local": 15
+  },
+  {
+    "@fingerprint_capacity": 64,
+    "@hardware_fingerprint_capacity": 71,
+    "@retained_plan_bytes": 28937,
+    "summary/activity_units": {
+      "capacity": 210,
+      "value": "physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal"
+    },
+    "summary/activity_work_semantics": {
+      "capacity": 159,
+      "value": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1"
+    },
+    "summary/alone_estimate_status": {
+      "capacity": 15,
+      "value": "ok_assumed"
+    },
+    "summary/candidate_estimate_source": {
+      "capacity": 37,
+      "value": "estimate_alone(shared_runtime_engine)"
+    },
+    "summary/dataflow_id": {
+      "capacity": 20,
+      "value": "output_stationary_v2"
+    },
+    "summary/evidence_flags/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/evidence_flags/1": {
+      "capacity": 23,
+      "value": "hardware_source_derived"
+    },
+    "summary/evidence_flags/@capacity": 2,
+    "summary/fixed_region_overheads/key:applied_ready_delay_ns": 22,
+    "summary/fixed_region_overheads/key:first_hbm_epoch": 15,
+    "summary/fixed_region_overheads/key:hbm_instances": 15,
+    "summary/fixed_region_overheads/key:instances": 15,
+    "summary/fixed_region_overheads/key:launch_ns_per_instance": 22,
+    "summary/fixed_region_overheads/key:memory_setup_ns_per_hbm_instance": 32,
+    "summary/fixed_region_overheads/key:model": 15,
+    "summary/fixed_region_overheads/key:modeled_instances": 17,
+    "summary/fixed_region_overheads/key:quantization": 15,
+    "summary/fixed_region_overheads/key:quantization_error_ns": 21,
+    "summary/fixed_region_overheads/key:ready_gate_description_count": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_ceil": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_whole": 29,
+    "summary/fixed_region_overheads/key:scope": 15,
+    "summary/fixed_region_overheads/key:timing_status": 15,
+    "summary/fixed_region_overheads/model": {
+      "capacity": 25,
+      "value": "region_ready_overheads_v1"
+    },
+    "summary/fixed_region_overheads/quantization": {
+      "capacity": 52,
+      "value": "ceil_combined_region_delay_once_to_public_integer_ns"
+    },
+    "summary/fixed_region_overheads/scope": {
+      "capacity": 54,
+      "value": "one_complete_source_region_not_internal_kernel_or_tile"
+    },
+    "summary/fixed_region_overheads/timing_status": {
+      "capacity": 29,
+      "value": "modeled_integer_ns_ready_gate"
+    },
+    "summary/fusion_policy": {
+      "capacity": 15,
+      "value": "materialized"
+    },
+    "summary/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/key:active_cores": 15,
+    "summary/key:activity_units": 15,
+    "summary/key:activity_work_semantics": 23,
+    "summary/key:alone_estimate_status": 21,
+    "summary/key:candidate_count": 15,
+    "summary/key:candidate_estimate_source": 25,
+    "summary/key:consumption_wave_count": 22,
+    "summary/key:conversion_elements": 19,
+    "summary/key:dataflow_id": 15,
+    "summary/key:estimated_latency_ns": 20,
+    "summary/key:evidence_flags": 15,
+    "summary/key:executed_int4_ops": 17,
+    "summary/key:executed_matrix_ops": 19,
+    "summary/key:executed_score_slots": 20,
+    "summary/key:fixed_region_overheads": 22,
+    "summary/key:fusion_policy": 15,
+    "summary/key:granularity_validation": 22,
+    "summary/key:hbm_read_bytes_total": 20,
+    "summary/key:hbm_workspace_peak_bytes": 24,
+    "summary/key:hbm_write_bytes_total": 21,
+    "summary/key:int4_input_bytes": 16,
+    "summary/key:kind": 15,
+    "summary/key:local_bus_bytes": 15,
+    "summary/key:logical_tensor_bytes": 20,
+    "summary/key:mapping_assumptions": 19,
+    "summary/key:output_round_count": 18,
+    "summary/key:physical_transfer_bytes": 23,
+    "summary/key:probability_bytes": 17,
+    "summary/key:recompute_matrix_ops": 20,
+    "summary/key:recomputed_matrix_ops": 21,
+    "summary/key:routing_evidence": 16,
+    "summary/key:score_bytes": 15,
+    "summary/key:selected_template": 17,
+    "summary/key:selection_rule": 15,
+    "summary/key:service_curves": 15,
+    "summary/key:service_description_count": 25,
+    "summary/key:service_model_revision": 22,
+    "summary/key:source_matrix_ops": 17,
+    "summary/key:source_vec_ops": 15,
+    "summary/key:sram_capacity_bytes_per_core": 28,
+    "summary/key:sram_peak_bytes_per_core": 24,
+    "summary/key:sram_read_bytes": 15,
+    "summary/key:sram_write_bytes": 16,
+    "summary/key:template_id": 15,
+    "summary/key:tf": 15,
+    "summary/key:th": 15,
+    "summary/key:tk": 15,
+    "summary/key:tm": 15,
+    "summary/key:tn": 15,
+    "summary/key:valid_score_pairs": 17,
+    "summary/key:vec_equivalent_ops": 18,
+    "summary/key:wave_count": 15,
+    "summary/kind": {
+      "capacity": 15,
+      "value": "ffn_region"
+    },
+    "summary/mapping_assumptions/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/mapping_assumptions/1": {
+      "capacity": 25,
+      "value": "materialized_intermediate"
+    },
+    "summary/mapping_assumptions/2": {
+      "capacity": 60,
+      "value": "analytical_cumulative_os_v3_fixed_bounded_description_budget"
+    },
+    "summary/mapping_assumptions/@capacity": 3,
+    "summary/routing_evidence/key:profile": 15,
+    "summary/routing_evidence/key:status": 15,
+    "summary/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/selected_template": {
+      "capacity": 30,
+      "value": "materialized_swiglu_v2"
+    },
+    "summary/selection_rule": {
+      "capacity": 115,
+      "value": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th"
+    },
+    "summary/service_curves/0/final_output_release": {
+      "capacity": 35,
+      "value": "compute_terminal_before_final_drain"
+    },
+    "summary/service_curves/0/first_output_release": {
+      "capacity": 29,
+      "value": "first_cohort_compute_terminal"
+    },
+    "summary/service_curves/0/input_unit": {
+      "capacity": 29,
+      "value": "one_output_tile_K_consumption"
+    },
+    "summary/service_curves/0/key:description_budget": 18,
+    "summary/service_curves/0/key:description_count": 17,
+    "summary/service_curves/0/key:epoch_begin": 15,
+    "summary/service_curves/0/key:epoch_count": 15,
+    "summary/service_curves/0/key:final_drain_units": 17,
+    "summary/service_curves/0/key:final_output_release": 20,
+    "summary/service_curves/0/key:first_load_units": 16,
+    "summary/service_curves/0/key:first_output_compute_progress": 29,
+    "summary/service_curves/0/key:first_output_compute_work_s": 27,
+    "summary/service_curves/0/key:first_output_epoch": 18,
+    "summary/service_curves/0/key:first_output_input_bytes": 24,
+    "summary/service_curves/0/key:first_output_input_units": 24,
+    "summary/service_curves/0/key:first_output_release": 20,
+    "summary/service_curves/0/key:input_capacity_units": 20,
+    "summary/service_curves/0/key:input_unit": 15,
+    "summary/service_curves/0/key:input_units": 15,
+    "summary/service_curves/0/key:model": 15,
+    "summary/service_curves/0/key:output_capacity_units": 21,
+    "summary/service_curves/0/key:output_unit": 15,
+    "summary/service_curves/0/key:output_units": 15,
+    "summary/service_curves/0/key:readiness_approximation": 23,
+    "summary/service_curves/0/model": {
+      "capacity": 27,
+      "value": "analytical_cumulative_os_v3"
+    },
+    "summary/service_curves/0/output_unit": {
+      "capacity": 15,
+      "value": "one_output_tile"
+    },
+    "summary/service_curves/0/readiness_approximation": {
+      "capacity": 54,
+      "value": "aggregate_piecewise_affine_not_discrete_tile_readiness"
+    },
+    "summary/service_curves/@capacity": 1,
+    "summary/service_model_revision": {
+      "capacity": 27,
+      "value": "analytical_cumulative_os_v3"
+    },
+    "summary/template_id": {
+      "capacity": 22,
+      "value": "materialized_swiglu_v2"
+    },
+    "task/execution_profile": {
+      "capacity": 31,
+      "value": "int4_matrix_vec_fp32_assumed_v1"
+    },
+    "task/fusion_policy": {
+      "capacity": 15,
+      "value": "auto"
+    },
+    "task/key:execution_profile": 17,
+    "task/key:fusion_policy": 15,
+    "task/key:kv_identity": 15,
+    "task/key:layer_instances": 15,
+    "task/key:op_kind": 15,
+    "task/key:phase": 15,
+    "task/key:schema": 15,
+    "task/key:spans": 15,
+    "task/key:storage_dtype": 15,
+    "task/key:tensor_shapes": 15,
+    "task/key:tp_slice": 15,
+    "task/key:weight_passes": 15,
+    "task/kv_identity": {
+      "capacity": 15,
+      "value": "local"
+    },
+    "task/op_kind": {
+      "capacity": 15,
+      "value": "ffn_region"
+    },
+    "task/phase": {
+      "capacity": 15,
+      "value": "prefill"
+    },
+    "task/schema": {
+      "capacity": 18,
+      "value": "coarse_die_task_v2"
+    },
+    "task/spans/0/key:count": 15,
+    "task/spans/0/key:kv_start_pos": 15,
+    "task/spans/0/key:kv_start_stride": 15,
+    "task/spans/0/key:kv_stride": 15,
+    "task/spans/0/key:kv_tokens": 15,
+    "task/spans/0/key:q_start_pos": 15,
+    "task/spans/0/key:q_start_stride": 15,
+    "task/spans/0/key:q_tokens": 15,
+    "task/spans/@capacity": 1,
+    "task/storage_dtype/accumulator": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/activations": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/key:accumulator": 15,
+    "task/storage_dtype/key:activations": 15,
+    "task/storage_dtype/key:kv": 15,
+    "task/storage_dtype/key:output": 15,
+    "task/storage_dtype/key:parameters": 15,
+    "task/storage_dtype/key:scores": 15,
+    "task/storage_dtype/key:weights": 15,
+    "task/storage_dtype/kv": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/output": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/parameters": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/scores": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/weights": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/tensor_shapes/key:ffn": 15,
+    "task/tensor_shapes/key:head_dim": 15,
+    "task/tensor_shapes/key:hidden": 15,
+    "task/tensor_shapes/key:kv_heads": 15,
+    "task/tensor_shapes/key:m": 15,
+    "task/tensor_shapes/key:mlp_variant": 15,
+    "task/tensor_shapes/key:norm_type": 15,
+    "task/tensor_shapes/key:position_encoding": 17,
+    "task/tensor_shapes/key:q_heads": 15,
+    "task/tensor_shapes/key:vocab": 15,
+    "task/tensor_shapes/mlp_variant": {
+      "capacity": 15,
+      "value": "swiglu"
+    },
+    "task/tensor_shapes/norm_type": {
+      "capacity": 15,
+      "value": "rmsnorm"
+    },
+    "task/tensor_shapes/position_encoding": {
+      "capacity": 15,
+      "value": "rope"
+    },
+    "task/tp_slice/key:ffn_local": 15,
+    "task/tp_slice/key:kv_heads_local": 15,
+    "task/tp_slice/key:q_heads_local": 15,
+    "task/tp_slice/key:tensor_parallel": 15,
+    "task/tp_slice/key:tensor_parallel_rank": 20,
+    "task/tp_slice/key:vocab_local": 15
+  },
+  {
+    "@fingerprint_capacity": 64,
+    "@hardware_fingerprint_capacity": 71,
+    "@retained_plan_bytes": 24857,
+    "summary/activity_units": {
+      "capacity": 210,
+      "value": "physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal"
+    },
+    "summary/activity_work_semantics": {
+      "capacity": 159,
+      "value": "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1"
+    },
+    "summary/alone_estimate_status": {
+      "capacity": 15,
+      "value": "ok_assumed"
+    },
+    "summary/candidate_estimate_source": {
+      "capacity": 37,
+      "value": "estimate_alone(shared_runtime_engine)"
+    },
+    "summary/dataflow_id": {
+      "capacity": 20,
+      "value": "output_stationary_v2"
+    },
+    "summary/evidence_flags/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/evidence_flags/1": {
+      "capacity": 23,
+      "value": "hardware_source_derived"
+    },
+    "summary/evidence_flags/@capacity": 2,
+    "summary/fixed_region_overheads/key:applied_ready_delay_ns": 22,
+    "summary/fixed_region_overheads/key:first_hbm_epoch": 15,
+    "summary/fixed_region_overheads/key:hbm_instances": 15,
+    "summary/fixed_region_overheads/key:instances": 15,
+    "summary/fixed_region_overheads/key:launch_ns_per_instance": 22,
+    "summary/fixed_region_overheads/key:memory_setup_ns_per_hbm_instance": 32,
+    "summary/fixed_region_overheads/key:model": 15,
+    "summary/fixed_region_overheads/key:modeled_instances": 17,
+    "summary/fixed_region_overheads/key:quantization": 15,
+    "summary/fixed_region_overheads/key:quantization_error_ns": 21,
+    "summary/fixed_region_overheads/key:ready_gate_description_count": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_ceil": 28,
+    "summary/fixed_region_overheads/key:required_total_delay_ns_whole": 29,
+    "summary/fixed_region_overheads/key:scope": 15,
+    "summary/fixed_region_overheads/key:timing_status": 15,
+    "summary/fixed_region_overheads/model": {
+      "capacity": 25,
+      "value": "region_ready_overheads_v1"
+    },
+    "summary/fixed_region_overheads/quantization": {
+      "capacity": 52,
+      "value": "ceil_combined_region_delay_once_to_public_integer_ns"
+    },
+    "summary/fixed_region_overheads/scope": {
+      "capacity": 54,
+      "value": "one_complete_source_region_not_internal_kernel_or_tile"
+    },
+    "summary/fixed_region_overheads/timing_status": {
+      "capacity": 29,
+      "value": "modeled_integer_ns_ready_gate"
+    },
+    "summary/granularity_validation": {
+      "capacity": 15,
+      "value": "not_run"
+    },
+    "summary/key:active_cores": 15,
+    "summary/key:activity_units": 15,
+    "summary/key:activity_work_semantics": 23,
+    "summary/key:alone_estimate_status": 21,
+    "summary/key:candidate_count": 15,
+    "summary/key:candidate_estimate_source": 25,
+    "summary/key:consumption_wave_count": 22,
+    "summary/key:conversion_elements": 19,
+    "summary/key:dataflow_id": 15,
+    "summary/key:estimated_latency_ns": 20,
+    "summary/key:evidence_flags": 15,
+    "summary/key:executed_int4_ops": 17,
+    "summary/key:executed_matrix_ops": 19,
+    "summary/key:executed_score_slots": 20,
+    "summary/key:fixed_region_overheads": 22,
+    "summary/key:granularity_validation": 22,
+    "summary/key:hbm_read_bytes_total": 20,
+    "summary/key:hbm_workspace_peak_bytes": 24,
+    "summary/key:hbm_write_bytes_total": 21,
+    "summary/key:int4_input_bytes": 16,
+    "summary/key:kind": 15,
+    "summary/key:local_bus_bytes": 15,
+    "summary/key:logical_tensor_bytes": 20,
+    "summary/key:mapping_assumptions": 19,
+    "summary/key:output_round_count": 18,
+    "summary/key:physical_transfer_bytes": 23,
+    "summary/key:probability_bytes": 17,
+    "summary/key:recompute_matrix_ops": 20,
+    "summary/key:recomputed_matrix_ops": 21,
+    "summary/key:routing_evidence": 16,
+    "summary/key:score_bytes": 15,
+    "summary/key:selected_template": 17,
+    "summary/key:selection_rule": 15,
+    "summary/key:service_curves": 15,
+    "summary/key:service_description_count": 25,
+    "summary/key:service_model_revision": 22,
+    "summary/key:source_matrix_ops": 17,
+    "summary/key:source_vec_ops": 15,
+    "summary/key:sram_capacity_bytes_per_core": 28,
+    "summary/key:sram_peak_bytes_per_core": 24,
+    "summary/key:sram_read_bytes": 15,
+    "summary/key:sram_write_bytes": 16,
+    "summary/key:template_id": 15,
+    "summary/key:tf": 15,
+    "summary/key:th": 15,
+    "summary/key:tk": 15,
+    "summary/key:tm": 15,
+    "summary/key:tn": 15,
+    "summary/key:valid_score_pairs": 17,
+    "summary/key:vec_equivalent_ops": 18,
+    "summary/key:wave_count": 15,
+    "summary/kind": {
+      "capacity": 15,
+      "value": "logits"
+    },
+    "summary/mapping_assumptions/0": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/mapping_assumptions/1": {
+      "capacity": 23,
+      "value": "bounded_tile_candidates"
+    },
+    "summary/mapping_assumptions/2": {
+      "capacity": 60,
+      "value": "analytical_cumulative_os_v3_fixed_bounded_description_budget"
+    },
+    "summary/mapping_assumptions/@capacity": 3,
+    "summary/routing_evidence/key:profile": 15,
+    "summary/routing_evidence/key:status": 15,
+    "summary/routing_evidence/profile": {
+      "capacity": 20,
+      "value": "distributed_ideal_v2"
+    },
+    "summary/routing_evidence/status": {
+      "capacity": 22,
+      "value": "engineering_assumption"
+    },
+    "summary/selected_template": {
+      "capacity": 30,
+      "value": "logits_output_stationary_v2"
+    },
+    "summary/selection_rule": {
+      "capacity": 115,
+      "value": "ceil(estimate_alone_ns),hbm_payload_bytes,hbm_workspace_peak_bytes,sram_peak_bytes_per_core,template_id,tm,tn,tk,th"
+    },
+    "summary/service_curves/0/final_output_release": {
+      "capacity": 35,
+      "value": "compute_terminal_before_final_drain"
+    },
+    "summary/service_curves/0/first_output_release": {
+      "capacity": 29,
+      "value": "first_cohort_compute_terminal"
+    },
+    "summary/service_curves/0/input_unit": {
+      "capacity": 29,
+      "value": "one_output_tile_K_consumption"
+    },
+    "summary/service_curves/0/key:description_budget": 18,
+    "summary/service_curves/0/key:description_count": 17,
+    "summary/service_curves/0/key:epoch_begin": 15,
+    "summary/service_curves/0/key:epoch_count": 15,
+    "summary/service_curves/0/key:final_drain_units": 17,
+    "summary/service_curves/0/key:final_output_release": 20,
+    "summary/service_curves/0/key:first_load_units": 16,
+    "summary/service_curves/0/key:first_output_compute_progress": 29,
+    "summary/service_curves/0/key:first_output_compute_work_s": 27,
+    "summary/service_curves/0/key:first_output_epoch": 18,
+    "summary/service_curves/0/key:first_output_input_bytes": 24,
+    "summary/service_curves/0/key:first_output_input_units": 24,
+    "summary/service_curves/0/key:first_output_release": 20,
+    "summary/service_curves/0/key:input_capacity_units": 20,
+    "summary/service_curves/0/key:input_unit": 15,
+    "summary/service_curves/0/key:input_units": 15,
+    "summary/service_curves/0/key:model": 15,
+    "summary/service_curves/0/key:output_capacity_units": 21,
+    "summary/service_curves/0/key:output_unit": 15,
+    "summary/service_curves/0/key:output_units": 15,
+    "summary/service_curves/0/key:readiness_approximation": 23,
+    "summary/service_curves/0/key:region_ready_gate_descriptions": 30,
+    "summary/service_curves/0/model": {
+      "capacity": 27,
+      "value": "analytical_cumulative_os_v3"
+    },
+    "summary/service_curves/0/output_unit": {
+      "capacity": 15,
+      "value": "one_output_tile"
+    },
+    "summary/service_curves/0/readiness_approximation": {
+      "capacity": 54,
+      "value": "aggregate_piecewise_affine_not_discrete_tile_readiness"
+    },
+    "summary/service_curves/@capacity": 1,
+    "summary/service_model_revision": {
+      "capacity": 27,
+      "value": "analytical_cumulative_os_v3"
+    },
+    "summary/template_id": {
+      "capacity": 30,
+      "value": "logits_output_stationary_v2"
+    },
+    "task/execution_profile": {
+      "capacity": 31,
+      "value": "int4_matrix_vec_fp32_assumed_v1"
+    },
+    "task/fusion_policy": {
+      "capacity": 15,
+      "value": "auto"
+    },
+    "task/key:execution_profile": 17,
+    "task/key:fusion_policy": 15,
+    "task/key:kv_identity": 15,
+    "task/key:layer_instances": 15,
+    "task/key:op_kind": 15,
+    "task/key:phase": 15,
+    "task/key:schema": 15,
+    "task/key:spans": 15,
+    "task/key:storage_dtype": 15,
+    "task/key:tensor_shapes": 15,
+    "task/key:tp_slice": 15,
+    "task/key:weight_passes": 15,
+    "task/kv_identity": {
+      "capacity": 15,
+      "value": "local"
+    },
+    "task/op_kind": {
+      "capacity": 15,
+      "value": "logits"
+    },
+    "task/phase": {
+      "capacity": 15,
+      "value": "prefill"
+    },
+    "task/schema": {
+      "capacity": 18,
+      "value": "coarse_die_task_v2"
+    },
+    "task/spans/0/key:count": 15,
+    "task/spans/0/key:kv_start_pos": 15,
+    "task/spans/0/key:kv_start_stride": 15,
+    "task/spans/0/key:kv_stride": 15,
+    "task/spans/0/key:kv_tokens": 15,
+    "task/spans/0/key:q_start_pos": 15,
+    "task/spans/0/key:q_start_stride": 15,
+    "task/spans/0/key:q_tokens": 15,
+    "task/spans/@capacity": 1,
+    "task/storage_dtype/accumulator": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/activations": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/key:accumulator": 15,
+    "task/storage_dtype/key:activations": 15,
+    "task/storage_dtype/key:kv": 15,
+    "task/storage_dtype/key:output": 15,
+    "task/storage_dtype/key:parameters": 15,
+    "task/storage_dtype/key:scores": 15,
+    "task/storage_dtype/key:weights": 15,
+    "task/storage_dtype/kv": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/output": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/parameters": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/storage_dtype/scores": {
+      "capacity": 15,
+      "value": "fp32"
+    },
+    "task/storage_dtype/weights": {
+      "capacity": 15,
+      "value": "bf16"
+    },
+    "task/tensor_shapes/key:ffn": 15,
+    "task/tensor_shapes/key:head_dim": 15,
+    "task/tensor_shapes/key:hidden": 15,
+    "task/tensor_shapes/key:kv_heads": 15,
+    "task/tensor_shapes/key:m": 15,
+    "task/tensor_shapes/key:mlp_variant": 15,
+    "task/tensor_shapes/key:norm_type": 15,
+    "task/tensor_shapes/key:position_encoding": 17,
+    "task/tensor_shapes/key:q_heads": 15,
+    "task/tensor_shapes/key:vocab": 15,
+    "task/tensor_shapes/mlp_variant": {
+      "capacity": 15,
+      "value": "swiglu"
+    },
+    "task/tensor_shapes/norm_type": {
+      "capacity": 15,
+      "value": "rmsnorm"
+    },
+    "task/tensor_shapes/position_encoding": {
+      "capacity": 15,
+      "value": "rope"
+    },
+    "task/tp_slice/key:ffn_local": 15,
+    "task/tp_slice/key:kv_heads_local": 15,
+    "task/tp_slice/key:q_heads_local": 15,
+    "task/tp_slice/key:tensor_parallel": 15,
+    "task/tp_slice/key:tensor_parallel_rank": 20,
+    "task/tp_slice/key:vocab_local": 15
+  }
+]

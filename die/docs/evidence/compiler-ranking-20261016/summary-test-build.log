@@ -1,0 +1,5 @@
+[ 55%] Built target coarse_die
+[ 77%] Built target coarse_die_cabi
+[ 88%] Building CXX object CMakeFiles/coarse_compiler_summary_test.dir/tests/compiler_summary_test.cc.o
+[100%] Linking CXX executable coarse_compiler_summary_test
+[100%] Built target coarse_compiler_summary_test

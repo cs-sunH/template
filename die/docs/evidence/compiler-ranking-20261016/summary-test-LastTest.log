@@ -1,0 +1,20 @@
+Start testing: Oct 16 04:20 UTC
+----------------------------------------------------------
+1/49 Testing: coarse_compiler_summary_test
+1/49 Test: coarse_compiler_summary_test
+Command: "/workspace/template/work/build-die-continue/coarse_compiler_summary_test"
+Directory: /workspace/template/work/build-die-continue
+"coarse_compiler_summary_test" start time: Oct 16 04:20 UTC
+Output:
+----------------------------------------------------------
+all_candidate_full_wire_comparisons=1092
+PASS compiler_summary_test
+<end of output>
+Test time =   0.62 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_compiler_summary_test" end time: Oct 16 04:20 UTC
+"coarse_compiler_summary_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 16 04:20 UTC

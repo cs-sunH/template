@@ -20,4 +20,9 @@ std::shared_ptr<const Plan> compile_normalized(
 // ready delay, resource work, availability status, or description budget.
 void finalize_region_overhead_audit(const Hardware& hardware, Plan& plan);
 
+// Rebuild the chosen internal ranking trial through the same GEMM builder,
+// emitting its full diagnostics without another Runtime estimate or search.
+std::shared_ptr<Plan> materialize_gemm_compile_candidate(const Hardware&,
+                                                       const Plan& candidate);
+
 }  // namespace coarse_die::detail

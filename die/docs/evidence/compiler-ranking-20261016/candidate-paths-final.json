@@ -1,0 +1,3578 @@
+{
+  "cases": [
+    {
+      "candidate_count": 8,
+      "candidate_paths": [
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1066
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1131
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2278
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2279
+            }
+          ],
+          "latency_ns": 2279,
+          "tk": 64,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1131
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2297
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2298
+            }
+          ],
+          "latency_ns": 2298,
+          "tk": 128,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1129
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1258
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3537
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3539
+            }
+          ],
+          "latency_ns": 3539,
+          "tk": 64,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1258
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3574
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3576
+            }
+          ],
+          "latency_ns": 3576,
+          "tk": 128,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1131
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2343
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2344
+            }
+          ],
+          "latency_ns": 2344,
+          "tk": 64,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1131
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2297
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 2298
+            }
+          ],
+          "latency_ns": 2298,
+          "tk": 128,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1258
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3666
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3668
+            }
+          ],
+          "latency_ns": 3668,
+          "tk": 64,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1258
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3574
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3576
+            }
+          ],
+          "latency_ns": 3576,
+          "tk": 128,
+          "tm": 1,
+          "tn": 128
+        }
+      ],
+      "m": 1,
+      "task_identity_copy_samples": [
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 13590,
+          "voluntary_switches": 0,
+          "wall_ns": 6820
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6069,
+          "voluntary_switches": 0,
+          "wall_ns": 5858
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5328,
+          "voluntary_switches": 0,
+          "wall_ns": 5158
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5799,
+          "voluntary_switches": 0,
+          "wall_ns": 5608
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6370,
+          "voluntary_switches": 0,
+          "wall_ns": 6189
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6600,
+          "voluntary_switches": 0,
+          "wall_ns": 6299
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4977,
+          "voluntary_switches": 0,
+          "wall_ns": 4807
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5128,
+          "voluntary_switches": 0,
+          "wall_ns": 4937
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4898,
+          "voluntary_switches": 0,
+          "wall_ns": 4717
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4707,
+          "voluntary_switches": 0,
+          "wall_ns": 4537
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4797,
+          "voluntary_switches": 0,
+          "wall_ns": 4627
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4707,
+          "voluntary_switches": 0,
+          "wall_ns": 4546
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4517,
+          "voluntary_switches": 0,
+          "wall_ns": 4336
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4597,
+          "voluntary_switches": 0,
+          "wall_ns": 4416
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5448,
+          "voluntary_switches": 0,
+          "wall_ns": 5208
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 7121,
+          "voluntary_switches": 0,
+          "wall_ns": 6670
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6750,
+          "voluntary_switches": 0,
+          "wall_ns": 6460
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 8483,
+          "voluntary_switches": 0,
+          "wall_ns": 8112
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4747,
+          "voluntary_switches": 0,
+          "wall_ns": 4556
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4937,
+          "voluntary_switches": 0,
+          "wall_ns": 4767
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5568,
+          "voluntary_switches": 0,
+          "wall_ns": 5368
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 6150,
+          "voluntary_switches": 0,
+          "wall_ns": 5949
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5419,
+          "voluntary_switches": 0,
+          "wall_ns": 5238
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4978,
+          "voluntary_switches": 0,
+          "wall_ns": 4797
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4787,
+          "voluntary_switches": 0,
+          "wall_ns": 4607
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 7261,
+          "voluntary_switches": 0,
+          "wall_ns": 7010
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4957,
+          "voluntary_switches": 0,
+          "wall_ns": 4747
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4807,
+          "voluntary_switches": 0,
+          "wall_ns": 4616
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 4737,
+          "voluntary_switches": 0,
+          "wall_ns": 4556
+        },
+        {
+          "cpp_new_bytes": 20240,
+          "cpp_new_calls": 352,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 5348,
+          "voluntary_switches": 0,
+          "wall_ns": 5158
+        }
+      ],
+      "winner_public_serialization_samples": [
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 71446,
+          "voluntary_switches": 0,
+          "wall_ns": 71196
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 68481,
+          "voluntary_switches": 0,
+          "wall_ns": 68291
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 66950,
+          "voluntary_switches": 0,
+          "wall_ns": 66718
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 1,
+          "thread_cpu_ns": 101911,
+          "voluntary_switches": 0,
+          "wall_ns": 163221
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 66649,
+          "voluntary_switches": 0,
+          "wall_ns": 66408
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 64626,
+          "voluntary_switches": 0,
+          "wall_ns": 64386
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62703,
+          "voluntary_switches": 0,
+          "wall_ns": 62502
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 62122,
+          "voluntary_switches": 0,
+          "wall_ns": 61912
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60830,
+          "voluntary_switches": 0,
+          "wall_ns": 60619
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60900,
+          "voluntary_switches": 0,
+          "wall_ns": 60710
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60109,
+          "voluntary_switches": 0,
+          "wall_ns": 59919
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61842,
+          "voluntary_switches": 0,
+          "wall_ns": 61621
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59659,
+          "voluntary_switches": 0,
+          "wall_ns": 59478
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 1,
+          "thread_cpu_ns": 59849,
+          "voluntary_switches": 0,
+          "wall_ns": 59638
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60740,
+          "voluntary_switches": 0,
+          "wall_ns": 60560
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 83745,
+          "voluntary_switches": 0,
+          "wall_ns": 83213
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 82953,
+          "voluntary_switches": 0,
+          "wall_ns": 82642
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61451,
+          "voluntary_switches": 0,
+          "wall_ns": 61231
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59669,
+          "voluntary_switches": 0,
+          "wall_ns": 59457
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61271,
+          "voluntary_switches": 0,
+          "wall_ns": 60970
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61111,
+          "voluntary_switches": 0,
+          "wall_ns": 60910
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60630,
+          "voluntary_switches": 0,
+          "wall_ns": 60409
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60480,
+          "voluntary_switches": 0,
+          "wall_ns": 60249
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59629,
+          "voluntary_switches": 0,
+          "wall_ns": 59448
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 103514,
+          "voluntary_switches": 0,
+          "wall_ns": 103153
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 75693,
+          "voluntary_switches": 0,
+          "wall_ns": 75401
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61491,
+          "voluntary_switches": 0,
+          "wall_ns": 61271
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 60680,
+          "voluntary_switches": 0,
+          "wall_ns": 60469
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59399,
+          "voluntary_switches": 0,
+          "wall_ns": 59207
+        },
+        {
+          "cpp_new_bytes": 68221,
+          "cpp_new_calls": 786,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59979,
+          "voluntary_switches": 0,
+          "wall_ns": 59738
+        }
+      ]
+    },
+    {
+      "candidate_count": 28,
+      "candidate_paths": [
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "ratio": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 13,
+              "tangent_rounds": 0,
+              "time_ns": 2013
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3026
+            },
+            {
+              "activities": 3,
+              "path": "ratio",
+              "pivots": 0,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 3226
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7125
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7139
+            }
+          ],
+          "latency_ns": 7139,
+          "tk": 64,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "ratio": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 3026
+            },
+            {
+              "activities": 3,
+              "path": "ratio",
+              "pivots": 0,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 4193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 8092
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 8106
+            }
+          ],
+          "latency_ns": 8106,
+          "tk": 128,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 13,
+              "tangent_rounds": 0,
+              "time_ns": 3011
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 5021
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 10,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 5418
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7277
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7291
+            }
+          ],
+          "latency_ns": 7291,
+          "tk": 64,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "signed_lp": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 5021
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 10,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 7336
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9195
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9209
+            }
+          ],
+          "latency_ns": 9209,
+          "tk": 128,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1499
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1998
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 4426
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 4526
+            }
+          ],
+          "latency_ns": 4526,
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1998
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 4193
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 4293
+            }
+          ],
+          "latency_ns": 4293,
+          "tk": 128,
+          "tm": 16,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1449
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1898
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7028
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 7128
+            }
+          ],
+          "latency_ns": 7128,
+          "tk": 64,
+          "tm": 16,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1898
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6013
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6113
+            }
+          ],
+          "latency_ns": 6113,
+          "tk": 128,
+          "tm": 16,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1200
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1399
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9613
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9713
+            }
+          ],
+          "latency_ns": 9713,
+          "tk": 64,
+          "tm": 64,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1399
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6886
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6986
+            }
+          ],
+          "latency_ns": 6986,
+          "tk": 128,
+          "tm": 64,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 16920
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17048
+            }
+          ],
+          "latency_ns": 17048,
+          "tk": 64,
+          "tm": 64,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11260
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11388
+            }
+          ],
+          "latency_ns": 11388,
+          "tk": 128,
+          "tm": 64,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 1193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 16920
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17048
+            }
+          ],
+          "latency_ns": 17048,
+          "tk": 64,
+          "tm": 128,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "output_stationary_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11260
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11388
+            }
+          ],
+          "latency_ns": 11388,
+          "tk": 128,
+          "tm": 128,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1003
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1006
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 1309
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 1310
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 1312
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 39479
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 39784
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 39785
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 40090
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 40091
+            }
+          ],
+          "latency_ns": 40091,
+          "tk": 64,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1003
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1006
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 1263
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 1264
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 1266
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 33651
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 33910
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 33911
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 34169
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 34170
+            }
+          ],
+          "latency_ns": 34170,
+          "tk": 128,
+          "tm": 1,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1004
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1008
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 1597
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 1599
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 1601
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 75660
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 76252
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 76254
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 76845
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 76847
+            }
+          ],
+          "latency_ns": 76847,
+          "tk": 64,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1004
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1008
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 1505
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 1507
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 1509
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 64072
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 64573
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 64575
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 65073
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 65075
+            }
+          ],
+          "latency_ns": 65075,
+          "tk": 128,
+          "tm": 1,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1049
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1097
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 3175
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 3191
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 3224
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 13809
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 15936
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 15952
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 18063
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 18079
+            }
+          ],
+          "latency_ns": 18079,
+          "tk": 64,
+          "tm": 16,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1049
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1097
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 2443
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 2460
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 2493
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9418
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 10812
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 10828
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 12207
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 12223
+            }
+          ],
+          "latency_ns": 12223,
+          "tk": 128,
+          "tm": 16,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1065
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1129
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 5043
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 5075
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 5108
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 24934
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 28912
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 28944
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 32891
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 32923
+            }
+          ],
+          "latency_ns": 32923,
+          "tk": 64,
+          "tm": 16,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 2,
+            "signed_lp": 3,
+            "singleton": 5
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1065
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1129
+            },
+            {
+              "activities": 3,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 14,
+              "tangent_rounds": 0,
+              "time_ns": 3579
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 15,
+              "rows": 15,
+              "tangent_rounds": 0,
+              "time_ns": 3612
+            },
+            {
+              "activities": 3,
+              "path": "signed_lp",
+              "pivots": 16,
+              "rows": 16,
+              "tangent_rounds": 0,
+              "time_ns": 3645
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 16154
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 18668
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 18700
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 21183
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 21215
+            }
+          ],
+          "latency_ns": 21215,
+          "tk": 128,
+          "tm": 16,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 4
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 9148
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 9212
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17104
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17168
+            }
+          ],
+          "latency_ns": 17168,
+          "tk": 64,
+          "tm": 64,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 4
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1193
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 6222
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 6286
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11251
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11315
+            }
+          ],
+          "latency_ns": 11315,
+          "tk": 128,
+          "tm": 64,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 4
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1257
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1513
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 16069
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 16197
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 30882
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 31010
+            }
+          ],
+          "latency_ns": 31010,
+          "tk": 64,
+          "tm": 64,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "packing": 1,
+            "signed_lp": 1,
+            "singleton": 4
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 2,
+              "path": "signed_lp",
+              "pivots": 7,
+              "rows": 12,
+              "tangent_rounds": 0,
+              "time_ns": 1257
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1513
+            },
+            {
+              "activities": 2,
+              "path": "packing",
+              "pivots": 0,
+              "rows": 11,
+              "tangent_rounds": 0,
+              "time_ns": 10217
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 10345
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 19178
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 19306
+            }
+          ],
+          "latency_ns": 19306,
+          "tk": 128,
+          "tm": 64,
+          "tn": 128
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17112
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 17240
+            }
+          ],
+          "latency_ns": 17240,
+          "tk": 64,
+          "tm": 128,
+          "tn": 64
+        },
+        {
+          "allocation_paths": {
+            "empty": 2,
+            "singleton": 3
+          },
+          "dataflow": "weight_resident_v2",
+          "event_diagnostics": [
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 0
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1000
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 1385
+            },
+            {
+              "activities": 1,
+              "path": "singleton",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11260
+            },
+            {
+              "activities": 0,
+              "path": "empty",
+              "pivots": 0,
+              "rows": 0,
+              "tangent_rounds": 0,
+              "time_ns": 11388
+            }
+          ],
+          "latency_ns": 11388,
+          "tk": 128,
+          "tm": 128,
+          "tn": 64
+        }
+      ],
+      "m": 128,
+      "task_identity_copy_samples": [
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 19338,
+          "voluntary_switches": 0,
+          "wall_ns": 18548
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16364,
+          "voluntary_switches": 0,
+          "wall_ns": 16144
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16214,
+          "voluntary_switches": 0,
+          "wall_ns": 16034
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15613,
+          "voluntary_switches": 0,
+          "wall_ns": 15423
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15724,
+          "voluntary_switches": 0,
+          "wall_ns": 15533
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15493,
+          "voluntary_switches": 0,
+          "wall_ns": 15252
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15333,
+          "voluntary_switches": 0,
+          "wall_ns": 15152
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15172,
+          "voluntary_switches": 0,
+          "wall_ns": 14993
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15393,
+          "voluntary_switches": 0,
+          "wall_ns": 15202
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15193,
+          "voluntary_switches": 0,
+          "wall_ns": 15022
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15353,
+          "voluntary_switches": 0,
+          "wall_ns": 15162
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15523,
+          "voluntary_switches": 0,
+          "wall_ns": 15343
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15733,
+          "voluntary_switches": 0,
+          "wall_ns": 15563
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15774,
+          "voluntary_switches": 0,
+          "wall_ns": 15563
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15543,
+          "voluntary_switches": 0,
+          "wall_ns": 15363
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15283,
+          "voluntary_switches": 0,
+          "wall_ns": 15102
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15443,
+          "voluntary_switches": 0,
+          "wall_ns": 15263
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15483,
+          "voluntary_switches": 0,
+          "wall_ns": 15303
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15724,
+          "voluntary_switches": 0,
+          "wall_ns": 15553
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16915,
+          "voluntary_switches": 0,
+          "wall_ns": 16665
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15583,
+          "voluntary_switches": 0,
+          "wall_ns": 15383
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 17436,
+          "voluntary_switches": 0,
+          "wall_ns": 17115
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15773,
+          "voluntary_switches": 0,
+          "wall_ns": 15583
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 1,
+          "thread_cpu_ns": 18889,
+          "voluntary_switches": 0,
+          "wall_ns": 16164
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15513,
+          "voluntary_switches": 0,
+          "wall_ns": 15322
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 16945,
+          "voluntary_switches": 0,
+          "wall_ns": 16734
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15834,
+          "voluntary_switches": 0,
+          "wall_ns": 15653
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15453,
+          "voluntary_switches": 0,
+          "wall_ns": 15263
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15803,
+          "voluntary_switches": 0,
+          "wall_ns": 15603
+        },
+        {
+          "cpp_new_bytes": 70840,
+          "cpp_new_calls": 1232,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 15664,
+          "voluntary_switches": 0,
+          "wall_ns": 15443
+        }
+      ],
+      "winner_public_serialization_samples": [
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 80289,
+          "voluntary_switches": 0,
+          "wall_ns": 80048
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 64066,
+          "voluntary_switches": 0,
+          "wall_ns": 63815
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 61902,
+          "voluntary_switches": 0,
+          "wall_ns": 61672
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59048,
+          "voluntary_switches": 0,
+          "wall_ns": 58847
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 80550,
+          "voluntary_switches": 0,
+          "wall_ns": 80319
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57886,
+          "voluntary_switches": 0,
+          "wall_ns": 57655
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56484,
+          "voluntary_switches": 0,
+          "wall_ns": 56264
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57085,
+          "voluntary_switches": 0,
+          "wall_ns": 56864
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56484,
+          "voluntary_switches": 0,
+          "wall_ns": 56293
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56584,
+          "voluntary_switches": 0,
+          "wall_ns": 56373
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56675,
+          "voluntary_switches": 0,
+          "wall_ns": 56473
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55753,
+          "voluntary_switches": 0,
+          "wall_ns": 55532
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55974,
+          "voluntary_switches": 0,
+          "wall_ns": 55763
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56945,
+          "voluntary_switches": 0,
+          "wall_ns": 56743
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57105,
+          "voluntary_switches": 0,
+          "wall_ns": 56914
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 56094,
+          "voluntary_switches": 0,
+          "wall_ns": 55863
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58367,
+          "voluntary_switches": 0,
+          "wall_ns": 57866
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55613,
+          "voluntary_switches": 0,
+          "wall_ns": 55402
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55753,
+          "voluntary_switches": 0,
+          "wall_ns": 55552
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 59699,
+          "voluntary_switches": 0,
+          "wall_ns": 59488
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55904,
+          "voluntary_switches": 0,
+          "wall_ns": 55712
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 58027,
+          "voluntary_switches": 0,
+          "wall_ns": 57815
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 54832,
+          "voluntary_switches": 0,
+          "wall_ns": 54580
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55623,
+          "voluntary_switches": 0,
+          "wall_ns": 55422
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55963,
+          "voluntary_switches": 0,
+          "wall_ns": 55752
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 57035,
+          "voluntary_switches": 0,
+          "wall_ns": 56844
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55563,
+          "voluntary_switches": 0,
+          "wall_ns": 55382
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 71326,
+          "voluntary_switches": 0,
+          "wall_ns": 71085
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 68211,
+          "voluntary_switches": 0,
+          "wall_ns": 68001
+        },
+        {
+          "cpp_new_bytes": 63542,
+          "cpp_new_calls": 692,
+          "involuntary_switches": 0,
+          "thread_cpu_ns": 55222,
+          "voluntary_switches": 0,
+          "wall_ns": 55031
+        }
+      ]
+    }
+  ],
+  "scope": "candidate path and JSON allocation diagnostics only, no budget acceptance"
+}

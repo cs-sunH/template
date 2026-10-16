@@ -1263,54 +1263,77 @@ void add_gemm_epoch(Plan& plan, Metrics& m, const Hardware& hw,
   m.active_cores = active; m.tm=tm; m.tn=tn; m.tk=tk; m.dataflow=wr?"weight_resident_v2":"output_stationary_v2"; m.template_id=label;
 }
 
-void finalize_summary(Plan& p, const Metrics& m, const Hardware& hw) {
+void finalize_summary(Plan& p, const Metrics& m, const Hardware& hw,
+                      bool ranking_only=false) {
+  // Internal GEMM trials still check every published scalar's range, even
+  // when only rank keys need JSON storage. Public Plans always emit all fields.
+  const auto emit=[&](const char* key,u128 value,std::string_view field,bool rank=false) {
+    const u64 checked=as_u64(value,field);
+    if(!ranking_only || rank)p.summary[key]=checked;
+  };
   p.summary["kind"] = gets(p.task,"op_kind");
   p.summary["template_id"] = m.template_id;
   p.summary["dataflow_id"] = m.dataflow;
-  p.summary["source_matrix_ops"] = as_u64(m.source_mops,"source matrix ops");
-  p.summary["executed_matrix_ops"] = as_u64(m.executed_mops,"executed matrix ops");
-  p.summary["recomputed_matrix_ops"] = as_u64(m.executed_mops >= m.source_mops ? m.executed_mops-m.source_mops : 0,"recomputed matrix ops");
-  p.summary["recompute_matrix_ops"] = p.summary["recomputed_matrix_ops"];
-  p.summary["executed_int4_ops"] = as_u64(m.int4ops,"executed INT4 ops");
-  p.summary["int4_input_bytes"] = as_u64(m.int4bytes,"INT4 input bytes");
-  p.summary["source_vec_ops"] = as_u64(m.source_vops,"source Vec ops");
-  publish_eqops(p.summary,m.vecops);
-  p.summary["conversion_elements"] = as_u64(m.conversion_elements,"conversion elements");
-  p.summary["logical_tensor_bytes"] = as_u64(m.logical,"logical tensor bytes");
-  p.summary["hbm_read_bytes_total"] = as_u64(m.hbm_read,"HBM read total");
-  p.summary["hbm_write_bytes_total"] = as_u64(m.hbm_write,"HBM write total");
-  p.summary["physical_transfer_bytes"] = as_u64(add128(m.hbm_read,m.hbm_write,"HBM total"),"HBM total");
-  p.summary["hbm_workspace_peak_bytes"] = as_u64(m.workspace,"HBM workspace");
-  p.summary["sram_peak_bytes_per_core"] = as_u64(m.sram_peak,"SRAM peak");
-  p.summary["sram_capacity_bytes_per_core"] = du(hw,"core","sram_bytes_per_core");
-  p.summary["sram_read_bytes"] = as_u64(m.sram_read,"SRAM reads");
-  p.summary["sram_write_bytes"] = as_u64(m.sram_write,"SRAM writes");
-  p.summary["local_bus_bytes"] = as_u64(m.local,"LOCAL bytes");
-  p.summary["output_round_count"] = as_u64(m.output_rounds,"output rounds");
-  p.summary["consumption_wave_count"] = as_u64(m.waves,"consumption waves");
-  p.summary["wave_count"] = p.summary["consumption_wave_count"];
-  p.summary["active_cores"] = m.active_cores;
+  emit("source_matrix_ops",m.source_mops,"source matrix ops");
+  emit("executed_matrix_ops",m.executed_mops,"executed matrix ops");
+  emit("recomputed_matrix_ops",m.executed_mops >= m.source_mops ? m.executed_mops-m.source_mops : 0,"recomputed matrix ops");
+  if(!ranking_only)p.summary["recompute_matrix_ops"] = p.summary["recomputed_matrix_ops"];
+  emit("executed_int4_ops",m.int4ops,"executed INT4 ops");
+  emit("int4_input_bytes",m.int4bytes,"INT4 input bytes");
+  emit("source_vec_ops",m.source_vops,"source Vec ops");
+  if(!ranking_only)publish_eqops(p.summary,m.vecops);
+  else {
+    (void)eqops_json(m.vecops);
+    if(!m.vecops.integral())(void)equivalent_fraction_to_json(m.vecops.fraction());
+  }
+  emit("conversion_elements",m.conversion_elements,"conversion elements");
+  emit("logical_tensor_bytes",m.logical,"logical tensor bytes");
+  emit("hbm_read_bytes_total",m.hbm_read,"HBM read total",true);
+  emit("hbm_write_bytes_total",m.hbm_write,"HBM write total",true);
+  emit("physical_transfer_bytes",add128(m.hbm_read,m.hbm_write,"HBM total"),"HBM total");
+  emit("hbm_workspace_peak_bytes",m.workspace,"HBM workspace",true);
+  emit("sram_peak_bytes_per_core",m.sram_peak,"SRAM peak",true);
+  const auto sram_capacity=du(hw,"core","sram_bytes_per_core");
+  if(!ranking_only)p.summary["sram_capacity_bytes_per_core"]=sram_capacity;
+  emit("sram_read_bytes",m.sram_read,"SRAM reads");
+  emit("sram_write_bytes",m.sram_write,"SRAM writes");
+  emit("local_bus_bytes",m.local,"LOCAL bytes");
+  emit("output_round_count",m.output_rounds,"output rounds");
+  emit("consumption_wave_count",m.waves,"consumption waves");
+  if(!ranking_only) {
+    p.summary["wave_count"] = p.summary["consumption_wave_count"];
+    p.summary["active_cores"] = m.active_cores;
+  }
   p.summary["tm"] = m.tm; p.summary["tn"] = m.tn; p.summary["tk"] = m.tk;
-  p.summary["th"] = m.th; p.summary["tf"] = m.tf;
-  p.summary["executed_score_slots"] = as_u64(m.score_slots,"executed score slots");
-  p.summary["valid_score_pairs"] = as_u64(m.valid_pairs,"valid score pairs");
-  p.summary["score_bytes"] = as_u64(m.score_bytes,"score bytes");
-  p.summary["probability_bytes"] = as_u64(m.probability_bytes,"probability bytes");
-  p.summary["granularity_validation"] = "not_run";
-  p.summary["mapping_assumptions"] = m.assumptions;
-  p.summary["activity_units"] = "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]";
+  p.summary["th"] = m.th;
+  if(!ranking_only)p.summary["tf"] = m.tf;
+  emit("executed_score_slots",m.score_slots,"executed score slots");
+  emit("valid_score_pairs",m.valid_pairs,"valid score pairs");
+  emit("score_bytes",m.score_bytes,"score bytes");
+  emit("probability_bytes",m.probability_bytes,"probability bytes");
+  if(!ranking_only) {
+    p.summary["granularity_validation"] = "not_run";
+    p.summary["mapping_assumptions"] = m.assumptions;
+    p.summary["activity_units"] = "work/hbm_bytes/ops are totals over this epoch; repeat_count is audit metadata only; signed credit_delta is total over progress [0,1]";
+  }
   if (p.summary.contains("service_curves")) {
     const auto& curves=p.summary.at("service_curves");
     std::string revision=curves.at(0).at("model").get<std::string>();
     for(const auto& curve:curves)
       if(curve.at("model")!=revision) revision="analytical_cumulative_mixed_v1";
-    p.summary["service_model_revision"]=revision;
-    p.summary["service_description_count"]=service_description_count(p);
-    p.summary["activity_units"]=revision=="analytical_cumulative_os_v3"
+    const auto descriptions=service_description_count(p);
+    if(!ranking_only) {
+      p.summary["service_model_revision"]=revision;
+      p.summary["service_description_count"]=descriptions;
+      p.summary["activity_units"]=revision=="analytical_cumulative_os_v3"
         ? "physical work/bytes/ops are epoch totals; input credits count output-tile K consumptions; output credits count output tiles; credit_curve overrides affine delta*p; final output released only at compute terminal"
         : "physical work/bytes/ops are epoch totals; each service_curves entry defines separate input/output credit units; credit_curve overrides affine delta*p; final output released only at compute terminal";
+    }
   }
-  p.summary["routing_evidence"] = {{"profile", gets(hw.input.at("performance_profile"),"timing_topology_profile")}, {"status","engineering_assumption"}};
+  if(!ranking_only)
+    p.summary["routing_evidence"]={{"profile",gets(hw.input.at("performance_profile"),"timing_topology_profile")},
+        {"status","engineering_assumption"}};
+  else (void)gets(hw.input.at("performance_profile"),"timing_topology_profile");
 }
 
 std::shared_ptr<Plan> new_plan(const Hardware& hw, const nlohmann::json& task) {
@@ -1858,11 +1881,33 @@ void add_elementwise(Plan& plan, Metrics& m, const Hardware& hw,
   m.assumptions.push_back("fixed_256_elementwise_blocks_exact_storage_packing_v1");
 }
 
+std::shared_ptr<Plan> make_gemm_mapping(const Hardware& hw,const nlohmann::json& task,
+    const Topology& topo,u64 M,u64 N,u64 K,const std::string& ad,
+    const std::string& wd,const std::string& od,u64 layers,u64 passes,
+    const GemmChoice& choice,bool seal_fingerprint,bool ranking_only) {
+  auto p=new_plan(hw,task);Metrics m;
+  m.assumptions={"engineering_assumption","bounded_tile_candidates","exact_per_tile_INT4_tail_packing"};
+  add_gemm_epoch(*p,m,hw,topo,M,N,K,ad,wd,od,layers,passes,choice,
+      choice.wr ? "weight_resident_v2" : "output_stationary_v2");
+  finalize_summary(*p,m,hw,ranking_only);
+  p->summary["template_id"]="gemm_"+m.dataflow;
+  p->summary["dataflow_id"]=m.dataflow;
+  if(!ranking_only) {
+    p->summary["source_matrix_ops"]=as_u64(m.source_mops,"source matrix ops");
+    p->summary["executed_matrix_ops"]=as_u64(m.executed_mops,"executed matrix ops");
+    p->summary["recomputed_matrix_ops"]=0;p->summary["recompute_matrix_ops"]=0;
+  }
+  p->summary["tm"]=choice.tm;p->summary["tn"]=choice.tn;p->summary["tk"]=choice.tk;
+  if(seal_fingerprint)p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
+  return p;
+}
+
 std::vector<std::shared_ptr<Plan>> enumerate_gemm(const Hardware& hw,
                                                    const nlohmann::json& task,
                                                    const Topology& topo,
                                                    u64 M,u64 N,u64 K,
-                                                   bool seal_fingerprints = true) {
+                                                   bool seal_fingerprints = true,
+                                                   bool ranking_only = false) {
   const auto ts=options(M,{1,16,64,256}); const auto ns=options(N,{64,256,1024,4096});
   const auto ks=options(K,{64,256,1024,4096});
   const u64 layers=getu(task,"layer_instances",1), passes=getu(task,"weight_passes",1);
@@ -1874,19 +1919,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_gemm(const Hardware& hw,
   for (bool wr : {false,true}) for (u64 tm:ts) for (u64 tn:ns) for (u64 tk:ks) {
     const u128 peak=gemm_sram_peak(M,N,K,tm,tn,tk,ad,wd,od,profile,wr);
     if (static_cast<long double>(as_u64(peak,"SRAM peak")) > cap) continue;
-    auto p=new_plan(hw,task); Metrics m; m.assumptions={"engineering_assumption","bounded_tile_candidates","exact_per_tile_INT4_tail_packing"};
-    GemmChoice c{tm,tn,tk,wr};
-    add_gemm_epoch(*p,m,hw,topo,M,N,K,ad,wd,od,layers,passes,c,wr?"weight_resident_v2":"output_stationary_v2");
-    finalize_summary(*p,m,hw);
-    p->summary["template_id"] = "gemm_" + m.dataflow;
-    p->summary["dataflow_id"] = m.dataflow;
-    p->summary["source_matrix_ops"] = as_u64(m.source_mops,"source matrix ops");
-    p->summary["executed_matrix_ops"] = as_u64(m.executed_mops,"executed matrix ops");
-    p->summary["recomputed_matrix_ops"] = 0; p->summary["recompute_matrix_ops"] = 0;
-    p->summary["tm"]=tm; p->summary["tn"]=tn; p->summary["tk"]=tk;
-    if (seal_fingerprints)
-      p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
-    result.push_back(std::move(p));
+    result.push_back(make_gemm_mapping(hw,task,topo,M,N,K,ad,wd,od,layers,passes,
+        GemmChoice{tm,tn,tk,wr},seal_fingerprints,ranking_only));
   }
   return result;
 }
@@ -2529,7 +2563,7 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
   const Topology topo=topology(hardware,nx,ny);
   if (op=="gemm") return enumerate_gemm(
       hardware,task,topo,shape_u(task,"m"),shape_u(task,"n"),shape_u(task,"k"),
-      !defer_top_level_gemm_fingerprints);
+      !defer_top_level_gemm_fingerprints,defer_top_level_gemm_fingerprints);
   if (op=="attention" || op=="attention_region") {
     const std::string fusion=gets(task,"fusion_policy","auto");
     std::vector<std::shared_ptr<Plan>> result;
@@ -3303,6 +3337,34 @@ std::vector<std::shared_ptr<Plan>> enumerate_mappings_for_compile(
   auto result=enumerate_mappings_impl(hardware,task,true);
   apply_region_ready_overheads(hardware,result,true);
   return result;
+}
+
+std::shared_ptr<Plan> materialize_gemm_compile_candidate(const Hardware& hardware,
+                                                       const Plan& candidate) {
+  const auto& task=candidate.task;
+  if(gets(task,"op_kind")!="gemm")fail("mapping_invariant: compact materialization requires GEMM");
+  const auto dataflow=gets(candidate.summary,"dataflow_id");
+  if(dataflow!="weight_resident_v2" && dataflow!="output_stationary_v2")
+    fail("mapping_invariant: unknown compact GEMM dataflow");
+  const GemmChoice choice{getu(candidate.summary,"tm"),getu(candidate.summary,"tn"),
+      getu(candidate.summary,"tk"),dataflow=="weight_resident_v2"};
+  const Topology topo=topology(hardware,du(hardware,"die","core_columns_nx"),
+      du(hardware,"die","core_rows_ny"));
+  auto full=make_gemm_mapping(hardware,task,topo,shape_u(task,"m"),shape_u(task,"n"),shape_u(task,"k"),
+      dtype(task,"activations"),dtype(task,"weights"),dtype(task,"output"),
+      getu(task,"layer_instances",1),getu(task,"weight_passes",1),choice,false,false);
+  std::vector<std::shared_ptr<Plan>> one{full};
+  apply_region_ready_overheads(hardware,one,true);
+  if(full->task!=candidate.task || full->hardware_fingerprint!=candidate.hardware_fingerprint ||
+      full->launch_ns!=candidate.launch_ns ||
+      full->summary.value("prediction_status",std::string("ok_assumed"))!=
+          candidate.summary.value("prediction_status",std::string("ok_assumed")))
+    fail("mapping_invariant: materialized GEMM candidate identity changed");
+  for(const char* key:{"hbm_read_bytes_total","hbm_write_bytes_total","hbm_workspace_peak_bytes",
+      "sram_peak_bytes_per_core","template_id","tm","tn","tk","th"})
+    if(full->summary.at(key)!=candidate.summary.at(key))
+      fail(std::string("mapping_invariant: materialized GEMM rank key changed: ")+key);
+  return full;
 }
 
 }  // namespace coarse_die::detail
