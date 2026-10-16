@@ -1,0 +1,578 @@
+{
+  "scope": "actual current A+B isolated SDK ABI/config/Python, not release or complete native/E2E",
+  "source_digest": "25c51345c5ddcedb45b21c8b4dc89805c1f9ea2166d49792ddaf639ccbf91013",
+  "phase_count": 33,
+  "phase_status_counts": {
+    "passed": 32,
+    "failed": 1
+  },
+  "abi_libraries_built": 10,
+  "configurations_passed": 98,
+  "python_consumers": [
+    {
+      "repo": "astra-sim-face",
+      "tests": 86,
+      "skipped": 0,
+      "strict_phase_status": "passed"
+    },
+    {
+      "repo": "astra-sim-face-LRU",
+      "tests": 80,
+      "skipped": 0,
+      "strict_phase_status": "passed"
+    },
+    {
+      "repo": "astra-sim-wscllm",
+      "tests": 64,
+      "skipped": 0,
+      "strict_phase_status": "passed"
+    },
+    {
+      "repo": "astra-sim-wscllm-LRU",
+      "tests": 63,
+      "skipped": 1,
+      "strict_phase_status": "failed"
+    },
+    {
+      "repo": "astra-sim-joint",
+      "tests": 92,
+      "skipped": 0,
+      "strict_phase_status": "passed"
+    }
+  ],
+  "coarse_library_sha256": {
+    "astra-sim-face": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+    "astra-sim-face-LRU": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+    "astra-sim-wscllm": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+    "astra-sim-wscllm-LRU": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663",
+    "astra-sim-joint": "6eb9cf20e8fe2ff1630367b5bdf9e28e4edd42d9034a865f3db534a223c48663"
+  },
+  "all_five_equal_public_ab": true,
+  "formal_sdk": "unchanged canonical24; publisher not run",
+  "engineering_status": "NOT ACCEPTED",
+  "archive_sha256": "1628e45b63a56088954e6e88223375d6e3ab985e31477c2228121b8f4e053afa",
+  "files": [
+    {
+      "path": "actual-python-availability/identity.json",
+      "sha256": "7686e414e1c85fe3be5a9fc8a6db63913d0500385bf7bcedbc238361e4134018",
+      "bytes": 3673
+    },
+    {
+      "path": "actual-python-availability/run.log",
+      "sha256": "17164cf10b173abaf567d2cd198ddee6c87319d53e3efb121d5ad57ccfc2bfe2",
+      "bytes": 841
+    },
+    {
+      "path": "actual-python-availability/started.json",
+      "sha256": "f8292502809b9a16a1d48a591ad7fabcc7ef88ccc97dbdf2a87d57d3f1ca0c61",
+      "bytes": 1584
+    },
+    {
+      "path": "actual-python-availability.json",
+      "sha256": "aba895cbe12454b6405af648c3600d7f7ed73f73bf35f5b7aafa0185c4d3f0d2",
+      "bytes": 690220
+    },
+    {
+      "path": "astra-sim-face-LRU-abi-build/identity.json",
+      "sha256": "8d8a80cd709b2592f99164d1589d46ea8122d15d0e9c9b644913270357c8587a",
+      "bytes": 4627
+    },
+    {
+      "path": "astra-sim-face-LRU-abi-build/run.log",
+      "sha256": "4fe4a93bff3e82d309c9a7cfef3edde32dcddc3edb64848f6d661e3b129f85d5",
+      "bytes": 25533
+    },
+    {
+      "path": "astra-sim-face-LRU-abi-build/started.json",
+      "sha256": "a5cb33e4bab3b03eacd14fb9957dd5f60a99c125f91798b813f80f73b7712d47",
+      "bytes": 2294
+    },
+    {
+      "path": "astra-sim-face-LRU-abi-configure/identity.json",
+      "sha256": "2f137f0dde7e16d20aeedd724c4a91775ee5b1f150b1fecbdb71c206a1ae6df0",
+      "bytes": 3532
+    },
+    {
+      "path": "astra-sim-face-LRU-abi-configure/run.log",
+      "sha256": "6bf8ae01ef71550d1ddd0249961cf0948756e36be745c471998ba672885eb8a4",
+      "bytes": 664
+    },
+    {
+      "path": "astra-sim-face-LRU-abi-configure/started.json",
+      "sha256": "887ecea053a2f6264858976abd11917a7d092488f72ddc4068a83c221e2d1c38",
+      "bytes": 1665
+    },
+    {
+      "path": "astra-sim-face-LRU-config/identity.json",
+      "sha256": "818a1a49d9149da07458be60a96afa643a62460fd564633261a96fc7ae1adf3d",
+      "bytes": 2433
+    },
+    {
+      "path": "astra-sim-face-LRU-config/run.log",
+      "sha256": "e5c9783529b7020fa28c001719e7b4bcbae16e462091841e4ecbab33b0518fdd",
+      "bytes": 3744
+    },
+    {
+      "path": "astra-sim-face-LRU-config/started.json",
+      "sha256": "ad015bff78e2ae7d6d1d2933626f0690af09939da7e28b4e889d68550ef4b7f1",
+      "bytes": 1403
+    },
+    {
+      "path": "astra-sim-face-LRU-python-bindings/identity.json",
+      "sha256": "781f6fffb1c79679a5b9dbd4e940992585749dbaebf634b7b2e3ccdd03c0fd25",
+      "bytes": 2553
+    },
+    {
+      "path": "astra-sim-face-LRU-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "astra-sim-face-LRU-python-bindings/started.json",
+      "sha256": "ea5f4ae6dccc9311531ad5fb25b46b33a74cf90a595568a58009673b363fa953",
+      "bytes": 1574
+    },
+    {
+      "path": "astra-sim-face-LRU-python-consumers/identity.json",
+      "sha256": "1a1909cf3cea13f94fb3dc926f294b5cd581f9444286ec2bbb0e9cb5b7aa1bee",
+      "bytes": 2806
+    },
+    {
+      "path": "astra-sim-face-LRU-python-consumers/run.log",
+      "sha256": "659f42290aa5ce0cd505e1ed65490c2ac1ead0fb588ceebd146723225bbaa7a9",
+      "bytes": 13162
+    },
+    {
+      "path": "astra-sim-face-LRU-python-consumers/started.json",
+      "sha256": "50eb7c448f73336993ffcf5ac974aea7140997dafa2b6d881d728f66d533516b",
+      "bytes": 1776
+    },
+    {
+      "path": "astra-sim-face-LRU-real-cost-consumer/identity.json",
+      "sha256": "db1ef359117c1c5576639667012f10cded6a5c8d1316860b04ede5ada3e01da2",
+      "bytes": 3369
+    },
+    {
+      "path": "astra-sim-face-LRU-real-cost-consumer/run.log",
+      "sha256": "c0cd0fd3abe4c855404a23c265df846892b2bd893dcf511a481c9870ea638bd6",
+      "bytes": 245
+    },
+    {
+      "path": "astra-sim-face-LRU-real-cost-consumer/started.json",
+      "sha256": "e160d89e82347133c0386cd4b6d68d174522129eaae98754e01df053630b3421",
+      "bytes": 2276
+    },
+    {
+      "path": "astra-sim-face-LRU-real-cost-consumer.json",
+      "sha256": "adea490796fc598878760fcc50f6f806e943f903865d5e2f251ec169af7bcf1f",
+      "bytes": 1325
+    },
+    {
+      "path": "astra-sim-face-LRU-typed-resolver/identity.json",
+      "sha256": "85b2d9ef79e00af3e18aabfac07bfc5738e6907f1e8dff7201c218546ff05672",
+      "bytes": 2790
+    },
+    {
+      "path": "astra-sim-face-LRU-typed-resolver/run.log",
+      "sha256": "d963ae34f122d0d1e076bc188ba8ac131755247a8f59583d410a058008e3cb05",
+      "bytes": 10252
+    },
+    {
+      "path": "astra-sim-face-LRU-typed-resolver/started.json",
+      "sha256": "b2712664f9ff32483af50522505612bdf74c380e2704e42b5f6e8546f73c3194",
+      "bytes": 1737
+    },
+    {
+      "path": "astra-sim-face-abi-build/identity.json",
+      "sha256": "ae6424b05cf7a06ac37f9d8183e588c8fbbc855a4932bfe0aa5e65309988ee50",
+      "bytes": 4236
+    },
+    {
+      "path": "astra-sim-face-abi-build/run.log",
+      "sha256": "228b3d66d4664cbbe253e1dbd15ffe540ace029d70336ff963bf721a9cffdd14",
+      "bytes": 25233
+    },
+    {
+      "path": "astra-sim-face-abi-build/started.json",
+      "sha256": "e0d82f1a1655be74ffe65212bc7ccaa118cf30ae7cf4fddb317402763f9ae068",
+      "bytes": 2261
+    },
+    {
+      "path": "astra-sim-face-abi-configure/identity.json",
+      "sha256": "87f2e1c4a758a46dc9f9c810d75f9528695e27a2addd0b51fadabda84163e972",
+      "bytes": 3158
+    },
+    {
+      "path": "astra-sim-face-abi-configure/run.log",
+      "sha256": "631529fc42b30134c35c63804a1eff394526df48f1acbfa25bc9a2053b932795",
+      "bytes": 660
+    },
+    {
+      "path": "astra-sim-face-abi-configure/started.json",
+      "sha256": "0396cdcfc3d4170aece802dd617da3ee621d6c0b2a5a6609d35cf64d12aa8801",
+      "bytes": 1644
+    },
+    {
+      "path": "astra-sim-face-config/identity.json",
+      "sha256": "6b106f7dc50548f8289264df245c10be62035de174e82eb165f81b207a54ca99",
+      "bytes": 2074
+    },
+    {
+      "path": "astra-sim-face-config/run.log",
+      "sha256": "b0be03b4f0eca75af066017d050e44176f2fefcf8d99aee12057196a99744a5b",
+      "bytes": 3834
+    },
+    {
+      "path": "astra-sim-face-config/started.json",
+      "sha256": "a3ebbb532923c8eac643b35a3a56dbccbdc32e05555dbd7a1fd09e79887adc85",
+      "bytes": 1383
+    },
+    {
+      "path": "astra-sim-face-python-bindings/identity.json",
+      "sha256": "992cbe89e76e264956a0615abbf1203cd1ae8f556017b34bfccc287d64b1e246",
+      "bytes": 2197
+    },
+    {
+      "path": "astra-sim-face-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "astra-sim-face-python-bindings/started.json",
+      "sha256": "86159c7bcad168cfc9df074cbc34ec95f2291c63d391bd24ff3febfe53111e2f",
+      "bytes": 1558
+    },
+    {
+      "path": "astra-sim-face-python-consumers/identity.json",
+      "sha256": "9cba25c7a5835f59a454eb2362a377b04d06dccc1befbb73bba6d6bf5b7b78f6",
+      "bytes": 2433
+    },
+    {
+      "path": "astra-sim-face-python-consumers/run.log",
+      "sha256": "7413c020f892f6898d41bcf9b6827e6143cb6e355cf74dcce2696ee1bd584ecb",
+      "bytes": 13728
+    },
+    {
+      "path": "astra-sim-face-python-consumers/started.json",
+      "sha256": "4affa29f0f6d629c09869ade8c033ac8249fa61d24469ec552bd607f8620f728",
+      "bytes": 1744
+    },
+    {
+      "path": "astra-sim-face-real-cost-consumer/identity.json",
+      "sha256": "e7776bb23a316bb6194ede8acb1a1c84a82ebf4a96f1ec57bb2341a94249f19c",
+      "bytes": 2995
+    },
+    {
+      "path": "astra-sim-face-real-cost-consumer/run.log",
+      "sha256": "9fd29904cfd2eb8a79ea1ab258788af5770841c3617f81e7193a2674d22234ee",
+      "bytes": 237
+    },
+    {
+      "path": "astra-sim-face-real-cost-consumer/started.json",
+      "sha256": "536d4db3053b68ff9484db2582deccfe1d2d43682d07a5847519f39430bfa45c",
+      "bytes": 2240
+    },
+    {
+      "path": "astra-sim-face-real-cost-consumer.json",
+      "sha256": "ea8d2b6db61cb600ad5caa976a654555b0c7fc4f2a5c455e2c0578649bf28512",
+      "bytes": 1317
+    },
+    {
+      "path": "astra-sim-face-typed-resolver/identity.json",
+      "sha256": "df1936be069a060ca16f5d92a858539cb42059cc53f71ebc33b58566bc191250",
+      "bytes": 2427
+    },
+    {
+      "path": "astra-sim-face-typed-resolver/run.log",
+      "sha256": "1642e50e4641312a73afc21b3f5fd5c7d5500b4608d54c3cdc61e9038cc5fffd",
+      "bytes": 10244
+    },
+    {
+      "path": "astra-sim-face-typed-resolver/started.json",
+      "sha256": "11303c234b528a1af5c4cb9faa1c96930e55a33a8c36bf03b9c5266453548ff0",
+      "bytes": 1713
+    },
+    {
+      "path": "astra-sim-joint-abi-build/identity.json",
+      "sha256": "bfbb71ce333386e30860a307b511076f897525e94e9b6659857be43dbb53f6e9",
+      "bytes": 5599
+    },
+    {
+      "path": "astra-sim-joint-abi-build/run.log",
+      "sha256": "e178efec834998838a3bff77950eb1a56b51c5ff3b56294bd028e3ec1c7eb608",
+      "bytes": 25308
+    },
+    {
+      "path": "astra-sim-joint-abi-build/started.json",
+      "sha256": "54a92f44c6c6bb68ff1b1de9b1cf41b3d4cad8ccf11980d80a1db80022c0f28c",
+      "bytes": 2270
+    },
+    {
+      "path": "astra-sim-joint-abi-configure/identity.json",
+      "sha256": "5befa2530d13fcbe563a1dfb754b2ef97f3bff538b9176571ae12a868308efb6",
+      "bytes": 4519
+    },
+    {
+      "path": "astra-sim-joint-abi-configure/run.log",
+      "sha256": "c08100996dd1c0ec72bfa0ca6c4ef7f3bbf83fe1ef8fbf5cde64b645c6cafcda",
+      "bytes": 661
+    },
+    {
+      "path": "astra-sim-joint-abi-configure/started.json",
+      "sha256": "3e60a149be0e6596f27426a7cd28d8eacbf57022dc912100b44fadc74036d1cb",
+      "bytes": 1650
+    },
+    {
+      "path": "astra-sim-joint-config/identity.json",
+      "sha256": "1802fbd6e69ab68054b6cf39055220920f56449427aa4d7f90ae216ba831e458",
+      "bytes": 3429
+    },
+    {
+      "path": "astra-sim-joint-config/run.log",
+      "sha256": "690c4c7bf91da35a3e9dd87d2471a9201344a1db1863c409f80c0268f7b85069",
+      "bytes": 2519
+    },
+    {
+      "path": "astra-sim-joint-config/started.json",
+      "sha256": "dc31cc9896e6debb67ce6f687ec70b35fbd4d654a6c87389ac69743d52b9f38c",
+      "bytes": 1388
+    },
+    {
+      "path": "astra-sim-joint-python-bindings/identity.json",
+      "sha256": "1164d66fb223dff750be98c5e1e1e5211d5463c8545143cdfef4c896acfc0d21",
+      "bytes": 3551
+    },
+    {
+      "path": "astra-sim-joint-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "astra-sim-joint-python-bindings/started.json",
+      "sha256": "27b1aa0ae0a561a185e1a6ad900069b51222fa60329a225f8dc6543782ce6613",
+      "bytes": 1562
+    },
+    {
+      "path": "astra-sim-joint-python-consumers/identity.json",
+      "sha256": "7613f5c2e8e01de8df8948a051137a0c378bfa0a3c6c8a041ca43fbd897761d0",
+      "bytes": 3802
+    },
+    {
+      "path": "astra-sim-joint-python-consumers/run.log",
+      "sha256": "9af1c679f60f48d8be190308f613b28d5a6531e1b8558c8d3dbd597314e47e97",
+      "bytes": 15714
+    },
+    {
+      "path": "astra-sim-joint-python-consumers/started.json",
+      "sha256": "82aa389e104734e1f1f645fa084cd9a6e41a9be835b37e1fed8c940ce70bb110",
+      "bytes": 1762
+    },
+    {
+      "path": "astra-sim-joint-typed-hardware-consumer.json",
+      "sha256": "9f9851da5c681a372a913d871aa2226c95e14fc68574f13eb78524dbf82e0e42",
+      "bytes": 14579
+    },
+    {
+      "path": "astra-sim-joint-typed-resolver/identity.json",
+      "sha256": "61a6d9f4e7559febd0d729bf30b7f7b71e628b594cb44c1a7d69daa44ed1d35c",
+      "bytes": 4242
+    },
+    {
+      "path": "astra-sim-joint-typed-resolver/run.log",
+      "sha256": "7e46afeefc17ddfc1c97a5de7faab5f9447cab38db2d47e492488cb8efa76840",
+      "bytes": 115
+    },
+    {
+      "path": "astra-sim-joint-typed-resolver/started.json",
+      "sha256": "ce4f4400a90a43722cc59f48299f207016a99d1075a46f21accaa6b985a88751",
+      "bytes": 2183
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-abi-build/identity.json",
+      "sha256": "9a725abaeb8a553579485f0dd640ceb118c3e125eb5486c8f256c6dca329d094",
+      "bytes": 5331
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-abi-build/run.log",
+      "sha256": "6c354e8bdb922a404a95bd2d502571f04c14e9c1e45fac251482e6ec7f40a7bf",
+      "bytes": 25683
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-abi-build/started.json",
+      "sha256": "acced2d5f8e68cf87575665ea3ebe1d6905067bacd2d7b324fe786df614b1bd3",
+      "bytes": 2310
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-abi-configure/identity.json",
+      "sha256": "d95352d0ae93fd5dc3447af5aab4c9ac4340d181d664ff1e352c3b57e9e9742b",
+      "bytes": 4226
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-abi-configure/run.log",
+      "sha256": "6414bae44ae67dcf14d310ac61e8750584a0d1d9491c7f246e900d969f1f33f1",
+      "bytes": 666
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-abi-configure/started.json",
+      "sha256": "a46b9e0077f123e0f309c13d706cbd12841cd8ec276aa99e3b2e3acf87735482",
+      "bytes": 1675
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-config/identity.json",
+      "sha256": "59f74130dfecd943e17b696e31b99c341d18d33fb9cf417521883da7293f77d1",
+      "bytes": 3122
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-config/run.log",
+      "sha256": "2f268c8356b92121c9274b774bb16dc079c231e2be9ad134e85f8dd2003f5f31",
+      "bytes": 2921
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-config/started.json",
+      "sha256": "00c088a4ca91b4de15a1546858f6d69aa584eb7c3220578d25742a033769827e",
+      "bytes": 1413
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-python-bindings/identity.json",
+      "sha256": "308676927f11bb8cf61e38ee7bf45afd4268bb490537b9b3c44c419859a91b63",
+      "bytes": 3239
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-python-bindings/started.json",
+      "sha256": "54d1f769c2ec3ef0ea64eace45d94fa8d4509275209d10669d92e36c20030cf2",
+      "bytes": 1581
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-python-consumers/identity.json",
+      "sha256": "ef8483104ce41b2aaa9d27499a2ce249824d7030a17c1cde2b58e6ef0af1d502",
+      "bytes": 3475
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-python-consumers/run.log",
+      "sha256": "7cd2b365bf69583c7e29c0bda4ae9723e25b029a2e86b214ed66211ac497d4f3",
+      "bytes": 11815
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-python-consumers/started.json",
+      "sha256": "3140295a272ee645d4758e4143398737b1532b31c11e2a8127ae97a1c2940241",
+      "bytes": 1766
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-typed-resolver/identity.json",
+      "sha256": "a22051231bfdb589d26b7401465719fd66c2a57aa9be84f307ef1af03979262d",
+      "bytes": 3480
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-typed-resolver/run.log",
+      "sha256": "45157ed0fcf2aa52b48cc3aac341aae02f44b5f3f6c2fecb3c04746722075dbd",
+      "bytes": 10256
+    },
+    {
+      "path": "astra-sim-wscllm-LRU-typed-resolver/started.json",
+      "sha256": "cf64f8a7e99f45ed9aef7c3d9e92eb1f4bd1c41e1126d2001c18f143240639cb",
+      "bytes": 1749
+    },
+    {
+      "path": "astra-sim-wscllm-abi-build/identity.json",
+      "sha256": "3200926a8007aec2b14ab824ca28f35e489cdc7d6c878584aa27373221bcfeaf",
+      "bytes": 4936
+    },
+    {
+      "path": "astra-sim-wscllm-abi-build/run.log",
+      "sha256": "6c23210c153ff101b8908a9c99d8bcca24422a6ba94effad65ab2f3a1ae0bc91",
+      "bytes": 25383
+    },
+    {
+      "path": "astra-sim-wscllm-abi-build/started.json",
+      "sha256": "f64b7e06d1addc0b2d61c01387678f189f479aea912f9dca5f238704d468885a",
+      "bytes": 2278
+    },
+    {
+      "path": "astra-sim-wscllm-abi-configure/identity.json",
+      "sha256": "b855d58cbb3ef61168d62337b3e6692283fb458c5c572405947863536c40024d",
+      "bytes": 3851
+    },
+    {
+      "path": "astra-sim-wscllm-abi-configure/run.log",
+      "sha256": "73c75a9c356c12049536a3a59fc4a9c3528002b9739ce25d5640063eadd2845f",
+      "bytes": 662
+    },
+    {
+      "path": "astra-sim-wscllm-abi-configure/started.json",
+      "sha256": "360505acb51c05fb3e096121616d275376cc1933ad11feb21d5d41b5a8f70be5",
+      "bytes": 1655
+    },
+    {
+      "path": "astra-sim-wscllm-config/identity.json",
+      "sha256": "50be347b67eafbf4f5fc1de49ab710c9a6b86fadfcf8f62d808788ab391f7b6f",
+      "bytes": 2759
+    },
+    {
+      "path": "astra-sim-wscllm-config/run.log",
+      "sha256": "bd51ac56b2e38e905c001c9c3dc61c1e61982657d7a61ffc53768dd394cf8e3f",
+      "bytes": 4260
+    },
+    {
+      "path": "astra-sim-wscllm-config/started.json",
+      "sha256": "46a7ccfea32fb9b4a2d1b442153782ffa3e2374e4d9d7424bcc300c98560eea0",
+      "bytes": 1393
+    },
+    {
+      "path": "astra-sim-wscllm-python-bindings/identity.json",
+      "sha256": "5e0f1ea43b1429dca2a57c3f93f99f090c8011f99f408c20ab4037121b9086f2",
+      "bytes": 2879
+    },
+    {
+      "path": "astra-sim-wscllm-python-bindings/run.log",
+      "sha256": "eedaa4287b01dc75f3d618c5bd46f0042a8fd52294034bdff5f1029214740dcb",
+      "bytes": 43
+    },
+    {
+      "path": "astra-sim-wscllm-python-bindings/started.json",
+      "sha256": "993d8ddd2bc56d27e980cf15fb2e42e0e777ec8d9ab7cc2194a3d2a7ded33a2f",
+      "bytes": 1566
+    },
+    {
+      "path": "astra-sim-wscllm-python-consumers/identity.json",
+      "sha256": "1e4a5ab7a92ef984af744e6786fe0df15a59675094085af0dc743b4bdd99c5e7",
+      "bytes": 3099
+    },
+    {
+      "path": "astra-sim-wscllm-python-consumers/run.log",
+      "sha256": "73717a7c0a07a2923f9979ea89769dd2a58dd8437a1680cdf2e23bf9819b1ace",
+      "bytes": 11586
+    },
+    {
+      "path": "astra-sim-wscllm-python-consumers/started.json",
+      "sha256": "3e31bc2dcee668aa436e625d6907e4ee0afed161eb89789e9149f604ddc728c7",
+      "bytes": 1734
+    },
+    {
+      "path": "astra-sim-wscllm-typed-resolver/identity.json",
+      "sha256": "b7134a88301ed3d2ef763b3ffb11187b0bc33b25553d34e9055131242d7080e2",
+      "bytes": 3113
+    },
+    {
+      "path": "astra-sim-wscllm-typed-resolver/run.log",
+      "sha256": "ce8593701becdebbc604bb13bff6135829cc4f914fb496c3fe089cb300cbd462",
+      "bytes": 10248
+    },
+    {
+      "path": "astra-sim-wscllm-typed-resolver/started.json",
+      "sha256": "34a216368323eeb5a2615fe9e081f47c46744bbb238d187c35c7f669a7f491ee",
+      "bytes": 1724
+    },
+    {
+      "path": "summary.json",
+      "sha256": "2116e75389ed5f2b332a9f4d8efa97ce7eac8172f5ab4cc30cc19602ccb9bf2d",
+      "bytes": 118691
+    }
+  ],
+  "roundtrip_hashes_verified": true,
+  "archiver_sha256": "5fb6899db98c6fe617d8ada0a18308e0593dcefd3b075524a8fc55deb66239e2"
+}
