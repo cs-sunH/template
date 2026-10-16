@@ -1,0 +1,692 @@
+{
+  "cases": [
+    {
+      "k": 128,
+      "m": 1,
+      "n": 128,
+      "samples": [
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 253343,
+            "cpp_new_calls": 3656,
+            "involuntary_switches": 1,
+            "thread_cpu_ns": 525190,
+            "voluntary_switches": 0,
+            "wall_ns": 528288
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 37720,
+            "cpp_new_calls": 318,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 131282,
+            "voluntary_switches": 0,
+            "wall_ns": 130878
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 3748,
+            "voluntary_switches": 0,
+            "wall_ns": 3513
+          },
+          "enumerate": {
+            "cpp_new_bytes": 74835,
+            "cpp_new_calls": 1408,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 182939,
+            "voluntary_switches": 0,
+            "wall_ns": 182626
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 17476,
+            "voluntary_switches": 0,
+            "wall_ns": 17219
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 46321,
+            "voluntary_switches": 0,
+            "wall_ns": 39254
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 253343,
+            "cpp_new_calls": 3656,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 464768,
+            "voluntary_switches": 0,
+            "wall_ns": 464388
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 37720,
+            "cpp_new_calls": 318,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 86102,
+            "voluntary_switches": 0,
+            "wall_ns": 85817
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 2795,
+            "voluntary_switches": 0,
+            "wall_ns": 2555
+          },
+          "enumerate": {
+            "cpp_new_bytes": 74835,
+            "cpp_new_calls": 1408,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 234837,
+            "voluntary_switches": 0,
+            "wall_ns": 233892
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 12535,
+            "voluntary_switches": 0,
+            "wall_ns": 12281
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 27699,
+            "voluntary_switches": 0,
+            "wall_ns": 27063
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 253343,
+            "cpp_new_calls": 3656,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 559549,
+            "voluntary_switches": 0,
+            "wall_ns": 558826
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 37720,
+            "cpp_new_calls": 318,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 80368,
+            "voluntary_switches": 0,
+            "wall_ns": 80071
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 244358,
+            "voluntary_switches": 0,
+            "wall_ns": 243468
+          },
+          "enumerate": {
+            "cpp_new_bytes": 74835,
+            "cpp_new_calls": 1408,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 118049,
+            "voluntary_switches": 0,
+            "wall_ns": 117770
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 10921,
+            "voluntary_switches": 0,
+            "wall_ns": 10674
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 24212,
+            "voluntary_switches": 0,
+            "wall_ns": 23940
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 253343,
+            "cpp_new_calls": 3656,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 839296,
+            "voluntary_switches": 0,
+            "wall_ns": 838226
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 37720,
+            "cpp_new_calls": 318,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 73942,
+            "voluntary_switches": 0,
+            "wall_ns": 73668
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 2430,
+            "voluntary_switches": 0,
+            "wall_ns": 2204
+          },
+          "enumerate": {
+            "cpp_new_bytes": 74835,
+            "cpp_new_calls": 1408,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 141838,
+            "voluntary_switches": 0,
+            "wall_ns": 141522
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 11757,
+            "voluntary_switches": 0,
+            "wall_ns": 11510
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 24434,
+            "voluntary_switches": 0,
+            "wall_ns": 24101
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 253343,
+            "cpp_new_calls": 3656,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1107872,
+            "voluntary_switches": 0,
+            "wall_ns": 1106738
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 37720,
+            "cpp_new_calls": 318,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 470521,
+            "voluntary_switches": 0,
+            "wall_ns": 469781
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 2674,
+            "voluntary_switches": 0,
+            "wall_ns": 2290
+          },
+          "enumerate": {
+            "cpp_new_bytes": 74835,
+            "cpp_new_calls": 1408,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 114052,
+            "voluntary_switches": 0,
+            "wall_ns": 113770
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 15927,
+            "voluntary_switches": 0,
+            "wall_ns": 15508
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 23383,
+            "voluntary_switches": 0,
+            "wall_ns": 22991
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        }
+      ]
+    },
+    {
+      "k": 128,
+      "m": 128,
+      "n": 128,
+      "samples": [
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1173772,
+            "cpp_new_calls": 15343,
+            "involuntary_switches": 1,
+            "thread_cpu_ns": 2375229,
+            "voluntary_switches": 0,
+            "wall_ns": 2378049
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 654128,
+            "cpp_new_calls": 7509,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1195274,
+            "voluntary_switches": 0,
+            "wall_ns": 1194080
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 11468,
+            "voluntary_switches": 0,
+            "wall_ns": 11220
+          },
+          "enumerate": {
+            "cpp_new_bytes": 343799,
+            "cpp_new_calls": 5735,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 728818,
+            "voluntary_switches": 0,
+            "wall_ns": 728122
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 23713,
+            "voluntary_switches": 0,
+            "wall_ns": 23453
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 28104,
+            "voluntary_switches": 0,
+            "wall_ns": 27750
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1173772,
+            "cpp_new_calls": 15343,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1962955,
+            "voluntary_switches": 0,
+            "wall_ns": 1961549
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 654128,
+            "cpp_new_calls": 7509,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 806766,
+            "voluntary_switches": 0,
+            "wall_ns": 806420
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 23780,
+            "voluntary_switches": 0,
+            "wall_ns": 23480
+          },
+          "enumerate": {
+            "cpp_new_bytes": 343799,
+            "cpp_new_calls": 5735,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 640318,
+            "voluntary_switches": 0,
+            "wall_ns": 639105
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 17320,
+            "voluntary_switches": 0,
+            "wall_ns": 17057
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 29776,
+            "voluntary_switches": 0,
+            "wall_ns": 29363
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1173772,
+            "cpp_new_calls": 15343,
+            "involuntary_switches": 1,
+            "thread_cpu_ns": 2502511,
+            "voluntary_switches": 0,
+            "wall_ns": 2505881
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 654128,
+            "cpp_new_calls": 7509,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 826504,
+            "voluntary_switches": 0,
+            "wall_ns": 826140
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 10661,
+            "voluntary_switches": 0,
+            "wall_ns": 10372
+          },
+          "enumerate": {
+            "cpp_new_bytes": 343799,
+            "cpp_new_calls": 5735,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 487646,
+            "voluntary_switches": 0,
+            "wall_ns": 487330
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 14734,
+            "voluntary_switches": 0,
+            "wall_ns": 14487
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 30056,
+            "voluntary_switches": 0,
+            "wall_ns": 29501
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1173772,
+            "cpp_new_calls": 15343,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 3579740,
+            "voluntary_switches": 0,
+            "wall_ns": 3577949
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 654128,
+            "cpp_new_calls": 7509,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1003096,
+            "voluntary_switches": 0,
+            "wall_ns": 1002415
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 11846,
+            "voluntary_switches": 0,
+            "wall_ns": 11592
+          },
+          "enumerate": {
+            "cpp_new_bytes": 343799,
+            "cpp_new_calls": 5735,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1217683,
+            "voluntary_switches": 0,
+            "wall_ns": 1215855
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 17702,
+            "voluntary_switches": 0,
+            "wall_ns": 17421
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 31181,
+            "voluntary_switches": 0,
+            "wall_ns": 30787
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1173772,
+            "cpp_new_calls": 15343,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 2990124,
+            "voluntary_switches": 0,
+            "wall_ns": 2988914
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 654128,
+            "cpp_new_calls": 7509,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1094501,
+            "voluntary_switches": 0,
+            "wall_ns": 1093193
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 11817,
+            "voluntary_switches": 0,
+            "wall_ns": 11566
+          },
+          "enumerate": {
+            "cpp_new_bytes": 343799,
+            "cpp_new_calls": 5735,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 838820,
+            "voluntary_switches": 0,
+            "wall_ns": 837075
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 16486,
+            "voluntary_switches": 0,
+            "wall_ns": 16208
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 31547,
+            "voluntary_switches": 0,
+            "wall_ns": 30809
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        }
+      ]
+    }
+  ],
+  "samples": 5,
+  "scope": "diagnostic allocation counts and phase CPU only; not acceptance timing",
+  "single_os_updates": [
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 0,
+      "owners": 1,
+      "thread_cpu_ns": 18133,
+      "voluntary_switches": 0,
+      "wall_ns": 16817
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 0,
+      "owners": 1,
+      "thread_cpu_ns": 14166,
+      "voluntary_switches": 0,
+      "wall_ns": 13721
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 0,
+      "owners": 1,
+      "thread_cpu_ns": 13397,
+      "voluntary_switches": 0,
+      "wall_ns": 12763
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 0,
+      "owners": 1,
+      "thread_cpu_ns": 14325,
+      "voluntary_switches": 0,
+      "wall_ns": 13540
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 0,
+      "owners": 1,
+      "thread_cpu_ns": 12352,
+      "voluntary_switches": 0,
+      "wall_ns": 11954
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 12024,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 35550,
+      "voluntary_switches": 0,
+      "wall_ns": 34565
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 12024,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 55870,
+      "voluntary_switches": 0,
+      "wall_ns": 54589
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 12024,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 63639,
+      "voluntary_switches": 0,
+      "wall_ns": 62291
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 12024,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 38574,
+      "voluntary_switches": 0,
+      "wall_ns": 37557
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 12024,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 37892,
+      "voluntary_switches": 0,
+      "wall_ns": 37076
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 32768,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 48763,
+      "voluntary_switches": 0,
+      "wall_ns": 47799
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 32768,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 56269,
+      "voluntary_switches": 0,
+      "wall_ns": 54767
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 32768,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 53290,
+      "voluntary_switches": 0,
+      "wall_ns": 52262
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 32768,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 40852,
+      "voluntary_switches": 0,
+      "wall_ns": 40044
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 32768,
+      "cpp_new_calls": 78,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 45105,
+      "voluntary_switches": 0,
+      "wall_ns": 44157
+    }
+  ]
+}

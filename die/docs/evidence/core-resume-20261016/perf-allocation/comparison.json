@@ -1,0 +1,287 @@
+{
+  "scope": "C++ new counts and instrumented thread CPU only; five diagnostic samples, concurrent unrelated build/testing allowed; never replaces failed normal30 wall-clock budget",
+  "configs": {
+    "example_hardware.json": {
+      "cases": [
+        {
+          "m": 1,
+          "phases": {
+            "enumerate": {
+              "baseline": {
+                "cpp_new_calls": 1408,
+                "requested_cpp_new_bytes": 74835,
+                "instrumented_thread_cpu_median_ns": 199094
+              },
+              "candidate": {
+                "cpp_new_calls": 1004,
+                "requested_cpp_new_bytes": 59707,
+                "instrumented_thread_cpu_median_ns": 99796
+              }
+            },
+            "all_candidate_runtime_with_validation": {
+              "baseline": {
+                "cpp_new_calls": 318,
+                "requested_cpp_new_bytes": 37720,
+                "instrumented_thread_cpu_median_ns": 73367
+              },
+              "candidate": {
+                "cpp_new_calls": 314,
+                "requested_cpp_new_bytes": 37016,
+                "instrumented_thread_cpu_median_ns": 65938
+              }
+            },
+            "actual_full_compile": {
+              "baseline": {
+                "cpp_new_calls": 3676,
+                "requested_cpp_new_bytes": 254361,
+                "instrumented_thread_cpu_median_ns": 506746
+              },
+              "candidate": {
+                "cpp_new_calls": 3260,
+                "requested_cpp_new_bytes": 233537,
+                "instrumented_thread_cpu_median_ns": 438862
+              }
+            }
+          },
+          "winner_hash_equal": true
+        },
+        {
+          "m": 128,
+          "phases": {
+            "enumerate": {
+              "baseline": {
+                "cpp_new_calls": 5038,
+                "requested_cpp_new_bytes": 306653,
+                "instrumented_thread_cpu_median_ns": 948053
+              },
+              "candidate": {
+                "cpp_new_calls": 3624,
+                "requested_cpp_new_bytes": 253705,
+                "instrumented_thread_cpu_median_ns": 502717
+              }
+            },
+            "all_candidate_runtime_with_validation": {
+              "baseline": {
+                "cpp_new_calls": 7656,
+                "requested_cpp_new_bytes": 656604,
+                "instrumented_thread_cpu_median_ns": 1234131
+              },
+              "candidate": {
+                "cpp_new_calls": 7586,
+                "requested_cpp_new_bytes": 642556,
+                "instrumented_thread_cpu_median_ns": 1152578
+              }
+            },
+            "actual_full_compile": {
+              "baseline": {
+                "cpp_new_calls": 14864,
+                "requested_cpp_new_bytes": 1138988,
+                "instrumented_thread_cpu_median_ns": 2141593
+              },
+              "candidate": {
+                "cpp_new_calls": 13352,
+                "requested_cpp_new_bytes": 1054520,
+                "instrumented_thread_cpu_median_ns": 2033385
+              }
+            }
+          },
+          "winner_hash_equal": true
+        }
+      ],
+      "os_updates": [
+        {
+          "owners": 1,
+          "results": {
+            "baseline": {
+              "cpp_new_calls": 51,
+              "requested_cpp_new_bytes": 3720,
+              "path": "packing",
+              "instrumented_thread_cpu_median_ns": 7625
+            },
+            "candidate": {
+              "cpp_new_calls": 49,
+              "requested_cpp_new_bytes": 3272,
+              "path": "packing",
+              "instrumented_thread_cpu_median_ns": 5662
+            }
+          }
+        },
+        {
+          "owners": 8,
+          "results": {
+            "baseline": {
+              "cpp_new_calls": 58,
+              "requested_cpp_new_bytes": 10368,
+              "path": "packing",
+              "instrumented_thread_cpu_median_ns": 20773
+            },
+            "candidate": {
+              "cpp_new_calls": 52,
+              "requested_cpp_new_bytes": 6256,
+              "path": "packing",
+              "instrumented_thread_cpu_median_ns": 22647
+            }
+          }
+        },
+        {
+          "owners": 32,
+          "results": {
+            "baseline": {
+              "cpp_new_calls": 58,
+              "requested_cpp_new_bytes": 31112,
+              "path": "packing",
+              "instrumented_thread_cpu_median_ns": 35492
+            },
+            "candidate": {
+              "cpp_new_calls": 52,
+              "requested_cpp_new_bytes": 16048,
+              "path": "packing",
+              "instrumented_thread_cpu_median_ns": 35290
+            }
+          }
+        }
+      ]
+    },
+    "tx8_compute_matched_hardware.json": {
+      "cases": [
+        {
+          "m": 1,
+          "phases": {
+            "enumerate": {
+              "baseline": {
+                "cpp_new_calls": 1408,
+                "requested_cpp_new_bytes": 74835,
+                "instrumented_thread_cpu_median_ns": 141838
+              },
+              "candidate": {
+                "cpp_new_calls": 1004,
+                "requested_cpp_new_bytes": 59707,
+                "instrumented_thread_cpu_median_ns": 140552
+              }
+            },
+            "all_candidate_runtime_with_validation": {
+              "baseline": {
+                "cpp_new_calls": 318,
+                "requested_cpp_new_bytes": 37720,
+                "instrumented_thread_cpu_median_ns": 86102
+              },
+              "candidate": {
+                "cpp_new_calls": 314,
+                "requested_cpp_new_bytes": 37016,
+                "instrumented_thread_cpu_median_ns": 92232
+              }
+            },
+            "actual_full_compile": {
+              "baseline": {
+                "cpp_new_calls": 3656,
+                "requested_cpp_new_bytes": 253343,
+                "instrumented_thread_cpu_median_ns": 559549
+              },
+              "candidate": {
+                "cpp_new_calls": 3240,
+                "requested_cpp_new_bytes": 232519,
+                "instrumented_thread_cpu_median_ns": 560624
+              }
+            }
+          },
+          "winner_hash_equal": true
+        },
+        {
+          "m": 128,
+          "phases": {
+            "enumerate": {
+              "baseline": {
+                "cpp_new_calls": 5735,
+                "requested_cpp_new_bytes": 343799,
+                "instrumented_thread_cpu_median_ns": 728818
+              },
+              "candidate": {
+                "cpp_new_calls": 4119,
+                "requested_cpp_new_bytes": 283287,
+                "instrumented_thread_cpu_median_ns": 635387
+              }
+            },
+            "all_candidate_runtime_with_validation": {
+              "baseline": {
+                "cpp_new_calls": 7509,
+                "requested_cpp_new_bytes": 654128,
+                "instrumented_thread_cpu_median_ns": 1003096
+              },
+              "candidate": {
+                "cpp_new_calls": 7435,
+                "requested_cpp_new_bytes": 639312,
+                "instrumented_thread_cpu_median_ns": 1315391
+              }
+            },
+            "actual_full_compile": {
+              "baseline": {
+                "cpp_new_calls": 15343,
+                "requested_cpp_new_bytes": 1173772,
+                "instrumented_thread_cpu_median_ns": 2502511
+              },
+              "candidate": {
+                "cpp_new_calls": 13621,
+                "requested_cpp_new_bytes": 1078476,
+                "instrumented_thread_cpu_median_ns": 2220293
+              }
+            }
+          },
+          "winner_hash_equal": true
+        }
+      ],
+      "os_updates": [
+        {
+          "owners": 1,
+          "results": {
+            "baseline": {
+              "cpp_new_calls": 71,
+              "requested_cpp_new_bytes": 5376,
+              "path": "ratio",
+              "instrumented_thread_cpu_median_ns": 14166
+            },
+            "candidate": {
+              "cpp_new_calls": 71,
+              "requested_cpp_new_bytes": 5376,
+              "path": "ratio",
+              "instrumented_thread_cpu_median_ns": 42292
+            }
+          }
+        },
+        {
+          "owners": 8,
+          "results": {
+            "baseline": {
+              "cpp_new_calls": 78,
+              "requested_cpp_new_bytes": 12024,
+              "path": "ratio",
+              "instrumented_thread_cpu_median_ns": 38574
+            },
+            "candidate": {
+              "cpp_new_calls": 74,
+              "requested_cpp_new_bytes": 8360,
+              "path": "ratio",
+              "instrumented_thread_cpu_median_ns": 41027
+            }
+          }
+        },
+        {
+          "owners": 32,
+          "results": {
+            "baseline": {
+              "cpp_new_calls": 78,
+              "requested_cpp_new_bytes": 32768,
+              "path": "ratio",
+              "instrumented_thread_cpu_median_ns": 48763
+            },
+            "candidate": {
+              "cpp_new_calls": 74,
+              "requested_cpp_new_bytes": 18152,
+              "path": "ratio",
+              "instrumented_thread_cpu_median_ns": 47036
+            }
+          }
+        }
+      ]
+    }
+  }
+}
