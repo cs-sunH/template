@@ -1,0 +1,5 @@
+{
+  "scope": "fix fixture duplicate activity ID only; all original assertions preserved",
+  "original_sha256": "5870b2e55eccbc523bdb65ccb1a9d955071d123fe3e2bccf930c6315ebc59086",
+  "updated_sha256": "51b289d073440907ab07356dbbb49a069375c6a9165d82915fd1d4151eb83df1"
+}

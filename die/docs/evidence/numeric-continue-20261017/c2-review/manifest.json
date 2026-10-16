@@ -1,115 +1,115 @@
 [
   {
     "original_path": "work/runtime-resume-20261017/baseline-build.json",
-    "stored_path": "work/runtime-resume-20261017/baseline-build.json",
+    "stored_path": "raw/runtime-resume-20261017/baseline-build.json",
     "bytes": 14732,
     "sha256": "c2cefe61193cb70c6d2a3205fcdbdcd72daac56724fec7e2166d1fed03a76f5d"
   },
   {
     "original_path": "work/runtime-resume-20261017/baseline-configure.json",
-    "stored_path": "work/runtime-resume-20261017/baseline-configure.json",
+    "stored_path": "raw/runtime-resume-20261017/baseline-configure.json",
     "bytes": 14531,
     "sha256": "15d608f6fa96a8eb4acc3cbb93a134916893d53c2b63aec1612f811b95dbc833"
   },
   {
     "original_path": "work/runtime-resume-20261017/baseline-build.log",
-    "stored_path": "work/runtime-resume-20261017/baseline-build.log",
+    "stored_path": "raw/runtime-resume-20261017/baseline-build.log.gz",
     "bytes": 19569,
     "sha256": "affcce33542450d1b2de14fbc10fdee04857631a0cc07f651d05c28e24ae5561"
   },
   {
     "original_path": "work/runtime-resume-20261017/baseline-configure.log",
-    "stored_path": "work/runtime-resume-20261017/baseline-configure.log",
+    "stored_path": "raw/runtime-resume-20261017/baseline-configure.log.gz",
     "bytes": 769,
     "sha256": "c3a2fadc426295fca618106ea467466cf27258140254dd18c535c4aed81681e4"
   },
   {
     "original_path": "work/runtime-resume-20261017/c2-configure.json",
-    "stored_path": "work/runtime-resume-20261017/c2-configure.json",
+    "stored_path": "raw/runtime-resume-20261017/c2-configure.json",
     "bytes": 14692,
     "sha256": "05a4e5a38b978ca6711c2c5a46cfa25c176f6de4dda9eb015bf9b01f2f4f1dd9"
   },
   {
     "original_path": "work/runtime-resume-20261017/c2-build.json",
-    "stored_path": "work/runtime-resume-20261017/c2-build.json",
+    "stored_path": "raw/runtime-resume-20261017/c2-build.json",
     "bytes": 14724,
     "sha256": "f4f66953eaf44f27320d215ba8ecf93c8b12a7f26a08cfbb00a5a5c9fc1dafeb"
   },
   {
     "original_path": "work/runtime-resume-20261017/c2-build.log",
-    "stored_path": "work/runtime-resume-20261017/c2-build.log",
+    "stored_path": "raw/runtime-resume-20261017/c2-build.log.gz",
     "bytes": 22944,
     "sha256": "6de15b64b561144e5ba2e2abd36664e279438cf0802cf475c5cb15762e5a9240"
   },
   {
     "original_path": "work/runtime-resume-20261017/c2-configure.log",
-    "stored_path": "work/runtime-resume-20261017/c2-configure.log",
+    "stored_path": "raw/runtime-resume-20261017/c2-configure.log.gz",
     "bytes": 646,
     "sha256": "df28f40ea8536eef8740dd2d0f82f31a394a51589badd58d69873179fd634905"
   },
   {
     "original_path": "work/runtime-resume-20261017/driver-fix.json",
-    "stored_path": "work/runtime-resume-20261017/driver-fix.json",
+    "stored_path": "raw/runtime-resume-20261017/driver-fix.json",
     "bytes": 268,
     "sha256": "2d4f5d245f5be9237505cacde1a5c3b1fad167c2f50a1c155f90f4f629ce7256"
   },
   {
     "original_path": "work/runtime-resume-20261017/review-baseline-c2/identity.json",
-    "stored_path": "work/runtime-resume-20261017/review-baseline-c2/identity.json",
+    "stored_path": "raw/runtime-resume-20261017/review-baseline-c2/identity.json",
     "bytes": 4712,
     "sha256": "aca96577ccde24ebac38450a0c40ca81380e03a9aaef87487a854a9cf5c86938"
   },
   {
     "original_path": "work/runtime-resume-20261017/review-baseline-c2/baseline.log",
-    "stored_path": "work/runtime-resume-20261017/review-baseline-c2/baseline.log",
+    "stored_path": "raw/runtime-resume-20261017/review-baseline-c2/baseline.log.gz",
     "bytes": 36,
     "sha256": "45e5c6c94eb9df64fece430da60abd8494cbebca4617a258d589eb4aba11c40b"
   },
   {
     "original_path": "work/runtime-resume-20261017/review-baseline-c2/baseline-link.log",
-    "stored_path": "work/runtime-resume-20261017/review-baseline-c2/baseline-link.log",
+    "stored_path": "raw/runtime-resume-20261017/review-baseline-c2/baseline-link.log.gz",
     "bytes": 0,
     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   {
     "original_path": "work/runtime-resume-20261017/review-baseline-c2/c2.log",
-    "stored_path": "work/runtime-resume-20261017/review-baseline-c2/c2.log",
+    "stored_path": "raw/runtime-resume-20261017/review-baseline-c2/c2.log.gz",
     "bytes": 30,
     "sha256": "e375884d5f1e278b5ff20e3f138e4f3b1cfcbd899ba2bc3ea3992f24ab22e79b"
   },
   {
     "original_path": "work/runtime-resume-20261017/review-baseline-c2/c2-link.log",
-    "stored_path": "work/runtime-resume-20261017/review-baseline-c2/c2-link.log",
+    "stored_path": "raw/runtime-resume-20261017/review-baseline-c2/c2-link.log.gz",
     "bytes": 0,
     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   {
     "original_path": "work/runtime-resume-20261017/review-baseline-c2/compile.log",
-    "stored_path": "work/runtime-resume-20261017/review-baseline-c2/compile.log",
+    "stored_path": "raw/runtime-resume-20261017/review-baseline-c2/compile.log.gz",
     "bytes": 1567,
     "sha256": "4f6c464acb041539f8f5520c39e0518c1951032b234ffe501658b393b1c32409"
   },
   {
     "original_path": "work/runtime-resume-20261017/review-baseline-c2/baseline/report.json",
-    "stored_path": "work/runtime-resume-20261017/review-baseline-c2/baseline/report.json.gz",
+    "stored_path": "raw/runtime-resume-20261017/review-baseline-c2/baseline/report.json.gz",
     "bytes": 363420,
     "sha256": "269aa1cae807fbce94cf79fa97b22bd44d3ecd6a54300e498e6bed6ecc9fd46c"
   },
   {
     "original_path": "work/runtime-resume-20261017/review-baseline-c2/c2/report.json",
-    "stored_path": "work/runtime-resume-20261017/review-baseline-c2/c2/report.json.gz",
+    "stored_path": "raw/runtime-resume-20261017/review-baseline-c2/c2/report.json.gz",
     "bytes": 363755,
     "sha256": "d614a5ac00a4f469c024909eed85533c858113b464dd51b9412eca818c67844b"
   },
   {
     "original_path": "work/runtime-positive-time-v2/prepare-identity.json",
-    "stored_path": "work/runtime-positive-time-v2/prepare-identity.json",
+    "stored_path": "raw/runtime-positive-time-v2/prepare-identity.json",
     "bytes": 488,
     "sha256": "cc00b21317d779d4d1d8ec563bd5fb878c5d0ca10de321a0329ba34f93ee4a14"
   },
   {
     "original_path": "work/runtime-positive-time-v2/time-only-v2.patch",
-    "stored_path": "work/runtime-positive-time-v2/time-only-v2.patch",
+    "stored_path": "raw/runtime-positive-time-v2/time-only-v2.patch",
     "bytes": 13205,
     "sha256": "fffa6bba3cd3cb4e3f4f31fdfe9a30e749b362bb5ddfe0d93a4c04cbd4e8a13f"
   }

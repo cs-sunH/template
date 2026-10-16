@@ -1,0 +1,8 @@
+{
+  "scope": "isolated time-only v2; not production/adoption",
+  "parent_candidate_source_sha256": "1b2b61023e7a9e4503743bbc7bba87618f86f4ea74a571b7d062efe56cd602a5",
+  "baseline_source_sha256": "6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e",
+  "candidate_source_sha256": "c05012f6fa18250e717253dfa2d0f057e72d755e46d77eb25e48dd53bab1c6fc",
+  "preparer_sha256": "ed80f1594eef1a350c17d91f1159469ceae7bfcc73df223c01a33899c3d7d2b1",
+  "parent_candidate_unchanged": true
+}

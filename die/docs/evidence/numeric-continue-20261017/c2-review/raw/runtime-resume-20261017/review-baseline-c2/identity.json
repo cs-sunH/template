@@ -1,0 +1,109 @@
+{
+  "scope": "fresh explicit-library synthetic numerical probe; no hardware calibration",
+  "source": "/workspace/template/die/docs/analysis/numeric-continue-20261017/time_only_review_driver.cc",
+  "source_sha256": "86d8b276bb61616ca2b9f80e1f189a176402fdef9cbef4210bef005a6f958cce",
+  "runner_sha256": "9007f460aec19854d4f3779fe82432ee91c05ca8e864bba9eec30cc175ea7dc7",
+  "steps": [
+    {
+      "label": "compile",
+      "command": [
+        "g++",
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-I/workspace/template/die/include",
+        "-I/workspace/template/die/tests",
+        "-I/workspace/template/astra-sim-wscllm/extern/helper",
+        "-DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/die\"",
+        "-DCOARSE_DIE_ROOT_DIR=\"/workspace/template\"",
+        "-c",
+        "/workspace/template/die/docs/analysis/numeric-continue-20261017/time_only_review_driver.cc",
+        "-o",
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/probe.o"
+      ],
+      "started_unix": 1792187005.2671983,
+      "return_code": 0,
+      "finished_unix": 1792187009.949193,
+      "log_sha256": "4f6c464acb041539f8f5520c39e0518c1951032b234ffe501658b393b1c32409"
+    },
+    {
+      "label": "baseline-link",
+      "command": [
+        "g++",
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/probe.o",
+        "/workspace/template/work/build-numeric-baseline-20261017/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/baseline-probe"
+      ],
+      "started_unix": 1792187009.9521456,
+      "return_code": 0,
+      "finished_unix": 1792187010.0406752,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "baseline",
+      "command": [
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/baseline-probe",
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/baseline",
+        "baseline"
+      ],
+      "started_unix": 1792187010.0417378,
+      "return_code": 1,
+      "finished_unix": 1792187010.0492232,
+      "log_sha256": "45e5c6c94eb9df64fece430da60abd8494cbebca4617a258d589eb4aba11c40b"
+    },
+    {
+      "label": "c2-link",
+      "command": [
+        "g++",
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/probe.o",
+        "/workspace/template/work/build-numeric-c2-20261017/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/c2-probe"
+      ],
+      "started_unix": 1792187010.0530183,
+      "return_code": 0,
+      "finished_unix": 1792187010.1138046,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "c2",
+      "command": [
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/c2-probe",
+        "/workspace/template/work/runtime-resume-20261017/review-baseline-c2/c2",
+        "c2"
+      ],
+      "started_unix": 1792187010.1146402,
+      "return_code": 1,
+      "finished_unix": 1792187010.1203644,
+      "log_sha256": "e375884d5f1e278b5ff20e3f138e4f3b1cfcbd899ba2bc3ea3992f24ab22e79b"
+    }
+  ],
+  "header_sha256": {
+    "die/include/coarse_die/Execution.hh": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+    "die/include/coarse_die/Hardware.hh": "629892410d0b77172fedb13f8eaf1633204eea5f9650ca2bf7469cbf20f0011c",
+    "die/include/coarse_die/Memory.hh": "0a3fc4aa58d1ecd2fedb8248d55080b9d30a12b7a476864a37f9b44d6e20022c",
+    "die/include/coarse_die/Plan.hh": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+    "die/include/coarse_die/Prediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "die/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11"
+  },
+  "object_sha256": "24e998357e74dc056c647ae022a04887213d9ab1ab2b0b142ef7c7bb00af18e0",
+  "libraries": {
+    "baseline": {
+      "path": "/workspace/template/work/build-numeric-baseline-20261017/libcoarse_die.a",
+      "sha256": "2555dff153b393a303a6a0899638993bd439e84ec15247f46b4fb2014e74f19c",
+      "executable_sha256": "c333829efe977f39b3ace0b1fd85acd2ae720fd1c1cf21b9a4f99fb5c501c847",
+      "unchanged": true
+    },
+    "c2": {
+      "path": "/workspace/template/work/build-numeric-c2-20261017/libcoarse_die.a",
+      "sha256": "fedea718c17c36401d4877860db5af4fb5d3fa8c5f6b3f7ccbcb57950fd78066",
+      "executable_sha256": "99456a2fa04f2935edad78dfbcc6dd62570e789c3656ca5eaebd199bf240cfba",
+      "unchanged": true
+    }
+  },
+  "source_unchanged": true,
+  "passed": false
+}
