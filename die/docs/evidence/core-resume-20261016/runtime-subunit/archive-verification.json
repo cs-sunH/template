@@ -1,0 +1,10 @@
+{
+  "status": "verified",
+  "copied_payloads": 358,
+  "all_source_and_archive_payload_hashes_match": true,
+  "checksummed_files": 362,
+  "no_elf_static_archives_objects_cache": true,
+  "production_execution_matches_baseline": true,
+  "candidate_execution_still_matches_public_relink": true,
+  "finalizer_sha256": "dd803710ea29ee4157747ebd0b10503147bce39c1b8d63c4c490e65965e55676"
+}

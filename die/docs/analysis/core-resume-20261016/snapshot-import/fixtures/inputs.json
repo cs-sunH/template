@@ -1,0 +1,198 @@
+{
+  "captured_failure": {
+    "fork_failed": {
+      "error": "{\"field_path\":\"invalid_snapshot\",\"reason\":\"invalid_snapshot: published activity allocation differs from canonical LP: id=4 saved_rate=7.862645685395645909011e+06 rebuilt_rate=7.862645685395650565624e+06 saved_alpha=6.878048780487804325645e-01 rebuilt_alpha=6.878048780487804325645e-01\",\"schema_version\":2,\"status_code\":1}",
+      "status_code": 1
+    }
+  },
+  "config": {
+    "architecture": {
+      "core_columns_nx": 10,
+      "core_pitch_x_mm": 0,
+      "core_pitch_y_mm": 0,
+      "core_rows_ny": 10,
+      "die_extra_height_mm": 0.1,
+      "die_extra_width_mm": 0.1,
+      "die_geometry": "explicit",
+      "die_height_mm": 32,
+      "die_width_mm": 25,
+      "hbm_placement_mode": "two_sides_one_row_each",
+      "hbm_stacks_per_row": 2,
+      "noc_width_bits": 512,
+      "sram_mib_per_core": 0.75
+    },
+    "core_resource_table": {
+      "id": "core32_v1",
+      "rows_sha256": "d66b4a76122742ed91102d75305e01f10a8241213c96ed2289ecd51a1f7aa346"
+    },
+    "performance_profile": {
+      "calibration_status": "assumed",
+      "eta_hbm_matrix": 0.7,
+      "eta_hbm_vector": 0.7,
+      "eta_inject": 0.7,
+      "eta_local": 0.7,
+      "eta_mesh": 0.7,
+      "eta_pe": 0.9,
+      "eta_sram": 1.0,
+      "eta_vec": 0.9,
+      "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+      "granularity_validation": "not_run",
+      "kappa_acc_convert_eqops": 2,
+      "kappa_quant_eqops": 4,
+      "launch_ns_per_macro": 1000,
+      "memory_setup_ns_per_macro": 0,
+      "physical_topology_validation": "unverified",
+      "pipeline_profile": "pipeline_fluid_v2",
+      "rho_sram": 0.9,
+      "routing_profile": "mapped_uniform_sources_v2",
+      "timing_topology_profile": "distributed_ideal_v2"
+    },
+    "schema": "coarse_die_v2",
+    "source_constants": {
+      "bump_communication_fraction": 0.4,
+      "bump_pitch_mm": 0.055,
+      "bump_rate_bits_per_s": 2500000000.0,
+      "clock_hz": 1000000000.0,
+      "hbm_gap_mm": 0.15,
+      "hbm_sku": "Micron MT65B18G16120A00QH-92:A",
+      "hbm_stack_capacity_bytes": 36000000000.0,
+      "hbm_stack_height_mm": 10.98,
+      "hbm_stack_peak_bytes_per_s": 1177600000000.0,
+      "hbm_stack_thickness_mm": 0.78,
+      "hbm_stack_width_bits": 1024,
+      "hbm_stack_width_mm": 10.98,
+      "hbm_transfer_per_s": 9200000000.0,
+      "noc_base_area_fraction": 0.15,
+      "noc_base_width_bits": 256,
+      "noc_fixed_fraction": 0.2,
+      "noc_width_fraction": 0.8,
+      "pe_area_mm2": 3.76e-05,
+      "pe_int4_ops_per_mac": 2,
+      "pe_per_vec_ratio": 19.777,
+      "process_node_nm": 7,
+      "sram_quarter_mib_long_side_mm": 0.40662,
+      "sram_short_side_mm": 0.13925,
+      "sram_wordwidth_bits": 1024,
+      "vec_lane_fp32_eq_ops_per_s": 3955400000.0,
+      "vec_lane_height_mm": 0.1265,
+      "vec_lane_width_mm": 0.1897
+    },
+    "source_revision": "41f119135fd2d4cc87292f59b4b00adc918eece0",
+    "validation_constraints": {
+      "allow_reticle_rotation": true,
+      "require_nonnegative_d2d_budget": true,
+      "reticle_height_mm": 33,
+      "reticle_width_mm": 26
+    }
+  },
+  "tasks": [
+    {
+      "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+      "fusion_policy": "auto",
+      "layer_instances": 1,
+      "op_kind": "gemm",
+      "phase": "prefill",
+      "schema": "coarse_die_task_v2",
+      "storage_dtype": {
+        "accumulator": "fp32",
+        "activations": "bf16",
+        "output": "bf16",
+        "weights": "int4"
+      },
+      "tensor_shapes": {
+        "k": 128,
+        "m": 4,
+        "n": 128
+      },
+      "weight_passes": 1
+    },
+    {
+      "die_op_spec": {
+        "dtype": "bf16",
+        "fusion_policy": "auto",
+        "kv_access": {
+          "identity": "local"
+        },
+        "layer_count": 1,
+        "model_dims": {
+          "ffn": 256,
+          "head_dim": 32,
+          "hidden": 128,
+          "mlp_variant": "swiglu",
+          "norm_type": "rmsnorm",
+          "num_kv_heads": 2,
+          "num_q_heads": 4,
+          "position_encoding": "rope",
+          "vocab": 512
+        },
+        "op_kind": "norm",
+        "phase": "prefill",
+        "schema_version": 1,
+        "spans": [
+          {
+            "kv_start_pos": 0,
+            "kv_tokens": 16,
+            "q_start_pos": 12,
+            "q_tokens": 4,
+            "request_id": "example-prefill"
+          }
+        ],
+        "tp_slice": {
+          "ffn_local": 256,
+          "kv_heads_local": 2,
+          "q_heads_local": 4,
+          "tensor_parallel": 1,
+          "tensor_parallel_rank": 0,
+          "vocab_local": 512
+        },
+        "weight_passes": 1
+      }
+    },
+    {
+      "die_op_spec": {
+        "dtype": "bf16",
+        "fusion_policy": "auto",
+        "kv_access": {
+          "identity": "local"
+        },
+        "layer_count": 1,
+        "model_dims": {
+          "ffn": 256,
+          "head_dim": 32,
+          "hidden": 128,
+          "mlp_variant": "swiglu",
+          "norm_type": "rmsnorm",
+          "num_kv_heads": 2,
+          "num_q_heads": 4,
+          "position_encoding": "rope",
+          "vocab": 512
+        },
+        "op_kind": "residual",
+        "phase": "prefill",
+        "schema_version": 1,
+        "spans": [
+          {
+            "kv_start_pos": 0,
+            "kv_tokens": 16,
+            "q_start_pos": 12,
+            "q_tokens": 4,
+            "request_id": "example-prefill"
+          }
+        ],
+        "tp_slice": {
+          "ffn_local": 256,
+          "kv_heads_local": 2,
+          "q_heads_local": 4,
+          "tensor_parallel": 1,
+          "tensor_parallel_rank": 0,
+          "vocab_local": 512
+        },
+        "weight_passes": 1
+      }
+    }
+  ],
+  "trace": {
+    "mode": "split",
+    "owners": 8
+  }
+}

@@ -1,0 +1,2603 @@
+{
+  "scope": "scratch candidate Runtime from current-source Execution, unchanged current-session fresh objects; independently assembled static/CABI libraries and relinked public tests; not a final clean CMake source build or adoption",
+  "head": "6a7deee47dab40389febb9238e2e80c78655af8e",
+  "started_unix": 1792155099.1076198,
+  "public51_identity_sha256": "31702e6ede162973e3829856aac5ec56ac652f6b2f96460b1a4f998c37b026cf",
+  "candidate_source_sha256": "66f34d699d79b3c6dcffc5af04002799f3b1bfa4d4dcb569165825fc6a3f655a",
+  "source_before": {
+    "die/src/RatioAllocation.hh": "ce5a040d44a4e4cfef1dbc9e9e0fd6dbbfb9eef335ed8482c2c5cf7392953fb8",
+    "die/src/Mapping.cc": "a5208b17d7f017c62f691a4d0196c46b6cea4b1fa62a2e353880e68708996289",
+    "die/src/EquivalentWork.hh": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+    "die/src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+    "die/src/Hardware.cc": "d2fe3d9d807757c5cfc87903ff717532922d581cf4590056a432324f895a64d4",
+    "die/src/Compiler.cc": "64ebea9e2fb5c17de30fdea1197867dd721b415679f7b9d457d09148bf3e9ab2",
+    "die/src/ElementwiseGeometry.hh": "4ca382e619b21de677de876187436c2fdf7df735d3f4ea16ec05df337a50df81",
+    "die/src/Plan.cc": "c80c34afa81196b83cbf79284c982c4273d0e3d9ad7bc2fe1eab26189282a872",
+    "die/src/RegionDelay.hh": "778db1de98fdd8c8782890ca343cad897efc9b6b5f67952b8235caf30c1e6c95",
+    "die/src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "die/src/GemmOSRouteCounter.hh": "298437831747470beaa2ee2f72f4c96ac60d98afc566e30722f348affea41ec9",
+    "die/src/GemmOSReadiness.hh": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+    "die/src/Execution.cc": "3c9d58a0ed8c6b64450b86cac1059b3a1dba7b604caf67b31f00034c673e3043",
+    "die/src/Capi.cc": "c924fa5867c52c4c0d38abec8f718d8985580e39da7ee610ee2b8beb47a6542d",
+    "die/src/CompilerInternal.hh": "e935c36d02d128d197e693e7240820a5773b8f5ea7cb6cb1a7134651502b2bec",
+    "die/src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+    "die/src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+    "die/src/PackingAllocation.hh": "6fca2771bd406db3c12a0fffa6dddbc08392d6f4647368250a5547899316c75f",
+    "die/include/coarse_die/Hardware.hh": "629892410d0b77172fedb13f8eaf1633204eea5f9650ca2bf7469cbf20f0011c",
+    "die/include/coarse_die/Capi.h": "8fa8be05f57599cbc0485da601b88f4a2fbf368c0af4086d5929cac98d7a2f89",
+    "die/include/coarse_die/Plan.hh": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+    "die/include/coarse_die/Prediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "die/include/coarse_die/Memory.hh": "0a3fc4aa58d1ecd2fedb8248d55080b9d30a12b7a476864a37f9b44d6e20022c",
+    "die/include/coarse_die/Execution.hh": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea",
+    "die/configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+    "die/configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+    "die/configs/example_hardware.json": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a",
+    "die/configs/example_hardware_explicit.json": "b275a326cceec297073a291ba230a9f0c8aeee21fbeb61454cebff8679ca4b3e",
+    "die/configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+    "die/configs/core32.json": "e89d353e29ffec23c50590d81344f44dd5b0d424c8361521ddf79fbe32c70986",
+    "die/configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+    "die/configs/tx8_compute_matched_hardware.json": "90941cc259673d144c2d17c1ee44d08837270de802d99a9307d426afee81bb5c",
+    "die/tests/region_delay_math_test.cc": "3834606812762ecbb91290f4b13a8302b2c755b3e790a8f9d30a4d974ead22a9",
+    "die/tests/k_readiness_runtime_driver.cc": "43fc90563dc60f34682e5c05ad2e99e2a2ee217db8c15dc30be61e69e09ea71d",
+    "die/tests/capi_cache_response_test.cc": "11fd8185a7834e61b581ebaf91b6177a5bdfbeb1dcaa8df07afbd0e058cecdcd",
+    "die/tests/norm_row_accounting_test.cc": "ee7587c186c10e2d871024f76d7c7553ed829692dc10a87fbcb6ac733a78dd8a",
+    "die/tests/service_curve_schema_test.cc": "b666748f3ccd6f78c0cf95117cebb4d4648a808382c9ad099de689162bda5339",
+    "die/tests/region_overhead_test.cc": "2f95ef9bc432116410babce5b2df8d1c0c10cafee7fb10d67f098641c9b55eae",
+    "die/tests/compiled_gemm_oracle_driver.cc": "e5c954b917838431366082bbd442191c372c4ee951781c83a660f63b5e4caa6d",
+    "die/tests/compile_execution_test.cc": "aff7176cd22f2d2fae64ad6ac42778fa359381e2294e0c3b09f245d79af8b527",
+    "die/tests/elementwise_service_test.cc": "d383064a2961064463f7de3f77ec5a8a4fb14949954632f3375181454e80d0eb",
+    "die/tests/task_schema_test.cc": "565acfa7a880ca03bd4de584cddce260f724eaabaa1f6946ad80cd3c10dd7af8",
+    "die/tests/source_golden_test.cc": "c68973206bf4292ffca66c6e21faf1acb63b2cdbdb29142d6a0200fc6e5a37cf",
+    "die/tests/workspace_envelope_test.cc": "9c259b7b19b2c9f94c79815a1f671f8a4928a6ee599f3a21bc8a2f09e0542cf0",
+    "die/tests/fused_ffn_accounting_test.cc": "275f5ec711b435f0f14647f3c71245875ded1a8dee9f23d86dc9fd43e4451c05",
+    "die/tests/os_lifecycle_runtime_driver.cc": "4482ddfe0b42ab6c452712028a96e7192e527a9beaecb052199c3cd0fd4fa9ea",
+    "die/tests/compiler_credit_test.cc": "80f5df261c0805e5133b3e06e746e8da6bb398c2ebc59e66d5db66e79a657609",
+    "die/tests/runtime_clock_translation_test.cc": "72ace48a497a33f62b0901cebdb5ea751186c70279f2524f56fcbded77de8e49",
+    "die/tests/gemm_os_route_counter_test.cc": "42ebe2fa66ca913aec678693a356b670210d6aa0f353c02d36953b5cd87e48dc",
+    "die/tests/runtime_submit_transaction_test.cc": "5e571810ac0bfdfa4910eea6d7421efedead078dd1b82a344cbb48899ebacf6e",
+    "die/tests/elementwise_oracle_driver.cc": "dfb73c351e8b3749d4f0c296ec0b7c1cb67598c266e4a052cd635b91e1721075",
+    "die/tests/capi_cost_query_test.cc": "fc6893afd8fce67c657086921dda1eca19825d878222ccdfd515ab01ab1366d5",
+    "die/tests/analytical_service_oracle_test.py": "200ed93a0335b956886bd359ddf32274da3fa4d5c979ab3739c637ff019d3846",
+    "die/tests/gemm_accounting_test.cc": "bd6e39e25cde514715d9e7e41a6afe1fb1ebe3882b3633eb6647fffaff6a7732",
+    "die/tests/hardware_input_test.cc": "29b886a3cd99b289f2a7714453958ab5e52cf2c762730bc0833ed4e2e1240066",
+    "die/tests/workspace_metadata_test.cc": "db9cd242ba35ee3c57257c99a3952619948360225415f66080e69fc042416d10",
+    "die/tests/operator_accounting_test.cc": "80dd61816adb723cb3a149344d23e1bd6e34ff8f264844dd7a16fb9ec4fb2f0d",
+    "die/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+    "die/tests/gemm_tail_budget_test.cc": "d0be84e7ff2f2f1c20ec87f6f63b0e0b30e05eacf9edc06808a6f0c4b8198d13",
+    "die/tests/repeated_region_availability_test.cc": "7c78455ec0cdaf05ead77adcfac089403f672910c715361fe22f4a88ba9a5041",
+    "die/tests/gemm_os_resource_facts_test.cc": "f24d76b839038ceabdeb662d3b5c95698b5c1d7a3d1f7d4636db7869a98db298",
+    "die/tests/service_curve_runtime_test.cc": "82028a3346ec737acec14449e2b50a8016b71d93df3bdfc9f87b3848798dafb1",
+    "die/tests/estimate_driver_test.cc": "41b4ab5c30c6a98f4c05eeece6348a99b825bb6d36ac1d622cf6865dc964b0e4",
+    "die/tests/estimate_cli_test.py": "21c31bec6916b404db968217fc0fc233a1c2aab2aa6cff7d59a02938a4b2e3fd",
+    "die/tests/attention_accounting_test.cc": "d7e0d29da9e151f7a19006d0de29bedcadbcef69e1e61ab191b63001076df882",
+    "die/tests/oracle_granularity_test.cc": "f785a6f1f31d55225fde8e2004b7c68682b07bd101c6d495eab0e5f10817c550",
+    "die/tests/gemm_os_access_counter_test.cc": "cdc1eaabc853580ef065692cc0883763685b339d2ceffc36357e4439801014c6",
+    "die/tests/service_curve_benchmark.cc": "01941d4ac36fcc2a4e42ad9890d9d67896ed1c549382eb2100c4c051a5cf14c1",
+    "die/tests/benchmark.cc": "5f5cca0c4560a0add9ae9614651f9afcf1a4fecc6ac04d1b0ab0b1071091d2f5",
+    "die/tests/grouped_gemm_oracle_test.py": "b5ee2b0cfa5f7c7a540ebc4c8f524b2b21e05d2abd2ab885c89b3be30255bf12",
+    "die/tests/runtime_semantics_test.cc": "d87ffebd5d6633bd5b303d0013658ff2dc4d66664388bb66bad0f00640368a17",
+    "die/tests/compact_batch_semantics_test.cc": "eadcdae8614fe6a0f16c90f8c27949661723a8ba2ec0a0da6c536281ab0faa0b",
+    "die/tests/runtime_counters_test.cc": "5eb3ddcdffb4031d26282a0dfcc78b5b5e33cc316b4326ae6086e25f9feea63e",
+    "die/tests/os_service_scaling_test.cc": "6cb7beb1ab5b6025f4fccad7f8c85bea9426c799e36a7f28c903192900059647",
+    "die/tests/packing_allocator_test.cc": "f449917392ee920413a35891a1d16d2d2821980b5099b3a880df2e33cdaf4cc4",
+    "die/tests/capi_lifecycle_test.cc": "32758610dadd559f3006f353dc4c40916a8fef9dd1b485f5e4c45d643e14f7b0",
+    "die/tests/prediction_availability_test.cc": "aedca26a6e5c009a72fd48431a04b83972d701817acd22eed87bf149afe2eb74",
+    "die/tests/owner_lp_oracle_driver.cc": "f187aaf39f314f994d820d88b106b037ec6f3708fcba9f9353427328493c9dba",
+    "die/tests/fractional_work_test.cc": "f196dc9d50a3a0adaa97f2ffb82edd9e6adc537c1cace8a45a93912eb089092c",
+    "die/tests/os_service_curve_test.cc": "f059ccd0039e16fb268878c31619adcf3f2112e3c569da63f99bbcede07c550b",
+    "die/tests/runtime_credit_scale_test.cc": "eeca71a2ce5f17e93a7d72aafd2d828dd1d6a123af600225440c3035c3b8c17f",
+    "die/tests/gemm_os_geometry_test.cc": "68c04ddc9e4c4505e1511dce1995993f2b23c420d1823c890efb074db1979d8d",
+    "die/tests/gemm_os_readiness_test.cc": "bb86005c5103f57beb7ae6f185832d0d208af694f8844280823172f20aa8799f",
+    "die/tests/runtime_owner_symmetry_test.cc": "d569c72f93ae88f5ece1da1737093ee4ebfbfd3287b5b6f06ec2cb19ed70e178",
+    "die/tests/norm_oracle_driver.cc": "2c260a8a7ab07cff1674f1b6fb4e16ec6896e9ce7e78d36379d5fcfeef49bd52",
+    "die/tests/equivalent_work_test.cc": "854fe7a755928d134ca50b069f23cb339971d0f3b6dcc586ab97d306d49e2052",
+    "die/tests/compiler_summary_test.cc": "83f5715e5d3a94b767b566187059cc84390c12e560acd8e87aea15a41b3e85ec",
+    "die/tests/endpoint_allocation_test.cc": "ac9e3cc321d7394b06785075286adc99f36e17e080cef2770a0fca2610c0ccc7",
+    "die/tests/ratio_allocator_test.cc": "3f6869ef445932005b13b7d265058ff2ceaad30b4794ba1dcc1a7e9ebba1fccf",
+    "die/tests/fixtures/pre_region_ready_attention.json": "85c9340be3dd0239f8fdde72f9f029db762f7a698c7a840e1652e0f229cd3e6b",
+    "die/tests/fixtures/coarse_die_v2.json": "5bdc26d2ceb4b96d2e0ed64925dc4e32b74a0fa46fa65cf7f323abdf57b38995",
+    "die/tests/fixtures/pre_region_ready_norm.json": "e9b31eadb8759b1d9f653504c8595dea7114947ba78c4bd37d025690ba61d7e9",
+    "die/tests/fixtures/discrete_wave_scenarios.json": "a2027d8b26c4057f89064002d836f3f933f275d49c59307ac8d53311f47082be",
+    "die/tests/fixtures/gemm_medium.json": "846fe90f7ceac25bb242ba5e07f1ba4f8d5934b7b0a8067d463b7839211522ef",
+    "die/validation/owner_lp_oracle.py": "d9a7610d801525fc62798bbeabd7ff518ac5165cc3925fcd580d02b96028f898",
+    "die/validation/norm_row_oracle.py": "829c5074a683579179b185e83888b78abd62af7c17e77093d0a877a9fdf443e3",
+    "die/validation/compiled_gemm_oracle.py": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+    "die/validation/os_lifecycle_runtime_oracle.py": "8c2875ef96942cd8c6b255658800d468a37137b1fe7fe78b2611271b78cdc5b8",
+    "die/validation/cabi.py": "2af22b989595b24d0b97ca8e27ca527db8b6c51f802ad7c2f0ec2e4d436469f7",
+    "die/validation/elementwise_service_oracle.py": "38534eaa90b2540fe1b7926197445694d89e057429f851807e5822daed5e1447",
+    "die/validation/analytical_service_oracle.py": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e",
+    "die/validation/discrete_oracle.py": "172178ed57845b4b715d5a52ad1efc7d7e770094603c630120c8ff6b4baa9080",
+    "die/validation/grouped_gemm_oracle.py": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+    "die/tools/validate.py": "975f936ceff5261802d6eddad5f2c0ec9550b5897164debae6351d1e16d88f6d",
+    "die/tools/benchmark.py": "5f747a44dd01e207629e77a5237232ca821f5829a5f93083dbfe6d626d314307",
+    "die/tools/sync_repositories.py": "4a2ec87da3c9b1c840cb5598170da77a9e1548cd6b8e0c6a7624eeac3a583b92",
+    "die/tools/check_core_source.py": "44a2da5aef461da05bd8206990b361349a941cd401f626278933e28b9d77b808",
+    "die/tools/sensitivity.py": "86ee6063160976a32cae1250313783b4b3044554ba575675a51439b47a5781fc",
+    "die/tools/calibrate_tx8.py": "2875adacca319dcf060fc0612b4ac9c46ca7c1cbe72621edee25516c8d84cefe",
+    "die/tools/estimate.py": "4728d1a40c6263ac43eb094bb90a495a7c71eb3544b236b7de988e94889e4596"
+  },
+  "baseline_library_sha256": "e12c029d3a574b234a2bbcd52139d7ab94dccb040e281cfe71ab85fe31afa599",
+  "steps": [
+    {
+      "name": "public-compile-Execution-PIC",
+      "command": [
+        "g++",
+        "-std=gnu++17",
+        "-O3",
+        "-DNDEBUG",
+        "-fPIC",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-I",
+        "/workspace/template/work/core-resume/die/src",
+        "-I",
+        "/workspace/template/work/core-resume/die/include",
+        "-I",
+        "/workspace/template/work/core-resume/astra-sim-wscllm/extern/helper",
+        "-c",
+        "/workspace/template/work/core-resume/work/runtime-lab/candidate/Execution.cc",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/Execution.cc.o"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/candidate/Execution.cc": "66f34d699d79b3c6dcffc5af04002799f3b1bfa4d4dcb569165825fc6a3f655a"
+      },
+      "started_unix": 1792155099.1902559,
+      "return_code": 0,
+      "finished_unix": 1792155172.1208081,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "8c92b48d5cdbcba3b99daadd2f26d4dcebd7bbbe7ae5a1f2f7e6ac11c0957e70"
+    },
+    {
+      "name": "public-archive-remove-Execution",
+      "command": [
+        "ar",
+        "d",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "Execution.cc.o"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/libcoarse_die.a": "e12c029d3a574b234a2bbcd52139d7ab94dccb040e281cfe71ab85fe31afa599"
+      },
+      "started_unix": 1792155172.1432772,
+      "return_code": 0,
+      "finished_unix": 1792155172.1882124,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-archive-add-Execution",
+      "command": [
+        "ar",
+        "r",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/Execution.cc.o"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/Execution.cc.o": "23f3e346158a66de159ae713290604e90cfd55f311d64a981d89e81577f0ac29",
+        "work/runtime-lab/public-build/libcoarse_die.a": "6d5fff5fb961235e9feca6140b28eaf10e9f9dae8d0c27ba43020af188903f03"
+      },
+      "started_unix": 1792155172.1965666,
+      "return_code": 0,
+      "finished_unix": 1792155172.2106564,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-archive-index",
+      "command": [
+        "ar",
+        "s",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57"
+      },
+      "started_unix": 1792155172.214014,
+      "return_code": 0,
+      "finished_unix": 1792155172.2265573,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_die_cabi",
+      "command": [
+        "/usr/bin/c++",
+        "-fPIC",
+        "-O3",
+        "-DNDEBUG",
+        "-shared",
+        "-Wl,-soname,libcoarse_die_cabi.so",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_die_cabi.dir/src/Capi.cc.o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_die_cabi.dir/link.txt": "54376c6b6ad1b80d13f84c6fa6f11871c6cf5c68af78586b3b13f867fc364a77",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_die_cabi.dir/src/Capi.cc.o": "59fba0368d81d2c46b2d8f4adf70b1fbdc51a2b5d9b41309e2bab9c5a0f804f3"
+      },
+      "started_unix": 1792155172.3115284,
+      "return_code": 0,
+      "finished_unix": 1792155172.4980476,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_attention_accounting_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_attention_accounting_test.dir/tests/attention_accounting_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_attention_accounting_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_attention_accounting_test.dir/link.txt": "ea3c181b770116cbbe351ac22003006ff030966c2f7332035bd63b7e0e803053",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_attention_accounting_test.dir/tests/attention_accounting_test.cc.o": "8b7ca1ab1917675a1b47b8fa60a3a5c8adb99b1ad242898181359386bf6123d9",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155172.5094833,
+      "return_code": 0,
+      "finished_unix": 1792155172.649302,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_attention_accounting_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_attention_accounting_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_attention_accounting_test": "d65c478ec333b3ed33bd822569d99cc578195a0ea8f1fcc99b118cb25798162e"
+      },
+      "started_unix": 1792155172.6558287,
+      "return_code": 0,
+      "finished_unix": 1792155172.725051,
+      "stdout_sha256": "0afb6389d5b4ab1d1b6cc9f09b5fd31080350402987bbd1f721c3a083c318f52",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_capi_cache_response_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_capi_cache_response_test.dir/tests/capi_cache_response_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_cache_response_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_capi_cache_response_test.dir/link.txt": "6505d10c87820badd31a6316fc92f781704f8f18e98870f62d7b626d2800bc3f",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_capi_cache_response_test.dir/tests/capi_cache_response_test.cc.o": "abe0d3d719fe4e54ac416fdb9e6f34f92b35c2462afc16f09c7b9e7b15dbff39",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155172.7376559,
+      "return_code": 0,
+      "finished_unix": 1792155172.9180632,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_capi_cache_response_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_cache_response_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_capi_cache_response_test": "87981d8e1dc0e946acd93804e36724674822101e54c836947d050f1c49e659d2"
+      },
+      "started_unix": 1792155172.9228384,
+      "return_code": 0,
+      "finished_unix": 1792155172.9346552,
+      "stdout_sha256": "3bc3785ee41bcfb5419d1c61b2520bac176da56d3541893688310fdb0602cb4e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_capi_cost_query_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_capi_cost_query_test.dir/tests/capi_cost_query_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_cost_query_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_capi_cost_query_test.dir/link.txt": "b1555833f06f06010144332b0a38b9e9cf30ef7bbf107261941f6b7c07fb6e0b",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_capi_cost_query_test.dir/tests/capi_cost_query_test.cc.o": "5c68c943a2906722261ffb9eee36bc21f8a59c6a6e50297b10bcb3967d686c6c",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155172.945763,
+      "return_code": 0,
+      "finished_unix": 1792155173.1471555,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_capi_cost_query_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_cost_query_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_capi_cost_query_test": "7c1691f2bd07b6bbf1adcb2013105bd598093ad1a34735564d708d027b2cc746"
+      },
+      "started_unix": 1792155173.1524165,
+      "return_code": 0,
+      "finished_unix": 1792155173.2037826,
+      "stdout_sha256": "3bb26dd59dec97ed63028f84675d3ad2ae2db845d3c844cd78caf1d536d3d627",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_capi_lifecycle_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_capi_lifecycle_test.dir/tests/capi_lifecycle_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_lifecycle_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_capi_lifecycle_test.dir/link.txt": "f44280c12e78cfd0afa6eb416ee4c9e30a8bfda734d1a67581ffbb8246e1b77d",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_capi_lifecycle_test.dir/tests/capi_lifecycle_test.cc.o": "15273fc5a8183e681d7ab9d397e11eaa1f1d4975cc450b64e5bb7b094706e588",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155173.2377799,
+      "return_code": 0,
+      "finished_unix": 1792155173.4488072,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_capi_lifecycle_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_lifecycle_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_capi_lifecycle_test": "fd6d9d0efa204e2a0e5c28ec51824ce5dfeb094ccea8f60e445599380d89997e"
+      },
+      "started_unix": 1792155173.4506273,
+      "return_code": 0,
+      "finished_unix": 1792155173.501028,
+      "stdout_sha256": "b71ac1c88f54ab5f222c26938262a7afb158934cb49a485e9a50effaabbc0c94",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_compact_batch_semantics_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_compact_batch_semantics_test.dir/tests/compact_batch_semantics_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compact_batch_semantics_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_compact_batch_semantics_test.dir/link.txt": "a74a0f222e28832b6db2ff76fd3247edc598e8140a669c0d7eb2d53a95c8947c",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_compact_batch_semantics_test.dir/tests/compact_batch_semantics_test.cc.o": "964abcf2e1f316a142460054a12efa39f897a05879928985108d542e211e17ef",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155173.5191376,
+      "return_code": 0,
+      "finished_unix": 1792155173.746372,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_compact_batch_semantics_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compact_batch_semantics_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_compact_batch_semantics_test": "00f692c5e1eb4fa72407b9e7b98f5ca45716b9676efa76b365ccfd7c4d2a0998"
+      },
+      "started_unix": 1792155173.7518153,
+      "return_code": 0,
+      "finished_unix": 1792155173.808387,
+      "stdout_sha256": "02f4f1c6c854cb7353c50a4c9e7671c505592df24ce6e9b376b8c3e537642871",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_compile_execution_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_compile_execution_test.dir/tests/compile_execution_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compile_execution_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_compile_execution_test.dir/link.txt": "cae8cda209d2575f868bd2bf8c7bcd00d5545145a384edba9763e34c60b73fbf",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_compile_execution_test.dir/tests/compile_execution_test.cc.o": "0fddcb2ba9813f09c0ca23cbbfb65290ac987a03fe333cbe88cd5a4ee3314093",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155173.8299947,
+      "return_code": 0,
+      "finished_unix": 1792155174.0356715,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_compile_execution_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compile_execution_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_compile_execution_test": "be5d1193011dfc3737ece74b99bafb95bd6b0915689012e6029034d85619eb1e"
+      },
+      "started_unix": 1792155174.0458581,
+      "return_code": 0,
+      "finished_unix": 1792155174.0951025,
+      "stdout_sha256": "78d40738086b12f2d45cb2b1d268dc7177c4d65092ea78939cf6160e17b7b2bf",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_compiler_credit_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_compiler_credit_test.dir/tests/compiler_credit_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compiler_credit_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_compiler_credit_test.dir/link.txt": "87f8f68bf6bcf1c95d4914fbb4a51cee2ab2de4cef070837eb27dd90887af61b",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_compiler_credit_test.dir/tests/compiler_credit_test.cc.o": "08ed889cfde1b1cfcdc10c9deac761858757439c4290ef7a4dfe7bcc4c5b0ae6",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155174.1114988,
+      "return_code": 0,
+      "finished_unix": 1792155174.2469192,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_compiler_credit_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compiler_credit_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_compiler_credit_test": "963cd5544b9e44ece17b96a9843372c2b7fa940a557923990cd67948b7648ebf"
+      },
+      "started_unix": 1792155174.2525792,
+      "return_code": 0,
+      "finished_unix": 1792155174.2983158,
+      "stdout_sha256": "7c68d25a58c0e2087eb650837029a8efcacbfd9eb73830ca3b799321d52afb8b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_compiler_summary_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_compiler_summary_test.dir/tests/compiler_summary_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compiler_summary_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_compiler_summary_test.dir/link.txt": "44035d2c951d653e3881657806e469693242f0c8f3aad09b0d7886d4159d7360",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_compiler_summary_test.dir/tests/compiler_summary_test.cc.o": "088fecac7350ea5b12a1dc5a9fb4b075b547fc1c04168330c00ef246053a051b",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155174.3073528,
+      "return_code": 0,
+      "finished_unix": 1792155174.5349662,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_compiler_summary_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compiler_summary_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_compiler_summary_test": "6a3d2930929a82297104d18d9992441bea0166df355ea275c9f5e963774949f4"
+      },
+      "started_unix": 1792155174.5396788,
+      "return_code": 0,
+      "finished_unix": 1792155174.5546353,
+      "stdout_sha256": "0e4b455ab01d5764986d1202cd62884874e60e7479172118cf67b50f3764cbdd",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_elementwise_service_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_elementwise_service_test.dir/tests/elementwise_service_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_elementwise_service_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_elementwise_service_test.dir/link.txt": "4510ec35fc5f022eaf1bea42a9a44aa0b58b01f365ad7e5a1c26e1aa48b8a3b8",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_elementwise_service_test.dir/tests/elementwise_service_test.cc.o": "d3313f87f30d28ffd520139520e180b4b0ec87ae8812384feb68e1406f53aadc",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155174.592077,
+      "return_code": 0,
+      "finished_unix": 1792155175.145311,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_elementwise_service_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_elementwise_service_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_elementwise_service_test": "99997355a6ff9e1edc8a62da3c66e01f90c57eed9d21f0882a3a2c3d9d05764f"
+      },
+      "started_unix": 1792155175.1500869,
+      "return_code": 0,
+      "finished_unix": 1792155175.2028031,
+      "stdout_sha256": "44af73c8e86ee68bbc66d8ed0406c597b880a7fe541b194f76c25fb40109da09",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_endpoint_allocation_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_endpoint_allocation_test.dir/tests/endpoint_allocation_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_endpoint_allocation_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_endpoint_allocation_test.dir/link.txt": "1100c6def49c78133888f6ef742d0dcabe914a360451b7c46e1f5d0ecdb40e42",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_endpoint_allocation_test.dir/tests/endpoint_allocation_test.cc.o": "214156af9dd6d87682a5ea25985d4cdd1418bc6ea964bc115de3f38210ddcc9d",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155175.2146854,
+      "return_code": 0,
+      "finished_unix": 1792155175.3488498,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_endpoint_allocation_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_endpoint_allocation_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_endpoint_allocation_test": "a9f0a911fb72d122d47b30d600cfd0c45af464830c2344ecae351b507444de54"
+      },
+      "started_unix": 1792155175.3530495,
+      "return_code": 0,
+      "finished_unix": 1792155175.3993976,
+      "stdout_sha256": "3af75ba8cf3a455b238f43e5f080a42d095198c23155e824353ebb964e6a5722",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_equivalent_work_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_equivalent_work_test.dir/tests/equivalent_work_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_equivalent_work_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_equivalent_work_test.dir/link.txt": "f2c4930b113ad065ec18a10b6d0b53fff48f30dfa2ed19efd306d44666f388e5",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_equivalent_work_test.dir/tests/equivalent_work_test.cc.o": "3cf6bb0bef8d579461063dd5faef1ba80abc3a8666da80494634d475a11db5fc",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155175.4115245,
+      "return_code": 0,
+      "finished_unix": 1792155175.5346994,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_equivalent_work_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_equivalent_work_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_equivalent_work_test": "8841beccda9c6e9f5dcda8980dad8f91c0fdb401a37e38b580c6f3f9098a97db"
+      },
+      "started_unix": 1792155175.536236,
+      "return_code": 0,
+      "finished_unix": 1792155175.5511887,
+      "stdout_sha256": "994344e6a5272ab3bd15cc39ea1d40b22ef63e131220aec12ed295d4866942d0",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_estimate_driver_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_estimate_driver_test.dir/tests/estimate_driver_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_estimate_driver_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_estimate_driver_test.dir/link.txt": "c8dfedb8a9be94fd2522f095d8806b8c5f53267b95692067405bbceb09e1315d",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_estimate_driver_test.dir/tests/estimate_driver_test.cc.o": "ef65f34a805650b2c7d871de7d840447c4c15dcdc57eed156ae089df58a6321c",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155175.5995886,
+      "return_code": 0,
+      "finished_unix": 1792155175.902782,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_estimate_driver_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_estimate_driver_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_estimate_driver_test": "f8b55adf5fe3e40060493fec1c194201836f98cae51317a2c1d5bfc2aefdcdb1"
+      },
+      "started_unix": 1792155175.9089513,
+      "return_code": 0,
+      "finished_unix": 1792155175.9230366,
+      "stdout_sha256": "f2165f8899cc5b093e77c5085095933c09c6dcef90268b69c8a3f750ad5f7781",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_fractional_work_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_fractional_work_test.dir/tests/fractional_work_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_fractional_work_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_fractional_work_test.dir/link.txt": "f510bdb565fad09de80e20e88daf3b43655a27b74ce81dd902304ca7fd9b8751",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_fractional_work_test.dir/tests/fractional_work_test.cc.o": "7fc58b414b44017a543dd30741ab82bef5a338af28449f6b3564017a2f4237a2",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155175.9337704,
+      "return_code": 0,
+      "finished_unix": 1792155176.4239008,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_fractional_work_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_fractional_work_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_fractional_work_test": "86522f66009fb2c883c8508cccb522d8d77623ad8c84b3eff759d0ee2dbb6563"
+      },
+      "started_unix": 1792155176.4290895,
+      "return_code": 0,
+      "finished_unix": 1792155176.4387844,
+      "stdout_sha256": "faa22400ce74d6fc5e5eca587c46301fe3dd1a8020653699949800783a152a02",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_fused_ffn_accounting_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_fused_ffn_accounting_test.dir/tests/fused_ffn_accounting_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_fused_ffn_accounting_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_fused_ffn_accounting_test.dir/link.txt": "30624d40e1c12232bca8fc00087665e8fefeecc90efe4eabb4f84c4f51c64c02",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_fused_ffn_accounting_test.dir/tests/fused_ffn_accounting_test.cc.o": "e1673c34f9aa622dc7722cd43c7fe3ce40a69f3ad71b194b176a587d53d4fc39",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155176.447679,
+      "return_code": 0,
+      "finished_unix": 1792155176.6987927,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_fused_ffn_accounting_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_fused_ffn_accounting_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_fused_ffn_accounting_test": "b46bc7a65090531c4f0692bf7fbbe9b19a8cb164bfbd6397d1e4919976118593"
+      },
+      "started_unix": 1792155176.7035334,
+      "return_code": 0,
+      "finished_unix": 1792155176.7251623,
+      "stdout_sha256": "292f386681069f4f3c66a9d43a89e73d048ae5aee54933fa81d353c48a536d36",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_gemm_accounting_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_gemm_accounting_test.dir/tests/gemm_accounting_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_accounting_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_gemm_accounting_test.dir/link.txt": "cc7f1cfcfd7009a05cc2765cb533bd92a59734c266cdcaeeef5bf2007db0580b",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_gemm_accounting_test.dir/tests/gemm_accounting_test.cc.o": "d5af740d053ec7f4661b5cffaf7c4b9662fe37aab559454d696bafb6bc09f1b4",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155176.744118,
+      "return_code": 0,
+      "finished_unix": 1792155176.9399073,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_gemm_accounting_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_accounting_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_gemm_accounting_test": "62517b4d7b8829f76e9bbee8a5c389b81437e33ce1b617a22c83e83e8710e03e"
+      },
+      "started_unix": 1792155176.944909,
+      "return_code": 0,
+      "finished_unix": 1792155176.9978228,
+      "stdout_sha256": "98923d1e263774d89972015850eecfdaabd969124a143dbca23b8ca51cd7ecfa",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_gemm_os_access_counter_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_gemm_os_access_counter_test.dir/tests/gemm_os_access_counter_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_access_counter_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_access_counter_test.dir/link.txt": "c96603899d88a5bd004c6700069392a8ae07dee9876eae710a2e6d94b90ce608",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_access_counter_test.dir/tests/gemm_os_access_counter_test.cc.o": "84b152646664833a052e351e6323db4bcb090a3046c5782d69d0bbe0c7cc957f",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155177.008088,
+      "return_code": 0,
+      "finished_unix": 1792155177.2086601,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_gemm_os_access_counter_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_access_counter_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_gemm_os_access_counter_test": "8fd52a175178ec988e64640866b669f3d81ee5cf68b7a77ee3c1613be64e1c42"
+      },
+      "started_unix": 1792155177.214066,
+      "return_code": 0,
+      "finished_unix": 1792155177.2388253,
+      "stdout_sha256": "5d289b7624864481a2c2daca0e6b0c440d52c148fc32825921e04c8c1ecfe4f8",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_gemm_os_geometry_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_gemm_os_geometry_test.dir/tests/gemm_os_geometry_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_geometry_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_geometry_test.dir/link.txt": "b1fcd905ecea81e9403b3db2039bf748afd21749a23c08519eac810508c4c1cf",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_geometry_test.dir/tests/gemm_os_geometry_test.cc.o": "053865afaed9545cc5e72e71d03124bb029937c18eb0c24829166314358fea45",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155177.248644,
+      "return_code": 0,
+      "finished_unix": 1792155177.689099,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_gemm_os_geometry_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_geometry_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_gemm_os_geometry_test": "6819aa52528c6d6f5f2b077d662311c95fa3f79b4f7f05b320307a872292cb56"
+      },
+      "started_unix": 1792155177.693203,
+      "return_code": 0,
+      "finished_unix": 1792155177.7344208,
+      "stdout_sha256": "c1aac531501999e9995769c7ce2dc6386bc61728070703e8e1cf49edc0f1e4f9",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_gemm_os_readiness_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_gemm_os_readiness_test.dir/tests/gemm_os_readiness_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_readiness_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_readiness_test.dir/link.txt": "2ddae2265a1eb4c1129c3facbccd15e42998d97d7a6241bb9dea7a628868e7da",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_readiness_test.dir/tests/gemm_os_readiness_test.cc.o": "ae63f95800ad7b2e0c96da30a22392a287a5e65e1c09eb3822e2ed2d20bd471e",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155177.755277,
+      "return_code": 0,
+      "finished_unix": 1792155178.1474056,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_gemm_os_readiness_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_readiness_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_gemm_os_readiness_test": "8fefff230793899e7d0afc08f374ea534a397571e060b9f6ea20aef76ab1713c"
+      },
+      "started_unix": 1792155178.152389,
+      "return_code": 0,
+      "finished_unix": 1792155178.2218914,
+      "stdout_sha256": "e6c19f2f10d7e5eedf52c0fb776158065b46bb4278068386f01ac41e234a42da",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_gemm_os_resource_facts_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_gemm_os_resource_facts_test.dir/tests/gemm_os_resource_facts_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_resource_facts_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_resource_facts_test.dir/link.txt": "a420ac55cc02550f6d58d36bd0c5f2acee12f836355030c575040928ebf7e098",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_resource_facts_test.dir/tests/gemm_os_resource_facts_test.cc.o": "d7b376e70215c654d0fd5f4bb36c291a4fc0614e8d450ffcd20ca69585fb794b",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155178.250199,
+      "return_code": 0,
+      "finished_unix": 1792155178.835325,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_gemm_os_resource_facts_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_resource_facts_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_gemm_os_resource_facts_test": "03591cb7998ba1f270575d827b416e75f3c6ef04e4e018ab6f2a443de3354144"
+      },
+      "started_unix": 1792155178.8460522,
+      "return_code": 0,
+      "finished_unix": 1792155178.9224994,
+      "stdout_sha256": "8078d9be2655012fa3a7095b7fb44402d4cbe1394c00be6b7e068c80aa07fbd1",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_gemm_os_route_counter_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_gemm_os_route_counter_test.dir/tests/gemm_os_route_counter_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_route_counter_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_route_counter_test.dir/link.txt": "722cb423e98fc33ad5ca1824252c5a46363ef6029aae74bd2391bd63acd39b0c",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_gemm_os_route_counter_test.dir/tests/gemm_os_route_counter_test.cc.o": "ddd6aeaf4eb15b9b97f5e410360197642d4d4766d7b91cf54b87b44cc7e3d1da",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155178.990286,
+      "return_code": 0,
+      "finished_unix": 1792155179.2187328,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_gemm_os_route_counter_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_route_counter_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_gemm_os_route_counter_test": "bfa9e71b73351fba3e2484cde740e85aa81ffe825696a0a6eec7a6443170e40c"
+      },
+      "started_unix": 1792155179.2217016,
+      "return_code": 0,
+      "finished_unix": 1792155179.2399065,
+      "stdout_sha256": "50c4e44dcfacd4db2ffdb1d82aca6aae82e95ad2352e2e106cd16b782ad75ae5",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_gemm_tail_budget_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_gemm_tail_budget_test.dir/tests/gemm_tail_budget_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_tail_budget_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_gemm_tail_budget_test.dir/link.txt": "f05c1bd6ebadca62e9d371db14c1aa6a4839f8aa3359e2ad840f60570d9b5b92",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_gemm_tail_budget_test.dir/tests/gemm_tail_budget_test.cc.o": "ae1b5cdcbf174774a668a928c22001f7589fb49528e5c53f1697e0df8641a4d1",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155179.2521834,
+      "return_code": 0,
+      "finished_unix": 1792155179.442431,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_gemm_tail_budget_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_tail_budget_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_gemm_tail_budget_test": "82e74671d361db5207fd0b9a3df3dc4ba03ef8b8488afca82caba90dd73cb64b"
+      },
+      "started_unix": 1792155179.447111,
+      "return_code": 0,
+      "finished_unix": 1792155179.4936147,
+      "stdout_sha256": "e1bb98cf8fd4d324fe7db0901802918b99be9d93da45095c54f7f7f78828e4ec",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_hardware_input_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_hardware_input_test.dir/tests/hardware_input_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_hardware_input_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_hardware_input_test.dir/link.txt": "b18b5e8a0c5f8ec7b9dfc141dde1983180d2bbb9763cbe928d3a525c0bad4cc0",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_hardware_input_test.dir/tests/hardware_input_test.cc.o": "4e5e68bfb6d5cae816df6ab2a52054e509a648c4a649c41515d9f3ae1151a98a",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155179.502815,
+      "return_code": 0,
+      "finished_unix": 1792155179.6920934,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_hardware_input_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_hardware_input_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_hardware_input_test": "b119ada62be67f38a2dc22a5741d5d75125863a908dcdf87997280801d57b370"
+      },
+      "started_unix": 1792155179.6943088,
+      "return_code": 0,
+      "finished_unix": 1792155179.7149982,
+      "stdout_sha256": "f7e67936123518b0e095639b4a4985a661602929ecda1d277c89a21437c2133e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_k_readiness_runtime_driver",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_k_readiness_runtime_driver.dir/tests/k_readiness_runtime_driver.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_k_readiness_runtime_driver",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_k_readiness_runtime_driver.dir/link.txt": "2f515eb5647b3000826eaa20b5b7f5e6ccf2e415a19cf6ff9e5d5883a6c1e7fb",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_k_readiness_runtime_driver.dir/tests/k_readiness_runtime_driver.cc.o": "867c3a50b45806c55cc18c852741d201b5e172b8875a4e4d3e2f7eeb922ccd95"
+      },
+      "started_unix": 1792155179.7475216,
+      "return_code": 0,
+      "finished_unix": 1792155180.0178516,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_k_readiness_runtime_driver",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_k_readiness_runtime_driver"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_k_readiness_runtime_driver": "4ee026208be8036e8d3993e2ed4a10171cdd7cd09f7dbf638afd3cb6ef93d493"
+      },
+      "started_unix": 1792155180.0241601,
+      "return_code": 0,
+      "finished_unix": 1792155180.049892,
+      "stdout_sha256": "2c63c157e55436406da1044c4cb797300e66f9f03c3620479a876102c7fb6043",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_norm_row_accounting_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_norm_row_accounting_test.dir/tests/norm_row_accounting_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_norm_row_accounting_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_norm_row_accounting_test.dir/link.txt": "efbe67942d65982d38b173d39f6ac0cb9380a9264e7e9eadd3e8c4702911820d",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_norm_row_accounting_test.dir/tests/norm_row_accounting_test.cc.o": "5c1affae261346a506b30910d397dc999c9763110c58273f0890c5b28eeb6597",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155180.0930593,
+      "return_code": 0,
+      "finished_unix": 1792155180.249179,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_norm_row_accounting_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_norm_row_accounting_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_norm_row_accounting_test": "58bf48149a29de8013c7048ddfcc2653b429f9af3ebc6f0b0ca82e648ae14792"
+      },
+      "started_unix": 1792155180.2923415,
+      "return_code": 0,
+      "finished_unix": 1792155180.3072119,
+      "stdout_sha256": "e065267a6f9348caf570382886690a23a08c04844ff5338684194d1d7ac5cab0",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_operator_accounting_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_operator_accounting_test.dir/tests/operator_accounting_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_operator_accounting_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_operator_accounting_test.dir/link.txt": "870029efd0b2325fee0ca3f815750441eb7a07987b9fe147ce70b3b060fe0b4d",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_operator_accounting_test.dir/tests/operator_accounting_test.cc.o": "d17c7da81b5ef6ca538ba3c8647e1d74bd5a18a0bc3661b5fee86fcdef5716ed",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155180.3160474,
+      "return_code": 0,
+      "finished_unix": 1792155180.494618,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_operator_accounting_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_operator_accounting_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_operator_accounting_test": "a1b6e3feec3a9ee106411ed6fbe6e7d674b709cbaa24fa206cf6fb845b2a353e"
+      },
+      "started_unix": 1792155180.4994123,
+      "return_code": 0,
+      "finished_unix": 1792155180.5106149,
+      "stdout_sha256": "7818d4257cc478c3d4046794995af0e8fdbcba83b704ed6980513d760c88cfee",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_oracle_granularity_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_oracle_granularity_test.dir/tests/oracle_granularity_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_oracle_granularity_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_oracle_granularity_test.dir/link.txt": "24af877e17e2ed225e2fd34416b1c69ccf4dc07a73bb3783287b112ae93ba04a",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_oracle_granularity_test.dir/tests/oracle_granularity_test.cc.o": "b3c420fd8354c72cd53358843a9da9c9e1d2af9454edf1c6484c697bf7bfd8b1",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155180.520364,
+      "return_code": 0,
+      "finished_unix": 1792155180.7187471,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_oracle_granularity_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_oracle_granularity_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_oracle_granularity_test": "543193302927ffa9eb93cead6d2042c3537d38658dd23c37b6b6ecad9d035edd"
+      },
+      "started_unix": 1792155180.7232957,
+      "return_code": 0,
+      "finished_unix": 1792155180.7344055,
+      "stdout_sha256": "1e32065fb0ae8d0ebb1a2dbe419bc9d8f13bc69a5d81a0693ff2b20167f2b402",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_os_service_curve_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_os_service_curve_test.dir/tests/os_service_curve_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_os_service_curve_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_os_service_curve_test.dir/link.txt": "a52992e415a40df3668d7d7110f25443d5851cd7864810579a39a7e06f4fc752",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_os_service_curve_test.dir/tests/os_service_curve_test.cc.o": "7a20963d94600a68c489ae9f4ac2541df8bb7fd228b8c946c4a9bceee892bb3d",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155180.7521832,
+      "return_code": 0,
+      "finished_unix": 1792155180.9982357,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_os_service_curve_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_os_service_curve_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_os_service_curve_test": "6790470b2005bb5f23a83ecad4241da973b6d9c294a62754b4cd8007f97cca2a"
+      },
+      "started_unix": 1792155181.0033562,
+      "return_code": 0,
+      "finished_unix": 1792155181.0147047,
+      "stdout_sha256": "8753314acaba7cb8046416dc373d5e946c182829574c522f3e246d0b89fb0553",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_os_service_scaling_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_os_service_scaling_test.dir/tests/os_service_scaling_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_os_service_scaling_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_os_service_scaling_test.dir/link.txt": "a598ed69f3b8224f562601000d28521c0585405b5768f572f025b1179e5624de",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_os_service_scaling_test.dir/tests/os_service_scaling_test.cc.o": "75d6ef5c9bb961d5102397701e823c1f77a7e3d408517230b594424b3cce9d86",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155181.0296113,
+      "return_code": 0,
+      "finished_unix": 1792155181.306713,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_os_service_scaling_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_os_service_scaling_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_os_service_scaling_test": "47467f8bca81a132cf455a09a609f1ef5fa6751b74b854702eb1efdfcba2e1b2"
+      },
+      "started_unix": 1792155181.311338,
+      "return_code": 0,
+      "finished_unix": 1792155181.3236318,
+      "stdout_sha256": "58a444ba957b1e0945f5bb6f22e5ec5e31d1e78bcf41f8b6c83d31085ae97023",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_owner_lp_oracle_driver",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_owner_lp_oracle_driver.dir/tests/owner_lp_oracle_driver.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_owner_lp_oracle_driver",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_owner_lp_oracle_driver.dir/link.txt": "ab20fb7e9039c088fed1d24711a8d9708fb0a0e963186db87903bcd2e80382cd",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_owner_lp_oracle_driver.dir/tests/owner_lp_oracle_driver.cc.o": "c1f5c50737ed722a3d4ed8703a2b04ef8984f4cdc51bb68313595d147d5512e2"
+      },
+      "started_unix": 1792155181.353054,
+      "return_code": 0,
+      "finished_unix": 1792155181.5475993,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_owner_lp_oracle_driver",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_owner_lp_oracle_driver"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_owner_lp_oracle_driver": "15cdb819c462da31407e0700e400dd98974cf20a24457623963c338b6ad34847"
+      },
+      "started_unix": 1792155181.5522332,
+      "return_code": 0,
+      "finished_unix": 1792155181.6024978,
+      "stdout_sha256": "1052fc4ff0106753519f26557548fd89b1e932c2ebc7c606c702a32b4a8ca44e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_packing_allocator_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_packing_allocator_test.dir/tests/packing_allocator_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_packing_allocator_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_packing_allocator_test.dir/link.txt": "666de3f4bbe39bb803ea40ad1eccdf0519f50eff01f95ca23aec7a8908d1cd89",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_packing_allocator_test.dir/tests/packing_allocator_test.cc.o": "9d4094e0e591571152700bb5037ef55fbf4fd2ff0a05689803df96e2a3af80d1",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155181.6135244,
+      "return_code": 0,
+      "finished_unix": 1792155181.729312,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_packing_allocator_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_packing_allocator_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_packing_allocator_test": "bde9f2e1436d511cd37ef84639ef1404ca56e050c6fec69ba6b1c43f8b6254f2"
+      },
+      "started_unix": 1792155181.7316017,
+      "return_code": 0,
+      "finished_unix": 1792155181.7441306,
+      "stdout_sha256": "218018c83a3d06d6abc45facbc2afdbec7d8b0b51dd75ec9e24a511adbe62f21",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_prediction_availability_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_prediction_availability_test.dir/tests/prediction_availability_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_prediction_availability_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_prediction_availability_test.dir/link.txt": "d5216405e6f24a9fb91ec7d3846ff77ba91e71cf1c5f6fe1cd64fa190250c4d1",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_prediction_availability_test.dir/tests/prediction_availability_test.cc.o": "ea045513df685fafebfefaf0bf9afbc3bfbe2dcce3e79544148c47ea0645faed",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155181.7558727,
+      "return_code": 0,
+      "finished_unix": 1792155181.988561,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_prediction_availability_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_prediction_availability_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_prediction_availability_test": "a9c4ee387b72bbdc6310680a8d60923b429101db9dbe02b38f7e9013e6dc79ba"
+      },
+      "started_unix": 1792155181.993986,
+      "return_code": 0,
+      "finished_unix": 1792155182.0069773,
+      "stdout_sha256": "f651c4981dadaf03a1803a865dec85e7ac234e6c2775b4f7bdf371025b9948fe",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_ratio_allocator_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_ratio_allocator_test.dir/tests/ratio_allocator_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_ratio_allocator_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_ratio_allocator_test.dir/link.txt": "745fea06501f3d486999df4473b3ec2ede72b993b9e49b5093da4ff67ed6bb33",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_ratio_allocator_test.dir/tests/ratio_allocator_test.cc.o": "eda29c29ce1109cd07b264af0544f4fe0f6d2b861eb077ae52224d2d016d6870",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155182.0199065,
+      "return_code": 0,
+      "finished_unix": 1792155182.2121198,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_ratio_allocator_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_ratio_allocator_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_ratio_allocator_test": "38bff97e248b79617600d6f547d136346b7d216a42f6d6bc27a2faa8c19e8d9d"
+      },
+      "started_unix": 1792155182.2182598,
+      "return_code": 0,
+      "finished_unix": 1792155182.2351446,
+      "stdout_sha256": "2b363ceb96c04c5c08d36983129050dbef8e07a7fa88b1a5ea3115eb116ff51d",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_region_delay_math_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_region_delay_math_test.dir/tests/region_delay_math_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_region_delay_math_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_region_delay_math_test.dir/link.txt": "ef506931e8da52556c06f0e845f7e5917736b1aec78634539c13e7f969cd87ea",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_region_delay_math_test.dir/tests/region_delay_math_test.cc.o": "523c96c38b8d1525ae6ec7425a06d8d90e9ea133ea08519bc0d3f91413a527fa",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155182.3007207,
+      "return_code": 0,
+      "finished_unix": 1792155182.4522476,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_region_delay_math_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_region_delay_math_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_region_delay_math_test": "b357bfac03f54d977aa9cc1748b3f316a7f1b92ae331e1159eeba2df8fb6483d"
+      },
+      "started_unix": 1792155182.4886694,
+      "return_code": 0,
+      "finished_unix": 1792155182.5069444,
+      "stdout_sha256": "1819697af4350c809053ad7cffaf00c09b1b28bf58d365f918237f5d3171996e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_region_overhead_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_region_overhead_test.dir/tests/region_overhead_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_region_overhead_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_region_overhead_test.dir/link.txt": "657acaf7ff47dfa736318db3cf1784c5dae6731463cee8f4b9c366ea80714464",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_region_overhead_test.dir/tests/region_overhead_test.cc.o": "f07db27a0dab0ae768bfa022f24b10191648584ca1aaf4ec07df79a6decca8d7",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155182.518871,
+      "return_code": 0,
+      "finished_unix": 1792155182.7227333,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_region_overhead_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_region_overhead_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_region_overhead_test": "3becb44b9ec24b0e94ef041a5680a4d01955d0888db3a3e4e9933014e7374ab2"
+      },
+      "started_unix": 1792155182.729089,
+      "return_code": 0,
+      "finished_unix": 1792155182.7430606,
+      "stdout_sha256": "68433c0b1f1cf59e9a3e0e233df24f3513c15c0700979c9649ab48762264b8d8",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_repeated_region_availability_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_repeated_region_availability_test.dir/tests/repeated_region_availability_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_repeated_region_availability_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_repeated_region_availability_test.dir/link.txt": "b2750bc250c39ed8e2f39835c9c4c571dd1b79b8d5c535cc0a6524c54c960abf",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_repeated_region_availability_test.dir/tests/repeated_region_availability_test.cc.o": "fb729d93de52e7b5b4421d20e46f9585dce9dafe294b4be860eff6648b78ed77",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155182.7881136,
+      "return_code": 0,
+      "finished_unix": 1792155182.9417396,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_repeated_region_availability_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_repeated_region_availability_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_repeated_region_availability_test": "3d1ef98007d9f53bcde1d98e9062879594eb07cae65a238f6d585eda2c7e909d"
+      },
+      "started_unix": 1792155182.9468517,
+      "return_code": 0,
+      "finished_unix": 1792155183.0092585,
+      "stdout_sha256": "b04b1cf4e6eedad0191a125ff8e125c1256ee968f908e6fd1d12ff00fced0bf7",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_runtime_clock_translation_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_clock_translation_test.dir/tests/runtime_clock_translation_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_clock_translation_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_runtime_clock_translation_test.dir/link.txt": "11f1f8541b5b6884c4535d79bfe41ab8125faaef3218c4e608b2d88d838246a0",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_runtime_clock_translation_test.dir/tests/runtime_clock_translation_test.cc.o": "5db73bd2773ee0c0e48ce0a9f1bcc61041243616ee459cee32cc8e01215a9539",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155183.0343683,
+      "return_code": 0,
+      "finished_unix": 1792155183.305425,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_runtime_clock_translation_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_clock_translation_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_runtime_clock_translation_test": "a29bf090670400b5717abba91ecf8c5d460c86ae2fb05dffc0d148fb141cf79c"
+      },
+      "started_unix": 1792155183.310413,
+      "return_code": 0,
+      "finished_unix": 1792155183.3226619,
+      "stdout_sha256": "e1c458060d35abd36fc53f4fbcc5ec9c3ed630994efb3561a7bb15ce50f43311",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_runtime_counters_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_counters_test.dir/tests/runtime_counters_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_counters_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_runtime_counters_test.dir/link.txt": "2d2702aa20222b674403dbcc06667ef2cd3c1e4fe1b4c94c4d6ab8f992a1f994",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_runtime_counters_test.dir/tests/runtime_counters_test.cc.o": "8648f77b7a0799b51126e8dc080d3bef11ce118cf2c5eb5cb76878e436dedc68",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155183.3330154,
+      "return_code": 0,
+      "finished_unix": 1792155183.5232332,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_runtime_counters_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_counters_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_runtime_counters_test": "38219b125f930a896028a77c9e1730bc83ade48989d4833952b946cfba596963"
+      },
+      "started_unix": 1792155183.5277557,
+      "return_code": 0,
+      "finished_unix": 1792155183.5448637,
+      "stdout_sha256": "9b0f4b8886c920859ebc6113ade6e03b64f312dd0b710c3eca399176f25818c3",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_runtime_credit_scale_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_credit_scale_test.dir/tests/runtime_credit_scale_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_credit_scale_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_runtime_credit_scale_test.dir/link.txt": "02c6058fe3dd4e1b06f5593a559151d6bbe0bb459827f3cc2c3e16e7eb91312b",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_runtime_credit_scale_test.dir/tests/runtime_credit_scale_test.cc.o": "e26bb65b2a3e3bc37f088e80e5bb3888d597b020be337b2fcecf98325372de3b",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155183.5932875,
+      "return_code": 0,
+      "finished_unix": 1792155183.7320516,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_runtime_credit_scale_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_credit_scale_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_runtime_credit_scale_test": "8a1ac1df51b1481fa4bc230ca3d78cd18b8ec8c68ddb5978e23217a02ac6e4f4"
+      },
+      "started_unix": 1792155183.7378778,
+      "return_code": 0,
+      "finished_unix": 1792155183.7516794,
+      "stdout_sha256": "f2538443b4716a1c17813c441c1c19f3454599b9a8d7e13871b4c8610b496e21",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_runtime_owner_symmetry_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_owner_symmetry_test.dir/tests/runtime_owner_symmetry_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_owner_symmetry_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_runtime_owner_symmetry_test.dir/link.txt": "7dd1a4b42f55d2f1354c172ca9dc9e8204a93e5e0c2b4dc9bd9be0ebe8b6eeec",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_runtime_owner_symmetry_test.dir/tests/runtime_owner_symmetry_test.cc.o": "bd5b6177c1363ec4821b8340088e9982454a2c08640ee790e2b9bf87e9014596",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155183.7950861,
+      "return_code": 0,
+      "finished_unix": 1792155183.9208264,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_runtime_owner_symmetry_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_owner_symmetry_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_runtime_owner_symmetry_test": "4547a8d1d594d3fed258ea5de31b34b30cfe4838df8239737711f963fdf174ee"
+      },
+      "started_unix": 1792155183.9251175,
+      "return_code": 0,
+      "finished_unix": 1792155183.9387546,
+      "stdout_sha256": "c061b42420b03ec55292c0ecf7f089b006e911fe4df5465a619abf931a5a6bbb",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_runtime_semantics_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_semantics_test.dir/tests/runtime_semantics_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_semantics_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_runtime_semantics_test.dir/link.txt": "05bb2b53356e786806e45ba32faf3f5637211ff5d471f6d21ec0329bac9264a1",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_runtime_semantics_test.dir/tests/runtime_semantics_test.cc.o": "31216950c7848f7db85c4c749b0794f9b7adfdac5daff77877584b8123602535",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155183.9564044,
+      "return_code": 0,
+      "finished_unix": 1792155184.2534947,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_runtime_semantics_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_semantics_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_runtime_semantics_test": "2cae56d7ba34daa80a14d51f720c6113d30038a625f67a8c665121496161dc24"
+      },
+      "started_unix": 1792155184.2881176,
+      "return_code": 0,
+      "finished_unix": 1792155184.302575,
+      "stdout_sha256": "b6488b1fcf1f34ccb40ccf984be7fcb0dee0e54dd0628d603492ae9b0a49683b",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_runtime_submit_transaction_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_submit_transaction_test.dir/tests/runtime_submit_transaction_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_submit_transaction_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_runtime_submit_transaction_test.dir/link.txt": "78be3c5f0607668550f2544c9f10c2758d58724fb63d4536c15f80c2acf3a91f",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_runtime_submit_transaction_test.dir/tests/runtime_submit_transaction_test.cc.o": "eb48e534e0a987038bdbaff24e8720362f8a9efea820f3771a7a9d83e91d8c83",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155184.3125043,
+      "return_code": 0,
+      "finished_unix": 1792155184.4355366,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_runtime_submit_transaction_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_submit_transaction_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_runtime_submit_transaction_test": "cee696d1c000119d173640c14f1c1c0087fbfbd568b61dc1591d2aeb543c11ae"
+      },
+      "started_unix": 1792155184.4397573,
+      "return_code": 0,
+      "finished_unix": 1792155184.5510535,
+      "stdout_sha256": "44ed8dc2afa8338ea5b2cf67ca33b40d77d98114c921377a00dab9c915ff1429",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_service_curve_runtime_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_service_curve_runtime_test.dir/tests/service_curve_runtime_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_service_curve_runtime_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_service_curve_runtime_test.dir/link.txt": "895ca8813b96be98ea9f69d97def968a263ad9e3181214d22c2b9314cb0ede90",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_service_curve_runtime_test.dir/tests/service_curve_runtime_test.cc.o": "a7e3ee0f8e0aab6d0d28f9b7dbb6a29e2854994583aba20a818d098576f87d46",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155184.5940304,
+      "return_code": 0,
+      "finished_unix": 1792155184.7233388,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_service_curve_runtime_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_service_curve_runtime_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_service_curve_runtime_test": "9ecc3b8a44b7474a6464e845d3c5f28843b1cae1fc7ab90660dccf0dd99a9460"
+      },
+      "started_unix": 1792155184.7278452,
+      "return_code": 0,
+      "finished_unix": 1792155184.7381163,
+      "stdout_sha256": "d5c6312a17981baf5fc276b6ced006edc08ab656935e109794aa51a51d0faa02",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_service_curve_schema_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_service_curve_schema_test.dir/tests/service_curve_schema_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_service_curve_schema_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_service_curve_schema_test.dir/link.txt": "a0bcf2328e781bc373b0a740cf4a9219515c4c2803c7d7202d2e6a76428d864b",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_service_curve_schema_test.dir/tests/service_curve_schema_test.cc.o": "38339777d67cb5feac5e27f83993fac0c762b51c50e515a58f7b5f59e50189f1",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155184.749589,
+      "return_code": 0,
+      "finished_unix": 1792155184.9176345,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_service_curve_schema_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_service_curve_schema_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_service_curve_schema_test": "0800499596a870bef291ce2bad4e7d76291fe647dd74fa99d92e3187e6d2a339"
+      },
+      "started_unix": 1792155184.9227104,
+      "return_code": 0,
+      "finished_unix": 1792155184.9350493,
+      "stdout_sha256": "88e168356128edadbff9ce61972949f785082f004942a78e32872517b954f80f",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_source_golden_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_source_golden_test.dir/tests/source_golden_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_source_golden_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_source_golden_test.dir/link.txt": "4d2f86d96c6a86be3e380ca8220d9bf5b494638016e03a69304b62037cd0eafa",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_source_golden_test.dir/tests/source_golden_test.cc.o": "5a10a93d54e1eae263f0c115c9fcc320a7f2d6897d54350254d8d0a3bd4c0001",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155184.9467447,
+      "return_code": 0,
+      "finished_unix": 1792155185.1245668,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_source_golden_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_source_golden_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_source_golden_test": "b9744d7be47a13a74ba700f8e4c3b349ca3ef51e49c20acdffe54a54c84225ce"
+      },
+      "started_unix": 1792155185.1317232,
+      "return_code": 0,
+      "finished_unix": 1792155185.1528006,
+      "stdout_sha256": "fe958c2ed5f8e57cb2de0e38065d350b49791ab1781a8f9416892b053aeefedf",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_task_schema_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_task_schema_test.dir/tests/task_schema_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_task_schema_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_task_schema_test.dir/link.txt": "74c1b607a8f46a4fa3e27598adaddee919132b66a2929bf7ccc9d89ea10c7293",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_task_schema_test.dir/tests/task_schema_test.cc.o": "f0b80d5f8b276f738c3783c152692052837ee5437f4fa86a6568adf83b043da9",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155185.195911,
+      "return_code": 0,
+      "finished_unix": 1792155185.3402374,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_task_schema_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_task_schema_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_task_schema_test": "cd906aba38ea9828a9120028a347173f6ab2bef8fe3966ecd44c3e3c505f10aa"
+      },
+      "started_unix": 1792155185.3460605,
+      "return_code": 0,
+      "finished_unix": 1792155185.3996012,
+      "stdout_sha256": "6cafa209281d3ae59a074839252d93fd9b10502dad8df8687c13717dbd42397e",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_workspace_envelope_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_workspace_envelope_test.dir/tests/workspace_envelope_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_workspace_envelope_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_workspace_envelope_test.dir/link.txt": "d284fa2d0db8cd6deda60789d55ec152ae64a7a7bd5e9a1fabcef31de648636e",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_workspace_envelope_test.dir/tests/workspace_envelope_test.cc.o": "e25d97b3486b910ffffbb9d14ea170586f3a431fb3c01995585049e4c57e8060",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155185.4238768,
+      "return_code": 0,
+      "finished_unix": 1792155185.5576537,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_workspace_envelope_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_workspace_envelope_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_workspace_envelope_test": "67345e116a23e35abfd16565587d7446bdb864acb5d496be63a8fb4240d86c0a"
+      },
+      "started_unix": 1792155185.592001,
+      "return_code": 0,
+      "finished_unix": 1792155185.6048684,
+      "stdout_sha256": "d36ad1544b97372aebe2dde79e8b7d0329164944d7b1c0a94893c1f5a7c66490",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-coarse_workspace_metadata_test",
+      "command": [
+        "/usr/bin/c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_workspace_metadata_test.dir/tests/workspace_metadata_test.cc.o",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_workspace_metadata_test",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so"
+      ],
+      "inputs_sha256": {
+        "work/build-core-release/CMakeFiles/coarse_workspace_metadata_test.dir/link.txt": "b2bddbb84e4bfa8ad338bc204ba315c47e90359dc6a0074cd71a445dbbf6cead",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/build-core-release/CMakeFiles/coarse_workspace_metadata_test.dir/tests/workspace_metadata_test.cc.o": "d79380b901d09b10410a040992818941e2f75e24c964d7ce1755b925a952cfda",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155185.6238527,
+      "return_code": 0,
+      "finished_unix": 1792155186.0896244,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ldd-coarse_workspace_metadata_test",
+      "command": [
+        "ldd",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_workspace_metadata_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_workspace_metadata_test": "a40d360085d26ac2d2484c21116803130f45eaa57aaf0f59ec2e3921000a3889"
+      },
+      "started_unix": 1792155186.108019,
+      "return_code": 0,
+      "finished_unix": 1792155186.2053049,
+      "stdout_sha256": "f61d1393b371e9c231de494f858f71294e59676a4c93d7984f61d4c953a8f09a",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-ctest51",
+      "command": [
+        "ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build",
+        "-j",
+        "1",
+        "--output-on-failure"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/CTestTestfile.cmake": "cab8b392396d8d358b19ac08059aad17118670c705692332a8b90681f480d663",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155186.2293124,
+      "return_code": 127,
+      "launch_error": "FileNotFoundError: [Errno 2] No such file or directory: 'ctest'",
+      "status": "not_run_missing_executable",
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "launch_failure_recorded_unix": 1792155265.9248729
+    },
+    {
+      "name": "public-ctest51-resumed",
+      "command": [
+        "/workspace/cloud-setup/venv/lib/python3.12/site-packages/cmake/data/bin/ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build",
+        "-j",
+        "1",
+        "--output-on-failure"
+      ],
+      "tool_sha256": "2410c3cd7b7c41f6fbbd32543bb132f3742a3de5d4cda6ad3b168f4b9e7f3e1e",
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/CTestTestfile.cmake": "cab8b392396d8d358b19ac08059aad17118670c705692332a8b90681f480d663",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155266.146939,
+      "return_code": 0,
+      "finished_unix": 1792155322.6475544,
+      "stdout_sha256": "ce4b35967ed71ca46e9465f8a50522c09befe8bec771fc95b9f66999a2130e54",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-extra-runtime_credit_slack_test",
+      "command": [
+        "g++",
+        "-O3",
+        "/workspace/template/work/core-resume/work/runtime-lab/runtime_credit_slack_test.o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_lab_runtime_credit_slack_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/runtime_credit_slack_test.o": "490ef8506ae4dce08d852d68ff180c75e1a5873e284d810178d9ecb3546c81d8",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155359.3110776,
+      "return_code": 0,
+      "finished_unix": 1792155359.5471516,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-run-extra-runtime_credit_slack_test",
+      "command": [
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_lab_runtime_credit_slack_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_lab_runtime_credit_slack_test": "912547f32dbfd27a3d886358d52b70376f1ff444f30d345d6bff5419d6d22181"
+      },
+      "started_unix": 1792155359.5514996,
+      "return_code": 0,
+      "finished_unix": 1792155359.5707393,
+      "stdout_sha256": "002756c46565e4e910f72b76e861d0a8226c00e3799bda479ffc18a5e13effb1",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-link-extra-scaled_credit_snapshot_guard_test",
+      "command": [
+        "g++",
+        "-O3",
+        "/workspace/template/work/core-resume/work/runtime-lab/scaled_credit_snapshot_guard_test.o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so",
+        "-Wl,-rpath,/workspace/template/work/core-resume/work/runtime-lab/public-build/lib",
+        "-o",
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_lab_scaled_credit_snapshot_guard_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/scaled_credit_snapshot_guard_test.o": "c4576a261225e8fb252f2fac8172e604c063a9311c2e66fd5edd357656f9892f",
+        "work/runtime-lab/public-build/libcoarse_die.a": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+        "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+      },
+      "started_unix": 1792155359.600004,
+      "return_code": 0,
+      "finished_unix": 1792155359.8818574,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "public-run-extra-scaled_credit_snapshot_guard_test",
+      "command": [
+        "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_lab_scaled_credit_snapshot_guard_test"
+      ],
+      "inputs_sha256": {
+        "work/runtime-lab/public-build/coarse_lab_scaled_credit_snapshot_guard_test": "67fa2608a3d54f4794ec9904500c3058312ca87b9c19428d311f3776cd68b770"
+      },
+      "started_unix": 1792155359.8913453,
+      "return_code": 0,
+      "finished_unix": 1792155359.9015715,
+      "stdout_sha256": "1e759193fe4affc8b3aa0b7e2228ef955a59a879ae72ce7e19e5a84bdd273674",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "candidate_object_sha256": "23f3e346158a66de159ae713290604e90cfd55f311d64a981d89e81577f0ac29",
+  "archive_members": {
+    "Hardware.cc.o": "e71155913c726c6dac1f1b4dd040145ad394f99e31c0cd137ad3fb489be80d5d",
+    "Plan.cc.o": "b451cea6c9cdd0c2f39c3d6c5970e110cee6b9fbd86a12ae6532d1c7fcb3aaf9",
+    "Compiler.cc.o": "9f6cda02a92507eaa945c984701376c91b12a43caea967d77e3febeba3b00125",
+    "Mapping.cc.o": "796f4e4ddd9b778509d856b127d9a6b166c89830a8d00c7e4691fa09bdd4ee2a",
+    "Execution.cc.o": "23f3e346158a66de159ae713290604e90cfd55f311d64a981d89e81577f0ac29"
+  },
+  "candidate_library_sha256": "81e3c232a0c76d3171b94b13e75ff2a66caddea408e855239a30606c0bc17d57",
+  "targets": [
+    "coarse_die_cabi",
+    "coarse_attention_accounting_test",
+    "coarse_capi_cache_response_test",
+    "coarse_capi_cost_query_test",
+    "coarse_capi_lifecycle_test",
+    "coarse_compact_batch_semantics_test",
+    "coarse_compile_execution_test",
+    "coarse_compiler_credit_test",
+    "coarse_compiler_summary_test",
+    "coarse_elementwise_service_test",
+    "coarse_endpoint_allocation_test",
+    "coarse_equivalent_work_test",
+    "coarse_estimate_driver_test",
+    "coarse_fractional_work_test",
+    "coarse_fused_ffn_accounting_test",
+    "coarse_gemm_accounting_test",
+    "coarse_gemm_os_access_counter_test",
+    "coarse_gemm_os_geometry_test",
+    "coarse_gemm_os_readiness_test",
+    "coarse_gemm_os_resource_facts_test",
+    "coarse_gemm_os_route_counter_test",
+    "coarse_gemm_tail_budget_test",
+    "coarse_hardware_input_test",
+    "coarse_k_readiness_runtime_driver",
+    "coarse_norm_row_accounting_test",
+    "coarse_operator_accounting_test",
+    "coarse_oracle_granularity_test",
+    "coarse_os_service_curve_test",
+    "coarse_os_service_scaling_test",
+    "coarse_owner_lp_oracle_driver",
+    "coarse_packing_allocator_test",
+    "coarse_prediction_availability_test",
+    "coarse_ratio_allocator_test",
+    "coarse_region_delay_math_test",
+    "coarse_region_overhead_test",
+    "coarse_repeated_region_availability_test",
+    "coarse_runtime_clock_translation_test",
+    "coarse_runtime_counters_test",
+    "coarse_runtime_credit_scale_test",
+    "coarse_runtime_owner_symmetry_test",
+    "coarse_runtime_semantics_test",
+    "coarse_runtime_submit_transaction_test",
+    "coarse_service_curve_runtime_test",
+    "coarse_service_curve_schema_test",
+    "coarse_source_golden_test",
+    "coarse_task_schema_test",
+    "coarse_workspace_envelope_test",
+    "coarse_workspace_metadata_test"
+  ],
+  "linked_artifacts": {
+    "coarse_die_cabi": {
+      "path": "work/runtime-lab/public-build/lib/libcoarse_die_cabi.so",
+      "sha256": "b48cf7288e87faca9ebdadb1b55c23d141d389ef88b632a7bbbfe2163092a342"
+    },
+    "coarse_attention_accounting_test": {
+      "path": "work/runtime-lab/public-build/coarse_attention_accounting_test",
+      "sha256": "d65c478ec333b3ed33bd822569d99cc578195a0ea8f1fcc99b118cb25798162e"
+    },
+    "coarse_capi_cache_response_test": {
+      "path": "work/runtime-lab/public-build/coarse_capi_cache_response_test",
+      "sha256": "87981d8e1dc0e946acd93804e36724674822101e54c836947d050f1c49e659d2"
+    },
+    "coarse_capi_cost_query_test": {
+      "path": "work/runtime-lab/public-build/coarse_capi_cost_query_test",
+      "sha256": "7c1691f2bd07b6bbf1adcb2013105bd598093ad1a34735564d708d027b2cc746"
+    },
+    "coarse_capi_lifecycle_test": {
+      "path": "work/runtime-lab/public-build/coarse_capi_lifecycle_test",
+      "sha256": "fd6d9d0efa204e2a0e5c28ec51824ce5dfeb094ccea8f60e445599380d89997e"
+    },
+    "coarse_compact_batch_semantics_test": {
+      "path": "work/runtime-lab/public-build/coarse_compact_batch_semantics_test",
+      "sha256": "00f692c5e1eb4fa72407b9e7b98f5ca45716b9676efa76b365ccfd7c4d2a0998"
+    },
+    "coarse_compile_execution_test": {
+      "path": "work/runtime-lab/public-build/coarse_compile_execution_test",
+      "sha256": "be5d1193011dfc3737ece74b99bafb95bd6b0915689012e6029034d85619eb1e"
+    },
+    "coarse_compiler_credit_test": {
+      "path": "work/runtime-lab/public-build/coarse_compiler_credit_test",
+      "sha256": "963cd5544b9e44ece17b96a9843372c2b7fa940a557923990cd67948b7648ebf"
+    },
+    "coarse_compiler_summary_test": {
+      "path": "work/runtime-lab/public-build/coarse_compiler_summary_test",
+      "sha256": "6a3d2930929a82297104d18d9992441bea0166df355ea275c9f5e963774949f4"
+    },
+    "coarse_elementwise_service_test": {
+      "path": "work/runtime-lab/public-build/coarse_elementwise_service_test",
+      "sha256": "99997355a6ff9e1edc8a62da3c66e01f90c57eed9d21f0882a3a2c3d9d05764f"
+    },
+    "coarse_endpoint_allocation_test": {
+      "path": "work/runtime-lab/public-build/coarse_endpoint_allocation_test",
+      "sha256": "a9f0a911fb72d122d47b30d600cfd0c45af464830c2344ecae351b507444de54"
+    },
+    "coarse_equivalent_work_test": {
+      "path": "work/runtime-lab/public-build/coarse_equivalent_work_test",
+      "sha256": "8841beccda9c6e9f5dcda8980dad8f91c0fdb401a37e38b580c6f3f9098a97db"
+    },
+    "coarse_estimate_driver_test": {
+      "path": "work/runtime-lab/public-build/coarse_estimate_driver_test",
+      "sha256": "f8b55adf5fe3e40060493fec1c194201836f98cae51317a2c1d5bfc2aefdcdb1"
+    },
+    "coarse_fractional_work_test": {
+      "path": "work/runtime-lab/public-build/coarse_fractional_work_test",
+      "sha256": "86522f66009fb2c883c8508cccb522d8d77623ad8c84b3eff759d0ee2dbb6563"
+    },
+    "coarse_fused_ffn_accounting_test": {
+      "path": "work/runtime-lab/public-build/coarse_fused_ffn_accounting_test",
+      "sha256": "b46bc7a65090531c4f0692bf7fbbe9b19a8cb164bfbd6397d1e4919976118593"
+    },
+    "coarse_gemm_accounting_test": {
+      "path": "work/runtime-lab/public-build/coarse_gemm_accounting_test",
+      "sha256": "62517b4d7b8829f76e9bbee8a5c389b81437e33ce1b617a22c83e83e8710e03e"
+    },
+    "coarse_gemm_os_access_counter_test": {
+      "path": "work/runtime-lab/public-build/coarse_gemm_os_access_counter_test",
+      "sha256": "8fd52a175178ec988e64640866b669f3d81ee5cf68b7a77ee3c1613be64e1c42"
+    },
+    "coarse_gemm_os_geometry_test": {
+      "path": "work/runtime-lab/public-build/coarse_gemm_os_geometry_test",
+      "sha256": "6819aa52528c6d6f5f2b077d662311c95fa3f79b4f7f05b320307a872292cb56"
+    },
+    "coarse_gemm_os_readiness_test": {
+      "path": "work/runtime-lab/public-build/coarse_gemm_os_readiness_test",
+      "sha256": "8fefff230793899e7d0afc08f374ea534a397571e060b9f6ea20aef76ab1713c"
+    },
+    "coarse_gemm_os_resource_facts_test": {
+      "path": "work/runtime-lab/public-build/coarse_gemm_os_resource_facts_test",
+      "sha256": "03591cb7998ba1f270575d827b416e75f3c6ef04e4e018ab6f2a443de3354144"
+    },
+    "coarse_gemm_os_route_counter_test": {
+      "path": "work/runtime-lab/public-build/coarse_gemm_os_route_counter_test",
+      "sha256": "bfa9e71b73351fba3e2484cde740e85aa81ffe825696a0a6eec7a6443170e40c"
+    },
+    "coarse_gemm_tail_budget_test": {
+      "path": "work/runtime-lab/public-build/coarse_gemm_tail_budget_test",
+      "sha256": "82e74671d361db5207fd0b9a3df3dc4ba03ef8b8488afca82caba90dd73cb64b"
+    },
+    "coarse_hardware_input_test": {
+      "path": "work/runtime-lab/public-build/coarse_hardware_input_test",
+      "sha256": "b119ada62be67f38a2dc22a5741d5d75125863a908dcdf87997280801d57b370"
+    },
+    "coarse_k_readiness_runtime_driver": {
+      "path": "work/runtime-lab/public-build/coarse_k_readiness_runtime_driver",
+      "sha256": "4ee026208be8036e8d3993e2ed4a10171cdd7cd09f7dbf638afd3cb6ef93d493"
+    },
+    "coarse_norm_row_accounting_test": {
+      "path": "work/runtime-lab/public-build/coarse_norm_row_accounting_test",
+      "sha256": "58bf48149a29de8013c7048ddfcc2653b429f9af3ebc6f0b0ca82e648ae14792"
+    },
+    "coarse_operator_accounting_test": {
+      "path": "work/runtime-lab/public-build/coarse_operator_accounting_test",
+      "sha256": "a1b6e3feec3a9ee106411ed6fbe6e7d674b709cbaa24fa206cf6fb845b2a353e"
+    },
+    "coarse_oracle_granularity_test": {
+      "path": "work/runtime-lab/public-build/coarse_oracle_granularity_test",
+      "sha256": "543193302927ffa9eb93cead6d2042c3537d38658dd23c37b6b6ecad9d035edd"
+    },
+    "coarse_os_service_curve_test": {
+      "path": "work/runtime-lab/public-build/coarse_os_service_curve_test",
+      "sha256": "6790470b2005bb5f23a83ecad4241da973b6d9c294a62754b4cd8007f97cca2a"
+    },
+    "coarse_os_service_scaling_test": {
+      "path": "work/runtime-lab/public-build/coarse_os_service_scaling_test",
+      "sha256": "47467f8bca81a132cf455a09a609f1ef5fa6751b74b854702eb1efdfcba2e1b2"
+    },
+    "coarse_owner_lp_oracle_driver": {
+      "path": "work/runtime-lab/public-build/coarse_owner_lp_oracle_driver",
+      "sha256": "15cdb819c462da31407e0700e400dd98974cf20a24457623963c338b6ad34847"
+    },
+    "coarse_packing_allocator_test": {
+      "path": "work/runtime-lab/public-build/coarse_packing_allocator_test",
+      "sha256": "bde9f2e1436d511cd37ef84639ef1404ca56e050c6fec69ba6b1c43f8b6254f2"
+    },
+    "coarse_prediction_availability_test": {
+      "path": "work/runtime-lab/public-build/coarse_prediction_availability_test",
+      "sha256": "a9c4ee387b72bbdc6310680a8d60923b429101db9dbe02b38f7e9013e6dc79ba"
+    },
+    "coarse_ratio_allocator_test": {
+      "path": "work/runtime-lab/public-build/coarse_ratio_allocator_test",
+      "sha256": "38bff97e248b79617600d6f547d136346b7d216a42f6d6bc27a2faa8c19e8d9d"
+    },
+    "coarse_region_delay_math_test": {
+      "path": "work/runtime-lab/public-build/coarse_region_delay_math_test",
+      "sha256": "b357bfac03f54d977aa9cc1748b3f316a7f1b92ae331e1159eeba2df8fb6483d"
+    },
+    "coarse_region_overhead_test": {
+      "path": "work/runtime-lab/public-build/coarse_region_overhead_test",
+      "sha256": "3becb44b9ec24b0e94ef041a5680a4d01955d0888db3a3e4e9933014e7374ab2"
+    },
+    "coarse_repeated_region_availability_test": {
+      "path": "work/runtime-lab/public-build/coarse_repeated_region_availability_test",
+      "sha256": "3d1ef98007d9f53bcde1d98e9062879594eb07cae65a238f6d585eda2c7e909d"
+    },
+    "coarse_runtime_clock_translation_test": {
+      "path": "work/runtime-lab/public-build/coarse_runtime_clock_translation_test",
+      "sha256": "a29bf090670400b5717abba91ecf8c5d460c86ae2fb05dffc0d148fb141cf79c"
+    },
+    "coarse_runtime_counters_test": {
+      "path": "work/runtime-lab/public-build/coarse_runtime_counters_test",
+      "sha256": "38219b125f930a896028a77c9e1730bc83ade48989d4833952b946cfba596963"
+    },
+    "coarse_runtime_credit_scale_test": {
+      "path": "work/runtime-lab/public-build/coarse_runtime_credit_scale_test",
+      "sha256": "8a1ac1df51b1481fa4bc230ca3d78cd18b8ec8c68ddb5978e23217a02ac6e4f4"
+    },
+    "coarse_runtime_owner_symmetry_test": {
+      "path": "work/runtime-lab/public-build/coarse_runtime_owner_symmetry_test",
+      "sha256": "4547a8d1d594d3fed258ea5de31b34b30cfe4838df8239737711f963fdf174ee"
+    },
+    "coarse_runtime_semantics_test": {
+      "path": "work/runtime-lab/public-build/coarse_runtime_semantics_test",
+      "sha256": "2cae56d7ba34daa80a14d51f720c6113d30038a625f67a8c665121496161dc24"
+    },
+    "coarse_runtime_submit_transaction_test": {
+      "path": "work/runtime-lab/public-build/coarse_runtime_submit_transaction_test",
+      "sha256": "cee696d1c000119d173640c14f1c1c0087fbfbd568b61dc1591d2aeb543c11ae"
+    },
+    "coarse_service_curve_runtime_test": {
+      "path": "work/runtime-lab/public-build/coarse_service_curve_runtime_test",
+      "sha256": "9ecc3b8a44b7474a6464e845d3c5f28843b1cae1fc7ab90660dccf0dd99a9460"
+    },
+    "coarse_service_curve_schema_test": {
+      "path": "work/runtime-lab/public-build/coarse_service_curve_schema_test",
+      "sha256": "0800499596a870bef291ce2bad4e7d76291fe647dd74fa99d92e3187e6d2a339"
+    },
+    "coarse_source_golden_test": {
+      "path": "work/runtime-lab/public-build/coarse_source_golden_test",
+      "sha256": "b9744d7be47a13a74ba700f8e4c3b349ca3ef51e49c20acdffe54a54c84225ce"
+    },
+    "coarse_task_schema_test": {
+      "path": "work/runtime-lab/public-build/coarse_task_schema_test",
+      "sha256": "cd906aba38ea9828a9120028a347173f6ab2bef8fe3966ecd44c3e3c505f10aa"
+    },
+    "coarse_workspace_envelope_test": {
+      "path": "work/runtime-lab/public-build/coarse_workspace_envelope_test",
+      "sha256": "67345e116a23e35abfd16565587d7446bdb864acb5d496be63a8fb4240d86c0a"
+    },
+    "coarse_workspace_metadata_test": {
+      "path": "work/runtime-lab/public-build/coarse_workspace_metadata_test",
+      "sha256": "a40d360085d26ac2d2484c21116803130f45eaa57aaf0f59ec2e3921000a3889"
+    }
+  },
+  "ctest_file_sha256": "cab8b392396d8d358b19ac08059aad17118670c705692332a8b90681f480d663",
+  "registered_tests": 51,
+  "tooling_failure_note": "All candidate relinks completed; first ctest launch failed before any test started. Empty first-attempt stdout/stderr retained. Resume with the real configured ctest path; do not rerun/relabel builds.",
+  "source_after": {
+    "die/src/RatioAllocation.hh": "ce5a040d44a4e4cfef1dbc9e9e0fd6dbbfb9eef335ed8482c2c5cf7392953fb8",
+    "die/src/Mapping.cc": "a5208b17d7f017c62f691a4d0196c46b6cea4b1fa62a2e353880e68708996289",
+    "die/src/EquivalentWork.hh": "41a5785bba67ce049ee9159fc877b04191c8741b69e8ba040c0875884d56f92e",
+    "die/src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+    "die/src/Hardware.cc": "d2fe3d9d807757c5cfc87903ff717532922d581cf4590056a432324f895a64d4",
+    "die/src/Compiler.cc": "64ebea9e2fb5c17de30fdea1197867dd721b415679f7b9d457d09148bf3e9ab2",
+    "die/src/ElementwiseGeometry.hh": "4ca382e619b21de677de876187436c2fdf7df735d3f4ea16ec05df337a50df81",
+    "die/src/Plan.cc": "c80c34afa81196b83cbf79284c982c4273d0e3d9ad7bc2fe1eab26189282a872",
+    "die/src/RegionDelay.hh": "778db1de98fdd8c8782890ca343cad897efc9b6b5f67952b8235caf30c1e6c95",
+    "die/src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "die/src/GemmOSRouteCounter.hh": "298437831747470beaa2ee2f72f4c96ac60d98afc566e30722f348affea41ec9",
+    "die/src/GemmOSReadiness.hh": "137814951b34329a6683c35c56cbe3ba7432ae39d6eb4c611e727bfbf18bc774",
+    "die/src/Execution.cc": "3c9d58a0ed8c6b64450b86cac1059b3a1dba7b604caf67b31f00034c673e3043",
+    "die/src/Capi.cc": "c924fa5867c52c4c0d38abec8f718d8985580e39da7ee610ee2b8beb47a6542d",
+    "die/src/CompilerInternal.hh": "e935c36d02d128d197e693e7240820a5773b8f5ea7cb6cb1a7134651502b2bec",
+    "die/src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+    "die/src/GemmTailBudget.hh": "4261f71cf742c3c5b218dd2a1bf3db7a47fc10d715a28e110b71b8a517608936",
+    "die/src/PackingAllocation.hh": "6fca2771bd406db3c12a0fffa6dddbc08392d6f4647368250a5547899316c75f",
+    "die/include/coarse_die/Hardware.hh": "629892410d0b77172fedb13f8eaf1633204eea5f9650ca2bf7469cbf20f0011c",
+    "die/include/coarse_die/Capi.h": "8fa8be05f57599cbc0485da601b88f4a2fbf368c0af4086d5929cac98d7a2f89",
+    "die/include/coarse_die/Plan.hh": "09427a5288e01fb10b3408a4b82f58af7a0242fe080e001441b4a9b6b29b9117",
+    "die/include/coarse_die/Prediction.hh": "457ac32c95d9cbe662705d29dc0892e255c6690a5f0fb10bb75951f4b082b01f",
+    "die/include/coarse_die/Memory.hh": "0a3fc4aa58d1ecd2fedb8248d55080b9d30a12b7a476864a37f9b44d6e20022c",
+    "die/include/coarse_die/Execution.hh": "e9c3228f1afc4e8ae6daf5069636b9e7cc987179b8017e256f6a30ad772000ea",
+    "die/configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
+    "die/configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
+    "die/configs/example_hardware.json": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a",
+    "die/configs/example_hardware_explicit.json": "b275a326cceec297073a291ba230a9f0c8aeee21fbeb61454cebff8679ca4b3e",
+    "die/configs/VERSION": "fa270db925f3dbf85e72df5840b5a8869c0567250a3e3c44265cafeee2d32220",
+    "die/configs/core32.json": "e89d353e29ffec23c50590d81344f44dd5b0d424c8361521ddf79fbe32c70986",
+    "die/configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
+    "die/configs/tx8_compute_matched_hardware.json": "90941cc259673d144c2d17c1ee44d08837270de802d99a9307d426afee81bb5c",
+    "die/tests/region_delay_math_test.cc": "3834606812762ecbb91290f4b13a8302b2c755b3e790a8f9d30a4d974ead22a9",
+    "die/tests/k_readiness_runtime_driver.cc": "43fc90563dc60f34682e5c05ad2e99e2a2ee217db8c15dc30be61e69e09ea71d",
+    "die/tests/capi_cache_response_test.cc": "11fd8185a7834e61b581ebaf91b6177a5bdfbeb1dcaa8df07afbd0e058cecdcd",
+    "die/tests/norm_row_accounting_test.cc": "ee7587c186c10e2d871024f76d7c7553ed829692dc10a87fbcb6ac733a78dd8a",
+    "die/tests/service_curve_schema_test.cc": "b666748f3ccd6f78c0cf95117cebb4d4648a808382c9ad099de689162bda5339",
+    "die/tests/region_overhead_test.cc": "2f95ef9bc432116410babce5b2df8d1c0c10cafee7fb10d67f098641c9b55eae",
+    "die/tests/compiled_gemm_oracle_driver.cc": "e5c954b917838431366082bbd442191c372c4ee951781c83a660f63b5e4caa6d",
+    "die/tests/compile_execution_test.cc": "aff7176cd22f2d2fae64ad6ac42778fa359381e2294e0c3b09f245d79af8b527",
+    "die/tests/elementwise_service_test.cc": "d383064a2961064463f7de3f77ec5a8a4fb14949954632f3375181454e80d0eb",
+    "die/tests/task_schema_test.cc": "565acfa7a880ca03bd4de584cddce260f724eaabaa1f6946ad80cd3c10dd7af8",
+    "die/tests/source_golden_test.cc": "c68973206bf4292ffca66c6e21faf1acb63b2cdbdb29142d6a0200fc6e5a37cf",
+    "die/tests/workspace_envelope_test.cc": "9c259b7b19b2c9f94c79815a1f671f8a4928a6ee599f3a21bc8a2f09e0542cf0",
+    "die/tests/fused_ffn_accounting_test.cc": "275f5ec711b435f0f14647f3c71245875ded1a8dee9f23d86dc9fd43e4451c05",
+    "die/tests/os_lifecycle_runtime_driver.cc": "4482ddfe0b42ab6c452712028a96e7192e527a9beaecb052199c3cd0fd4fa9ea",
+    "die/tests/compiler_credit_test.cc": "80f5df261c0805e5133b3e06e746e8da6bb398c2ebc59e66d5db66e79a657609",
+    "die/tests/runtime_clock_translation_test.cc": "72ace48a497a33f62b0901cebdb5ea751186c70279f2524f56fcbded77de8e49",
+    "die/tests/gemm_os_route_counter_test.cc": "42ebe2fa66ca913aec678693a356b670210d6aa0f353c02d36953b5cd87e48dc",
+    "die/tests/runtime_submit_transaction_test.cc": "5e571810ac0bfdfa4910eea6d7421efedead078dd1b82a344cbb48899ebacf6e",
+    "die/tests/elementwise_oracle_driver.cc": "dfb73c351e8b3749d4f0c296ec0b7c1cb67598c266e4a052cd635b91e1721075",
+    "die/tests/capi_cost_query_test.cc": "fc6893afd8fce67c657086921dda1eca19825d878222ccdfd515ab01ab1366d5",
+    "die/tests/analytical_service_oracle_test.py": "200ed93a0335b956886bd359ddf32274da3fa4d5c979ab3739c637ff019d3846",
+    "die/tests/gemm_accounting_test.cc": "bd6e39e25cde514715d9e7e41a6afe1fb1ebe3882b3633eb6647fffaff6a7732",
+    "die/tests/hardware_input_test.cc": "29b886a3cd99b289f2a7714453958ab5e52cf2c762730bc0833ed4e2e1240066",
+    "die/tests/workspace_metadata_test.cc": "db9cd242ba35ee3c57257c99a3952619948360225415f66080e69fc042416d10",
+    "die/tests/operator_accounting_test.cc": "80dd61816adb723cb3a149344d23e1bd6e34ff8f264844dd7a16fb9ec4fb2f0d",
+    "die/tests/test_support.hh": "20630b90066778e748b3d7bfcbb1ecfecc3ba57a847ed172653c63cbc643df11",
+    "die/tests/gemm_tail_budget_test.cc": "d0be84e7ff2f2f1c20ec87f6f63b0e0b30e05eacf9edc06808a6f0c4b8198d13",
+    "die/tests/repeated_region_availability_test.cc": "7c78455ec0cdaf05ead77adcfac089403f672910c715361fe22f4a88ba9a5041",
+    "die/tests/gemm_os_resource_facts_test.cc": "f24d76b839038ceabdeb662d3b5c95698b5c1d7a3d1f7d4636db7869a98db298",
+    "die/tests/service_curve_runtime_test.cc": "82028a3346ec737acec14449e2b50a8016b71d93df3bdfc9f87b3848798dafb1",
+    "die/tests/estimate_driver_test.cc": "41b4ab5c30c6a98f4c05eeece6348a99b825bb6d36ac1d622cf6865dc964b0e4",
+    "die/tests/estimate_cli_test.py": "21c31bec6916b404db968217fc0fc233a1c2aab2aa6cff7d59a02938a4b2e3fd",
+    "die/tests/attention_accounting_test.cc": "d7e0d29da9e151f7a19006d0de29bedcadbcef69e1e61ab191b63001076df882",
+    "die/tests/oracle_granularity_test.cc": "f785a6f1f31d55225fde8e2004b7c68682b07bd101c6d495eab0e5f10817c550",
+    "die/tests/gemm_os_access_counter_test.cc": "cdc1eaabc853580ef065692cc0883763685b339d2ceffc36357e4439801014c6",
+    "die/tests/service_curve_benchmark.cc": "01941d4ac36fcc2a4e42ad9890d9d67896ed1c549382eb2100c4c051a5cf14c1",
+    "die/tests/benchmark.cc": "5f5cca0c4560a0add9ae9614651f9afcf1a4fecc6ac04d1b0ab0b1071091d2f5",
+    "die/tests/grouped_gemm_oracle_test.py": "b5ee2b0cfa5f7c7a540ebc4c8f524b2b21e05d2abd2ab885c89b3be30255bf12",
+    "die/tests/runtime_semantics_test.cc": "d87ffebd5d6633bd5b303d0013658ff2dc4d66664388bb66bad0f00640368a17",
+    "die/tests/compact_batch_semantics_test.cc": "eadcdae8614fe6a0f16c90f8c27949661723a8ba2ec0a0da6c536281ab0faa0b",
+    "die/tests/runtime_counters_test.cc": "5eb3ddcdffb4031d26282a0dfcc78b5b5e33cc316b4326ae6086e25f9feea63e",
+    "die/tests/os_service_scaling_test.cc": "6cb7beb1ab5b6025f4fccad7f8c85bea9426c799e36a7f28c903192900059647",
+    "die/tests/packing_allocator_test.cc": "f449917392ee920413a35891a1d16d2d2821980b5099b3a880df2e33cdaf4cc4",
+    "die/tests/capi_lifecycle_test.cc": "32758610dadd559f3006f353dc4c40916a8fef9dd1b485f5e4c45d643e14f7b0",
+    "die/tests/prediction_availability_test.cc": "aedca26a6e5c009a72fd48431a04b83972d701817acd22eed87bf149afe2eb74",
+    "die/tests/owner_lp_oracle_driver.cc": "f187aaf39f314f994d820d88b106b037ec6f3708fcba9f9353427328493c9dba",
+    "die/tests/fractional_work_test.cc": "f196dc9d50a3a0adaa97f2ffb82edd9e6adc537c1cace8a45a93912eb089092c",
+    "die/tests/os_service_curve_test.cc": "f059ccd0039e16fb268878c31619adcf3f2112e3c569da63f99bbcede07c550b",
+    "die/tests/runtime_credit_scale_test.cc": "eeca71a2ce5f17e93a7d72aafd2d828dd1d6a123af600225440c3035c3b8c17f",
+    "die/tests/gemm_os_geometry_test.cc": "68c04ddc9e4c4505e1511dce1995993f2b23c420d1823c890efb074db1979d8d",
+    "die/tests/gemm_os_readiness_test.cc": "bb86005c5103f57beb7ae6f185832d0d208af694f8844280823172f20aa8799f",
+    "die/tests/runtime_owner_symmetry_test.cc": "d569c72f93ae88f5ece1da1737093ee4ebfbfd3287b5b6f06ec2cb19ed70e178",
+    "die/tests/norm_oracle_driver.cc": "2c260a8a7ab07cff1674f1b6fb4e16ec6896e9ce7e78d36379d5fcfeef49bd52",
+    "die/tests/equivalent_work_test.cc": "854fe7a755928d134ca50b069f23cb339971d0f3b6dcc586ab97d306d49e2052",
+    "die/tests/compiler_summary_test.cc": "83f5715e5d3a94b767b566187059cc84390c12e560acd8e87aea15a41b3e85ec",
+    "die/tests/endpoint_allocation_test.cc": "ac9e3cc321d7394b06785075286adc99f36e17e080cef2770a0fca2610c0ccc7",
+    "die/tests/ratio_allocator_test.cc": "3f6869ef445932005b13b7d265058ff2ceaad30b4794ba1dcc1a7e9ebba1fccf",
+    "die/tests/fixtures/pre_region_ready_attention.json": "85c9340be3dd0239f8fdde72f9f029db762f7a698c7a840e1652e0f229cd3e6b",
+    "die/tests/fixtures/coarse_die_v2.json": "5bdc26d2ceb4b96d2e0ed64925dc4e32b74a0fa46fa65cf7f323abdf57b38995",
+    "die/tests/fixtures/pre_region_ready_norm.json": "e9b31eadb8759b1d9f653504c8595dea7114947ba78c4bd37d025690ba61d7e9",
+    "die/tests/fixtures/discrete_wave_scenarios.json": "a2027d8b26c4057f89064002d836f3f933f275d49c59307ac8d53311f47082be",
+    "die/tests/fixtures/gemm_medium.json": "846fe90f7ceac25bb242ba5e07f1ba4f8d5934b7b0a8067d463b7839211522ef",
+    "die/validation/owner_lp_oracle.py": "d9a7610d801525fc62798bbeabd7ff518ac5165cc3925fcd580d02b96028f898",
+    "die/validation/norm_row_oracle.py": "829c5074a683579179b185e83888b78abd62af7c17e77093d0a877a9fdf443e3",
+    "die/validation/compiled_gemm_oracle.py": "8c656c84b8a43b02fa44f7fa59554ee8c46a307a0da21dbe0bcf146ba07d71f9",
+    "die/validation/os_lifecycle_runtime_oracle.py": "8c2875ef96942cd8c6b255658800d468a37137b1fe7fe78b2611271b78cdc5b8",
+    "die/validation/cabi.py": "2af22b989595b24d0b97ca8e27ca527db8b6c51f802ad7c2f0ec2e4d436469f7",
+    "die/validation/elementwise_service_oracle.py": "38534eaa90b2540fe1b7926197445694d89e057429f851807e5822daed5e1447",
+    "die/validation/analytical_service_oracle.py": "da56e5cb0f4548b4eb5623e2843fa92c6c9e01636e92222e5245372d2d90959e",
+    "die/validation/discrete_oracle.py": "172178ed57845b4b715d5a52ad1efc7d7e770094603c630120c8ff6b4baa9080",
+    "die/validation/grouped_gemm_oracle.py": "03ba5acaae7973ea2f1e7573bda1e4f053d6afc9355a5893b405f923db2e2753",
+    "die/tools/validate.py": "975f936ceff5261802d6eddad5f2c0ec9550b5897164debae6351d1e16d88f6d",
+    "die/tools/benchmark.py": "5f747a44dd01e207629e77a5237232ca821f5829a5f93083dbfe6d626d314307",
+    "die/tools/sync_repositories.py": "4a2ec87da3c9b1c840cb5598170da77a9e1548cd6b8e0c6a7624eeac3a583b92",
+    "die/tools/check_core_source.py": "44a2da5aef461da05bd8206990b361349a941cd401f626278933e28b9d77b808",
+    "die/tools/sensitivity.py": "86ee6063160976a32cae1250313783b4b3044554ba575675a51439b47a5781fc",
+    "die/tools/calibrate_tx8.py": "2875adacca319dcf060fc0612b4ac9c46ca7c1cbe72621edee25516c8d84cefe",
+    "die/tools/estimate.py": "4728d1a40c6263ac43eb094bb90a495a7c71eb3544b236b7de988e94889e4596"
+  },
+  "production_unchanged": true,
+  "baseline_library_unchanged": true,
+  "finished_unix": 1792155359.9113133,
+  "runner_sha256_for_completed_relink_attempt": "dfc9ec918ac5d6dcc522ab25599b59c680714b2493d45f23ab643a41a7a63b21",
+  "public_ctest51": {
+    "status": "passed",
+    "count": 51,
+    "seconds": 56.45,
+    "scope": "relinked unchanged fresh-session test/driver objects, scratch Runtime archive and independently linked candidate CABI; three pure Python/source tests do not execute Runtime"
+  },
+  "extra_current_red_regression_status": "original tiny passed with PIC candidate archive; scaled snapshot inventory/capacity guard passed",
+  "corrected_future_runner_sha256": "8ee8bc7486ebf355ad70235e75e024594147dd828b9498c445f00ae63e263699",
+  "runner_change_note": "Tooling corrected after the real initial relink and resumed CTest run; not represented as an executed past source."
+}

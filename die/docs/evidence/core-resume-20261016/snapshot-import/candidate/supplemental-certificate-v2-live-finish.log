@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/workspace/template/work/core-resume/work/snapshot-lab/certify_supplemental.py", line 46, in <module>
+    if terminal:metric(stage,'finish_ns',e['finish_ns'],j*10**9//4 if stage=='cancel' else j*10**9,index+1)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/core-resume/work/snapshot-lab/certify_supplemental.py", line 21, in metric
+    actual=F(actual);expected=F(expected);error=abs(actual-expected)
+           ^^^^^^^^^
+  File "/opt/codex/runtimes/codex-primary-runtime/dependencies/python/lib/python3.12/fractions.py", line 264, in __new__
+    raise TypeError("argument should be a string "
+TypeError: argument should be a string or a Rational instance

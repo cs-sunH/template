@@ -1,0 +1,29 @@
+{
+  "scope": "resume tool syntax/dry-run and 8 small filesystem-fixture tests; no native build outcome inferred by these checks",
+  "unit_test_command": [
+    "python3",
+    "-B",
+    "die/docs/analysis/core-resume-20261016/test_sdk_resume_support.py"
+  ],
+  "unit_tests": 8,
+  "unit_exit_code": 0,
+  "retained_original_states": {
+    "astra-sim-face-native-configure": "passed",
+    "astra-sim-face-native-build": "passed",
+    "astra-sim-face-native-consumers": "failed",
+    "astra-sim-face-LRU-native-configure": "passed",
+    "astra-sim-face-LRU-native-build": "passed",
+    "astra-sim-face-LRU-native-consumers": "failed",
+    "astra-sim-wscllm-native-configure": "passed"
+  },
+  "incomplete_WS_build_reason": "incomplete_no_final_identity",
+  "tool_sha256": {
+    "die/docs/analysis/core-resume-20261016/run_isolated_sdk.py": "c111dfe39f94b88bb396aeccfb0be51adf0666af1abfe68031430997a4872e7f",
+    "die/docs/analysis/core-resume-20261016/sdk_resume_support.py": "29dbbea50ce1c82b263d69b8aa0a227909267d491341a079a284fd0262f3377c",
+    "die/docs/analysis/core-resume-20261016/test_sdk_resume_support.py": "77bcc7d596ec0f828cf99788ef7dd749897b39d0e12cd5d1ad6597773f21ebe0"
+  },
+  "evidence_sha256": {
+    "native-resume-dry-run.json": "662223c8f883f7ac428127a53ebd946be3b2c1ee910098ea25f5a35d5573fd28",
+    "sdk-resume-unit.log": "e824012971ca52bdfe613e3a2123076694076171407b119e3b8acc64e5727383"
+  }
+}

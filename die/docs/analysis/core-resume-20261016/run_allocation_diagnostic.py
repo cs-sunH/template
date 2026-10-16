@@ -11,6 +11,10 @@ import time
 p = argparse.ArgumentParser(description=__doc__)
 p.add_argument('--output', type=Path, required=True)
 p.add_argument('--samples', type=int, default=5)
+p.add_argument('--candidate-source', type=Path)
+p.add_argument('--candidate-build', type=Path)
+p.add_argument('--candidate-only', action='store_true',
+               help='retain prior baseline evidence instead of rebuilding its unchanged probe')
 a = p.parse_args()
 root = Path(__file__).resolve().parents[4]
 output = a.output.resolve()
@@ -18,7 +22,8 @@ if output.exists() or not output.is_relative_to(root / 'work'): p.error('fresh r
 if not 1 <= a.samples <= 1000: p.error('samples must be in [1,1000]')
 output.mkdir(parents=True)
 relative_probe = Path('die/docs/analysis/hotpath-allocation-20261016/phase_profile.cc')
-lab = root / 'work/core-perf-lab'
+lab = (a.candidate_source or root / 'work/core-perf-lab').resolve()
+candidate_build = (a.candidate_build or lab / 'build').resolve()
 destination = lab / relative_probe
 if destination.exists():
     if destination.read_bytes() != (root / relative_probe).read_bytes(): p.error('lab probe differs')
@@ -27,8 +32,10 @@ else:
     shutil.copy2(root / relative_probe, destination)
 sha = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
 rows = []
-for name, source, build in [('baseline', root, root / 'work/build-core-release'),
-                            ('candidate', lab, lab / 'build')]:
+variants = [('candidate', lab, candidate_build)]
+if not a.candidate_only:
+    variants.insert(0, ('baseline', root, root / 'work/build-core-release'))
+for name, source, build in variants:
     inputs = sorted(path for folder in ['src', 'include', 'configs', 'tests']
                     for path in (source / 'die' / folder).rglob('*') if path.is_file())
     inputs += [source / relative_probe, build / 'libcoarse_die.a', build / 'lib/libcoarse_die_cabi.so',

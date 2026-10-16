@@ -1,0 +1,2058 @@
+{
+  "commands": {
+    "certificate": "source /workspace/cloud-setup/activate.sh\npython3 -B work/snapshot-lab/certify_supplemental.py work/snapshot-lab/supplemental-coupled.stdout.log work/snapshot-lab/supplemental-exact-certificate.json > work/snapshot-lab/supplemental-certificate.log 2>&1",
+    "compile": "source /workspace/cloud-setup/activate.sh\nc++ -std=c++17 -O3 -DNDEBUG -I die/tests -I work/snapshot-lab/die/include -I astra-sim-wscllm/extern/helper -DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/work/core-resume/die\" -DCOARSE_DIE_ROOT_DIR=\"/workspace/template/work/core-resume\" work/snapshot-lab/supplemental-coupled-driver.cc work/snapshot-lab/libcoarse_die.a -o work/snapshot-lab/supplemental-coupled-driver > work/snapshot-lab/supplemental-coupled-compile.log 2>&1",
+    "oracle": "source /workspace/cloud-setup/activate.sh\npython3 -B work/runtime-lab/coupled_credit_oracle.py work/snapshot-lab/supplemental-coupled.stdout.log work/snapshot-lab/supplemental-coupled-results.json > work/snapshot-lab/supplemental-coupled-oracle.stdout.log 2> work/snapshot-lab/supplemental-coupled-oracle.stderr.log",
+    "run": "work/snapshot-lab/supplemental-coupled-driver > work/snapshot-lab/supplemental-coupled.stdout.log 2> work/snapshot-lab/supplemental-coupled.stderr.log"
+  },
+  "driver_cases": 48,
+  "driver_observed": 48,
+  "driver_source_sha256": "dd84ef2076390cecfd0c0b07ed9ff68d46317e00d979e2e1dc13eed639700127",
+  "oracle_source_sha256": "aa7bb6051f91e037b255f76c5212a1f72b847dc5940cc526d60f500beec5fb9a",
+  "original_baseline_log_sha256": "4df1121c0969cfad09a5668b21664536b287fc03f2c6cf8b4ce30f00e2be4302",
+  "original_driver_source_sha256": "dd84ef2076390cecfd0c0b07ed9ff68d46317e00d979e2e1dc13eed639700127",
+  "scope": "Same immutable synthetic coupled driver linked separately to B-only scratch archive; no tiny-credit candidate combined; old failure evidence unchanged. Snapshot checks and strict Fraction numeric oracle are reported separately.",
+  "scratch_driver_binary_sha256": "073d313000554ae37de28a6dd3f37367d4fab8c8887f72ef841bf7dd823785ac",
+  "scratch_static_library_sha256": "6573ce3f330833b9b7b05d117e05456b9f983e8554281c5dad77ec5cd90316c6",
+  "specific_split_snapshot_cases": [
+    {
+      "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+      "baseline_status": "exception",
+      "candidate_status": "observed",
+      "continuation_snapshot_exact": true,
+      "initial_rate_by_execution": [
+        [
+          0.5000000000000002
+        ],
+        [
+          0.5
+        ],
+        [
+          0.5000000000000002
+        ],
+        [
+          0.49999999999999983
+        ]
+      ],
+      "owners": 2,
+      "snapshot_roundtrip_exact": true,
+      "unit_exponent": 0
+    },
+    {
+      "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+      "baseline_status": "exception",
+      "candidate_status": "observed",
+      "continuation_snapshot_exact": true,
+      "initial_rate_by_execution": [
+        [
+          0.12500000000000022
+        ],
+        [
+          0.125
+        ],
+        [
+          0.12500000000000022
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ]
+      ],
+      "owners": 8,
+      "snapshot_roundtrip_exact": true,
+      "unit_exponent": 0
+    },
+    {
+      "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+      "baseline_status": "exception",
+      "candidate_status": "observed",
+      "continuation_snapshot_exact": true,
+      "initial_rate_by_execution": [
+        [
+          0.5000000000000002
+        ],
+        [
+          0.5
+        ],
+        [
+          0.5000000000000002
+        ],
+        [
+          0.49999999999999983
+        ]
+      ],
+      "owners": 2,
+      "snapshot_roundtrip_exact": true,
+      "unit_exponent": -10
+    },
+    {
+      "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+      "baseline_status": "exception",
+      "candidate_status": "observed",
+      "continuation_snapshot_exact": true,
+      "initial_rate_by_execution": [
+        [
+          0.12500000000000022
+        ],
+        [
+          0.125
+        ],
+        [
+          0.12500000000000022
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ],
+        [
+          0.12499999999999997
+        ]
+      ],
+      "owners": 8,
+      "snapshot_roundtrip_exact": true,
+      "unit_exponent": -10
+    },
+    {
+      "baseline_error": null,
+      "baseline_status": "observed",
+      "candidate_status": "observed",
+      "continuation_snapshot_exact": true,
+      "initial_rate_by_execution": [
+        [
+          0.0
+        ],
+        [
+          0.0
+        ],
+        [
+          0.0
+        ],
+        [
+          1.0
+        ]
+      ],
+      "owners": 2,
+      "snapshot_roundtrip_exact": true,
+      "unit_exponent": -60
+    },
+    {
+      "baseline_error": null,
+      "baseline_status": "observed",
+      "candidate_status": "observed",
+      "continuation_snapshot_exact": true,
+      "initial_rate_by_execution": [
+        [
+          0.0
+        ],
+        [
+          0.0
+        ],
+        [
+          0.0
+        ],
+        [
+          0.14285714285714285
+        ],
+        [
+          0.14285714285714285
+        ],
+        [
+          0.14285714285714285
+        ],
+        [
+          0.14285714285714285
+        ],
+        [
+          0.14285714285714285
+        ],
+        [
+          0.14285714285714285
+        ],
+        [
+          0.14285714285714285
+        ]
+      ],
+      "owners": 8,
+      "snapshot_roundtrip_exact": true,
+      "unit_exponent": -60
+    }
+  ],
+  "strict_binary64_certificate": {
+    "all_allocations_strict_feasible": true,
+    "cases": [
+      {
+        "all_strict_feasible": true,
+        "metric_summary": {
+          "activity_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "1.136868377216160297393798828125E-13",
+              "denominator": "8796093022208",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "activity_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "2.27373675443232059478759765625E-13",
+              "denominator": "4398046511104",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                4,
+                4
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "2.9605947323337507744630177815755208333333333333333333333333333333333333333333333E-16",
+              "denominator": "3377699720527872",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                4,
+                4
+              ],
+              "stage": "quarter"
+            }
+          },
+          "alpha": {
+            "max_absolute_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "compute_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "9.5367431640625E-7",
+              "denominator": "1048576",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "4.76837158203125E-16",
+              "denominator": "2097152000000000",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "credit_units": {
+            "max_absolute_error": {
+              "decimal": "1.1102230246251565404236316680908203125E-16",
+              "denominator": "9007199254740992",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "finish_ns": {
+            "max_absolute_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_absolute_location": {
+              "identity": 1,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_relative_location": {
+              "identity": 1,
+              "stage": "completion"
+            }
+          },
+          "global_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "1.136868377216160297393798828125E-13",
+              "denominator": "8796093022208",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "global_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "2.27373675443232059478759765625E-13",
+              "denominator": "4398046511104",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "2.220446049250313080847263336181640625E-16",
+              "denominator": "4503599627370496",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "quarter"
+            }
+          },
+          "hbm_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "9.5367431640625E-7",
+              "denominator": "1048576",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "4.76837158203125E-16",
+              "denominator": "2097152000000000",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "progress": {
+            "max_absolute_error": {
+              "decimal": "1.1102230246251565404236316680908203125E-16",
+              "denominator": "9007199254740992",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            }
+          },
+          "rate": {
+            "max_absolute_error": {
+              "decimal": "2.220446049250313080847263336181640625E-16",
+              "denominator": "4503599627370496",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "row_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "9.5367431640625E-7",
+              "denominator": "1048576",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": 0,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "4.76837158203125E-16",
+              "denominator": "2097152000000000",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": 0,
+              "stage": "completion"
+            }
+          }
+        },
+        "owners": 2,
+        "unavailable_metrics": [],
+        "unit_exponent": 0
+      },
+      {
+        "all_strict_feasible": true,
+        "metric_summary": {
+          "activity_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "4.5474735088646411895751953125E-13",
+              "denominator": "2199023255552",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "activity_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "2.27373675443232059478759765625E-13",
+              "denominator": "4398046511104",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                4,
+                4
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "2.9605947323337507744630177815755208333333333333333333333333333333333333333333333E-16",
+              "denominator": "3377699720527872",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                4,
+                4
+              ],
+              "stage": "quarter"
+            }
+          },
+          "alpha": {
+            "max_absolute_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "compute_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "0.00001430511474609375",
+              "denominator": "1048576",
+              "numerator": "15"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1.78813934326171875E-15",
+              "denominator": "1677721600000000",
+              "numerator": "3"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "credit_units": {
+            "max_absolute_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "finish_ns": {
+            "max_absolute_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_absolute_location": {
+              "identity": 1,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_relative_location": {
+              "identity": 1,
+              "stage": "completion"
+            }
+          },
+          "global_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "4.5474735088646411895751953125E-13",
+              "denominator": "2199023255552",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "global_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "9.094947017729282379150390625E-13",
+              "denominator": "1099511627776",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.6148698540002276951616460626775568181818181818181818181818181818181818181818182E-16",
+              "denominator": "6192449487634432",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "quarter"
+            }
+          },
+          "hbm_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "0.00001430511474609375",
+              "denominator": "1048576",
+              "numerator": "15"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1.78813934326171875E-15",
+              "denominator": "1677721600000000",
+              "numerator": "3"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "progress": {
+            "max_absolute_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            }
+          },
+          "rate": {
+            "max_absolute_error": {
+              "decimal": "2.220446049250313080847263336181640625E-16",
+              "denominator": "4503599627370496",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "row_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "0.00001430511474609375",
+              "denominator": "1048576",
+              "numerator": "15"
+            },
+            "max_absolute_location": {
+              "identity": 0,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1.78813934326171875E-15",
+              "denominator": "1677721600000000",
+              "numerator": "3"
+            },
+            "max_relative_location": {
+              "identity": 0,
+              "stage": "completion"
+            }
+          }
+        },
+        "owners": 8,
+        "unavailable_metrics": [],
+        "unit_exponent": 0
+      },
+      {
+        "all_strict_feasible": true,
+        "metric_summary": {
+          "activity_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "1.136868377216160297393798828125E-13",
+              "denominator": "8796093022208",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "activity_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "2.27373675443232059478759765625E-13",
+              "denominator": "4398046511104",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                4,
+                4
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "2.9605947323337507744630177815755208333333333333333333333333333333333333333333333E-16",
+              "denominator": "3377699720527872",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                4,
+                4
+              ],
+              "stage": "quarter"
+            }
+          },
+          "alpha": {
+            "max_absolute_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "compute_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "9.5367431640625E-7",
+              "denominator": "1048576",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "4.76837158203125E-16",
+              "denominator": "2097152000000000",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "credit_units": {
+            "max_absolute_error": {
+              "decimal": "1.08420217248550443400745280086994171142578125E-19",
+              "denominator": "9223372036854775808",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "finish_ns": {
+            "max_absolute_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_absolute_location": {
+              "identity": 1,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_relative_location": {
+              "identity": 1,
+              "stage": "completion"
+            }
+          },
+          "global_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "1.136868377216160297393798828125E-13",
+              "denominator": "8796093022208",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "global_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "2.27373675443232059478759765625E-13",
+              "denominator": "4398046511104",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "2.220446049250313080847263336181640625E-16",
+              "denominator": "4503599627370496",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "quarter"
+            }
+          },
+          "hbm_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "9.5367431640625E-7",
+              "denominator": "1048576",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "4.76837158203125E-16",
+              "denominator": "2097152000000000",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "progress": {
+            "max_absolute_error": {
+              "decimal": "1.1102230246251565404236316680908203125E-16",
+              "denominator": "9007199254740992",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            }
+          },
+          "rate": {
+            "max_absolute_error": {
+              "decimal": "2.220446049250313080847263336181640625E-16",
+              "denominator": "4503599627370496",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "row_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "9.5367431640625E-7",
+              "denominator": "1048576",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": 0,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "4.76837158203125E-16",
+              "denominator": "2097152000000000",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": 0,
+              "stage": "completion"
+            }
+          }
+        },
+        "owners": 2,
+        "unavailable_metrics": [],
+        "unit_exponent": -10
+      },
+      {
+        "all_strict_feasible": true,
+        "metric_summary": {
+          "activity_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "4.5474735088646411895751953125E-13",
+              "denominator": "2199023255552",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "activity_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "2.27373675443232059478759765625E-13",
+              "denominator": "4398046511104",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                4,
+                4
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "2.9605947323337507744630177815755208333333333333333333333333333333333333333333333E-16",
+              "denominator": "3377699720527872",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                4,
+                4
+              ],
+              "stage": "quarter"
+            }
+          },
+          "alpha": {
+            "max_absolute_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "compute_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "0.00001430511474609375",
+              "denominator": "1048576",
+              "numerator": "15"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1.78813934326171875E-15",
+              "denominator": "1677721600000000",
+              "numerator": "3"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "credit_units": {
+            "max_absolute_error": {
+              "decimal": "4.336808689942017736029811203479766845703125E-19",
+              "denominator": "2305843009213693952",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "finish_ns": {
+            "max_absolute_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_absolute_location": {
+              "identity": 1,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0",
+              "denominator": "1",
+              "numerator": "0"
+            },
+            "max_relative_location": {
+              "identity": 1,
+              "stage": "completion"
+            }
+          },
+          "global_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "4.5474735088646411895751953125E-13",
+              "denominator": "2199023255552",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "global_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "9.094947017729282379150390625E-13",
+              "denominator": "1099511627776",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.6148698540002276951616460626775568181818181818181818181818181818181818181818182E-16",
+              "denominator": "6192449487634432",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "quarter"
+            }
+          },
+          "hbm_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "0.00001430511474609375",
+              "denominator": "1048576",
+              "numerator": "15"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1.78813934326171875E-15",
+              "denominator": "1677721600000000",
+              "numerator": "3"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "progress": {
+            "max_absolute_error": {
+              "decimal": "4.44089209850062616169452667236328125E-16",
+              "denominator": "2251799813685248",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            }
+          },
+          "rate": {
+            "max_absolute_error": {
+              "decimal": "2.220446049250313080847263336181640625E-16",
+              "denominator": "4503599627370496",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "1.7763568394002504646778106689453125E-15",
+              "denominator": "562949953421312",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "row_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "0.00001430511474609375",
+              "denominator": "1048576",
+              "numerator": "15"
+            },
+            "max_absolute_location": {
+              "identity": 0,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1.78813934326171875E-15",
+              "denominator": "1677721600000000",
+              "numerator": "3"
+            },
+            "max_relative_location": {
+              "identity": 0,
+              "stage": "completion"
+            }
+          }
+        },
+        "owners": 8,
+        "unavailable_metrics": [],
+        "unit_exponent": -10
+      },
+      {
+        "all_strict_feasible": true,
+        "metric_summary": {
+          "activity_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "1024",
+              "denominator": "1",
+              "numerator": "1024"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "activity_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "1024",
+              "denominator": "1",
+              "numerator": "1024"
+            },
+            "max_absolute_location": {
+              "identity": [
+                2,
+                2
+              ],
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                2,
+                2
+              ],
+              "stage": "quarter"
+            }
+          },
+          "alpha": {
+            "max_absolute_error": {
+              "decimal": "0.333333333333333314829616256247390992939472198486328125",
+              "denominator": "18014398509481984",
+              "numerator": "6004799503160661"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "compute_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "1000000000",
+              "denominator": "1",
+              "numerator": "1000000000"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0.5",
+              "denominator": "2",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "credit_units": {
+            "max_absolute_error": {
+              "decimal": "1.73472347597680709441192448139190673828125E-18",
+              "denominator": "576460752303423488",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "7",
+              "denominator": "1",
+              "numerator": "7"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "finish_ns": {
+            "max_absolute_error": {
+              "decimal": "1000000000",
+              "denominator": "1",
+              "numerator": "1000000000"
+            },
+            "max_absolute_location": {
+              "identity": 4,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0.5",
+              "denominator": "2",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": 4,
+              "stage": "completion"
+            }
+          },
+          "global_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "1024",
+              "denominator": "1",
+              "numerator": "1024"
+            },
+            "max_absolute_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "global_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "1024",
+              "denominator": "1",
+              "numerator": "1024"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0.5",
+              "denominator": "2",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "quarter"
+            }
+          },
+          "hbm_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "2000000000",
+              "denominator": "1",
+              "numerator": "2000000000"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "quarter"
+            }
+          },
+          "progress": {
+            "max_absolute_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            }
+          },
+          "rate": {
+            "max_absolute_error": {
+              "decimal": "0.5",
+              "denominator": "2",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "row_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "2000000000",
+              "denominator": "1",
+              "numerator": "2000000000"
+            },
+            "max_absolute_location": {
+              "identity": 0,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": 0,
+              "stage": "quarter"
+            }
+          }
+        },
+        "owners": 2,
+        "unavailable_metrics": [
+          {
+            "actual": null,
+            "expected": {
+              "decimal": "2000000000",
+              "denominator": "1",
+              "numerator": "2000000000"
+            },
+            "identity": 1,
+            "name": "finish_ns",
+            "stage": "completion"
+          },
+          {
+            "actual": null,
+            "expected": {
+              "decimal": "2000000000",
+              "denominator": "1",
+              "numerator": "2000000000"
+            },
+            "identity": 2,
+            "name": "finish_ns",
+            "stage": "completion"
+          },
+          {
+            "actual": null,
+            "expected": {
+              "decimal": "2000000000",
+              "denominator": "1",
+              "numerator": "2000000000"
+            },
+            "identity": 3,
+            "name": "finish_ns",
+            "stage": "completion"
+          }
+        ],
+        "unit_exponent": -60
+      },
+      {
+        "all_strict_feasible": true,
+        "metric_summary": {
+          "activity_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "1024",
+              "denominator": "1",
+              "numerator": "1024"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1,
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "activity_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "1024",
+              "denominator": "1",
+              "numerator": "1024"
+            },
+            "max_absolute_location": {
+              "identity": [
+                2,
+                2
+              ],
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                2,
+                2
+              ],
+              "stage": "quarter"
+            }
+          },
+          "alpha": {
+            "max_absolute_error": {
+              "decimal": "0.333333333333333314829616256247390992939472198486328125",
+              "denominator": "18014398509481984",
+              "numerator": "6004799503160661"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "compute_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "1000000000",
+              "denominator": "1",
+              "numerator": "1000000000"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0.125",
+              "denominator": "8",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "completion"
+            }
+          },
+          "credit_units": {
+            "max_absolute_error": {
+              "decimal": "1.73472347597680709441192448139190673828125E-18",
+              "denominator": "576460752303423488",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "7",
+              "denominator": "1",
+              "numerator": "7"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "finish_ns": {
+            "max_absolute_error": {
+              "decimal": "999999999",
+              "denominator": "1",
+              "numerator": "999999999"
+            },
+            "max_absolute_location": {
+              "identity": 4,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0.124999999875",
+              "denominator": "8000000000",
+              "numerator": "999999999"
+            },
+            "max_relative_location": {
+              "identity": 4,
+              "stage": "completion"
+            }
+          },
+          "global_hbm_bytes": {
+            "max_absolute_error": {
+              "decimal": "1024",
+              "denominator": "1",
+              "numerator": "1024"
+            },
+            "max_absolute_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                0,
+                0
+              ],
+              "stage": "quarter"
+            }
+          },
+          "global_vec_eqops": {
+            "max_absolute_error": {
+              "decimal": "1024",
+              "denominator": "1",
+              "numerator": "1024"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "0.090909090909090909090909090909090909090909090909090909090909090909090909090909091",
+              "denominator": "11",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "quarter"
+            }
+          },
+          "hbm_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "8000000000",
+              "denominator": "1",
+              "numerator": "8000000000"
+            },
+            "max_absolute_location": {
+              "identity": null,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": null,
+              "stage": "quarter"
+            }
+          },
+          "progress": {
+            "max_absolute_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "quarter"
+            }
+          },
+          "rate": {
+            "max_absolute_error": {
+              "decimal": "0.125",
+              "denominator": "8",
+              "numerator": "1"
+            },
+            "max_absolute_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": [
+                1,
+                1
+              ],
+              "stage": "initial"
+            }
+          },
+          "row_busy_ns": {
+            "max_absolute_error": {
+              "decimal": "8000000000",
+              "denominator": "1",
+              "numerator": "8000000000"
+            },
+            "max_absolute_location": {
+              "identity": 0,
+              "stage": "completion"
+            },
+            "max_relative_error": {
+              "decimal": "1",
+              "denominator": "1",
+              "numerator": "1"
+            },
+            "max_relative_location": {
+              "identity": 0,
+              "stage": "quarter"
+            }
+          }
+        },
+        "owners": 8,
+        "unavailable_metrics": [
+          {
+            "actual": null,
+            "expected": {
+              "decimal": "8000000000",
+              "denominator": "1",
+              "numerator": "8000000000"
+            },
+            "identity": 1,
+            "name": "finish_ns",
+            "stage": "completion"
+          },
+          {
+            "actual": null,
+            "expected": {
+              "decimal": "8000000000",
+              "denominator": "1",
+              "numerator": "8000000000"
+            },
+            "identity": 2,
+            "name": "finish_ns",
+            "stage": "completion"
+          },
+          {
+            "actual": null,
+            "expected": {
+              "decimal": "8000000000",
+              "denominator": "1",
+              "numerator": "8000000000"
+            },
+            "identity": 3,
+            "name": "finish_ns",
+            "stage": "completion"
+          }
+        ],
+        "unit_exponent": -60
+      }
+    ],
+    "ordinary_observations_compared": 184,
+    "ordinary_observations_exactly_equal": true,
+    "result_sha256": "4d430a1d328c9e8541a56bfdde06e15107c0fa0d1312626751ac9dd8e50eb2a7",
+    "tool_sha256": "f3a4e478f25a370107579de727ebae2ce8d5a4c219f328e4b8b62906747cee4a"
+  },
+  "unchanged_oracle": {
+    "case_count": 48,
+    "failed": 16,
+    "passed": 32,
+    "scope": "48 manual fluid coupled/split-owner cases, exact Fraction ledger and signed constraints; synthetic only"
+  }
+}

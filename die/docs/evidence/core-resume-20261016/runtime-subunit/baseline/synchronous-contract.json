@@ -1,0 +1,236 @@
+{
+  "status": "historical_contract_only_not_a_current_hardware_plan_or_reproducer_pass",
+  "source_relative_to_repo": "work/norm-audit/work/norm-review/runtime-archive-20261016/strict-projection.stderr.log",
+  "source_sha256": "0973c32fd6bdf2e891ba5c096cf3b4722440cbf710da8cbc4bfc13eaf64226c6",
+  "source_baseline_execution_sha256": "3c9d58a0ed8c6b64450b86cac1059b3a1dba7b604caf67b31f00034c673e3043",
+  "captured_capacities": [
+    1.0,
+    4000000000000.0,
+    4000000000000.0,
+    4000000000000.0,
+    204800.0,
+    204800.0,
+    0.0,
+    0.0,
+    4000000000000.0,
+    4000000000000.0,
+    0.0,
+    0.0,
+    4000000000000.0
+  ],
+  "historical_epoch": {
+    "activities": [
+      {
+        "canonical_q": 390150.0,
+        "credit_curve": [
+          {
+            "cumulative": [
+              0.0,
+              0.0
+            ],
+            "progress": 0.0
+          },
+          {
+            "cumulative": [
+              254.0,
+              0.0
+            ],
+            "progress": 1.0
+          }
+        ],
+        "credit_delta": [
+          254.0,
+          0.0
+        ],
+        "hbm_bytes": [
+          [
+            195075,
+            0
+          ],
+          [
+            195075,
+            0
+          ]
+        ],
+        "id": 13,
+        "int4_ops": 0,
+        "private_time_s": 3.9015e-07,
+        "role": "load",
+        "vec_eqops": 0,
+        "work": [
+          0.0,
+          0.0,
+          390150.0,
+          0.0,
+          195075.0,
+          195075.0,
+          0.0,
+          0.0,
+          0.0,
+          195075.0,
+          0.0,
+          0.0,
+          585225.0
+        ]
+      },
+      {
+        "canonical_q": 1175040.0,
+        "credit_curve": [
+          {
+            "cumulative": [
+              0.0,
+              0.0
+            ],
+            "progress": 0.0
+          },
+          {
+            "cumulative": [
+              -255.0,
+              254.0
+            ],
+            "progress": 1.0
+          }
+        ],
+        "credit_delta": [
+          -255.0,
+          254.0
+        ],
+        "hbm_bytes": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "id": 14,
+        "int4_ops": 0,
+        "private_time_s": 1.59375,
+        "role": "compute",
+        "vec_eqops": 326400,
+        "work": [
+          1.59375,
+          652800.0,
+          522240.0,
+          1175040.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0,
+          0.0
+        ]
+      },
+      {
+        "canonical_q": 261120.0,
+        "credit_curve": [
+          {
+            "cumulative": [
+              0.0,
+              0.0
+            ],
+            "progress": 0.0
+          },
+          {
+            "cumulative": [
+              0.0,
+              -255.0
+            ],
+            "progress": 1.0
+          }
+        ],
+        "credit_delta": [
+          0.0,
+          -255.0
+        ],
+        "hbm_bytes": [
+          [
+            0,
+            130560
+          ],
+          [
+            0,
+            130560
+          ]
+        ],
+        "id": 15,
+        "int4_ops": 0,
+        "private_time_s": 2.6112e-07,
+        "role": "store",
+        "vec_eqops": 0,
+        "work": [
+          0.0,
+          261120.0,
+          0.0,
+          0.0,
+          130560.0,
+          130560.0,
+          0.0,
+          0.0,
+          130560.0,
+          0.0,
+          0.0,
+          0.0,
+          391680.0
+        ]
+      }
+    ],
+    "credit_capacity": [
+      1.0,
+      1.0
+    ],
+    "credit_initial": [
+      1.0,
+      1.0
+    ],
+    "name": "norm_two_pass_single_cohort_v1_apply_middle_reserved_tail",
+    "repeat_count": 1
+  },
+  "observed_stall": {
+    "now_ns": 5130029297,
+    "exact_ns": "5.130029297000000000000e+09",
+    "epoch_index": 4,
+    "credit": [
+      0.0,
+      0.0
+    ],
+    "activities": [
+      {
+        "activity_id": 13,
+        "curve_progress_exact": "1.000000000000000000000e+00",
+        "done": true,
+        "epoch_index": 4,
+        "progress": 1.0,
+        "rate": 0.0
+      },
+      {
+        "activity_id": 14,
+        "curve_progress_exact": "9.999999999997531472231e-01",
+        "done": false,
+        "epoch_index": 4,
+        "progress": 0.9999999999997532,
+        "rate": 0.0
+      },
+      {
+        "activity_id": 15,
+        "curve_progress_exact": "1.000000000000000000000e+00",
+        "done": true,
+        "epoch_index": 4,
+        "progress": 1.0,
+        "rate": 0.0
+      }
+    ]
+  },
+  "reduction_source": {
+    "path": "work/norm-audit/current-baseline/synchronous_three_activity_candidate.cc",
+    "sha256": "e44113d0f4b6fd863499716bb7277324e1c870a0df54a5a4fcd3d29ef4385a9c",
+    "compiled": "not_run",
+    "executed": "not_run",
+    "stable_red_reproduction": "not_established"
+  }
+}

@@ -1,0 +1,135 @@
+--- a/die/src/Execution.cc
++++ b/die/src/Execution.cc
+@@ -1159,7 +1159,13 @@
+   }
+ }
+ 
+-void Runtime::allocate() {
++void Runtime::allocate() { allocate(false, nullptr); }
++
++// Import-only witness: add at most one fixed set of componentwise nonpositive
++// initial-boundary rows. They are tautologies for nonnegative progress rates.
++// Normal runtime arbitration retains the original row set and arithmetic.
++void Runtime::allocate(bool redundant_initial_boundaries,
++                       std::size_t* import_pivots) {
+   last_arbitration_={};
+   struct Ref {
+     Execution* execution = nullptr;
+@@ -1214,6 +1220,15 @@
+   if (refs.size() > 96) {
+     for (Ref& ref : refs) ref.live->rate = 0.0;
+     throw std::runtime_error("numerical_failure: active activity count exceeds 3x32 solver bound");
++  }
++  if (redundant_initial_boundaries) {
++    std::set<std::tuple<std::uint64_t,std::uint64_t,std::uint64_t>> owners;
++    for (const auto& ref : refs) {
++      const auto& owner = ref.execution->owner;
++      owners.emplace(owner.node_id, owner.execution_id, owner.generation);
++    }
++    if (owners.size() > 32)
++      throw std::invalid_argument("invalid_snapshot: redundant-row witness exceeds 32 fair owners");
+   }
+   // Complete, exactly identical owner blocks can share LP variables. The
+   // convex feasible set is invariant under their permutation, so weighted
+@@ -1393,6 +1408,7 @@
+ 
+   std::map<std::uint64_t, Execution*> active_executions;
+   for (const Ref& ref : refs) active_executions.emplace(ref.handle, ref.execution);
++  std::size_t redundant_rows = 0;
+   for (const auto& [execution_handle, execution] : active_executions) {
+     (void)execution_handle;
+     for (std::size_t buffer = 0; buffer < 2; ++buffer) {
+@@ -1401,7 +1417,23 @@
+       const double tolerance = kCreditTolerance * std::max(1.0, capacity);
+       const bool at_low = credit <= tolerance;
+       const bool at_high = credit >= capacity - tolerance;
+-      if (!at_low && !at_high) continue;
++      bool initial_low_witness = false, initial_high_witness = false;
++      if (redundant_initial_boundaries) {
++        const auto& epoch = execution->plan->epochs.at(execution->epoch);
++        bool all_nonnegative = true, all_nonpositive = true, nonzero = false;
++        for (const auto& ref : refs) {
++          if (ref.execution != execution) continue;
++          const double delta = ref.credit_slope[buffer];
++          all_nonnegative = all_nonnegative && delta >= 0.0;
++          all_nonpositive = all_nonpositive && delta <= 0.0;
++          nonzero = nonzero || delta != 0.0;
++        }
++        initial_low_witness = !at_low && nonzero && all_nonnegative &&
++            epoch.credit_initial[buffer] == 0.0;
++        initial_high_witness = !at_high && nonzero && all_nonpositive &&
++            epoch.credit_initial[buffer] == epoch.credit_capacity[buffer];
++      }
++      if (!at_low && !at_high && !initial_low_witness && !initial_high_witness) continue;
+       const auto add_boundary = [&](bool lower_boundary) {
+         Constraint c{std::vector<double>(count, 0.0), 0.0};
+         bool used = false;
+@@ -1416,8 +1448,15 @@
+         }
+         if (used) base.push_back(std::move(c));
+       };
++      const auto add_witness = [&](bool lower_boundary) {
++        if (++redundant_rows > 64)
++          throw std::invalid_argument("invalid_snapshot: redundant-row witness exceeds 64 extra rows");
++        add_boundary(lower_boundary);
++      };
+       if (at_low) add_boundary(true);
++      if (initial_low_witness) add_witness(true);
+       if (at_high) add_boundary(false);
++      if (initial_high_witness) add_witness(false);
+     }
+   }
+ 
+@@ -1457,7 +1496,8 @@
+   }
+   last_arbitration_.path=ArbitrationDiagnostics::Path::SignedLP;
+   last_arbitration_.constraint_rows=base.size();
+-  std::size_t pivot_count = 0;
++  const std::size_t prior_import_pivots = import_pivots ? *import_pivots : 0;
++  std::size_t pivot_count = prior_import_pivots;
+   std::vector<bool> excluded(count, false);
+   std::vector<bool> frozen(count, false);
+   std::vector<double> solved(count, 0.0);
+@@ -1469,7 +1509,8 @@
+                       const std::vector<double>& objective) -> LpResult {
+     DenseSimplex solver(rows, objective, pivot_count);
+     auto result=solver.solve();
+-    last_arbitration_.pivots=pivot_count;
++    last_arbitration_.pivots=pivot_count-prior_import_pivots;
++    if (import_pivots) *import_pivots = pivot_count;
+     return result;
+   };
+ 
+@@ -2933,7 +2974,20 @@
+   if (runtime->internal_events_ != saved_events) {
+     throw std::invalid_argument("invalid_snapshot: saved state was not settled at its event boundary");
+   }
+-  runtime->allocate();
++  std::size_t import_pivots = 0;
++  runtime->allocate(false, &import_pivots);
++  const auto published_matches = [&]() {
++    return std::all_of(published_allocations.begin(), published_allocations.end(),
++        [](const SavedAllocation& saved) {
++          return same_or_one_ulp(saved.rate, saved.activity->rate) &&
++                 same_or_one_ulp(saved.alpha, saved.activity->alpha);
++        });
++  };
++  if (has_published_rates && !published_matches()) {
++    // One fixed mathematical witness, never a search over boundary contexts.
++    // The same global 256-pivot budget covers both reconstruction attempts.
++    runtime->allocate(true, &import_pivots);
++  }
+   for (SavedAllocation& saved : published_allocations) {
+     saved.canonical_rate = saved.activity->rate;
+     if (!same_or_one_ulp(saved.rate, saved.activity->rate) ||
+--- a/die/include/coarse_die/Execution.hh
++++ b/die/include/coarse_die/Execution.hh
+@@ -117,6 +117,8 @@
+     bool accounting_history_complete_ = true;
+     void settle();
+     void allocate();
++    void allocate(bool redundant_initial_boundaries,
++                  std::size_t* import_pivots);
+     void integrate(long double delta_ns);
+     // Keep absolute integer time separate from sub-nanosecond integration.
+     // Adding a short deadline to a large absolute long double can otherwise

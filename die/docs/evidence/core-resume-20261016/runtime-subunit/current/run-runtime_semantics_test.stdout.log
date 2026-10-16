@@ -1,0 +1,2 @@
+fairness=2s, W2_finish_s=15, hbm_release_finish_s=100, credit_lp=checked, snapshot_replay=exact
+PASS runtime_semantics_test

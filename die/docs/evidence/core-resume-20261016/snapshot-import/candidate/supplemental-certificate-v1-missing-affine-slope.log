@@ -1,0 +1,8 @@
+Traceback (most recent call last):
+  File "/workspace/template/work/core-resume/work/snapshot-lab/certify_supplemental.py", line 37, in <module>
+    value=F(e['snapshot_credit'][b]);capacity=F(e['snapshot_credit_capacity'][b]);tangent=sum((F(a['credit_slope'][b])*F(a['rate']) for a in e['activities']),F(0))
+                                                                                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/workspace/template/work/core-resume/work/snapshot-lab/certify_supplemental.py", line 37, in <genexpr>
+    value=F(e['snapshot_credit'][b]);capacity=F(e['snapshot_credit_capacity'][b]);tangent=sum((F(a['credit_slope'][b])*F(a['rate']) for a in e['activities']),F(0))
+                                                                                                 ~^^^^^^^^^^^^^^^^
+KeyError: 'credit_slope'

@@ -1,0 +1,295 @@
+{
+  "case_count": 36,
+  "passed": 36,
+  "failed": 0,
+  "cases": [
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": 0,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": 0,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": 0,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": 0,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": 0,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": 0,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": 0,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": 0,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": 0,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": 0,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": 0,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": 0,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": -10,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": -10,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": -10,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": -10,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": -10,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": -10,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": -10,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": -10,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": -10,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": -10,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": -10,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": -10,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": -60,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": -60,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "unit_exponent": -60,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": -60,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": -60,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "unit_exponent": -60,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": -60,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": -60,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "unit_exponent": -60,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": -60,
+      "boundary": "empty",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": -60,
+      "boundary": "full",
+      "status": "passed",
+      "failures": []
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "unit_exponent": -60,
+      "boundary": "interior",
+      "status": "passed",
+      "failures": []
+    }
+  ]
+}

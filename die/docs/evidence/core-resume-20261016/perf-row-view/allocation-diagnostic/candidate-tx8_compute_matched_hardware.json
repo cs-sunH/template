@@ -1,0 +1,692 @@
+{
+  "cases": [
+    {
+      "k": 128,
+      "m": 1,
+      "n": 128,
+      "samples": [
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 231463,
+            "cpp_new_calls": 3216,
+            "involuntary_switches": 1,
+            "thread_cpu_ns": 718127,
+            "voluntary_switches": 0,
+            "wall_ns": 717248
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 35960,
+            "cpp_new_calls": 290,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 128565,
+            "voluntary_switches": 0,
+            "wall_ns": 128097
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 5497,
+            "voluntary_switches": 0,
+            "wall_ns": 5170
+          },
+          "enumerate": {
+            "cpp_new_bytes": 59707,
+            "cpp_new_calls": 1004,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 268157,
+            "voluntary_switches": 0,
+            "wall_ns": 267504
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 16925,
+            "voluntary_switches": 0,
+            "wall_ns": 16574
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 56759,
+            "voluntary_switches": 0,
+            "wall_ns": 49105
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 231463,
+            "cpp_new_calls": 3216,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 826291,
+            "voluntary_switches": 0,
+            "wall_ns": 824980
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 35960,
+            "cpp_new_calls": 290,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 234608,
+            "voluntary_switches": 0,
+            "wall_ns": 233480
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 4123,
+            "voluntary_switches": 0,
+            "wall_ns": 3844
+          },
+          "enumerate": {
+            "cpp_new_bytes": 59707,
+            "cpp_new_calls": 1004,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 172535,
+            "voluntary_switches": 0,
+            "wall_ns": 172162
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 17694,
+            "voluntary_switches": 0,
+            "wall_ns": 17364
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 40599,
+            "voluntary_switches": 0,
+            "wall_ns": 39225
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 231463,
+            "cpp_new_calls": 3216,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 768753,
+            "voluntary_switches": 0,
+            "wall_ns": 767648
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 35960,
+            "cpp_new_calls": 290,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 104324,
+            "voluntary_switches": 0,
+            "wall_ns": 103667
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 3048,
+            "voluntary_switches": 0,
+            "wall_ns": 2749
+          },
+          "enumerate": {
+            "cpp_new_bytes": 59707,
+            "cpp_new_calls": 1004,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 185589,
+            "voluntary_switches": 0,
+            "wall_ns": 185074
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 18543,
+            "voluntary_switches": 0,
+            "wall_ns": 18171
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 35008,
+            "voluntary_switches": 0,
+            "wall_ns": 34584
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 231463,
+            "cpp_new_calls": 3216,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 754906,
+            "voluntary_switches": 0,
+            "wall_ns": 753732
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 35960,
+            "cpp_new_calls": 290,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 95440,
+            "voluntary_switches": 0,
+            "wall_ns": 95055
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 3567,
+            "voluntary_switches": 0,
+            "wall_ns": 3264
+          },
+          "enumerate": {
+            "cpp_new_bytes": 59707,
+            "cpp_new_calls": 1004,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 148614,
+            "voluntary_switches": 0,
+            "wall_ns": 148136
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 14783,
+            "voluntary_switches": 0,
+            "wall_ns": 14457
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 34067,
+            "voluntary_switches": 0,
+            "wall_ns": 33585
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 231463,
+            "cpp_new_calls": 3216,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 817699,
+            "voluntary_switches": 0,
+            "wall_ns": 816642
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 35960,
+            "cpp_new_calls": 290,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 149100,
+            "voluntary_switches": 0,
+            "wall_ns": 148581
+          },
+          "candidate_count": 8,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 1040,
+            "cpp_new_calls": 26,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 4007,
+            "voluntary_switches": 0,
+            "wall_ns": 3712
+          },
+          "enumerate": {
+            "cpp_new_bytes": 59707,
+            "cpp_new_calls": 1004,
+            "involuntary_switches": 1,
+            "thread_cpu_ns": 351992,
+            "voluntary_switches": 0,
+            "wall_ns": 357685
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 18630,
+            "voluntary_switches": 0,
+            "wall_ns": 18285
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 299590,
+            "voluntary_switches": 0,
+            "wall_ns": 298479
+          },
+          "selected_hash": "a271ba14f4ad5ee28336aaab503bb0bed8ecb74c43c32db2cf4c95a1634f451d"
+        }
+      ]
+    },
+    {
+      "k": 128,
+      "m": 128,
+      "n": 128,
+      "samples": [
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1060732,
+            "cpp_new_calls": 13241,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 2920604,
+            "voluntary_switches": 0,
+            "wall_ns": 2918879
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 621568,
+            "cpp_new_calls": 7055,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1664731,
+            "voluntary_switches": 0,
+            "wall_ns": 1663047
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 17281,
+            "voluntary_switches": 0,
+            "wall_ns": 16957
+          },
+          "enumerate": {
+            "cpp_new_bytes": 283287,
+            "cpp_new_calls": 4119,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 660027,
+            "voluntary_switches": 0,
+            "wall_ns": 659412
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 29614,
+            "voluntary_switches": 0,
+            "wall_ns": 29211
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 63487,
+            "voluntary_switches": 0,
+            "wall_ns": 62691
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1060732,
+            "cpp_new_calls": 13241,
+            "involuntary_switches": 1,
+            "thread_cpu_ns": 5288696,
+            "voluntary_switches": 0,
+            "wall_ns": 5289855
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 621568,
+            "cpp_new_calls": 7055,
+            "involuntary_switches": 1,
+            "thread_cpu_ns": 1358047,
+            "voluntary_switches": 0,
+            "wall_ns": 1360769
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 29152,
+            "voluntary_switches": 0,
+            "wall_ns": 28771
+          },
+          "enumerate": {
+            "cpp_new_bytes": 283287,
+            "cpp_new_calls": 4119,
+            "involuntary_switches": 2,
+            "thread_cpu_ns": 811992,
+            "voluntary_switches": 0,
+            "wall_ns": 28183973
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 30380,
+            "voluntary_switches": 0,
+            "wall_ns": 30014
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 36017,
+            "voluntary_switches": 0,
+            "wall_ns": 35450
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1060732,
+            "cpp_new_calls": 13241,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 2898758,
+            "voluntary_switches": 0,
+            "wall_ns": 2896690
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 621568,
+            "cpp_new_calls": 7055,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 3004304,
+            "voluntary_switches": 0,
+            "wall_ns": 3001556
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 20600,
+            "voluntary_switches": 0,
+            "wall_ns": 20205
+          },
+          "enumerate": {
+            "cpp_new_bytes": 283287,
+            "cpp_new_calls": 4119,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1838727,
+            "voluntary_switches": 0,
+            "wall_ns": 1837308
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 23795,
+            "voluntary_switches": 0,
+            "wall_ns": 23377
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 40000,
+            "voluntary_switches": 0,
+            "wall_ns": 39415
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1060732,
+            "cpp_new_calls": 13241,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 2854372,
+            "voluntary_switches": 0,
+            "wall_ns": 2852706
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 621568,
+            "cpp_new_calls": 7055,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1539025,
+            "voluntary_switches": 0,
+            "wall_ns": 1536715
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 17705,
+            "voluntary_switches": 0,
+            "wall_ns": 17383
+          },
+          "enumerate": {
+            "cpp_new_bytes": 283287,
+            "cpp_new_calls": 4119,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 985946,
+            "voluntary_switches": 0,
+            "wall_ns": 984042
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 24935,
+            "voluntary_switches": 0,
+            "wall_ns": 24586
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 38417,
+            "voluntary_switches": 0,
+            "wall_ns": 37874
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        },
+        {
+          "actual_full_compile": {
+            "cpp_new_bytes": 1060732,
+            "cpp_new_calls": 13241,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 3205079,
+            "voluntary_switches": 0,
+            "wall_ns": 3203123
+          },
+          "all_candidate_runtime_with_validation": {
+            "cpp_new_bytes": 621568,
+            "cpp_new_calls": 7055,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1467824,
+            "voluntary_switches": 0,
+            "wall_ns": 1465553
+          },
+          "candidate_count": 32,
+          "candidate_structure_validation_subset": {
+            "cpp_new_bytes": 7040,
+            "cpp_new_calls": 176,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 20041,
+            "voluntary_switches": 0,
+            "wall_ns": 19739
+          },
+          "enumerate": {
+            "cpp_new_bytes": 283287,
+            "cpp_new_calls": 4119,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 1687318,
+            "voluntary_switches": 0,
+            "wall_ns": 1684968
+          },
+          "hardware_copy": {
+            "cpp_new_bytes": 21903,
+            "cpp_new_calls": 377,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 23364,
+            "voluntary_switches": 0,
+            "wall_ns": 22942
+          },
+          "normalize": {
+            "cpp_new_bytes": 8421,
+            "cpp_new_calls": 195,
+            "involuntary_switches": 0,
+            "thread_cpu_ns": 37802,
+            "voluntary_switches": 0,
+            "wall_ns": 37094
+          },
+          "selected_hash": "4263b016df31879b1628792e6f91cea0c7c2c92b5dd1d55be9cb31088ea6b329"
+        }
+      ]
+    }
+  ],
+  "samples": 5,
+  "scope": "diagnostic allocation counts and phase CPU only; not acceptance timing",
+  "single_os_updates": [
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 1,
+      "owners": 1,
+      "thread_cpu_ns": 43477,
+      "voluntary_switches": 0,
+      "wall_ns": 34696
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 1,
+      "owners": 1,
+      "thread_cpu_ns": 42029,
+      "voluntary_switches": 0,
+      "wall_ns": 33758
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 0,
+      "owners": 1,
+      "thread_cpu_ns": 20880,
+      "voluntary_switches": 0,
+      "wall_ns": 19290
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 1,
+      "owners": 1,
+      "thread_cpu_ns": 38984,
+      "voluntary_switches": 0,
+      "wall_ns": 30988
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 5376,
+      "cpp_new_calls": 71,
+      "involuntary_switches": 0,
+      "owners": 1,
+      "thread_cpu_ns": 20280,
+      "voluntary_switches": 0,
+      "wall_ns": 19129
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 8360,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 41358,
+      "voluntary_switches": 0,
+      "wall_ns": 40200
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 8360,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 2,
+      "owners": 8,
+      "thread_cpu_ns": 133282,
+      "voluntary_switches": 0,
+      "wall_ns": 119487
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 8360,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 55200,
+      "voluntary_switches": 0,
+      "wall_ns": 51011
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 8360,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 80640,
+      "voluntary_switches": 0,
+      "wall_ns": 75658
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 8360,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 8,
+      "thread_cpu_ns": 53932,
+      "voluntary_switches": 0,
+      "wall_ns": 52473
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 18152,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 76637,
+      "voluntary_switches": 0,
+      "wall_ns": 74305
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 18152,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 69703,
+      "voluntary_switches": 0,
+      "wall_ns": 67799
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 18152,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 94890,
+      "voluntary_switches": 0,
+      "wall_ns": 92480
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 18152,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 159220,
+      "voluntary_switches": 0,
+      "wall_ns": 156587
+    },
+    {
+      "arbitration_path": "ratio",
+      "cpp_new_bytes": 18152,
+      "cpp_new_calls": 74,
+      "involuntary_switches": 0,
+      "owners": 32,
+      "thread_cpu_ns": 76545,
+      "voluntary_switches": 0,
+      "wall_ns": 74562
+    }
+  ]
+}

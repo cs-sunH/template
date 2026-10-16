@@ -1,0 +1,143 @@
+Start testing: Oct 16 13:13 UTC
+----------------------------------------------------------
+2/51 Testing: coarse_compiler_summary_test
+2/51 Test: coarse_compiler_summary_test
+Command: "/workspace/template/work/core-resume/work/core-perf-row-lab/build/coarse_compiler_summary_test"
+Directory: /workspace/template/work/core-resume/work/core-perf-row-lab/build
+"coarse_compiler_summary_test" start time: Oct 16 13:13 UTC
+Output:
+----------------------------------------------------------
+all_candidate_full_wire_comparisons=1092
+PASS compiler_summary_test
+<end of output>
+Test time =   1.57 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_compiler_summary_test" end time: Oct 16 13:13 UTC
+"coarse_compiler_summary_test" time elapsed: 00:00:01
+----------------------------------------------------------
+
+8/51 Testing: coarse_packing_allocator_test
+8/51 Test: coarse_packing_allocator_test
+Command: "/workspace/template/work/core-resume/work/core-perf-row-lab/build/coarse_packing_allocator_test"
+Directory: /workspace/template/work/core-resume/work/core-perf-row-lab/build
+"coarse_packing_allocator_test" start time: Oct 16 13:13 UTC
+Output:
+----------------------------------------------------------
+PASS packing_allocator_test
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_packing_allocator_test" end time: Oct 16 13:13 UTC
+"coarse_packing_allocator_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/51 Testing: coarse_ratio_allocator_test
+9/51 Test: coarse_ratio_allocator_test
+Command: "/workspace/template/work/core-resume/work/core-perf-row-lab/build/coarse_ratio_allocator_test"
+Directory: /workspace/template/work/core-resume/work/core-perf-row-lab/build
+"coarse_ratio_allocator_test" start time: Oct 16 13:13 UTC
+Output:
+----------------------------------------------------------
+PASS ratio_allocator_test
+<end of output>
+Test time =   0.12 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_ratio_allocator_test" end time: Oct 16 13:13 UTC
+"coarse_ratio_allocator_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+13/51 Testing: coarse_service_curve_runtime_test
+13/51 Test: coarse_service_curve_runtime_test
+Command: "/workspace/template/work/core-resume/work/core-perf-row-lab/build/coarse_service_curve_runtime_test"
+Directory: /workspace/template/work/core-resume/work/core-perf-row-lab/build
+"coarse_service_curve_runtime_test" start time: Oct 16 13:13 UTC
+Output:
+----------------------------------------------------------
+PASS service_curve_runtime_test
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_service_curve_runtime_test" end time: Oct 16 13:13 UTC
+"coarse_service_curve_runtime_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+38/51 Testing: coarse_runtime_semantics_test
+38/51 Test: coarse_runtime_semantics_test
+Command: "/workspace/template/work/core-resume/work/core-perf-row-lab/build/coarse_runtime_semantics_test"
+Directory: /workspace/template/work/core-resume/work/core-perf-row-lab/build
+"coarse_runtime_semantics_test" start time: Oct 16 13:13 UTC
+Output:
+----------------------------------------------------------
+fairness=2s, W2_finish_s=15, hbm_release_finish_s=100, credit_lp=checked, snapshot_replay=exact
+PASS runtime_semantics_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_runtime_semantics_test" end time: Oct 16 13:13 UTC
+"coarse_runtime_semantics_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+45/51 Testing: coarse_runtime_owner_symmetry_test
+45/51 Test: coarse_runtime_owner_symmetry_test
+Command: "/workspace/template/work/core-resume/work/core-perf-row-lab/build/coarse_runtime_owner_symmetry_test"
+Directory: /workspace/template/work/core-resume/work/core-perf-row-lab/build
+"coarse_runtime_owner_symmetry_test" start time: Oct 16 13:13 UTC
+Output:
+----------------------------------------------------------
+PASS runtime_owner_symmetry_test
+<end of output>
+Test time =   0.06 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_runtime_owner_symmetry_test" end time: Oct 16 13:13 UTC
+"coarse_runtime_owner_symmetry_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+50/51 Testing: coarse_owner_lp_oracle_test
+50/51 Test: coarse_owner_lp_oracle_test
+Command: "/workspace/cloud-setup/venv/bin/python3.12" "/workspace/template/work/core-resume/work/core-perf-row-lab/die/validation/owner_lp_oracle.py" "/workspace/template/work/core-resume/work/core-perf-row-lab/build/coarse_owner_lp_oracle_driver"
+Directory: /workspace/template/work/core-resume/work/core-perf-row-lab/build
+"coarse_owner_lp_oracle_test" start time: Oct 16 13:13 UTC
+Output:
+----------------------------------------------------------
+private-not-multiplied: exact x=[Fraction(14, 1), Fraction(14, 1)]; rates=[Fraction(2, 1), Fraction(2, 1)]; alpha=[Fraction(1, 1), Fraction(1, 1)]; excluded=[]
+q-alpha-physical-multiplicity-phase-offset: exact x=[Fraction(6, 5), Fraction(3, 1), Fraction(6, 5), Fraction(3, 1)]; rates=[Fraction(3, 5), Fraction(3, 5), Fraction(3, 5), Fraction(3, 5)]; alpha=[Fraction(2, 7), Fraction(5, 7), Fraction(2, 7), Fraction(5, 7)]; excluded=[]
+zero-exclusion-renormalizes: exact x=[Fraction(0, 1), Fraction(0, 1), Fraction(5, 1), Fraction(5, 1)]; rates=[Fraction(0, 1), Fraction(0, 1), Fraction(5, 1), Fraction(5, 1)]; alpha=[Fraction(0, 1), Fraction(0, 1), Fraction(1, 1), Fraction(1, 1)]; excluded=[0, 1]
+symmetric-pair-with-heterogeneous-owner: exact x=[Fraction(4, 1), Fraction(4, 1), Fraction(9, 1)]; rates=[Fraction(2, 1), Fraction(2, 1), Fraction(3, 1)]; alpha=[Fraction(1, 1), Fraction(1, 1), Fraction(1, 1)]; excluded=[]
+same-owner-across-executions-keeps-Q-denominator: exact x=[Fraction(3, 4), Fraction(3, 4), Fraction(3, 2)]; rates=[Fraction(3, 4), Fraction(3, 4), Fraction(3, 2)]; alpha=[Fraction(1, 2), Fraction(1, 2), Fraction(1, 1)]; excluded=[]
+PASS: 5 exact Fraction LP cases; full LP vs exact block projection
+runtime:mixed-forward: owners=3; activities=5; exact_rates=[0.6, 0.6, 0.6, 0.6, 0.6]; projection=equal; observed=match
+runtime:mixed-reverse: owners=3; activities=5; exact_rates=[0.6, 0.6, 0.6, 0.6, 0.6]; projection=equal; observed=match
+runtime:private-not-multiplied-runtime: owners=2; activities=2; exact_rates=[2.0, 2.0]; projection=equal; observed=match
+runtime:curved-ratio-2: owners=1; activities=2; exact_rates=[1.5, 0.5]; projection=equal; observed=match
+runtime:curved-ratio-restored-2: owners=1; activities=2; exact_rates=[1.5, 0.5]; projection=equal; observed=match
+runtime:curved-ratio-capacity-2: owners=1; activities=2; exact_rates=[0.25, 0.25]; projection=equal; observed=match
+runtime:curved-ratio-3: owners=1; activities=3; exact_rates=[1.25, 0.5, 0.5]; projection=equal; observed=match
+runtime:curved-ratio-restored-3: owners=1; activities=3; exact_rates=[1.25, 0.5, 0.5]; projection=equal; observed=match
+runtime:curved-ratio-capacity-3: owners=1; activities=3; exact_rates=[0.16666666666666666, 0.16666666666666666, 0.16666666666666666]; projection=equal; observed=match
+runtime:split-fair-owner-different-request-ids: owners=2; activities=3; exact_rates=[1.0, 1.0, 1.0]; projection=equal; observed=match
+runtime:arrival-before-join: owners=1; activities=2; exact_rates=[0.5, 0.5]; projection=equal; observed=match
+runtime:arrival-join-phase-offset: owners=2; activities=4; exact_rates=[0.25, 0.25, 0.25, 0.25]; projection=equal; observed=match
+runtime:arrival-join-snapshot-restore: owners=2; activities=4; exact_rates=[0.25, 0.25, 0.25, 0.25]; projection=equal; observed=match
+runtime:arrival-member-completed: owners=1; activities=2; exact_rates=[0.5, 0.5]; projection=equal; observed=match
+runtime:capacity-before-change: owners=2; activities=2; exact_rates=[0.5, 0.5]; projection=equal; observed=match
+runtime:capacity-after-change: owners=2; activities=2; exact_rates=[0.25, 0.25]; projection=equal; observed=match
+runtime:capacity-snapshot-restore: owners=2; activities=2; exact_rates=[0.25, 0.25]; projection=equal; observed=match
+runtime:cancel-reallocation: owners=1; activities=1; exact_rates=[0.5]; projection=equal; observed=match
+runtime:cancel-snapshot-restore: owners=1; activities=1; exact_rates=[0.5]; projection=equal; observed=match
+runtime:submission-permutation: owner rates/alpha unchanged
+PASS: 19 actual Runtime observations matched exact Fraction LP
+<end of output>
+Test time =  27.88 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_owner_lp_oracle_test" end time: Oct 16 13:13 UTC
+"coarse_owner_lp_oracle_test" time elapsed: 00:00:27
+----------------------------------------------------------
+
+End testing: Oct 16 13:13 UTC

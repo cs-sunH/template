@@ -1,0 +1,1322 @@
+Start testing: Oct 16 12:54 UTC
+----------------------------------------------------------
+1/51 Testing: coarse_repeated_region_availability_test
+1/51 Test: coarse_repeated_region_availability_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_repeated_region_availability_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_repeated_region_availability_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS repeated_region_availability_test
+<end of output>
+Test time =   0.13 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_repeated_region_availability_test" end time: Oct 16 12:54 UTC
+"coarse_repeated_region_availability_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/51 Testing: coarse_compiler_summary_test
+2/51 Test: coarse_compiler_summary_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compiler_summary_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_compiler_summary_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+all_candidate_full_wire_comparisons=1092
+PASS compiler_summary_test
+<end of output>
+Test time =   2.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_compiler_summary_test" end time: Oct 16 12:54 UTC
+"coarse_compiler_summary_test" time elapsed: 00:00:02
+----------------------------------------------------------
+
+3/51 Testing: coarse_norm_row_accounting_test
+3/51 Test: coarse_norm_row_accounting_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_norm_row_accounting_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_norm_row_accounting_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS norm_row_accounting_test
+<end of output>
+Test time =   0.98 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_norm_row_accounting_test" end time: Oct 16 12:54 UTC
+"coarse_norm_row_accounting_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/51 Testing: coarse_prediction_availability_test
+4/51 Test: coarse_prediction_availability_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_prediction_availability_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_prediction_availability_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS prediction_availability_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_prediction_availability_test" end time: Oct 16 12:54 UTC
+"coarse_prediction_availability_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/51 Testing: coarse_region_delay_math_test
+5/51 Test: coarse_region_delay_math_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_region_delay_math_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_region_delay_math_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS region_delay_math_test 37 hand-calculated cases
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_region_delay_math_test" end time: Oct 16 12:54 UTC
+"coarse_region_delay_math_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/51 Testing: coarse_region_overhead_test
+6/51 Test: coarse_region_overhead_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_region_overhead_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_region_overhead_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS region_overhead_test
+<end of output>
+Test time =   0.10 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_region_overhead_test" end time: Oct 16 12:54 UTC
+"coarse_region_overhead_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/51 Testing: coarse_elementwise_service_test
+7/51 Test: coarse_elementwise_service_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_elementwise_service_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_elementwise_service_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+{"independent_target_calibration":"not_available","integer_plan_conservation":"passed","maximum_absolute_byte_residual":"4.44089209850062616169e-16","maximum_repeat_internal_events":15,"prediction_accuracy":"not_run","runtime_service_exact_integer_equality":false,"runtime_service_numeric_reconciliation":"passed"}
+PASS elementwise_service_test
+<end of output>
+Test time =   0.30 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_elementwise_service_test" end time: Oct 16 12:54 UTC
+"coarse_elementwise_service_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/51 Testing: coarse_packing_allocator_test
+8/51 Test: coarse_packing_allocator_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_packing_allocator_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_packing_allocator_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS packing_allocator_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_packing_allocator_test" end time: Oct 16 12:54 UTC
+"coarse_packing_allocator_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/51 Testing: coarse_ratio_allocator_test
+9/51 Test: coarse_ratio_allocator_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_ratio_allocator_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_ratio_allocator_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS ratio_allocator_test
+<end of output>
+Test time =   0.20 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_ratio_allocator_test" end time: Oct 16 12:54 UTC
+"coarse_ratio_allocator_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+10/51 Testing: coarse_os_service_curve_test
+10/51 Test: coarse_os_service_curve_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_os_service_curve_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_os_service_curve_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS os_service_curve_test
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_os_service_curve_test" end time: Oct 16 12:54 UTC
+"coarse_os_service_curve_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+11/51 Testing: coarse_os_service_scaling_test
+11/51 Test: coarse_os_service_scaling_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_os_service_scaling_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_os_service_scaling_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+{"cases":[{"active_activities_at_arrival":2,"active_cores":1,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":3,"compiled_plan_epochs":3,"compiled_service_descriptions":3,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":4},"case":"base_m16_n64_k64","core_grid":{"core_count":16,"nx":4,"ny":4},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1,"runtime_events":{"allocation_updates":6,"drain_steps":4,"internal_events":8},"shape":{"k":64,"m":16,"n":64},"terminal_physical_totals":{"hbm_read_bytes":2560,"hbm_write_bytes":2048,"int4_ops":131072,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":1,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":4,"compiled_plan_epochs":3,"compiled_service_descriptions":4,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":5},"case":"k4096","core_grid":{"core_count":16,"nx":4,"ny":4},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1,"runtime_events":{"allocation_updates":8,"drain_steps":6,"internal_events":10},"shape":{"k":4096,"m":16,"n":64},"terminal_physical_totals":{"hbm_read_bytes":163840,"hbm_write_bytes":2048,"int4_ops":8388608,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":1,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":4,"compiled_plan_epochs":3,"compiled_service_descriptions":4,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":5},"case":"k262144","core_grid":{"core_count":16,"nx":4,"ny":4},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1,"runtime_events":{"allocation_updates":8,"drain_steps":6,"internal_events":10},"shape":{"k":262144,"m":16,"n":64},"terminal_physical_totals":{"hbm_read_bytes":10485760,"hbm_write_bytes":2048,"int4_ops":536870912,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":16,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":6,"compiled_plan_epochs":4,"compiled_service_descriptions":6,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":7},"case":"tiles_n4096","core_grid":{"core_count":16,"nx":4,"ny":4},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1,"runtime_events":{"allocation_updates":10,"drain_steps":8,"internal_events":13},"shape":{"k":64,"m":16,"n":4096},"terminal_physical_totals":{"hbm_read_bytes":163840,"hbm_write_bytes":131072,"int4_ops":8388608,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":16,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":6,"compiled_plan_epochs":4,"compiled_service_descriptions":6,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":7},"case":"tiles_n65536","core_grid":{"core_count":16,"nx":4,"ny":4},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1,"runtime_events":{"allocation_updates":10,"drain_steps":8,"internal_events":13},"shape":{"k":64,"m":16,"n":65536},"terminal_physical_totals":{"hbm_read_bytes":2621440,"hbm_write_bytes":2097152,"int4_ops":134217728,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":1,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":7,"compiled_plan_epochs":4,"compiled_service_descriptions":7,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":8},"case":"cores1_m1024_n1024_k4096","core_grid":{"core_count":1,"nx":1,"ny":1},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1,"runtime_events":{"allocation_updates":12,"drain_steps":10,"internal_events":15},"shape":{"k":4096,"m":1024,"n":1024},"terminal_physical_totals":{"hbm_read_bytes":167772160,"hbm_write_bytes":2097152,"int4_ops":8589934592,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":4,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":7,"compiled_plan_epochs":4,"compiled_service_descriptions":7,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":8},"case":"cores4_m1024_n1024_k4096","core_grid":{"core_count":4,"nx":2,"ny":2},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1,"runtime_events":{"allocation_updates":12,"drain_steps":10,"internal_events":15},"shape":{"k":4096,"m":1024,"n":1024},"terminal_physical_totals":{"hbm_read_bytes":167772160,"hbm_write_bytes":2097152,"int4_ops":8589934592,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":64,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":7,"compiled_plan_epochs":4,"compiled_service_descriptions":7,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":8},"case":"cores64_m1024_n1024_k4096","core_grid":{"core_count":64,"nx":8,"ny":8},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1,"runtime_events":{"allocation_updates":12,"drain_steps":10,"internal_events":15},"shape":{"k":4096,"m":1024,"n":1024},"terminal_physical_totals":{"hbm_read_bytes":167772160,"hbm_write_bytes":2097152,"int4_ops":8589934592,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":1,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":6,"compiled_plan_epochs":4,"compiled_service_descriptions":6,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":7},"case":"repeat1024","core_grid":{"core_count":16,"nx":4,"ny":4},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1024,"runtime_events":{"allocation_updates":10,"drain_steps":8,"internal_events":13},"shape":{"k":64,"m":16,"n":64},"terminal_physical_totals":{"hbm_read_bytes":2621440,"hbm_write_bytes":2097152,"int4_ops":134217728,"summary_matches_exact_runtime_service":true}},{"active_activities_at_arrival":2,"active_cores":1,"active_owners_at_arrival":2,"actual_counts":{"compiled_plan_activity_records":6,"compiled_plan_epochs":4,"compiled_service_descriptions":6,"description_count_semantics":"independent activity segments including terminal switch","endpoint_activity_records":1,"runtime_activity_records":7},"case":"repeat1000000","core_grid":{"core_count":16,"nx":4,"ny":4},"external_event":{"arrival_ns":100,"physical_bytes":64,"type":"local_hbm_endpoint_read"},"fixed_os_tile":{"tk":64,"tm":16,"tn":64},"layer_instances":1000000,"runtime_events":{"allocation_updates":10,"drain_steps":8,"internal_events":13},"shape":{"k":64,"m":16,"n":64},"terminal_physical_totals":{"hbm_read_bytes":2560000000,"hbm_write_bytes":2048000000,"int4_ops":131072000000,"summary_matches_exact_runtime_service":true}}],"drain_step_limit":100,"event_count_limit":100,"fixed_active_owners":2,"status":"pass","test":"os_service_scaling_test"}
+PASS os_service_scaling_test
+<end of output>
+Test time =   0.07 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_os_service_scaling_test" end time: Oct 16 12:54 UTC
+"coarse_os_service_scaling_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+12/51 Testing: coarse_service_curve_schema_test
+12/51 Test: coarse_service_curve_schema_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_service_curve_schema_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_service_curve_schema_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS service_curve_schema_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_service_curve_schema_test" end time: Oct 16 12:54 UTC
+"coarse_service_curve_schema_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+13/51 Testing: coarse_service_curve_runtime_test
+13/51 Test: coarse_service_curve_runtime_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_service_curve_runtime_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_service_curve_runtime_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS service_curve_runtime_test
+<end of output>
+Test time =   0.07 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_service_curve_runtime_test" end time: Oct 16 12:54 UTC
+"coarse_service_curve_runtime_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+14/51 Testing: coarse_capi_cost_query_test
+14/51 Test: coarse_capi_cost_query_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_cost_query_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_capi_cost_query_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS capi_cost_query_test
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_capi_cost_query_test" end time: Oct 16 12:54 UTC
+"coarse_capi_cost_query_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+15/51 Testing: coarse_source_golden_test
+15/51 Test: coarse_source_golden_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_source_golden_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_source_golden_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+source DOCX rows=32, source hash="d66b4a76122742ed91102d75305e01f10a8241213c96ed2289ecd51a1f7aa346", baseline cores=88, HBM stacks=4, capacity=144000000000 B, peak=4710400000000 B/s
+PASS source_golden_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_source_golden_test" end time: Oct 16 12:54 UTC
+"coarse_source_golden_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+16/51 Testing: coarse_hardware_input_test
+16/51 Test: coarse_hardware_input_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_hardware_input_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_hardware_input_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS hardware_input_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_hardware_input_test" end time: Oct 16 12:54 UTC
+"coarse_hardware_input_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+17/51 Testing: coarse_compile_execution_test
+17/51 Test: coarse_compile_execution_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compile_execution_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_compile_execution_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+GEMM_INT4_odd=checked, OS_WR=candidates, FFN_recompute=checked, attention_GQA_causal=checked, same_input_hash=stable
+PASS compile_execution_test
+<end of output>
+Test time =   0.15 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_compile_execution_test" end time: Oct 16 12:54 UTC
+"coarse_compile_execution_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+18/51 Testing: coarse_compiler_credit_test
+18/51 Test: coarse_compiler_credit_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compiler_credit_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_compiler_credit_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS compiler_credit_test
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_compiler_credit_test" end time: Oct 16 12:54 UTC
+"coarse_compiler_credit_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+19/51 Testing: coarse_gemm_os_access_counter_test
+19/51 Test: coarse_gemm_os_access_counter_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_access_counter_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_gemm_os_access_counter_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS gemm_os_access_counter_test
+<end of output>
+Test time =   0.11 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_gemm_os_access_counter_test" end time: Oct 16 12:54 UTC
+"coarse_gemm_os_access_counter_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+20/51 Testing: coarse_gemm_os_geometry_test
+20/51 Test: coarse_gemm_os_geometry_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_geometry_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_gemm_os_geometry_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+gemm_os_geometry_test: PASS
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_gemm_os_geometry_test" end time: Oct 16 12:54 UTC
+"coarse_gemm_os_geometry_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+21/51 Testing: coarse_gemm_os_route_counter_test
+21/51 Test: coarse_gemm_os_route_counter_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_route_counter_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_gemm_os_route_counter_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+gemm_os_route_counter_test: PASS (partial first moments; no second moments)
+<end of output>
+Test time =   0.45 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_gemm_os_route_counter_test" end time: Oct 16 12:54 UTC
+"coarse_gemm_os_route_counter_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+22/51 Testing: coarse_gemm_os_resource_facts_test
+22/51 Test: coarse_gemm_os_resource_facts_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_resource_facts_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_gemm_os_resource_facts_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS: 8 typed single-K compiler/resource-fact comparisons
+<end of output>
+Test time =   0.02 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_gemm_os_resource_facts_test" end time: Oct 16 12:54 UTC
+"coarse_gemm_os_resource_facts_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+23/51 Testing: coarse_gemm_os_readiness_test
+23/51 Test: coarse_gemm_os_readiness_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_os_readiness_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_gemm_os_readiness_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS: final-only output reservations, atomic cursor restore, 5 ordered full/tail lifecycles; bounded metadata only
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_gemm_os_readiness_test" end time: Oct 16 12:54 UTC
+"coarse_gemm_os_readiness_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+24/51 Testing: coarse_operator_accounting_test
+24/51 Test: coarse_operator_accounting_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_operator_accounting_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_operator_accounting_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS operator_accounting_test
+<end of output>
+Test time =   0.12 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_operator_accounting_test" end time: Oct 16 12:54 UTC
+"coarse_operator_accounting_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+25/51 Testing: coarse_gemm_accounting_test
+25/51 Test: coarse_gemm_accounting_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_accounting_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_gemm_accounting_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS gemm_accounting_test
+<end of output>
+Test time =   0.07 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_gemm_accounting_test" end time: Oct 16 12:54 UTC
+"coarse_gemm_accounting_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+26/51 Testing: coarse_gemm_tail_budget_test
+26/51 Test: coarse_gemm_tail_budget_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_gemm_tail_budget_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_gemm_tail_budget_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+compiled GEMM tail-budget candidates checked=288 with 1/2/4 Cores, OS/WR, M/N/K tails, repeats and strict FP32
+PASS gemm_tail_budget_test
+<end of output>
+Test time =   0.19 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_gemm_tail_budget_test" end time: Oct 16 12:54 UTC
+"coarse_gemm_tail_budget_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+27/51 Testing: coarse_task_schema_test
+27/51 Test: coarse_task_schema_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_task_schema_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_task_schema_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+task_schema_test passed
+<end of output>
+Test time =   0.10 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_task_schema_test" end time: Oct 16 12:54 UTC
+"coarse_task_schema_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+28/51 Testing: coarse_compact_batch_semantics_test
+28/51 Test: coarse_compact_batch_semantics_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_compact_batch_semantics_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_compact_batch_semantics_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+compact batch: discrete counts, Runtime, workspace, capacity, hashes, overflow
+PASS compact_batch_semantics_test
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_compact_batch_semantics_test" end time: Oct 16 12:54 UTC
+"coarse_compact_batch_semantics_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+29/51 Testing: coarse_equivalent_work_test
+29/51 Test: coarse_equivalent_work_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_equivalent_work_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_equivalent_work_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+equivalent-work checks passed
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_equivalent_work_test" end time: Oct 16 12:54 UTC
+"coarse_equivalent_work_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+30/51 Testing: coarse_fractional_work_test
+30/51 Test: coarse_fractional_work_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_fractional_work_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_fractional_work_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS fractional_work_test
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_fractional_work_test" end time: Oct 16 12:54 UTC
+"coarse_fractional_work_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+31/51 Testing: coarse_fused_ffn_accounting_test
+31/51 Test: coarse_fused_ffn_accounting_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_fused_ffn_accounting_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_fused_ffn_accounting_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS fused_ffn_accounting_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_fused_ffn_accounting_test" end time: Oct 16 12:54 UTC
+"coarse_fused_ffn_accounting_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+32/51 Testing: coarse_attention_accounting_test
+32/51 Test: coarse_attention_accounting_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_attention_accounting_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_attention_accounting_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+attention_tiles=oracle_checked, int4_tail_bytes=exact, full_score_stages=4, qk_av=independent
+PASS attention_accounting_test
+<end of output>
+Test time =   0.52 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_attention_accounting_test" end time: Oct 16 12:54 UTC
+"coarse_attention_accounting_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+33/51 Testing: coarse_endpoint_allocation_test
+33/51 Test: coarse_endpoint_allocation_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_endpoint_allocation_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_endpoint_allocation_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS endpoint_allocation_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_endpoint_allocation_test" end time: Oct 16 12:54 UTC
+"coarse_endpoint_allocation_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+34/51 Testing: coarse_runtime_credit_scale_test
+34/51 Test: coarse_runtime_credit_scale_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_credit_scale_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_runtime_credit_scale_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS runtime_credit_scale_test
+<end of output>
+Test time =   0.05 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_runtime_credit_scale_test" end time: Oct 16 12:54 UTC
+"coarse_runtime_credit_scale_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+35/51 Testing: coarse_runtime_clock_translation_test
+35/51 Test: coarse_runtime_clock_translation_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_clock_translation_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_runtime_clock_translation_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS: 72 translated real-fact runs, partial import/cancel/capacity, legacy fractional wire and u64 edge
+<end of output>
+Test time =   0.19 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_runtime_clock_translation_test" end time: Oct 16 12:54 UTC
+"coarse_runtime_clock_translation_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+36/51 Testing: coarse_runtime_counters_test
+36/51 Test: coarse_runtime_counters_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_counters_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_runtime_counters_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS runtime_counters_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_runtime_counters_test" end time: Oct 16 12:54 UTC
+"coarse_runtime_counters_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+37/51 Testing: coarse_estimate_driver_test
+37/51 Test: coarse_estimate_driver_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_estimate_driver_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_estimate_driver_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS estimate_driver_test
+<end of output>
+Test time =   0.11 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_estimate_driver_test" end time: Oct 16 12:54 UTC
+"coarse_estimate_driver_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+38/51 Testing: coarse_runtime_semantics_test
+38/51 Test: coarse_runtime_semantics_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_semantics_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_runtime_semantics_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+fairness=2s, W2_finish_s=15, hbm_release_finish_s=100, credit_lp=checked, snapshot_replay=exact
+PASS runtime_semantics_test
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_runtime_semantics_test" end time: Oct 16 12:54 UTC
+"coarse_runtime_semantics_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+39/51 Testing: coarse_oracle_granularity_test
+39/51 Test: coarse_oracle_granularity_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_oracle_granularity_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_oracle_granularity_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+{"compute_ops_per_s":8.0,"hardware_fingerprint":"sha256:154b6d59b68483fbaece8c4a341058ed91bd5ddcd544e31816f90795d955d2b5","hbm_bytes_per_s":1000.0,"input_slots":2.0,"measurement_count":39,"measurements":[{"E":5,"allocation_updates":7,"finish_by_request_s":{"A":26.25},"hbm_busy_s":26.249999999999996,"hbm_shared_s":0.0,"host_cpu_ns":2849000,"host_wall_ns":2851124,"internal_events":11,"phase_offset_s":0.0,"shape":"single"},{"E":8,"allocation_updates":10,"finish_by_request_s":{"A":26.325},"hbm_busy_s":26.324999999999996,"hbm_shared_s":0.0,"host_cpu_ns":7004000,"host_wall_ns":7068809,"internal_events":17,"phase_offset_s":0.0,"shape":"single"},{"E":16,"allocation_updates":19,"finish_by_request_s":{"A":27.15},"hbm_busy_s":27.149999999999995,"hbm_shared_s":0.0,"host_cpu_ns":19266000,"host_wall_ns":55188153,"internal_events":34,"phase_offset_s":0.0,"shape":"single"},{"E":5,"allocation_updates":8,"finish_by_request_s":{"A":50.975,"B":50.975},"hbm_busy_s":50.97499999999997,"hbm_shared_s":50.97499999999997,"host_cpu_ns":2958000,"host_wall_ns":2957404,"internal_events":16,"phase_offset_s":0.0,"shape":"balanced"},{"E":8,"allocation_updates":11,"finish_by_request_s":{"A":51.05,"B":51.05},"hbm_busy_s":51.04999999999999,"hbm_shared_s":51.04999999999999,"host_cpu_ns":6333000,"host_wall_ns":6331714,"internal_events":25,"phase_offset_s":0.0,"shape":"balanced"},{"E":16,"allocation_updates":23,"finish_by_request_s":{"A":52.4,"B":52.4},"hbm_busy_s":52.399999999999984,"hbm_shared_s":52.399999999999984,"host_cpu_ns":20806000,"host_wall_ns":20803966,"internal_events":53,"phase_offset_s":0.0,"shape":"balanced"},{"E":5,"allocation_updates":16,"finish_by_request_s":{"A":50.323797687,"B":50.800412758},"hbm_busy_s":50.80041275797371,"hbm_shared_s":49.95379768605376,"host_cpu_ns":6939000,"host_wall_ns":6936901,"internal_events":24,"phase_offset_s":0.37,"shape":"balanced"},{"E":8,"allocation_updates":25,"finish_by_request_s":{"A":50.077265017,"B":50.81288142},"hbm_busy_s":50.812881419939565,"hbm_shared_s":49.70726501688664,"host_cpu_ns":14014000,"host_wall_ns":14069507,"internal_events":39,"phase_offset_s":0.37,"shape":"balanced"},{"E":16,"allocation_updates":56,"finish_by_request_s":{"A":51.985832699,"B":52.282159677},"hbm_busy_s":52.28215967662976,"hbm_shared_s":51.61583269886204,"host_cpu_ns":49619000,"host_wall_ns":85238408,"internal_events":86,"phase_offset_s":0.37,"shape":"balanced"},{"E":5,"allocation_updates":15,"finish_by_request_s":{"A":49.232608291,"B":50.8},"hbm_busy_s":50.799999999999976,"hbm_shared_s":48.0326082900173,"host_cpu_ns":5903000,"host_wall_ns":5901336,"internal_events":23,"phase_offset_s":1.2,"shape":"balanced"},{"E":8,"allocation_updates":25,"finish_by_request_s":{"A":48.816322786,"B":50.8},"hbm_busy_s":50.79999999999999,"hbm_shared_s":47.616322785080705,"host_cpu_ns":18944000,"host_wall_ns":54438939,"internal_events":39,"phase_offset_s":1.2,"shape":"balanced"},{"E":16,"allocation_updates":53,"finish_by_request_s":{"A":50.677666358,"B":53.070601185},"hbm_busy_s":53.07060118496263,"hbm_shared_s":49.477666357489205,"host_cpu_ns":43177000,"host_wall_ns":43423798,"internal_events":83,"phase_offset_s":1.2,"shape":"balanced"},{"E":5,"allocation_updates":17,"finish_by_request_s":{"A":94.6375,"B":94.6375},"hbm_busy_s":94.63749999999999,"hbm_shared_s":94.63749999999999,"host_cpu_ns":7666000,"host_wall_ns":7875511,"internal_events":25,"phase_offset_s":0.0,"shape":"compute_long_memory_short"},{"E":8,"allocation_updates":18,"finish_by_request_s":{"A":94.637500001,"B":94.637500001},"hbm_busy_s":94.6375,"hbm_shared_s":94.6375,"host_cpu_ns":9228000,"host_wall_ns":9226405,"internal_events":32,"phase_offset_s":0.0,"shape":"compute_long_memory_short"},{"E":16,"allocation_updates":34,"finish_by_request_s":{"A":94.6375,"B":94.6375},"hbm_busy_s":94.6375,"hbm_shared_s":94.6375,"host_cpu_ns":37205000,"host_wall_ns":68194789,"internal_events":64,"phase_offset_s":0.0,"shape":"compute_long_memory_short"},{"E":5,"allocation_updates":32,"finish_by_request_s":{"A":93.95374,"B":94.6375},"hbm_busy_s":94.6375,"hbm_shared_s":93.58373999999988,"host_cpu_ns":14681000,"host_wall_ns":14677453,"internal_events":40,"phase_offset_s":0.37,"shape":"compute_long_memory_short"},{"E":8,"allocation_updates":34,"finish_by_request_s":{"A":94.312571527,"B":94.6375},"hbm_busy_s":94.6375,"hbm_shared_s":93.94257152679809,"host_cpu_ns":24006000,"host_wall_ns":54806509,"internal_events":48,"phase_offset_s":0.37,"shape":"compute_long_memory_short"},{"E":16,"allocation_updates":66,"finish_by_request_s":{"A":94.121362019,"B":94.6375},"hbm_busy_s":94.6375,"hbm_shared_s":93.75136201806063,"host_cpu_ns":69534000,"host_wall_ns":101348634,"internal_events":96,"phase_offset_s":0.37,"shape":"compute_long_memory_short"},{"E":5,"allocation_updates":32,"finish_by_request_s":{"A":92.4199,"B":94.6375},"hbm_busy_s":94.6375,"hbm_shared_s":91.21989999999984,"host_cpu_ns":11307000,"host_wall_ns":11358458,"internal_events":40,"phase_offset_s":1.2,"shape":"compute_long_memory_short"},{"E":8,"allocation_updates":34,"finish_by_request_s":{"A":93.580764343,"B":94.6375},"hbm_busy_s":94.6375,"hbm_shared_s":92.38076434258691,"host_cpu_ns":13603000,"host_wall_ns":13601222,"internal_events":48,"phase_offset_s":1.2,"shape":"compute_long_memory_short"},{"E":16,"allocation_updates":66,"finish_by_request_s":{"A":92.822082606,"B":94.6375},"hbm_busy_s":94.6375,"hbm_shared_s":91.62208260507909,"host_cpu_ns":67920000,"host_wall_ns":99522244,"internal_events":96,"phase_offset_s":1.2,"shape":"compute_long_memory_short"},{"E":5,"allocation_updates":7,"finish_by_request_s":{"A":111.04,"B":111.04},"hbm_busy_s":111.03999999999994,"hbm_shared_s":111.03999999999994,"host_cpu_ns":2957000,"host_wall_ns":2954635,"internal_events":15,"phase_offset_s":0.0,"shape":"memory_long_compute_short"},{"E":8,"allocation_updates":10,"finish_by_request_s":{"A":111.04,"B":111.04},"hbm_busy_s":111.03999999999996,"hbm_shared_s":111.03999999999996,"host_cpu_ns":5427000,"host_wall_ns":5430260,"internal_events":24,"phase_offset_s":0.0,"shape":"memory_long_compute_short"},{"E":16,"allocation_updates":18,"finish_by_request_s":{"A":111.04,"B":111.04},"hbm_busy_s":111.03999999999996,"hbm_shared_s":111.03999999999996,"host_cpu_ns":20828000,"host_wall_ns":20895884,"internal_events":48,"phase_offset_s":0.0,"shape":"memory_long_compute_short"},{"E":5,"allocation_updates":12,"finish_by_request_s":{"A":110.44454442,"B":111.04},"hbm_busy_s":111.03999999999995,"hbm_shared_s":110.07454441913437,"host_cpu_ns":6747000,"host_wall_ns":6745555,"internal_events":20,"phase_offset_s":0.37,"shape":"memory_long_compute_short"},{"E":8,"allocation_updates":18,"finish_by_request_s":{"A":110.496063123,"B":111.04},"hbm_busy_s":111.03999999999996,"hbm_shared_s":110.12606312292358,"host_cpu_ns":12093000,"host_wall_ns":43510445,"internal_events":32,"phase_offset_s":0.37,"shape":"memory_long_compute_short"},{"E":16,"allocation_updates":34,"finish_by_request_s":{"A":110.189345795,"B":111.04},"hbm_busy_s":111.03999999999996,"hbm_shared_s":109.8193457943925,"host_cpu_ns":36243000,"host_wall_ns":37477976,"internal_events":64,"phase_offset_s":0.37,"shape":"memory_long_compute_short"},{"E":5,"allocation_updates":12,"finish_by_request_s":{"A":109.108792711,"B":111.04},"hbm_busy_s":111.03999999999996,"hbm_shared_s":107.90879271070614,"host_cpu_ns":4868000,"host_wall_ns":4867203,"internal_events":20,"phase_offset_s":1.2,"shape":"memory_long_compute_short"},{"E":8,"allocation_updates":18,"finish_by_request_s":{"A":109.275880399,"B":111.04},"hbm_busy_s":111.03999999999996,"hbm_shared_s":108.0758803986711,"host_cpu_ns":12640000,"host_wall_ns":12702856,"internal_events":32,"phase_offset_s":1.2,"shape":"memory_long_compute_short"},{"E":16,"allocation_updates":34,"finish_by_request_s":{"A":108.281121496,"B":111.04},"hbm_busy_s":111.03999999999996,"hbm_shared_s":107.08112149532707,"host_cpu_ns":35544000,"host_wall_ns":70242156,"internal_events":64,"phase_offset_s":1.2,"shape":"memory_long_compute_short"},{"E":5,"allocation_updates":7,"finish_by_request_s":{"A":62.33,"B":62.33},"hbm_busy_s":62.32999999999996,"hbm_shared_s":62.32999999999996,"host_cpu_ns":3121000,"host_wall_ns":3120785,"internal_events":15,"phase_offset_s":0.0,"shape":"restore_burst"},{"E":8,"allocation_updates":10,"finish_by_request_s":{"A":62.33,"B":62.33},"hbm_busy_s":62.32999999999999,"hbm_shared_s":62.32999999999999,"host_cpu_ns":8584000,"host_wall_ns":8582112,"internal_events":24,"phase_offset_s":0.0,"shape":"restore_burst"},{"E":16,"allocation_updates":22,"finish_by_request_s":{"A":63.505,"B":63.505},"hbm_busy_s":63.504999999999974,"hbm_shared_s":63.504999999999974,"host_cpu_ns":25152000,"host_wall_ns":56666378,"internal_events":52,"phase_offset_s":0.0,"shape":"restore_burst"},{"E":5,"allocation_updates":12,"finish_by_request_s":{"A":62.071860466,"B":62.33},"hbm_busy_s":62.32999999999997,"hbm_shared_s":61.701860465116255,"host_cpu_ns":24003000,"host_wall_ns":24076714,"internal_events":20,"phase_offset_s":0.37,"shape":"restore_burst"},{"E":8,"allocation_updates":21,"finish_by_request_s":{"A":62.090916135,"B":62.33},"hbm_busy_s":62.32999999999999,"hbm_shared_s":61.72091613413042,"host_cpu_ns":20160000,"host_wall_ns":20157762,"internal_events":35,"phase_offset_s":0.37,"shape":"restore_burst"},{"E":16,"allocation_updates":53,"finish_by_request_s":{"A":62.837474702,"B":63.129264487},"hbm_busy_s":63.129264486005276,"hbm_shared_s":62.46747470167903,"host_cpu_ns":60455000,"host_wall_ns":88189199,"internal_events":83,"phase_offset_s":0.37,"shape":"restore_burst"},{"E":5,"allocation_updates":12,"finish_by_request_s":{"A":61.492790698,"B":62.33},"hbm_busy_s":62.32999999999998,"hbm_shared_s":60.2927906976744,"host_cpu_ns":5022000,"host_wall_ns":5019692,"internal_events":20,"phase_offset_s":1.2,"shape":"restore_burst"},{"E":8,"allocation_updates":21,"finish_by_request_s":{"A":61.554592868,"B":62.33},"hbm_busy_s":62.32999999999999,"hbm_shared_s":60.35459286745,"host_cpu_ns":12460000,"host_wall_ns":12457953,"internal_events":35,"phase_offset_s":1.2,"shape":"restore_burst"},{"E":16,"allocation_updates":51,"finish_by_request_s":{"A":61.880348354,"B":62.77459193},"hbm_busy_s":62.77459192945299,"hbm_shared_s":60.68034835317419,"host_cpu_ns":47612000,"host_wall_ns":79342724,"internal_events":81,"phase_offset_s":1.2,"shape":"restore_burst"}],"output_slots":2.0,"runtime":"public_coarse_die_cpp_Runtime","schema_version":1,"status":"measured"}
+<end of output>
+Test time =   1.20 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_oracle_granularity_test" end time: Oct 16 12:54 UTC
+"coarse_oracle_granularity_test" time elapsed: 00:00:01
+----------------------------------------------------------
+
+40/51 Testing: coarse_capi_lifecycle_test
+40/51 Test: coarse_capi_lifecycle_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_lifecycle_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_capi_lifecycle_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+{"cabi_lifecycle":"passed","abi":2}
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_capi_lifecycle_test" end time: Oct 16 12:54 UTC
+"coarse_capi_lifecycle_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+41/51 Testing: coarse_capi_cache_response_test
+41/51 Test: coarse_capi_cache_response_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_capi_cache_response_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_capi_cache_response_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS capi_cache_response_test
+<end of output>
+Test time =  13.72 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_capi_cache_response_test" end time: Oct 16 12:54 UTC
+"coarse_capi_cache_response_test" time elapsed: 00:00:13
+----------------------------------------------------------
+
+42/51 Testing: coarse_workspace_metadata_test
+42/51 Test: coarse_workspace_metadata_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_workspace_metadata_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_workspace_metadata_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS workspace_metadata_test
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_workspace_metadata_test" end time: Oct 16 12:54 UTC
+"coarse_workspace_metadata_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+43/51 Testing: coarse_workspace_envelope_test
+43/51 Test: coarse_workspace_envelope_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_workspace_envelope_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_workspace_envelope_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS workspace_envelope_test
+<end of output>
+Test time =   0.15 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_workspace_envelope_test" end time: Oct 16 12:54 UTC
+"coarse_workspace_envelope_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+44/51 Testing: coarse_runtime_submit_transaction_test
+44/51 Test: coarse_runtime_submit_transaction_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_submit_transaction_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_runtime_submit_transaction_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS runtime_submit_transaction_test
+<end of output>
+Test time =   0.04 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_runtime_submit_transaction_test" end time: Oct 16 12:54 UTC
+"coarse_runtime_submit_transaction_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+45/51 Testing: coarse_runtime_owner_symmetry_test
+45/51 Test: coarse_runtime_owner_symmetry_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_runtime_owner_symmetry_test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_runtime_owner_symmetry_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+PASS runtime_owner_symmetry_test
+<end of output>
+Test time =   0.13 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_runtime_owner_symmetry_test" end time: Oct 16 12:54 UTC
+"coarse_runtime_owner_symmetry_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+46/51 Testing: coarse_core_docx_source_test
+46/51 Test: coarse_core_docx_source_test
+Command: "/workspace/cloud-setup/venv/bin/python3.12" "/workspace/template/work/core-resume/die/tools/check_core_source.py"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_core_docx_source_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+{"status": "passed", "document": {"path": "架构建模_单Core版_严格复核修订.docx", "sha256": "b4382bc7a655b7a3bf9a531b583ce8b52f8d1036883796db8a52b26b4cae4ad3"}, "row_count": 32, "rows_sha256": "d66b4a76122742ed91102d75305e01f10a8241213c96ed2289ecd51a1f7aa346"}
+<end of output>
+Test time =   0.13 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_core_docx_source_test" end time: Oct 16 12:54 UTC
+"coarse_core_docx_source_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+47/51 Testing: coarse_estimate_cli_test
+47/51 Test: coarse_estimate_cli_test
+Command: "/workspace/cloud-setup/venv/bin/python3.12" "/workspace/template/work/core-resume/die/tests/estimate_cli_test.py" "--library" "/workspace/template/work/core-resume/work/runtime-lab/public-build/lib/libcoarse_die_cabi.so" "-v"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_estimate_cli_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+test_real_r3_body_exits_nonzero_without_losing_diagnostics (__main__.NativeCliTests.test_real_r3_body_exits_nonzero_without_losing_diagnostics) ... ok
+test_real_r3_without_native_error_also_exits_nonzero (__main__.NativeCliTests.test_real_r3_without_native_error_also_exits_nonzero) ... ok
+test_real_valid_r1_still_exits_zero (__main__.NativeCliTests.test_real_valid_r1_still_exits_zero) ... ok
+test_missing_or_malformed_status_is_not_success (__main__.ResultAvailabilityTests.test_missing_or_malformed_status_is_not_success) ... ok
+test_mixed_rows_preserve_order_body_and_native_errors (__main__.ResultAvailabilityTests.test_mixed_rows_preserve_order_body_and_native_errors) ... ok
+test_nested_missing_calibration_does_not_reject_prediction (__main__.ResultAvailabilityTests.test_nested_missing_calibration_does_not_reject_prediction) ... ok
+test_only_unavailable_is_not_global_success (__main__.ResultAvailabilityTests.test_only_unavailable_is_not_global_success) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.416s
+
+OK
+<end of output>
+Test time =   0.75 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_estimate_cli_test" end time: Oct 16 12:54 UTC
+"coarse_estimate_cli_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+48/51 Testing: coarse_grouped_gemm_oracle_test
+48/51 Test: coarse_grouped_gemm_oracle_test
+Command: "/workspace/cloud-setup/venv/bin/python3.12" "/workspace/template/work/core-resume/die/tests/grouped_gemm_oracle_test.py"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_grouped_gemm_oracle_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+.............
+----------------------------------------------------------------------
+Ran 13 tests in 5.977s
+
+OK
+<end of output>
+Test time =   6.34 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_grouped_gemm_oracle_test" end time: Oct 16 12:54 UTC
+"coarse_grouped_gemm_oracle_test" time elapsed: 00:00:06
+----------------------------------------------------------
+
+49/51 Testing: coarse_analytical_service_oracle_test
+49/51 Test: coarse_analytical_service_oracle_test
+Command: "/workspace/cloud-setup/venv/bin/python3.12" "/workspace/template/work/core-resume/die/tests/analytical_service_oracle_test.py"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_analytical_service_oracle_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+............
+----------------------------------------------------------------------
+Ran 12 tests in 0.022s
+
+OK
+<end of output>
+Test time =   0.49 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_analytical_service_oracle_test" end time: Oct 16 12:54 UTC
+"coarse_analytical_service_oracle_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+50/51 Testing: coarse_owner_lp_oracle_test
+50/51 Test: coarse_owner_lp_oracle_test
+Command: "/workspace/cloud-setup/venv/bin/python3.12" "/workspace/template/work/core-resume/die/validation/owner_lp_oracle.py" "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_owner_lp_oracle_driver"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_owner_lp_oracle_test" start time: Oct 16 12:54 UTC
+Output:
+----------------------------------------------------------
+private-not-multiplied: exact x=[Fraction(14, 1), Fraction(14, 1)]; rates=[Fraction(2, 1), Fraction(2, 1)]; alpha=[Fraction(1, 1), Fraction(1, 1)]; excluded=[]
+q-alpha-physical-multiplicity-phase-offset: exact x=[Fraction(6, 5), Fraction(3, 1), Fraction(6, 5), Fraction(3, 1)]; rates=[Fraction(3, 5), Fraction(3, 5), Fraction(3, 5), Fraction(3, 5)]; alpha=[Fraction(2, 7), Fraction(5, 7), Fraction(2, 7), Fraction(5, 7)]; excluded=[]
+zero-exclusion-renormalizes: exact x=[Fraction(0, 1), Fraction(0, 1), Fraction(5, 1), Fraction(5, 1)]; rates=[Fraction(0, 1), Fraction(0, 1), Fraction(5, 1), Fraction(5, 1)]; alpha=[Fraction(0, 1), Fraction(0, 1), Fraction(1, 1), Fraction(1, 1)]; excluded=[0, 1]
+symmetric-pair-with-heterogeneous-owner: exact x=[Fraction(4, 1), Fraction(4, 1), Fraction(9, 1)]; rates=[Fraction(2, 1), Fraction(2, 1), Fraction(3, 1)]; alpha=[Fraction(1, 1), Fraction(1, 1), Fraction(1, 1)]; excluded=[]
+same-owner-across-executions-keeps-Q-denominator: exact x=[Fraction(3, 4), Fraction(3, 4), Fraction(3, 2)]; rates=[Fraction(3, 4), Fraction(3, 4), Fraction(3, 2)]; alpha=[Fraction(1, 2), Fraction(1, 2), Fraction(1, 1)]; excluded=[]
+PASS: 5 exact Fraction LP cases; full LP vs exact block projection
+runtime:mixed-forward: owners=3; activities=5; exact_rates=[0.6, 0.6, 0.6, 0.6, 0.6]; projection=equal; observed=match
+runtime:mixed-reverse: owners=3; activities=5; exact_rates=[0.6, 0.6, 0.6, 0.6, 0.6]; projection=equal; observed=match
+runtime:private-not-multiplied-runtime: owners=2; activities=2; exact_rates=[2.0, 2.0]; projection=equal; observed=match
+runtime:curved-ratio-2: owners=1; activities=2; exact_rates=[1.5, 0.5]; projection=equal; observed=match
+runtime:curved-ratio-restored-2: owners=1; activities=2; exact_rates=[1.5, 0.5]; projection=equal; observed=match
+runtime:curved-ratio-capacity-2: owners=1; activities=2; exact_rates=[0.25, 0.25]; projection=equal; observed=match
+runtime:curved-ratio-3: owners=1; activities=3; exact_rates=[1.25, 0.5, 0.5]; projection=equal; observed=match
+runtime:curved-ratio-restored-3: owners=1; activities=3; exact_rates=[1.25, 0.5, 0.5]; projection=equal; observed=match
+runtime:curved-ratio-capacity-3: owners=1; activities=3; exact_rates=[0.16666666666666666, 0.16666666666666666, 0.16666666666666666]; projection=equal; observed=match
+runtime:split-fair-owner-different-request-ids: owners=2; activities=3; exact_rates=[1.0, 1.0, 1.0]; projection=equal; observed=match
+runtime:arrival-before-join: owners=1; activities=2; exact_rates=[0.5, 0.5]; projection=equal; observed=match
+runtime:arrival-join-phase-offset: owners=2; activities=4; exact_rates=[0.25, 0.25, 0.25, 0.25]; projection=equal; observed=match
+runtime:arrival-join-snapshot-restore: owners=2; activities=4; exact_rates=[0.25, 0.25, 0.25, 0.25]; projection=equal; observed=match
+runtime:arrival-member-completed: owners=1; activities=2; exact_rates=[0.5, 0.5]; projection=equal; observed=match
+runtime:capacity-before-change: owners=2; activities=2; exact_rates=[0.5, 0.5]; projection=equal; observed=match
+runtime:capacity-after-change: owners=2; activities=2; exact_rates=[0.25, 0.25]; projection=equal; observed=match
+runtime:capacity-snapshot-restore: owners=2; activities=2; exact_rates=[0.25, 0.25]; projection=equal; observed=match
+runtime:cancel-reallocation: owners=1; activities=1; exact_rates=[0.5]; projection=equal; observed=match
+runtime:cancel-snapshot-restore: owners=1; activities=1; exact_rates=[0.5]; projection=equal; observed=match
+runtime:submission-permutation: owner rates/alpha unchanged
+PASS: 19 actual Runtime observations matched exact Fraction LP
+<end of output>
+Test time =  27.19 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_owner_lp_oracle_test" end time: Oct 16 12:55 UTC
+"coarse_owner_lp_oracle_test" time elapsed: 00:00:27
+----------------------------------------------------------
+
+51/51 Testing: coarse_k_readiness_runtime_self_test
+51/51 Test: coarse_k_readiness_runtime_self_test
+Command: "/workspace/template/work/core-resume/work/runtime-lab/public-build/coarse_k_readiness_runtime_driver" "--self-test"
+Directory: /workspace/template/work/core-resume/work/runtime-lab/public-build
+"coarse_k_readiness_runtime_self_test" start time: Oct 16 12:55 UTC
+Output:
+----------------------------------------------------------
+{
+  "actual": {
+    "final_compute_after_store_release": {
+      "event": "compute_start",
+      "input_occupancy": 1,
+      "input_slot": 1,
+      "k_tile": 1,
+      "ordinal": 5,
+      "output_occupancy": 2,
+      "output_q": 2,
+      "output_slot": 0,
+      "request_id": 1,
+      "time_ns": 7000000000
+    },
+    "final_compute_wait_observations": 1,
+    "finish_ns": 15000000000,
+    "first_final_compute_wait": {
+      "event": "final_compute_wait",
+      "input_occupancy": 1,
+      "input_slot": 1,
+      "k_tile": 1,
+      "ordinal": 5,
+      "output_occupancy": 2,
+      "output_q": 2,
+      "output_slot": 2,
+      "request_id": 1,
+      "time_ns": 6000000000
+    },
+    "first_output_full_nonfinal_admission": {
+      "k_tile": 0,
+      "output_occupancy": 2,
+      "output_q": 2,
+      "request_id": 1,
+      "time_ns": 5000000000
+    },
+    "manual_fixture_stage_trace": [
+      {
+        "event": "load_start",
+        "input_occupancy": 1,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 0,
+        "output_occupancy": 0,
+        "output_q": 0,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 0
+      },
+      {
+        "event": "load_terminal",
+        "input_occupancy": 1,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 0,
+        "output_occupancy": 0,
+        "output_q": 0,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 1000000000
+      },
+      {
+        "event": "compute_start",
+        "input_occupancy": 1,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 0,
+        "output_occupancy": 0,
+        "output_q": 0,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 1000000000
+      },
+      {
+        "event": "load_start",
+        "input_occupancy": 2,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 1,
+        "output_occupancy": 0,
+        "output_q": 0,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 1000000000
+      },
+      {
+        "event": "load_terminal",
+        "input_occupancy": 2,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 1,
+        "output_occupancy": 0,
+        "output_q": 0,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 2000000000
+      },
+      {
+        "event": "compute_terminal",
+        "input_occupancy": 1,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 0,
+        "output_occupancy": 0,
+        "output_q": 0,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 2000000000
+      },
+      {
+        "event": "compute_start",
+        "input_occupancy": 1,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 1,
+        "output_occupancy": 1,
+        "output_q": 0,
+        "output_slot": 0,
+        "request_id": 1,
+        "time_ns": 2000000000
+      },
+      {
+        "event": "load_start",
+        "input_occupancy": 2,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 2,
+        "output_occupancy": 1,
+        "output_q": 1,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 2000000000
+      },
+      {
+        "event": "load_terminal",
+        "input_occupancy": 2,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 2,
+        "output_occupancy": 1,
+        "output_q": 1,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 3000000000
+      },
+      {
+        "event": "compute_terminal",
+        "input_occupancy": 1,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 1,
+        "output_occupancy": 1,
+        "output_q": 0,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 3000000000
+      },
+      {
+        "event": "store_start",
+        "input_occupancy": 1,
+        "input_slot": 2,
+        "k_tile": 1,
+        "ordinal": 1,
+        "output_occupancy": 1,
+        "output_q": 0,
+        "output_slot": 0,
+        "request_id": 1,
+        "time_ns": 3000000000
+      },
+      {
+        "event": "compute_start",
+        "input_occupancy": 1,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 2,
+        "output_occupancy": 1,
+        "output_q": 1,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 3000000000
+      },
+      {
+        "event": "load_start",
+        "input_occupancy": 2,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 3,
+        "output_occupancy": 1,
+        "output_q": 1,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 3000000000
+      },
+      {
+        "event": "load_terminal",
+        "input_occupancy": 2,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 3,
+        "output_occupancy": 1,
+        "output_q": 1,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 4000000000
+      },
+      {
+        "event": "compute_terminal",
+        "input_occupancy": 1,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 2,
+        "output_occupancy": 1,
+        "output_q": 1,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 4000000000
+      },
+      {
+        "event": "compute_start",
+        "input_occupancy": 1,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 3,
+        "output_occupancy": 2,
+        "output_q": 1,
+        "output_slot": 1,
+        "request_id": 1,
+        "time_ns": 4000000000
+      },
+      {
+        "event": "load_start",
+        "input_occupancy": 2,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 4,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 4000000000
+      },
+      {
+        "event": "load_terminal",
+        "input_occupancy": 2,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 4,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 5000000000
+      },
+      {
+        "event": "compute_terminal",
+        "input_occupancy": 1,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 3,
+        "output_occupancy": 2,
+        "output_q": 1,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 5000000000
+      },
+      {
+        "event": "compute_start",
+        "input_occupancy": 1,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 4,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 5000000000
+      },
+      {
+        "event": "load_start",
+        "input_occupancy": 2,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 5,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 5000000000
+      },
+      {
+        "event": "load_terminal",
+        "input_occupancy": 2,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 5,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 6000000000
+      },
+      {
+        "event": "compute_terminal",
+        "input_occupancy": 1,
+        "input_slot": 0,
+        "k_tile": 0,
+        "ordinal": 4,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 6000000000
+      },
+      {
+        "event": "final_compute_wait",
+        "input_occupancy": 1,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 5,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 6000000000
+      },
+      {
+        "event": "store_terminal_release",
+        "input_occupancy": 1,
+        "input_slot": 2,
+        "k_tile": 1,
+        "ordinal": 1,
+        "output_occupancy": 1,
+        "output_q": 0,
+        "output_slot": 0,
+        "request_id": 1,
+        "time_ns": 7000000000
+      },
+      {
+        "event": "store_start",
+        "input_occupancy": 1,
+        "input_slot": 2,
+        "k_tile": 1,
+        "ordinal": 3,
+        "output_occupancy": 1,
+        "output_q": 1,
+        "output_slot": 1,
+        "request_id": 1,
+        "time_ns": 7000000000
+      },
+      {
+        "event": "compute_start",
+        "input_occupancy": 1,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 5,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 0,
+        "request_id": 1,
+        "time_ns": 7000000000
+      },
+      {
+        "event": "compute_terminal",
+        "input_occupancy": 0,
+        "input_slot": 1,
+        "k_tile": 1,
+        "ordinal": 5,
+        "output_occupancy": 2,
+        "output_q": 2,
+        "output_slot": 2,
+        "request_id": 1,
+        "time_ns": 8000000000
+      },
+      {
+        "event": "store_terminal_release",
+        "input_occupancy": 0,
+        "input_slot": 2,
+        "k_tile": 1,
+        "ordinal": 3,
+        "output_occupancy": 1,
+        "output_q": 1,
+        "output_slot": 1,
+        "request_id": 1,
+        "time_ns": 11000000000
+      },
+      {
+        "event": "store_start",
+        "input_occupancy": 0,
+        "input_slot": 2,
+        "k_tile": 1,
+        "ordinal": 5,
+        "output_occupancy": 1,
+        "output_q": 2,
+        "output_slot": 0,
+        "request_id": 1,
+        "time_ns": 11000000000
+      },
+      {
+        "event": "store_terminal_release",
+        "input_occupancy": 0,
+        "input_slot": 2,
+        "k_tile": 1,
+        "ordinal": 5,
+        "output_occupancy": 0,
+        "output_q": 2,
+        "output_slot": 0,
+        "request_id": 1,
+        "time_ns": 15000000000
+      }
+    ],
+    "nonfinal_computes_admitted_while_output_full": 1,
+    "output_full_nonfinal_ready_observations": 1,
+    "slot_and_order_invariants": {
+      "all_submitted_stages_reached_terminal": true,
+      "compact_cursor_matches_explicit_slots_and_admissions": true,
+      "compute_uses_oldest_terminal_load": true,
+      "maximum_input_occupancy_le_two": true,
+      "maximum_output_occupancy_le_two": true,
+      "only_final_compute_reserves_output": true,
+      "only_final_compute_terminal_produces_output": true,
+      "store_terminal_releases_output_slot": true
+    },
+    "store_terminal_release_times": [
+      {
+        "output_q": 0,
+        "time_ns": 7000000000
+      },
+      {
+        "output_q": 1,
+        "time_ns": 11000000000
+      },
+      {
+        "output_q": 2,
+        "time_ns": 15000000000
+      }
+    ],
+    "store_terminal_slot_releases": 3
+  },
+  "expected": {
+    "final_compute_resumed_at_ns": 7000000000,
+    "final_compute_waited_for_free_output_slot": true,
+    "final_wait_at_ns": 6000000000,
+    "finish_ns": 15000000000,
+    "output_full_nonfinal_at_ns": 5000000000,
+    "output_full_nonfinal_compute_admitted": true,
+    "store_terminal_released_each_output_slot": true,
+    "three_outputs_stored": true
+  },
+  "fixture": "three output tiles x two K consumptions; synthetic manual stage work",
+  "passed": true
+}
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"coarse_k_readiness_runtime_self_test" end time: Oct 16 12:55 UTC
+"coarse_k_readiness_runtime_self_test" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Oct 16 12:55 UTC

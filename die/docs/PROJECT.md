@@ -1,10 +1,10 @@
 # die 子项目：项目说明与验收标准
 
-## 2026-10-16当前交接指针
+## 2026-10-16 唯一 Core 来源与当前状态
 
-用户新DOCX`架构建模_单Core版_严格复核修订.docx`只有一种Core设计。唯一Core迁移、32行/L0=a、移除类型选择及文档更新已完整保存至远端`codex/die-single-core-20261016`，最后提交`b8ddbcfd62e03738b0c3996444355cbbe2e99b80`。用户进一步授权10×10、25×32mm/800mm²、0.75MiB/B512作为TX8矩阵操作率工程对照；126.6INT4TOPS只数值接近128BF16TFLOPS参考，不等效实测，Vec/存储未匹配，不改变先验或校准身份。
+硬件权威为根 `架构建模_单Core版_严格复核修订.docx`，只有 Core，32行 `core32_v1`、`L0=a`。完整迁移从远端 `codex/die-single-core-20261016@b8ddbcfd62e03738b0c3996444355cbbe2e99b80` 恢复，已保留 main 独有交接归档；当前分支 `codex/die-core-resume-20261016`。最终公共51/51与192资源点、五仓隔离10库/98配置已验证，实际 native C++22通过/4个原R4失败，JOINT另6项native Python通过。两套正常30样本性能failed。准备安全快进激活main，实际推送身份以 [HANDOFF](HANDOFF.md) 最新记录为准；正式五仓SDK未发布，工程 **NOT ACCEPTED**。
 
-用户随后要求立即停止。最终公共元数据/工程点fixture及三仓最新W/H范围未验完，不激活到main、不发布五仓SDK。完整源码/测试/raw在main的`analysis/single-core-handoff-20261016`可恢复归档中，已核对补丁可在41f1191应用。请先读[HANDOFF](HANDOFF.md)并按其有效Next Step继续；下方历史设计/验收记录不代表本次硬件迁移已完成或当前实现已验收。
+用户授权的10×10、25×32mm、0.75MiB/512bit工程对照点为126.6 INT4 TOPS，只数值接近128 BF16 TFLOPS参考，不等效实测，Vec/存储未匹配，不改变先验或校准身份。此前“停止/未激活”段落是旧检查点；完整恢复归档仍保留，不覆盖当前持续开发授权。
 
 ## 仓库与范围
 
@@ -14,7 +14,7 @@
 
 ## 当前恢复状态（2026-10-16）
 
-用户已恢复持续开发。从已推送迁移 b8ddbcf 建立 codex/die-core-resume-20261016，安全整合 main d3a64a6 独有交接资料；最终公共51/51、DOCX/192资源点及五仓隔离双ABI/98配置已实际通过；两套30样本性能failed，native消费者继续验证。正式 SDK 未发布，工程 NOT ACCEPTED。下方带日期停止/检查点均按历史范围阅读，最新操作以 HANDOFF 顶部为准。
+用户已恢复持续开发。公共生产源码仍与保存迁移一致；五仓最终实际验证范围见[总表](evidence/core-resume-20261016/SDK-VALIDATION-SCOPE.md)。R4不可用guard、WSLRU原optional skip和性能失败均保留。SDK正式canonical24未发布；两项Runtime数值/快照修复和四项性能优化仅在隔离研究中，尚未采用。main安全激活后继续Runtime/Norm/R>1/busy及五仓业务依赖。最新操作以HANDOFF顶部为准。
 
 ## 项目目标
 

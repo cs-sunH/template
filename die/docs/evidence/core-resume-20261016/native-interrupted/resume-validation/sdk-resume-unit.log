@@ -1,0 +1,13 @@
+test_actual_target_digest_and_drift_are_recorded (__main__.ResumeIdentityTest.test_actual_target_digest_and_drift_are_recorded) ... ok
+test_command_cwd_env_changes_are_rejected (__main__.ResumeIdentityTest.test_command_cwd_env_changes_are_rejected) ... ok
+test_configure_requires_matching_live_cache (__main__.ResumeIdentityTest.test_configure_requires_matching_live_cache) ... ok
+test_failed_is_retained_as_failed (__main__.ResumeIdentityTest.test_failed_is_retained_as_failed) ... ok
+test_log_tampering_is_rejected (__main__.ResumeIdentityTest.test_log_tampering_is_rejected) ... ok
+test_missing_final_identity_is_incomplete_even_with_log (__main__.ResumeIdentityTest.test_missing_final_identity_is_incomplete_even_with_log) ... ok
+test_nonterminal_record_is_not_retained (__main__.ResumeIdentityTest.test_nonterminal_record_is_not_retained) ... ok
+test_source_or_manifest_changes_are_rejected (__main__.ResumeIdentityTest.test_source_or_manifest_changes_are_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.017s
+
+OK

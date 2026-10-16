@@ -1,0 +1,409 @@
+{
+  "scope": "exact physical JSON field invariance; excludes coordinate-dependent credit and Plan identity; no tolerance",
+  "runner_sha256": "3cbb9918814b87c549e52cde9b47440041d788b3490fd2060e1dfbffd589cc49",
+  "groups": [
+    {
+      "family": "coupled",
+      "owners": 1,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 1,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 2,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 8,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 32,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 1,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 2,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 8,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    },
+    {
+      "family": "asymmetric_coupled",
+      "owners": 32,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "half",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "incomplete_samples": [],
+      "all_three_units_same_snapshot_exception": true
+    }
+  ],
+  "group_count": 28,
+  "different_sample_count": 0,
+  "note": "Missing post-import samples remain failed/not_run in the case oracle; this comparison does not waive them."
+}

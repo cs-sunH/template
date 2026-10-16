@@ -1,0 +1,62 @@
+{
+  "scope": "affected current-session object reuse; fourth row-view storage candidate, not clean final-source CMake build",
+  "original_archive_sha256": "482751b22c491761dfe282eb1dd07a238dd218f00f44c31320d6af0dd7ad35a7",
+  "original_members": {
+    "Hardware.cc.o": "e71155913c726c6dac1f1b4dd040145ad394f99e31c0cd137ad3fb489be80d5d",
+    "Plan.cc.o": "b451cea6c9cdd0c2f39c3d6c5970e110cee6b9fbd86a12ae6532d1c7fcb3aaf9",
+    "Compiler.cc.o": "9f6cda02a92507eaa945c984701376c91b12a43caea967d77e3febeba3b00125",
+    "Mapping.cc.o": "ec163c27d3cf5896521b4d9a0f7f3f824afcb195c503dbfc1c76d554537da342",
+    "Execution.cc.o": "219bd464e4e58bdd4fe85c5f4e22cdd47dbb8ad219fed3a5adff22f0e30e8f25"
+  },
+  "new_members": {
+    "Hardware.cc.o": "e71155913c726c6dac1f1b4dd040145ad394f99e31c0cd137ad3fb489be80d5d",
+    "Plan.cc.o": "b451cea6c9cdd0c2f39c3d6c5970e110cee6b9fbd86a12ae6532d1c7fcb3aaf9",
+    "Compiler.cc.o": "9f6cda02a92507eaa945c984701376c91b12a43caea967d77e3febeba3b00125",
+    "Mapping.cc.o": "ec163c27d3cf5896521b4d9a0f7f3f824afcb195c503dbfc1c76d554537da342",
+    "Execution.cc.o": "380f6d33850057157b58dd53e1edabcf6e8fec246e4fca48f5aa031f0e9dffb0"
+  },
+  "new_archive_sha256": "746256548bbcb513a82159c9b76ad6c4693b834c63a84c6ed10650c8ba44e714",
+  "new_cabi_sha256": "fd13b75f728503202b231b69706833632fe9670bfac65dbadd0bc4402e6ea9cd",
+  "unchanged_capi_object_sha256": "59fba0368d81d2c46b2d8f4adf70b1fbdc51a2b5d9b41309e2bab9c5a0f804f3",
+  "commands": [
+    {
+      "command": [
+        "ar",
+        "d",
+        "/workspace/template/work/core-resume/work/core-perf-row-lab/build/libcoarse_die.a",
+        "Execution.cc.o"
+      ],
+      "return_code": 0,
+      "started_unix": 1792156044.9044943,
+      "finished_unix": 1792156044.9194295
+    },
+    {
+      "command": [
+        "ar",
+        "r",
+        "/workspace/template/work/core-resume/work/core-perf-row-lab/build/libcoarse_die.a",
+        "/workspace/template/work/core-resume/work/core-perf-row-lab/build/Execution.cc.o"
+      ],
+      "return_code": 0,
+      "started_unix": 1792156044.9194345,
+      "finished_unix": 1792156044.9402378
+    },
+    {
+      "command": [
+        "/usr/bin/g++",
+        "-fPIC",
+        "-O3",
+        "-DNDEBUG",
+        "-shared",
+        "-Wl,-soname,libcoarse_die_cabi.so",
+        "-o",
+        "/workspace/template/work/core-resume/work/core-perf-row-lab/build/lib/libcoarse_die_cabi.so",
+        "/workspace/template/work/core-resume/work/core-perf-lab/build/CMakeFiles/coarse_die_cabi.dir/src/Capi.cc.o",
+        "/workspace/template/work/core-resume/work/core-perf-row-lab/build/libcoarse_die.a"
+      ],
+      "return_code": 0,
+      "started_unix": 1792156044.9402423,
+      "finished_unix": 1792156045.4287314
+    }
+  ]
+}

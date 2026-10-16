@@ -1,0 +1,243 @@
+{
+  "status": "partial_migration_validation_not_engineering_acceptance",
+  "provenance": {
+    "public_release_source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+    "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+    "coarse_cabi_all_five_sha256": "8030d49d518f84f7657882a3e888ab70504148a263268cd543f0ed53bb5a3de6",
+    "legacy_cabi_four_sha256": "d0c297e507a266a004e0e430266032e6948ee48a594ee21485f7ee99663516b7",
+    "legacy_cabi_joint_sha256": "7d362078ddfe342616853a5c158987d63c2c3de7a975eea2d3b9b633cb247033",
+    "later_public_candidates": "not rebuilt/accepted by these frozen-source SDK records"
+  },
+  "five_repositories": [
+    {
+      "repo": "astra-sim-face",
+      "fresh_sdk_libraries": {
+        "coarse": "built",
+        "legacy": "built"
+      },
+      "configuration_tests": {
+        "total": 21,
+        "passed": 21,
+        "failed": 0,
+        "skipped": 0
+      },
+      "frozen_python_consumers": {
+        "total": 86,
+        "passed": 85,
+        "failed": 1,
+        "skipped": 0,
+        "runner_status": "failed",
+        "identity": "sdk-python-face-initial/astra-sim-face-python-consumers/identity.json",
+        "identity_sha256": "a09289f69d36275865972b5aa26bac381c9bb421dc2dc6d2d3c2b5d7ff8c8287",
+        "log_sha256": "ab1f5c9e06db0c19ce54f8eb62e2a2945f4e779cd6bd6584e16b1ce326bb8f0a"
+      },
+      "native_cpp": {
+        "total": 4,
+        "passed": 3,
+        "failed": 1,
+        "skipped": 0
+      },
+      "actual_hardware_consumer": "passed original typed resolver probe",
+      "python_fixture_correction": {
+        "total": 86,
+        "passed": 86,
+        "failed": 0,
+        "skipped": 0,
+        "identity": "face-fixture-correction/identity.json",
+        "identity_sha256": "1cd3baf0b22ef640dcc90941e536c789b2de56ff9dc92a4807d76ad74cd46929",
+        "scope": "independent copy; only test_face_scheduler.py changes obsolete 6197ns hardware pin to 6192ns, independently decomposed real ABI result; frozen original 85/86 failure remains recorded",
+        "original_fixture_sha256": "7e33376418c083a6211cece835f897a6aab318a0aa250e39b4336137ca2e2df1",
+        "corrected_fixture_sha256": "37aadf67890f0dff005f65b582701621844600d5c3b765ff2d4887d875a0ae4f"
+      }
+    },
+    {
+      "repo": "astra-sim-face-LRU",
+      "fresh_sdk_libraries": {
+        "coarse": "built",
+        "legacy": "built"
+      },
+      "configuration_tests": {
+        "total": 20,
+        "passed": 20,
+        "failed": 0,
+        "skipped": 0
+      },
+      "frozen_python_consumers": {
+        "total": 80,
+        "passed": 80,
+        "failed": 0,
+        "skipped": 0,
+        "runner_status": "passed",
+        "identity": "sdk-python-three/astra-sim-face-LRU-python-consumers/identity.json",
+        "identity_sha256": "dfae65d90f31b46a008fc41cc8adbe953400860d1e7834fba7c1b175f0350368",
+        "log_sha256": "b1ec4752d6fa1dc764a3c9003eaace22346c3a669be826a126107cad2f4cf744"
+      },
+      "native_cpp": {
+        "total": 4,
+        "passed": 3,
+        "failed": 1,
+        "skipped": 0
+      },
+      "actual_hardware_consumer": "passed original typed resolver probe"
+    },
+    {
+      "repo": "astra-sim-wscllm",
+      "fresh_sdk_libraries": {
+        "coarse": "built",
+        "legacy": "built"
+      },
+      "configuration_tests": {
+        "total": 23,
+        "passed": 23,
+        "failed": 0,
+        "skipped": 0
+      },
+      "frozen_python_consumers": {
+        "total": 64,
+        "passed": 64,
+        "failed": 0,
+        "skipped": 0,
+        "runner_status": "passed",
+        "identity": "sdk-python-three/astra-sim-wscllm-python-consumers/identity.json",
+        "identity_sha256": "2140f79f84ec2113119c88f34ba0a8463a8873f7b29cafef83fa60538f5ecbd6",
+        "log_sha256": "e8e56892b19a9a76fd1708fa59fe7520067890fa91b066d0d858078a4d1bdc25"
+      },
+      "native_cpp": {
+        "total": 4,
+        "passed": 3,
+        "failed": 1,
+        "skipped": 0
+      },
+      "actual_hardware_consumer": "passed original typed resolver probe"
+    },
+    {
+      "repo": "astra-sim-wscllm-LRU",
+      "fresh_sdk_libraries": {
+        "coarse": "built",
+        "legacy": "built"
+      },
+      "configuration_tests": {
+        "total": 18,
+        "passed": 18,
+        "failed": 0,
+        "skipped": 0
+      },
+      "frozen_python_consumers": {
+        "total": 63,
+        "passed": 62,
+        "failed": 0,
+        "skipped": 1,
+        "runner_status": "failed",
+        "identity": "sdk-python-three/astra-sim-wscllm-LRU-python-consumers/identity.json",
+        "identity_sha256": "38ee562264e0464b8f93856a3add781d50d89945b0fd63ab256ae6298c43c38e",
+        "log_sha256": "51d75296e7b112ad7b6321825e7d4e11d2412527b88b54360bd0fb8dd5ffd496"
+      },
+      "native_cpp": {
+        "total": 4,
+        "passed": 3,
+        "failed": 1,
+        "skipped": 0
+      },
+      "actual_hardware_consumer": "passed original typed resolver probe",
+      "optional_skip": "test_spec_json_round_trip_through_cost_library skips because original WSLRU has no Python oracle client; runner zero-skip criterion remains failed",
+      "separate_producer_protocol_bridge": {
+        "identity": "wslru-producer/wslru-existing-producer-formal-v3/result.json",
+        "scope": "actual WSLRU _make_context/build_die_spec, existing FACE ctypes client, fresh WSLRU dual ABI; original five operations R4 legacy roundtrip passes; separate coarse R1 valid, unchanged R4 returns not_available and full/cost/estimate_one reject; no new production client and no retroactive skip pass"
+      }
+    },
+    {
+      "repo": "astra-sim-joint",
+      "fresh_sdk_libraries": {
+        "coarse": "built",
+        "legacy": "built"
+      },
+      "configuration_tests": {
+        "total": 16,
+        "passed": 16,
+        "failed": 0,
+        "skipped": 0
+      },
+      "frozen_python_consumers": {
+        "total": 92,
+        "passed": 92,
+        "failed": 0,
+        "skipped": 0,
+        "runner_status": "passed",
+        "identity": "sdk-python-joint/astra-sim-joint-python-consumers/identity.json",
+        "identity_sha256": "8f8256f254f36243762e4fa8513cb0da45b46ed4f5dcd9bff6fd8afe4d4b112f",
+        "log_sha256": "7f587fde07b63450357930c82afb31bb133d425039361bc44d565bfae37d27ee"
+      },
+      "native_cpp": {
+        "total": 10,
+        "passed": 10,
+        "failed": 0,
+        "skipped": 0
+      },
+      "actual_hardware_consumer": "passed; JOINT uses actual online.die_model_oracle entry",
+      "native_python": {
+        "total": 6,
+        "passed": 6,
+        "failed": 0,
+        "skipped": 0,
+        "scope": "real projection wire/C ABI/native parity, cancellation and snapshot round trip"
+      },
+      "selected_current_isolated_test_count": 124,
+      "selected_current_isolated_test_count_definition": "configuration16 + actual Python consumer92 + native C++10 + native Python6; all selected suites pass; ABI builds and separate hardware probe not counted as test cases; no full business/performance acceptance"
+    }
+  ],
+  "totals": {
+    "fresh_shared_libraries": 10,
+    "config_tests": {
+      "total": 98,
+      "passed": 98,
+      "failed": 0,
+      "skipped": 0
+    },
+    "frozen_python_suite_counts": {
+      "total": 385,
+      "passed": 383,
+      "failed": 1,
+      "skipped": 1
+    },
+    "python_with_independent_face_test_fixture_correction": {
+      "total": 385,
+      "passed": 384,
+      "failed": 0,
+      "skipped": 1,
+      "warning": "distinct FACE test fixture source identity; original frozen failure retained; WSLRU runner remains failed due skip"
+    },
+    "native_cpp": {
+      "total": 26,
+      "passed": 22,
+      "failed": 4,
+      "skipped": 0
+    },
+    "joint_native_python": {
+      "total": 6,
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0
+    },
+    "selected_count_warning": "counts describe named test invocations/suites; no claim of unique assertion count or full business coverage"
+  },
+  "known_failures": [
+    "four unchanged R4 DieExecutionLifecycleTest aborts at complete-prediction availability guard",
+    "original FACE Python numeric pin expected obsolete6197 versus actual6192; separate test-fixture copy corrected and86/86 passed",
+    "original WSLRU optional consumer remains1skip and runner failed",
+    "original JOINT generic typed helper wrong authoring entry remains failed in sdk-abi; separately actual online hardware consumer passed"
+  ],
+  "formal_sdk": {
+    "state": "canonical24 unchanged; no publication",
+    "actual_files_per_sdk": 24,
+    "digest": "23160c512203596611d5c534104f5dd2015be2ef75a2665c88ffe1cfddcc7e9b",
+    "evidence": "integration-audit/scope-audit.json"
+  },
+  "limits": [
+    "no astra-sim-joint_old restoration",
+    "full Online business not accepted",
+    "five original end-to-end CPU budgets not accepted by this matrix",
+    "normal30 public performance failed in separate evidence; no SDK performance claim",
+    "no independent target-hardware measured calibration",
+    "R4 availability and original busy/correctness requirements unchanged"
+  ]
+}

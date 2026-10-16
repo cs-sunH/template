@@ -1,0 +1,40 @@
+{
+  "astra-sim-wscllm": {
+    "source_path": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc",
+    "source_sha256": "e40e15149987463f35d2c7438dc98d2dd650e54ebe474afdf0dd03d8ebdbb4db",
+    "excerpts": [
+      {
+        "line": 287,
+        "text": "    }\n  ],\n  \"layer_count\": 2,\n  \"weight_passes\": 2,\n  \"kv_access\": {\"identity\": \"local\"},"
+      },
+      {
+        "line": 288,
+        "text": "  ],\n  \"layer_count\": 2,\n  \"weight_passes\": 2,\n  \"kv_access\": {\"identity\": \"local\"},\n  \"fusion_policy\": \"auto\","
+      },
+      {
+        "line": 585,
+        "text": "                    stored->compute.die_spec->op_kind ==\n                        DieModel::OpKind::FfnRegion,\n                \"O: real ParsedGraphBatch retains raw old FFN task and parsed legacy diagnostic\");\n\n    install_workspace_snapshot("
+      }
+    ],
+    "result": "original FFN fixture layer_count=2 weight_passes=2 => R4; legacy diagnostic raw task preservation assertion passes then complete coarse prediction availability guard throws. Later assertions are not reached; suite remains failed."
+  },
+  "astra-sim-wscllm-LRU": {
+    "source_path": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc",
+    "source_sha256": "840a2d767d56e4192fb15fb6cddd14f7bf2d0e34e92071b12c5347309b6810b2",
+    "excerpts": [
+      {
+        "line": 359,
+        "text": "    }\n  ],\n  \"layer_count\": 2,\n  \"weight_passes\": 2,\n  \"kv_access\": {\"identity\": \"local\"},"
+      },
+      {
+        "line": 360,
+        "text": "  ],\n  \"layer_count\": 2,\n  \"weight_passes\": 2,\n  \"kv_access\": {\"identity\": \"local\"},\n  \"fusion_policy\": \"auto\","
+      },
+      {
+        "line": 709,
+        "text": "                    stored->compute.die_spec->op_kind ==\n                        DieModel::OpKind::FfnRegion,\n                \"O: real ParsedGraphBatch retains raw old FFN task and parsed legacy diagnostic\");\n\n    install_workspace_snapshot("
+      }
+    ],
+    "result": "original FFN fixture layer_count=2 weight_passes=2 => R4; legacy diagnostic raw task preservation assertion passes then complete coarse prediction availability guard throws. Later assertions are not reached; suite remains failed."
+  }
+}

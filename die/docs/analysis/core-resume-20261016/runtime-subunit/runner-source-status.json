@@ -1,0 +1,51 @@
+{
+  "baseline_compile_run_wrapper": {
+    "status": "not_preserved",
+    "description": "Python heredoc wrapper not saved; exact build/run argument arrays, source/library identities, return codes and logs retained in baseline identity.json"
+  },
+  "synchronous_compile_run_wrapper": {
+    "status": "not_preserved",
+    "description": "Python heredoc wrapper not saved; full actual arguments and identities in sync-identity.json"
+  },
+  "initial_public_relink_runner": {
+    "status": "not_preserved",
+    "executed_sha256": "dfc9ec918ac5d6dcc522ab25599b59c680714b2493d45f23ab643a41a7a63b21",
+    "description": "Executed version was changed after missing-ctest error; not reconstructed. Corrected archived run_public_relinked.py is future-only relative to that completed run."
+  },
+  "public_ctest_resume_and_extra_wrapper": {
+    "status": "not_preserved",
+    "description": "Actual Python heredoc wrapper not saved; exact subprocess commands and return codes in public-relinked-identity.json"
+  },
+  "focused_runner": {
+    "status": "preserved",
+    "path": "runners/run_focused.py",
+    "qualification": "Current source copy preserved; no runner SHA recorded at historical execution start"
+  },
+  "coupled_attempt_1": {
+    "status": "preserved",
+    "path": "coupled-attempt-1/run_coupled.py",
+    "qualification": "Executed SHA bound in that attempt identity"
+  },
+  "current_coupled_baseline_asymmetric": {
+    "status": "preserved",
+    "paths": [
+      "runners/run_coupled.py",
+      "runners/run_baseline_coupled.py",
+      "runners/run_asymmetric.py"
+    ],
+    "qualification": "Each actual runner SHA recorded by its execution identity"
+  },
+  "layered_attempt_1": {
+    "status": "preserved",
+    "path": "layered-attempt-1/assess_coupled.py"
+  },
+  "current_layered_and_summaries": {
+    "status": "preserved",
+    "paths": [
+      "runners/assess_coupled.py",
+      "runners/summarize_coupled.py",
+      "runners/compare_coupled_baseline.py"
+    ],
+    "qualification": "Each output records executed runner SHA; no candidate build or budget performed"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "label": "astra-sim-joint-native-python",
+  "command": [
+    "/workspace/cloud-setup/venv/bin/python3",
+    "-B",
+    "-m",
+    "unittest",
+    "joint.test_native_coarse_projection",
+    "-v"
+  ],
+  "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+  "environment": {
+    "PYTHONDONTWRITEBYTECODE": "1",
+    "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+    "NATIVE_COARSE_PROJECTION_LIBRARY": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint/lib/libjoint_projection.so",
+    "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint/lib/libcoarse_die_cabi.so",
+    "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint/lib/libdie_model_cabi.so"
+  },
+  "expected": [
+    "unittest_nonempty",
+    null
+  ],
+  "requires": [
+    "astra-sim-joint-native-build"
+  ],
+  "new_build": false,
+  "state": "process_launched",
+  "started_unix": 1792156850.7393408,
+  "runner_pid": 18480,
+  "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+  "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+  "runner_sha256": "c111dfe39f94b88bb396aeccfb0be51adf0666af1abfe68031430997a4872e7f",
+  "support_sha256": "29dbbea50ce1c82b263d69b8aa0a227909267d491341a079a284fd0262f3377c",
+  "tool_inputs_sha256": {},
+  "artifacts_before": {
+    "build_root": "/workspace/template/work/core-resume/-m",
+    "targets": {}
+  },
+  "resume_decision": {
+    "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-joint-native-python",
+    "identity_present": false,
+    "started_present": false,
+    "log_present": false,
+    "retain": false,
+    "reason": "incomplete_no_final_identity",
+    "prior_log_sha256": null,
+    "prior_started_sha256": null
+  },
+  "child_pid": 30628
+}

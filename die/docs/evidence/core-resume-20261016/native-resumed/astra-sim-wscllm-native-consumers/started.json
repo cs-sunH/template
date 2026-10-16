@@ -1,0 +1,109 @@
+{
+  "label": "astra-sim-wscllm-native-consumers",
+  "command": [
+    "/workspace/cloud-setup/venv/bin/ctest",
+    "--test-dir",
+    "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm",
+    "--output-on-failure",
+    "-R",
+    "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_WorkspaceAdmissionTest)$"
+  ],
+  "cwd": "/workspace/template/work/core-resume",
+  "environment": {},
+  "expected": [
+    "ctest",
+    4
+  ],
+  "requires": [
+    "astra-sim-wscllm-native-build"
+  ],
+  "new_build": false,
+  "state": "process_launched",
+  "started_unix": 1792155042.9593015,
+  "runner_pid": 18480,
+  "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+  "snapshot_manifest_sha256": "3cad402edce1ebfc9050feb7fcf835b3bbcd9ee900492ee53067f4d5070ea9b4",
+  "runner_sha256": "c111dfe39f94b88bb396aeccfb0be51adf0666af1abfe68031430997a4872e7f",
+  "support_sha256": "29dbbea50ce1c82b263d69b8aa0a227909267d491341a079a284fd0262f3377c",
+  "tool_inputs_sha256": {},
+  "artifacts_before": {
+    "build_root": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm",
+    "targets": {
+      "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": {
+        "files": {
+          "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest": {
+            "exists": true,
+            "sha256": "c78983de7e012a686be5569e854fbc8c7aa21c71f026e316abc56ce924e49b60",
+            "bytes": 4929264
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.dir/link.txt",
+            "sha256": "a26d889f2f1a83ab67ef5e5c7e59190c2a97541ce5cb2be8fdbfbcb9bf0d712f"
+          }
+        ],
+        "resolution": "resolved"
+      },
+      "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": {
+        "files": {
+          "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest": {
+            "exists": true,
+            "sha256": "e8db877e96f862aa66e276096e5160831ffec3b76e57a9079c39bae254b6f506",
+            "bytes": 4751616
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest.dir/link.txt",
+            "sha256": "a47ccd4217a6d0be213e842d513602b81b1e5447a704d4117b10181d00ca9071"
+          }
+        ],
+        "resolution": "resolved"
+      },
+      "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": {
+        "files": {
+          "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest": {
+            "exists": true,
+            "sha256": "32b10b1ce2705d86a48aa2f77bc016177e65354d9693a6771ae87fe3cdbdc1dd",
+            "bytes": 4738792
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/frontend/CMakeFiles/AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest.dir/link.txt",
+            "sha256": "b566d9f9de6a7a3240dc6a64bcb58f84544fd659b21454bbe46c885e4795af6c"
+          }
+        ],
+        "resolution": "resolved"
+      },
+      "AstraSim_Analytical_WorkspaceAdmissionTest": {
+        "files": {
+          "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/bin/AstraSim_Analytical_WorkspaceAdmissionTest": {
+            "exists": true,
+            "sha256": "7a08ed66902db3e00e1e1cfdabe0de2b5e8c9d72dd5ed86f97d89a7fcfa5dfbd",
+            "bytes": 32728
+          }
+        },
+        "link_metadata": [
+          {
+            "path": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/frontend/CMakeFiles/AstraSim_Analytical_WorkspaceAdmissionTest.dir/link.txt",
+            "sha256": "47fdce7ad463ca89df25ab252bcee73be241a7f99a47c414d8ffde1b0cf7e293"
+          }
+        ],
+        "resolution": "resolved"
+      }
+    }
+  },
+  "resume_decision": {
+    "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-wscllm-native-consumers",
+    "identity_present": false,
+    "started_present": false,
+    "log_present": false,
+    "retain": false,
+    "reason": "incomplete_no_final_identity",
+    "prior_log_sha256": null,
+    "prior_started_sha256": null
+  },
+  "child_pid": 18977
+}

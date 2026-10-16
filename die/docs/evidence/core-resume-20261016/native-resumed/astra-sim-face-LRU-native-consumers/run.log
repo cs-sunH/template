@@ -1,0 +1,23 @@
+Internal ctest changing into directory: /workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face-LRU
+Test project /workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face-LRU
+    Start 12: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest
+1/4 Test #12: AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest .........   Passed    0.02 sec
+    Start 14: AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest
+2/4 Test #14: AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest ......   Passed    0.00 sec
+    Start 18: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
+3/4 Test #18: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...Subprocess aborted***Exception:   0.01 sec
+J: fixture retains the actual emitted FACE FFN task and source provenance -> PASS
+J: real v2 parser preserves raw FFN JSON and diagnostic DieSpec          -> PASS
+terminate called after throwing an instance of 'std::invalid_argument'
+  what():  prediction_not_available: prediction_status marks body-only timing; a complete latency prediction is required
+
+    Start 19: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest
+4/4 Test #19: AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest .......   Passed    0.01 sec
+
+75% tests passed, 1 tests failed out of 4
+
+Total Test time (real) =   0.05 sec
+
+The following tests FAILED:
+	 18 - AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest (Subprocess aborted)
+Errors while running CTest

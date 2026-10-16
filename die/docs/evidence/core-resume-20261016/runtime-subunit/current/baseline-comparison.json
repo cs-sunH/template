@@ -1,0 +1,780 @@
+{
+  "scope": "physical fields only, exact baseline/candidate JSON comparison; differences are observations, not waivers",
+  "runner_sha256": "2cf9747efd84611e567c144c7aa1f34a2b128acd549e6b805c04f150bd426f7d",
+  "cases": [
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": 0,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": 0,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": 0,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 1,
+      "unit_exponent": 0,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": 0,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": 0,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": 0,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 2,
+      "unit_exponent": 0,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter"
+      ],
+      "different_samples": [],
+      "missing_in_either": [
+        "cancel",
+        "completion"
+      ],
+      "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+      "candidate_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01"
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": 0,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": 0,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": 0,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 8,
+      "unit_exponent": 0,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter"
+      ],
+      "different_samples": [],
+      "missing_in_either": [
+        "cancel",
+        "completion"
+      ],
+      "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+      "candidate_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01"
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": 0,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": 0,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": 0,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 32,
+      "unit_exponent": 0,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": -10,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": -10,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": -10,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 1,
+      "unit_exponent": -10,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": -10,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": -10,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": -10,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 2,
+      "unit_exponent": -10,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter"
+      ],
+      "different_samples": [],
+      "missing_in_either": [
+        "cancel",
+        "completion"
+      ],
+      "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+      "candidate_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01"
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": -10,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": -10,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": -10,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 8,
+      "unit_exponent": -10,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter"
+      ],
+      "different_samples": [],
+      "missing_in_either": [
+        "cancel",
+        "completion"
+      ],
+      "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+      "candidate_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01"
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": -10,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": -10,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": -10,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 32,
+      "unit_exponent": -10,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": -60,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": -60,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 1,
+      "unit_exponent": -60,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 1,
+      "unit_exponent": -60,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [],
+      "different_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": -60,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": -60,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 2,
+      "unit_exponent": -60,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 2,
+      "unit_exponent": -60,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [],
+      "different_samples": [
+        "initial",
+        "quarter"
+      ],
+      "missing_in_either": [
+        "cancel",
+        "completion"
+      ],
+      "baseline_error": null,
+      "candidate_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01"
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": -60,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": -60,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 8,
+      "unit_exponent": -60,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 8,
+      "unit_exponent": -60,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [],
+      "different_samples": [
+        "initial",
+        "quarter"
+      ],
+      "missing_in_either": [
+        "cancel",
+        "completion"
+      ],
+      "baseline_error": null,
+      "candidate_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01"
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": -60,
+      "boundary": "empty",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": -60,
+      "boundary": "full",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "coupled",
+      "owners": 32,
+      "unit_exponent": -60,
+      "boundary": "interior",
+      "exactly_equal_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "different_samples": [],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    },
+    {
+      "family": "same_owner_split",
+      "owners": 32,
+      "unit_exponent": -60,
+      "boundary": "declared_separate_inventories",
+      "exactly_equal_samples": [],
+      "different_samples": [
+        "initial",
+        "quarter",
+        "cancel",
+        "completion"
+      ],
+      "missing_in_either": [],
+      "baseline_error": null,
+      "candidate_error": null
+    }
+  ]
+}

@@ -1,0 +1,606 @@
+{
+  "scope": "dry_run_only",
+  "snapshot_status": "frozen_manifest_found",
+  "source_digest": "2e3e7e2628b7b02785328c0fb212d9332121c265d8a2f1c6fc4f06b2f4ff30f5",
+  "commands": [
+    {
+      "label": "astra-sim-face-native-configure",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-face",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-face-native-build",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest",
+        "coarse_die_cabi",
+        "die_model_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-face-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-native-consumers",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        4
+      ],
+      "requires": [
+        "astra-sim-face-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-native-configure",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face-LRU",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-face-LRU",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-face-LRU-native-build",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face-LRU",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest",
+        "coarse_die_cabi",
+        "die_model_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-face-LRU-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-face-LRU-native-consumers",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face-LRU",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_Congestion_Aware_WorkspaceAdmissionTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        4
+      ],
+      "requires": [
+        "astra-sim-face-LRU-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-native-configure",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-wscllm-native-build",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "AstraSim_Analytical_WorkspaceAdmissionTest",
+        "coarse_die_cabi",
+        "die_model_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-wscllm-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-native-consumers",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_WorkspaceAdmissionTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        4
+      ],
+      "requires": [
+        "astra-sim-wscllm-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-configure",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm-LRU",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm-LRU",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-build",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm-LRU",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "AstraSim_Analytical_WorkspaceAdmissionTest",
+        "coarse_die_cabi",
+        "die_model_cabi"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-wscllm-LRU-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-wscllm-LRU-native-consumers",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm-LRU",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|AstraSim_Analytical_WorkspaceAdmissionTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        4
+      ],
+      "requires": [
+        "astra-sim-wscllm-LRU-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-native-configure",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "-S",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/aggregate",
+        "-B",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint",
+        "-G",
+        "Unix Makefiles",
+        "-DASTRA_SIM_ROOT=/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint",
+        "-DBUILDTARGET=congestion_aware",
+        "-DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON",
+        "-DCMAKE_CXX_COMPILER=/usr/bin/g++",
+        "-DCMAKE_BUILD_TYPE=Release"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [],
+      "new_build": true
+    },
+    {
+      "label": "astra-sim-joint-native-build",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/cmake",
+        "--build",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint",
+        "--parallel",
+        "2",
+        "--target",
+        "AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest",
+        "AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest",
+        "AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest",
+        "JointPipelineWindowTest",
+        "NativeProjectionCApiTest",
+        "NativeCoarseProjectionTest",
+        "NativeCoarseDieDomainTest",
+        "AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest",
+        "AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest",
+        "JointPipelineMutationTest",
+        "coarse_die_cabi",
+        "die_model_cabi",
+        "joint_projection"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": null,
+      "requires": [
+        "astra-sim-joint-native-configure"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-native-consumers",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/ctest",
+        "--test-dir",
+        "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint",
+        "--output-on-failure",
+        "-R",
+        "^(AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest|AstraSim_Analytical_Congestion_Aware_DieModelAdapterTest|AstraSim_Analytical_Congestion_Aware_LocalHbmDieMemoryTest|JointPipelineWindowTest|NativeProjectionCApiTest|NativeCoarseProjectionTest|NativeCoarseDieDomainTest|AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest|AstraSim_Analytical_Congestion_Aware_HbmTailComponentTest|JointPipelineMutationTest)$"
+      ],
+      "cwd": "/workspace/template/work/core-resume",
+      "environment": {},
+      "expected": [
+        "ctest",
+        10
+      ],
+      "requires": [
+        "astra-sim-joint-native-build"
+      ],
+      "new_build": false
+    },
+    {
+      "label": "astra-sim-joint-native-python",
+      "command": [
+        "/workspace/cloud-setup/venv/bin/python3",
+        "-B",
+        "-m",
+        "unittest",
+        "joint.test_native_coarse_projection",
+        "-v"
+      ],
+      "cwd": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+      "environment": {
+        "PYTHONDONTWRITEBYTECODE": "1",
+        "PYTHONPATH": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference",
+        "NATIVE_COARSE_PROJECTION_LIBRARY": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint/lib/libjoint_projection.so",
+        "DIE_COARSE_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint/lib/libcoarse_die_cabi.so",
+        "DIE_MODEL_CABI_PATH": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-joint/lib/libdie_model_cabi.so"
+      },
+      "expected": [
+        "unittest_nonempty",
+        null
+      ],
+      "requires": [
+        "astra-sim-joint-native-build"
+      ],
+      "new_build": false
+    }
+  ],
+  "resume_from": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native",
+  "resume_decisions": {
+    "astra-sim-face-native-configure": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-face-native-configure",
+      "identity_present": true,
+      "started_present": false,
+      "log_present": true,
+      "cache_validation": {
+        "valid": true,
+        "path": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face/CMakeCache.txt",
+        "sha256": "f64a0045ec4571bab5bf60c3815eef7da7c036faa2e6300eee84c2530d2ff3eb",
+        "expected_configuration": {
+          "CMAKE_HOME_DIRECTORY": "/workspace/template/work/core-resume/work/core-resume-sdk/aggregate",
+          "CMAKE_GENERATOR": "Unix Makefiles",
+          "ASTRA_SIM_ROOT": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-face",
+          "BUILDTARGET": "congestion_aware",
+          "NETWORK_BACKEND_BUILD_AS_LIBRARY": "ON",
+          "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+          "CMAKE_BUILD_TYPE": "Release"
+        },
+        "mismatches": {}
+      },
+      "retain": true,
+      "reason": "matched",
+      "mismatches": [],
+      "original_status": "passed",
+      "original_identity_sha256": "bfd7b2bab2291494b5a612104edcb581d20ba9d74a7f3fef80eb76c376d2c199",
+      "original_runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "original_log_sha256": "fb4f274b45ed33101fd223aa904beee819850f53bfd0d3314522e05bdf284383"
+    },
+    "astra-sim-face-native-build": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-face-native-build",
+      "identity_present": true,
+      "started_present": false,
+      "log_present": true,
+      "retain": true,
+      "reason": "matched",
+      "mismatches": [],
+      "original_status": "passed",
+      "original_identity_sha256": "f2cd47d8f3453b0c792a69828a28e3823f87f72186820809952ad72d898b122a",
+      "original_runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "original_log_sha256": "e36233291a99055abc2e7664879523e39aee51d6c5de36efd3a4c7292f0655da"
+    },
+    "astra-sim-face-native-consumers": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-face-native-consumers",
+      "identity_present": true,
+      "started_present": false,
+      "log_present": true,
+      "retain": true,
+      "reason": "matched",
+      "mismatches": [],
+      "original_status": "failed",
+      "original_identity_sha256": "9d32509e695dd08bcedcce357aa08f388dd71205b97f434ca9a73cdc2d563489",
+      "original_runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "original_log_sha256": "51a075949c022a90581290410382688352a9000d375ffdf0276c054d6832406b"
+    },
+    "astra-sim-face-LRU-native-configure": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-face-LRU-native-configure",
+      "identity_present": true,
+      "started_present": false,
+      "log_present": true,
+      "cache_validation": {
+        "valid": true,
+        "path": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-face-LRU/CMakeCache.txt",
+        "sha256": "c146e45b7160eff769ca867d82eadd62a118217d573392b7af89f2d0dd3cc282",
+        "expected_configuration": {
+          "CMAKE_HOME_DIRECTORY": "/workspace/template/work/core-resume/work/core-resume-sdk/aggregate",
+          "CMAKE_GENERATOR": "Unix Makefiles",
+          "ASTRA_SIM_ROOT": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-face-LRU",
+          "BUILDTARGET": "congestion_aware",
+          "NETWORK_BACKEND_BUILD_AS_LIBRARY": "ON",
+          "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+          "CMAKE_BUILD_TYPE": "Release"
+        },
+        "mismatches": {}
+      },
+      "retain": true,
+      "reason": "matched",
+      "mismatches": [],
+      "original_status": "passed",
+      "original_identity_sha256": "f70f6a9e5b23d4aaf4f4b95714657b7e835f07b2d87fd470b95251065b1a6bc4",
+      "original_runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "original_log_sha256": "5d6c02edfd339a46c09b2f3c9f7994d11bd780ef78e2054bbe8932be502a994f"
+    },
+    "astra-sim-face-LRU-native-build": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-face-LRU-native-build",
+      "identity_present": true,
+      "started_present": false,
+      "log_present": true,
+      "retain": true,
+      "reason": "matched",
+      "mismatches": [],
+      "original_status": "passed",
+      "original_identity_sha256": "28968264ff4826a5e5da3493dcb81e1e8df317a34736e083f5e5365d288ddbf7",
+      "original_runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "original_log_sha256": "9b4244ae41386cb3917d0a4a55cec30139959b4861eb4ce1b7dda05139ca723e"
+    },
+    "astra-sim-face-LRU-native-consumers": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-face-LRU-native-consumers",
+      "identity_present": true,
+      "started_present": false,
+      "log_present": true,
+      "retain": true,
+      "reason": "matched",
+      "mismatches": [],
+      "original_status": "failed",
+      "original_identity_sha256": "3e607187775836cd2a26805843e632013a120e5f62ee44f044176bb7a2f92a3e",
+      "original_runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "original_log_sha256": "1e2ac9e4f2982ac869c99b2b565ca6510a8ed329088b25ab4be06dbf10583f0f"
+    },
+    "astra-sim-wscllm-native-configure": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-wscllm-native-configure",
+      "identity_present": true,
+      "started_present": false,
+      "log_present": true,
+      "cache_validation": {
+        "valid": true,
+        "path": "/workspace/template/work/core-resume/work/core-resume-sdk/build-native/astra-sim-wscllm/CMakeCache.txt",
+        "sha256": "847d5a8c67936d05deb9a63c6be77947dcbe668a7e76fc32f263c07e3807fad1",
+        "expected_configuration": {
+          "CMAKE_HOME_DIRECTORY": "/workspace/template/work/core-resume/work/core-resume-sdk/aggregate",
+          "CMAKE_GENERATOR": "Unix Makefiles",
+          "ASTRA_SIM_ROOT": "/workspace/template/work/core-resume/work/core-resume-sdk/stage-root/astra-sim-wscllm",
+          "BUILDTARGET": "congestion_aware",
+          "NETWORK_BACKEND_BUILD_AS_LIBRARY": "ON",
+          "CMAKE_CXX_COMPILER": "/usr/bin/g++",
+          "CMAKE_BUILD_TYPE": "Release"
+        },
+        "mismatches": {}
+      },
+      "retain": true,
+      "reason": "matched",
+      "mismatches": [],
+      "original_status": "passed",
+      "original_identity_sha256": "a23459c06c0593cc095bdb3594d4baef51153ea8e6653329fd42b8fc4dc25d4e",
+      "original_runner_sha256": "de118d0f67cbe8b4688c1064523ef836f96d134ce5c65963b9c6c9e11c75704b",
+      "original_log_sha256": "36370d8bb618114dd0084849ac4adf9c645dab4fb9c730a30a29136cc023ef91"
+    },
+    "astra-sim-wscllm-native-build": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-wscllm-native-build",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": true,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": "ceea9337478e17a0bbbfb421cf8658c0d671984d1f25ee232e3971e677ebf86c",
+      "prior_started_sha256": null
+    },
+    "astra-sim-wscllm-native-consumers": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-wscllm-native-consumers",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": false,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": null,
+      "prior_started_sha256": null
+    },
+    "astra-sim-wscllm-LRU-native-configure": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-wscllm-LRU-native-configure",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": false,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": null,
+      "prior_started_sha256": null
+    },
+    "astra-sim-wscllm-LRU-native-build": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-wscllm-LRU-native-build",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": false,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": null,
+      "prior_started_sha256": null
+    },
+    "astra-sim-wscllm-LRU-native-consumers": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-wscllm-LRU-native-consumers",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": false,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": null,
+      "prior_started_sha256": null
+    },
+    "astra-sim-joint-native-configure": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-joint-native-configure",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": false,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": null,
+      "prior_started_sha256": null
+    },
+    "astra-sim-joint-native-build": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-joint-native-build",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": false,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": null,
+      "prior_started_sha256": null
+    },
+    "astra-sim-joint-native-consumers": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-joint-native-consumers",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": false,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": null,
+      "prior_started_sha256": null
+    },
+    "astra-sim-joint-native-python": {
+      "source_phase_root": "/workspace/template/work/core-resume/work/core-resume-sdk-validation/native/astra-sim-joint-native-python",
+      "identity_present": false,
+      "started_present": false,
+      "log_present": false,
+      "retain": false,
+      "reason": "incomplete_no_final_identity",
+      "prior_log_sha256": null,
+      "prior_started_sha256": null
+    }
+  },
+  "actual_frozen_source_hash_check": "required_before_execute; dry-run validates manifest/retention identities only"
+}

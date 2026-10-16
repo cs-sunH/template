@@ -1,0 +1,2252 @@
+{
+  "actual_fixture_counts": [
+    2,
+    4,
+    6,
+    8
+  ],
+  "analysis_sha256": {
+    "README.md": "361058a22236457b0ddbce18a27da12f01e5f0055dd1af1dd3f37889512f6fdf",
+    "baseline-audit-report.md": "e7d10e19af27c68f1a42eaa0f81bc919000cfea15ea4ac6ced10373c1f0d68b0",
+    "baseline-audit-tools/certify_saved_allocation.py": "6ed919175808f5576899e63a3bc47cf947463bdb7a19e3f4bebc877b8ea4cbc2",
+    "baseline-audit-tools/count_probe.py": "4c3e1fcac8a0fdff48178ed9182c1e07f8a53e3ec3962dc4260fd2b2846e48c7",
+    "baseline-audit-tools/reproduce.py": "781ccec8fae934bb6b9d640bdbdbbefc636f03727f5ee54c28d87db2e720695e",
+    "baseline-audit-tools/trace_allocation.cc": "b1a3c1b3f8863f2f669d40786b57e9cea60d0a112eff7e25058d120b5a9f59f8",
+    "baseline-audit-tools/trace_allocation_v2.cc": "26c1690ad5e08477b72b87c6ac957a6210f55e094a60662340606e9f210ce469",
+    "candidate/die/include/coarse_die/Execution.hh": "4ae56348aab0f39c6e67ecc28fe157cf6aaffd9478ac107af4b2f1d3003f0d6a",
+    "candidate/die/src/Execution.cc": "81c1152784d2f7a63d6dd6e41c48b72b419c578e4564aa8004ffa10549af8bb4",
+    "certify_supplemental.py": "f3a4e478f25a370107579de727ebae2ce8d5a4c219f328e4b8b62906747cee4a",
+    "fixtures/failed-snapshot.json": "21e3f193ea999720a9e9d1560e8612bda3d3b3b5973a11b381f826d3a06e6935",
+    "fixtures/inputs.json": "1bc088a7a283e4827fcc958ca42564390a65a18ffd378947ac5e02a85bc50a3b",
+    "guards.cc": "24f01a9fb055aa66544657b1860b7ad6a644629411d474885f1e83be43ab99ce",
+    "import-redundant-row-witness.patch": "ab6bcc22538eeecd1ee2a8de4a2bd6d58d423872ce853014ae1a1bd059ec2035",
+    "probe.py": "278a4fb67b0db974d110a1cf81a1c15fea9fa1a003cece506ff5763f241638b6",
+    "run_focused.py": "5a078628d7cadbbad1c59fd31ed171b5f9cea8b71c3550492a3536ee9a7b4cc0",
+    "supplemental-coupled-driver.cc": "dd84ef2076390cecfd0c0b07ed9ff68d46317e00d979e2e1dc13eed639700127",
+    "supplemental-coupled-oracle.py": "aa7bb6051f91e037b255f76c5212a1f72b847dc5940cc526d60f500beec5fb9a"
+  },
+  "candidate_patch_sha256": "ab6bcc22538eeecd1ee2a8de4a2bd6d58d423872ce853014ae1a1bd059ec2035",
+  "controlled_continuation_sample_counts": {
+    "2": 2,
+    "4": 4,
+    "6": 4,
+    "8": 4
+  },
+  "evidence_sha256": {
+    "baseline-audit/allocation-paths-v2.json.gz": "ba5d0a201a42629785256075beef6b73347df118b679a8060afcf4dc3b7134be",
+    "baseline-audit/allocation-paths.json.gz": "3a0e03f468a991b6b05f6720e0429d397947dd2447eeffbff6da63eb8a68ec41",
+    "baseline-audit/allocation-stderr-v2.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-audit/allocation-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-audit/compile-v2.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-audit/compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "baseline-audit/counts.json.gz": "93b262534cdc97c37e5bb4bdd9815be2b82cfaf25c067fbe31dadbb660c59ae9",
+    "baseline-audit/counts.log": "2dbd18f0d5928f28760fab58f1cce60980c286b0aa2993199855fb50e200e312",
+    "baseline-audit/exact-feasibility.json.gz": "16417092b4955dbb59ed4e3e2ddb5cb0811b76acb5ec1a21adb33f97528c5977",
+    "baseline-audit/exact-feasibility.log": "72b2f0a7f9671af77b2c5e47c06a120eba04206eb4b4ca8d9cb62892bd422b82",
+    "baseline-audit/failed-snapshot.json.gz": "9be40c56af4ecb6a632948d5b9598786b2b9ec203db91d0fb017d198dec5018c",
+    "baseline-audit/identity.json.gz": "4f11f0b36ca969d427a2617d60e8a9ecc85be7b5c6bd4dbdfdfd8f963d2374bb",
+    "baseline-audit/inputs.json.gz": "6bf21f008b5e903ac69576370dceed5a27590314b891b2a5f8ec695e8c5a9761",
+    "baseline-audit/result.json.gz": "98302ae1fba0f3c984d5fb7f6c20666b953cba334e0eed933a3546fd79e2cdf2",
+    "baseline-audit/run-v1-library-path-error.log": "7a1c73e3bbd36350bc0b28212779958a3ab0a3846f339c09120d8327562085d8",
+    "baseline-audit/run-v2-active-destroy-error.log": "842aebaa5f8340286fd83028e201c7d91d4371c3958b66557d639bfc5163385c",
+    "baseline-audit/run.log": "d620ee6c432a0594461d64bacec2bfd9e1fa72430e32ba89d16822c45ab2965a",
+    "baseline-audit/supplemental-baseline-coupled-identity.json.gz": "ca0a23f09f381dcb9e5d0dd8ba54dbc59efc6f5b70ba99f98e0dcc49e41cab4f",
+    "baseline-audit/supplemental-baseline-coupled.stdout.log.gz": "3d9c2ea00621aeb5196d352a94b6728e17f28adce195cc69e236c3ff4b3e5b9f",
+    "baseline-audit/trace-rows.json.gz": "c2f94c5a9db6c22b1a288e2f60b5b63a691bbe3891ee598b45fa0cd5cda26abe",
+    "candidate/abi-symbols.json.gz": "2823a7aa8b48dce1b78f350efa7d4901615b89fd64ccf76d8b9855683e30f490",
+    "candidate/compile.log": "8b62b064074a9d86b35ae97498b3df4f66dc34b4e1b40ad3d56964d228ab5b74",
+    "candidate/focused-results.json.gz": "5f990c79d811ef42066b76fc7fdb5c0d059e20d3e6b8be3b7bae5e5a3e9f49b1",
+    "candidate/focused.log": "044423c06e96b272d2e521d659b254437243ba94ab0d4405e2d312ed3b3533d6",
+    "candidate/guards-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/guards-stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/guards.json.gz": "5f22a38ac9590d2da41c3e4095bcd7af3d41a2436c1062d9e670759af262305d",
+    "candidate/link.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/probe-result.json.gz": "5f8b9d43b0a2d90398036d6a46ac9fee7548f36eda0bdcefd7d5650602495a79",
+    "candidate/probe.log": "b843cd7e9067981488b10934804d81b034a40943cc539953f11e871b458f62b3",
+    "candidate/runtime_clock_translation_test-link.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/runtime_clock_translation_test.log": "db4c4556bde969a1c36d98568ea6196828b1d4f2c1e88869b26b39c0cc30998c",
+    "candidate/runtime_counters_test-link.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/runtime_counters_test.log": "b6fe92dce34764c8275c17ffcc0de3b6976deb34de3c18c0a3391dd157434319",
+    "candidate/runtime_owner_symmetry_test-link.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/runtime_owner_symmetry_test.log": "0bc667b2d4afba78475ac968f36fa740802c0eefc90dedc61d5306dab5dba3d0",
+    "candidate/runtime_semantics_test-link.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/runtime_semantics_test.log": "62366cd7a9dee74971a25dbef3d572ee84d4fa7aa19239f5ce70e5be0e97a592",
+    "candidate/service_curve_runtime_test-link.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/service_curve_runtime_test.log": "092514e28642b3ef836d0aecce10445ae5f8c2679181fedac30b4fcba6c77cd1",
+    "candidate/supplemental-certificate-v1-missing-affine-slope.log": "47b3b4cb78cc78e8fba3fe67376003d232d1e386c80f36ecaf78b5f1de6c0596",
+    "candidate/supplemental-certificate-v2-live-finish.log": "f81bea1015b768338d5eef9190fd80a55d28718c225defdd0ef8d667653717e9",
+    "candidate/supplemental-certificate.log": "fcfda603d8ff6b53df25364764bdbb4c725b9af502a1a5c2fbaa25093a1dfb83",
+    "candidate/supplemental-coupled-compile.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/supplemental-coupled-oracle.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/supplemental-coupled-oracle.stdout.log": "cf4bcd23814dab2b3228cdf06a0dad8a6898fd7d31e3cba69a634bd51489b19a",
+    "candidate/supplemental-coupled-results.json.gz": "e358771b357249c42cda7b12b800db287fd579c1287d2258114d74a3ca12b9b0",
+    "candidate/supplemental-coupled.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidate/supplemental-coupled.stdout.log.gz": "72ba59026ee1c3031c02dc1afaef31640b379c53ccd398e4e883115ef6ce1668",
+    "candidate/supplemental-exact-certificate.json.gz": "191e4f26251c6f26b3a94f715574e0a4abe214092ffcd599cb4c0dd1e9551293",
+    "experiment-identity.json": "aa44701d072da59979b51d9bae5eb5c82fb00542ebaa8cfab8750175a05cef6f",
+    "supplemental-coupled-summary.json": "48360400fbe0c39fe94b359b2592eafa558cbae01388eb8538c1ca0f6e98e20b"
+  },
+  "imports_and_forks_exact": true,
+  "malicious_fixture_edits_rejected": 7,
+  "no_hint_owner_row_guards": {
+    "no_hint_feasible_4ulp_low_rejection": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=9.999999999999995559108e-01 rebuilt_rate=1.000000000000000000000e+00 saved_alpha=1.000000000000000000000e+00 rebuilt_alpha=1.000000000000000000000e+00",
+    "no_hint_parent_unchanged": true,
+    "owner_limit_rejection": "invalid_snapshot: redundant-row witness exceeds 32 fair owners",
+    "passed": true,
+    "row_limit_rejection": "invalid_snapshot: redundant-row witness exceeds 64 extra rows"
+  },
+  "ordinary_source_snapshots_equal": true,
+  "original_relinked_tests": [
+    {
+      "binary_sha256": "a8ce588a58b14d86d124a095ed9ce347b2bf246616df8471123fa8430cae1c25",
+      "elapsed_including_link_s": 0.3491188300004069,
+      "exit": 0,
+      "link_command": [
+        "c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_service_curve_runtime_test.dir/tests/service_curve_runtime_test.cc.o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/service_curve_runtime_test"
+      ],
+      "old_object": "work/build-core-release/CMakeFiles/coarse_service_curve_runtime_test.dir/tests/service_curve_runtime_test.cc.o",
+      "old_object_sha256": "a7e3ee0f8e0aab6d0d28f9b7dbb6a29e2854994583aba20a818d098576f87d46",
+      "test": "service_curve_runtime_test"
+    },
+    {
+      "binary_sha256": "5b05536f173a7c1cb7e011f2945d981a4ea05d387f71b14a2624623400cf0e79",
+      "elapsed_including_link_s": 0.546319881999807,
+      "exit": 0,
+      "link_command": [
+        "c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_clock_translation_test.dir/tests/runtime_clock_translation_test.cc.o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/runtime_clock_translation_test"
+      ],
+      "old_object": "work/build-core-release/CMakeFiles/coarse_runtime_clock_translation_test.dir/tests/runtime_clock_translation_test.cc.o",
+      "old_object_sha256": "5db73bd2773ee0c0e48ce0a9f1bcc61041243616ee459cee32cc8e01215a9539",
+      "test": "runtime_clock_translation_test"
+    },
+    {
+      "binary_sha256": "379805e683179e7d5e125a1caaa8287a078cc1d110ef73057ce70bd9c2bc652d",
+      "elapsed_including_link_s": 0.35663493200081575,
+      "exit": 0,
+      "link_command": [
+        "c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_owner_symmetry_test.dir/tests/runtime_owner_symmetry_test.cc.o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/runtime_owner_symmetry_test"
+      ],
+      "old_object": "work/build-core-release/CMakeFiles/coarse_runtime_owner_symmetry_test.dir/tests/runtime_owner_symmetry_test.cc.o",
+      "old_object_sha256": "bd5b6177c1363ec4821b8340088e9982454a2c08640ee790e2b9bf87e9014596",
+      "test": "runtime_owner_symmetry_test"
+    },
+    {
+      "binary_sha256": "1bb91bb9edeb6d469856902d3bb6b931ad1ae699e3139af95dc2a6baac38b8ea",
+      "elapsed_including_link_s": 0.29495862200019474,
+      "exit": 0,
+      "link_command": [
+        "c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_semantics_test.dir/tests/runtime_semantics_test.cc.o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/runtime_semantics_test"
+      ],
+      "old_object": "work/build-core-release/CMakeFiles/coarse_runtime_semantics_test.dir/tests/runtime_semantics_test.cc.o",
+      "old_object_sha256": "31216950c7848f7db85c4c749b0794f9b7adfdac5daff77877584b8123602535",
+      "test": "runtime_semantics_test"
+    },
+    {
+      "binary_sha256": "89421713c1de35c7f7b31fb4e5c4d49323b7d1e730e7b5ac17ac90bd92e4936b",
+      "elapsed_including_link_s": 1.2629335109995736,
+      "exit": 0,
+      "link_command": [
+        "c++",
+        "-O3",
+        "-DNDEBUG",
+        "/workspace/template/work/core-resume/work/build-core-release/CMakeFiles/coarse_runtime_counters_test.dir/tests/runtime_counters_test.cc.o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/libcoarse_die.a",
+        "-o",
+        "/workspace/template/work/core-resume/work/snapshot-lab/runtime_counters_test"
+      ],
+      "old_object": "work/build-core-release/CMakeFiles/coarse_runtime_counters_test.dir/tests/runtime_counters_test.cc.o",
+      "old_object_sha256": "8648f77b7a0799b51126e8dc080d3bef11ce118cf2c5eb5cb76878e436dedc68",
+      "test": "runtime_counters_test"
+    }
+  ],
+  "production_unchanged": true,
+  "scope": "partial scratch import-only repair; no production adoption, final fresh public validation, formal SDK or CPU budget acceptance",
+  "supplemental_coupled": {
+    "commands": {
+      "certificate": "source /workspace/cloud-setup/activate.sh\npython3 -B work/snapshot-lab/certify_supplemental.py work/snapshot-lab/supplemental-coupled.stdout.log work/snapshot-lab/supplemental-exact-certificate.json > work/snapshot-lab/supplemental-certificate.log 2>&1",
+      "compile": "source /workspace/cloud-setup/activate.sh\nc++ -std=c++17 -O3 -DNDEBUG -I die/tests -I work/snapshot-lab/die/include -I astra-sim-wscllm/extern/helper -DCOARSE_DIE_SOURCE_DIR=\"/workspace/template/work/core-resume/die\" -DCOARSE_DIE_ROOT_DIR=\"/workspace/template/work/core-resume\" work/snapshot-lab/supplemental-coupled-driver.cc work/snapshot-lab/libcoarse_die.a -o work/snapshot-lab/supplemental-coupled-driver > work/snapshot-lab/supplemental-coupled-compile.log 2>&1",
+      "oracle": "source /workspace/cloud-setup/activate.sh\npython3 -B work/runtime-lab/coupled_credit_oracle.py work/snapshot-lab/supplemental-coupled.stdout.log work/snapshot-lab/supplemental-coupled-results.json > work/snapshot-lab/supplemental-coupled-oracle.stdout.log 2> work/snapshot-lab/supplemental-coupled-oracle.stderr.log",
+      "run": "work/snapshot-lab/supplemental-coupled-driver > work/snapshot-lab/supplemental-coupled.stdout.log 2> work/snapshot-lab/supplemental-coupled.stderr.log"
+    },
+    "driver_cases": 48,
+    "driver_observed": 48,
+    "driver_source_sha256": "dd84ef2076390cecfd0c0b07ed9ff68d46317e00d979e2e1dc13eed639700127",
+    "oracle_source_sha256": "aa7bb6051f91e037b255f76c5212a1f72b847dc5940cc526d60f500beec5fb9a",
+    "original_baseline_log_sha256": "4df1121c0969cfad09a5668b21664536b287fc03f2c6cf8b4ce30f00e2be4302",
+    "original_driver_source_sha256": "dd84ef2076390cecfd0c0b07ed9ff68d46317e00d979e2e1dc13eed639700127",
+    "scope": "Same immutable synthetic coupled driver linked separately to B-only scratch archive; no tiny-credit candidate combined; old failure evidence unchanged. Snapshot checks and strict Fraction numeric oracle are reported separately.",
+    "scratch_driver_binary_sha256": "073d313000554ae37de28a6dd3f37367d4fab8c8887f72ef841bf7dd823785ac",
+    "scratch_static_library_sha256": "6573ce3f330833b9b7b05d117e05456b9f983e8554281c5dad77ec5cd90316c6",
+    "specific_split_snapshot_cases": [
+      {
+        "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+        "baseline_status": "exception",
+        "candidate_status": "observed",
+        "continuation_snapshot_exact": true,
+        "initial_rate_by_execution": [
+          [
+            0.5000000000000002
+          ],
+          [
+            0.5
+          ],
+          [
+            0.5000000000000002
+          ],
+          [
+            0.49999999999999983
+          ]
+        ],
+        "owners": 2,
+        "snapshot_roundtrip_exact": true,
+        "unit_exponent": 0
+      },
+      {
+        "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+        "baseline_status": "exception",
+        "candidate_status": "observed",
+        "continuation_snapshot_exact": true,
+        "initial_rate_by_execution": [
+          [
+            0.12500000000000022
+          ],
+          [
+            0.125
+          ],
+          [
+            0.12500000000000022
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ]
+        ],
+        "owners": 8,
+        "snapshot_roundtrip_exact": true,
+        "unit_exponent": 0
+      },
+      {
+        "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=5.000000000000002220446e-01 rebuilt_rate=5.000000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+        "baseline_status": "exception",
+        "candidate_status": "observed",
+        "continuation_snapshot_exact": true,
+        "initial_rate_by_execution": [
+          [
+            0.5000000000000002
+          ],
+          [
+            0.5
+          ],
+          [
+            0.5000000000000002
+          ],
+          [
+            0.49999999999999983
+          ]
+        ],
+        "owners": 2,
+        "snapshot_roundtrip_exact": true,
+        "unit_exponent": -10
+      },
+      {
+        "baseline_error": "invalid_snapshot: published activity allocation differs from canonical LP: id=1 saved_rate=1.250000000000002220446e-01 rebuilt_rate=1.250000000000000000000e-01 saved_alpha=3.333333333333333148296e-01 rebuilt_alpha=3.333333333333333148296e-01",
+        "baseline_status": "exception",
+        "candidate_status": "observed",
+        "continuation_snapshot_exact": true,
+        "initial_rate_by_execution": [
+          [
+            0.12500000000000022
+          ],
+          [
+            0.125
+          ],
+          [
+            0.12500000000000022
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ],
+          [
+            0.12499999999999997
+          ]
+        ],
+        "owners": 8,
+        "snapshot_roundtrip_exact": true,
+        "unit_exponent": -10
+      },
+      {
+        "baseline_error": null,
+        "baseline_status": "observed",
+        "candidate_status": "observed",
+        "continuation_snapshot_exact": true,
+        "initial_rate_by_execution": [
+          [
+            0.0
+          ],
+          [
+            0.0
+          ],
+          [
+            0.0
+          ],
+          [
+            1.0
+          ]
+        ],
+        "owners": 2,
+        "snapshot_roundtrip_exact": true,
+        "unit_exponent": -60
+      },
+      {
+        "baseline_error": null,
+        "baseline_status": "observed",
+        "candidate_status": "observed",
+        "continuation_snapshot_exact": true,
+        "initial_rate_by_execution": [
+          [
+            0.0
+          ],
+          [
+            0.0
+          ],
+          [
+            0.0
+          ],
+          [
+            0.14285714285714285
+          ],
+          [
+            0.14285714285714285
+          ],
+          [
+            0.14285714285714285
+          ],
+          [
+            0.14285714285714285
+          ],
+          [
+            0.14285714285714285
+          ],
+          [
+            0.14285714285714285
+          ],
+          [
+            0.14285714285714285
+          ]
+        ],
+        "owners": 8,
+        "snapshot_roundtrip_exact": true,
+        "unit_exponent": -60
+      }
+    ],
+    "strict_binary64_certificate": {
+      "all_allocations_strict_feasible": true,
+      "cases": [
+        {
+          "all_strict_feasible": true,
+          "metric_summary": {
+            "activity_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "1.136868377216160297393798828125E-13",
+                "denominator": "8796093022208",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "activity_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "2.27373675443232059478759765625E-13",
+                "denominator": "4398046511104",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  4,
+                  4
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "2.9605947323337507744630177815755208333333333333333333333333333333333333333333333E-16",
+                "denominator": "3377699720527872",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  4,
+                  4
+                ],
+                "stage": "quarter"
+              }
+            },
+            "alpha": {
+              "max_absolute_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "compute_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "9.5367431640625E-7",
+                "denominator": "1048576",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "4.76837158203125E-16",
+                "denominator": "2097152000000000",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "credit_units": {
+              "max_absolute_error": {
+                "decimal": "1.1102230246251565404236316680908203125E-16",
+                "denominator": "9007199254740992",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "finish_ns": {
+              "max_absolute_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_absolute_location": {
+                "identity": 1,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_relative_location": {
+                "identity": 1,
+                "stage": "completion"
+              }
+            },
+            "global_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "1.136868377216160297393798828125E-13",
+                "denominator": "8796093022208",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "global_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "2.27373675443232059478759765625E-13",
+                "denominator": "4398046511104",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "2.220446049250313080847263336181640625E-16",
+                "denominator": "4503599627370496",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "quarter"
+              }
+            },
+            "hbm_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "9.5367431640625E-7",
+                "denominator": "1048576",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "4.76837158203125E-16",
+                "denominator": "2097152000000000",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "progress": {
+              "max_absolute_error": {
+                "decimal": "1.1102230246251565404236316680908203125E-16",
+                "denominator": "9007199254740992",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              }
+            },
+            "rate": {
+              "max_absolute_error": {
+                "decimal": "2.220446049250313080847263336181640625E-16",
+                "denominator": "4503599627370496",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "row_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "9.5367431640625E-7",
+                "denominator": "1048576",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": 0,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "4.76837158203125E-16",
+                "denominator": "2097152000000000",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": 0,
+                "stage": "completion"
+              }
+            }
+          },
+          "owners": 2,
+          "unavailable_metrics": [],
+          "unit_exponent": 0
+        },
+        {
+          "all_strict_feasible": true,
+          "metric_summary": {
+            "activity_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "4.5474735088646411895751953125E-13",
+                "denominator": "2199023255552",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "activity_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "2.27373675443232059478759765625E-13",
+                "denominator": "4398046511104",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  4,
+                  4
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "2.9605947323337507744630177815755208333333333333333333333333333333333333333333333E-16",
+                "denominator": "3377699720527872",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  4,
+                  4
+                ],
+                "stage": "quarter"
+              }
+            },
+            "alpha": {
+              "max_absolute_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "compute_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "0.00001430511474609375",
+                "denominator": "1048576",
+                "numerator": "15"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1.78813934326171875E-15",
+                "denominator": "1677721600000000",
+                "numerator": "3"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "credit_units": {
+              "max_absolute_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "finish_ns": {
+              "max_absolute_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_absolute_location": {
+                "identity": 1,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_relative_location": {
+                "identity": 1,
+                "stage": "completion"
+              }
+            },
+            "global_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "4.5474735088646411895751953125E-13",
+                "denominator": "2199023255552",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "global_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "9.094947017729282379150390625E-13",
+                "denominator": "1099511627776",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.6148698540002276951616460626775568181818181818181818181818181818181818181818182E-16",
+                "denominator": "6192449487634432",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "quarter"
+              }
+            },
+            "hbm_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "0.00001430511474609375",
+                "denominator": "1048576",
+                "numerator": "15"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1.78813934326171875E-15",
+                "denominator": "1677721600000000",
+                "numerator": "3"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "progress": {
+              "max_absolute_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              }
+            },
+            "rate": {
+              "max_absolute_error": {
+                "decimal": "2.220446049250313080847263336181640625E-16",
+                "denominator": "4503599627370496",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "row_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "0.00001430511474609375",
+                "denominator": "1048576",
+                "numerator": "15"
+              },
+              "max_absolute_location": {
+                "identity": 0,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1.78813934326171875E-15",
+                "denominator": "1677721600000000",
+                "numerator": "3"
+              },
+              "max_relative_location": {
+                "identity": 0,
+                "stage": "completion"
+              }
+            }
+          },
+          "owners": 8,
+          "unavailable_metrics": [],
+          "unit_exponent": 0
+        },
+        {
+          "all_strict_feasible": true,
+          "metric_summary": {
+            "activity_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "1.136868377216160297393798828125E-13",
+                "denominator": "8796093022208",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "activity_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "2.27373675443232059478759765625E-13",
+                "denominator": "4398046511104",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  4,
+                  4
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "2.9605947323337507744630177815755208333333333333333333333333333333333333333333333E-16",
+                "denominator": "3377699720527872",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  4,
+                  4
+                ],
+                "stage": "quarter"
+              }
+            },
+            "alpha": {
+              "max_absolute_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "compute_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "9.5367431640625E-7",
+                "denominator": "1048576",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "4.76837158203125E-16",
+                "denominator": "2097152000000000",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "credit_units": {
+              "max_absolute_error": {
+                "decimal": "1.08420217248550443400745280086994171142578125E-19",
+                "denominator": "9223372036854775808",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "finish_ns": {
+              "max_absolute_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_absolute_location": {
+                "identity": 1,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_relative_location": {
+                "identity": 1,
+                "stage": "completion"
+              }
+            },
+            "global_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "1.136868377216160297393798828125E-13",
+                "denominator": "8796093022208",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "global_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "2.27373675443232059478759765625E-13",
+                "denominator": "4398046511104",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "2.220446049250313080847263336181640625E-16",
+                "denominator": "4503599627370496",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "quarter"
+              }
+            },
+            "hbm_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "9.5367431640625E-7",
+                "denominator": "1048576",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "4.76837158203125E-16",
+                "denominator": "2097152000000000",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "progress": {
+              "max_absolute_error": {
+                "decimal": "1.1102230246251565404236316680908203125E-16",
+                "denominator": "9007199254740992",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              }
+            },
+            "rate": {
+              "max_absolute_error": {
+                "decimal": "2.220446049250313080847263336181640625E-16",
+                "denominator": "4503599627370496",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "row_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "9.5367431640625E-7",
+                "denominator": "1048576",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": 0,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "4.76837158203125E-16",
+                "denominator": "2097152000000000",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": 0,
+                "stage": "completion"
+              }
+            }
+          },
+          "owners": 2,
+          "unavailable_metrics": [],
+          "unit_exponent": -10
+        },
+        {
+          "all_strict_feasible": true,
+          "metric_summary": {
+            "activity_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "4.5474735088646411895751953125E-13",
+                "denominator": "2199023255552",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "activity_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "2.27373675443232059478759765625E-13",
+                "denominator": "4398046511104",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  4,
+                  4
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "2.9605947323337507744630177815755208333333333333333333333333333333333333333333333E-16",
+                "denominator": "3377699720527872",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  4,
+                  4
+                ],
+                "stage": "quarter"
+              }
+            },
+            "alpha": {
+              "max_absolute_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "compute_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "0.00001430511474609375",
+                "denominator": "1048576",
+                "numerator": "15"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1.78813934326171875E-15",
+                "denominator": "1677721600000000",
+                "numerator": "3"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "credit_units": {
+              "max_absolute_error": {
+                "decimal": "4.336808689942017736029811203479766845703125E-19",
+                "denominator": "2305843009213693952",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "finish_ns": {
+              "max_absolute_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_absolute_location": {
+                "identity": 1,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0",
+                "denominator": "1",
+                "numerator": "0"
+              },
+              "max_relative_location": {
+                "identity": 1,
+                "stage": "completion"
+              }
+            },
+            "global_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "4.5474735088646411895751953125E-13",
+                "denominator": "2199023255552",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "global_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "9.094947017729282379150390625E-13",
+                "denominator": "1099511627776",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.6148698540002276951616460626775568181818181818181818181818181818181818181818182E-16",
+                "denominator": "6192449487634432",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "quarter"
+              }
+            },
+            "hbm_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "0.00001430511474609375",
+                "denominator": "1048576",
+                "numerator": "15"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1.78813934326171875E-15",
+                "denominator": "1677721600000000",
+                "numerator": "3"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "progress": {
+              "max_absolute_error": {
+                "decimal": "4.44089209850062616169452667236328125E-16",
+                "denominator": "2251799813685248",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              }
+            },
+            "rate": {
+              "max_absolute_error": {
+                "decimal": "2.220446049250313080847263336181640625E-16",
+                "denominator": "4503599627370496",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "1.7763568394002504646778106689453125E-15",
+                "denominator": "562949953421312",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "row_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "0.00001430511474609375",
+                "denominator": "1048576",
+                "numerator": "15"
+              },
+              "max_absolute_location": {
+                "identity": 0,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1.78813934326171875E-15",
+                "denominator": "1677721600000000",
+                "numerator": "3"
+              },
+              "max_relative_location": {
+                "identity": 0,
+                "stage": "completion"
+              }
+            }
+          },
+          "owners": 8,
+          "unavailable_metrics": [],
+          "unit_exponent": -10
+        },
+        {
+          "all_strict_feasible": true,
+          "metric_summary": {
+            "activity_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "1024",
+                "denominator": "1",
+                "numerator": "1024"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "activity_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "1024",
+                "denominator": "1",
+                "numerator": "1024"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  2,
+                  2
+                ],
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  2,
+                  2
+                ],
+                "stage": "quarter"
+              }
+            },
+            "alpha": {
+              "max_absolute_error": {
+                "decimal": "0.333333333333333314829616256247390992939472198486328125",
+                "denominator": "18014398509481984",
+                "numerator": "6004799503160661"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "compute_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "1000000000",
+                "denominator": "1",
+                "numerator": "1000000000"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0.5",
+                "denominator": "2",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "credit_units": {
+              "max_absolute_error": {
+                "decimal": "1.73472347597680709441192448139190673828125E-18",
+                "denominator": "576460752303423488",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "7",
+                "denominator": "1",
+                "numerator": "7"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "finish_ns": {
+              "max_absolute_error": {
+                "decimal": "1000000000",
+                "denominator": "1",
+                "numerator": "1000000000"
+              },
+              "max_absolute_location": {
+                "identity": 4,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0.5",
+                "denominator": "2",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": 4,
+                "stage": "completion"
+              }
+            },
+            "global_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "1024",
+                "denominator": "1",
+                "numerator": "1024"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "global_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "1024",
+                "denominator": "1",
+                "numerator": "1024"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0.5",
+                "denominator": "2",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "quarter"
+              }
+            },
+            "hbm_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "2000000000",
+                "denominator": "1",
+                "numerator": "2000000000"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "quarter"
+              }
+            },
+            "progress": {
+              "max_absolute_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              }
+            },
+            "rate": {
+              "max_absolute_error": {
+                "decimal": "0.5",
+                "denominator": "2",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "row_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "2000000000",
+                "denominator": "1",
+                "numerator": "2000000000"
+              },
+              "max_absolute_location": {
+                "identity": 0,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": 0,
+                "stage": "quarter"
+              }
+            }
+          },
+          "owners": 2,
+          "unavailable_metrics": [
+            {
+              "actual": null,
+              "expected": {
+                "decimal": "2000000000",
+                "denominator": "1",
+                "numerator": "2000000000"
+              },
+              "identity": 1,
+              "name": "finish_ns",
+              "stage": "completion"
+            },
+            {
+              "actual": null,
+              "expected": {
+                "decimal": "2000000000",
+                "denominator": "1",
+                "numerator": "2000000000"
+              },
+              "identity": 2,
+              "name": "finish_ns",
+              "stage": "completion"
+            },
+            {
+              "actual": null,
+              "expected": {
+                "decimal": "2000000000",
+                "denominator": "1",
+                "numerator": "2000000000"
+              },
+              "identity": 3,
+              "name": "finish_ns",
+              "stage": "completion"
+            }
+          ],
+          "unit_exponent": -60
+        },
+        {
+          "all_strict_feasible": true,
+          "metric_summary": {
+            "activity_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "1024",
+                "denominator": "1",
+                "numerator": "1024"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1,
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "activity_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "1024",
+                "denominator": "1",
+                "numerator": "1024"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  2,
+                  2
+                ],
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  2,
+                  2
+                ],
+                "stage": "quarter"
+              }
+            },
+            "alpha": {
+              "max_absolute_error": {
+                "decimal": "0.333333333333333314829616256247390992939472198486328125",
+                "denominator": "18014398509481984",
+                "numerator": "6004799503160661"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "compute_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "1000000000",
+                "denominator": "1",
+                "numerator": "1000000000"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0.125",
+                "denominator": "8",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "completion"
+              }
+            },
+            "credit_units": {
+              "max_absolute_error": {
+                "decimal": "1.73472347597680709441192448139190673828125E-18",
+                "denominator": "576460752303423488",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "7",
+                "denominator": "1",
+                "numerator": "7"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "finish_ns": {
+              "max_absolute_error": {
+                "decimal": "999999999",
+                "denominator": "1",
+                "numerator": "999999999"
+              },
+              "max_absolute_location": {
+                "identity": 4,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0.124999999875",
+                "denominator": "8000000000",
+                "numerator": "999999999"
+              },
+              "max_relative_location": {
+                "identity": 4,
+                "stage": "completion"
+              }
+            },
+            "global_hbm_bytes": {
+              "max_absolute_error": {
+                "decimal": "1024",
+                "denominator": "1",
+                "numerator": "1024"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  0,
+                  0
+                ],
+                "stage": "quarter"
+              }
+            },
+            "global_vec_eqops": {
+              "max_absolute_error": {
+                "decimal": "1024",
+                "denominator": "1",
+                "numerator": "1024"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "0.090909090909090909090909090909090909090909090909090909090909090909090909090909091",
+                "denominator": "11",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "quarter"
+              }
+            },
+            "hbm_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "8000000000",
+                "denominator": "1",
+                "numerator": "8000000000"
+              },
+              "max_absolute_location": {
+                "identity": null,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": null,
+                "stage": "quarter"
+              }
+            },
+            "progress": {
+              "max_absolute_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "quarter"
+              }
+            },
+            "rate": {
+              "max_absolute_error": {
+                "decimal": "0.125",
+                "denominator": "8",
+                "numerator": "1"
+              },
+              "max_absolute_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": [
+                  1,
+                  1
+                ],
+                "stage": "initial"
+              }
+            },
+            "row_busy_ns": {
+              "max_absolute_error": {
+                "decimal": "8000000000",
+                "denominator": "1",
+                "numerator": "8000000000"
+              },
+              "max_absolute_location": {
+                "identity": 0,
+                "stage": "completion"
+              },
+              "max_relative_error": {
+                "decimal": "1",
+                "denominator": "1",
+                "numerator": "1"
+              },
+              "max_relative_location": {
+                "identity": 0,
+                "stage": "quarter"
+              }
+            }
+          },
+          "owners": 8,
+          "unavailable_metrics": [
+            {
+              "actual": null,
+              "expected": {
+                "decimal": "8000000000",
+                "denominator": "1",
+                "numerator": "8000000000"
+              },
+              "identity": 1,
+              "name": "finish_ns",
+              "stage": "completion"
+            },
+            {
+              "actual": null,
+              "expected": {
+                "decimal": "8000000000",
+                "denominator": "1",
+                "numerator": "8000000000"
+              },
+              "identity": 2,
+              "name": "finish_ns",
+              "stage": "completion"
+            },
+            {
+              "actual": null,
+              "expected": {
+                "decimal": "8000000000",
+                "denominator": "1",
+                "numerator": "8000000000"
+              },
+              "identity": 3,
+              "name": "finish_ns",
+              "stage": "completion"
+            }
+          ],
+          "unit_exponent": -60
+        }
+      ],
+      "ordinary_observations_compared": 184,
+      "ordinary_observations_exactly_equal": true,
+      "result_sha256": "4d430a1d328c9e8541a56bfdde06e15107c0fa0d1312626751ac9dd8e50eb2a7",
+      "tool_sha256": "f3a4e478f25a370107579de727ebae2ce8d5a4c219f328e4b8b62906747cee4a"
+    },
+    "unchanged_oracle": {
+      "case_count": 48,
+      "failed": 16,
+      "passed": 32,
+      "scope": "48 manual fluid coupled/split-owner cases, exact Fraction ledger and signed constraints; synthetic only"
+    }
+  },
+  "uncontrolled_continuation_sample_counts": {
+    "2": 4,
+    "4": 4,
+    "6": 4,
+    "8": 2
+  }
+}

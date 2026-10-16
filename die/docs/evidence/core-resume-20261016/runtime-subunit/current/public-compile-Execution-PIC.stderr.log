@@ -1,0 +1,4 @@
+/workspace/template/work/core-resume/work/runtime-lab/candidate/Execution.cc: In member function ‘void coarse_die::Runtime::allocate()’:
+/workspace/template/work/core-resume/work/runtime-lab/candidate/Execution.cc:1230:48: warning: missing initializer for member ‘coarse_die::Runtime::allocate()::Ref::mirrors’ [-Wmissing-field-initializers]
+ 1230 |                          first_resource, q, 0.0});
+      |                                                ^
