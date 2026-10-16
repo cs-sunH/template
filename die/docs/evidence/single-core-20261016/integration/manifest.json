@@ -1,7 +1,11 @@
 {
   "status": "partial_stopped_for_handoff",
+  "source_commit": "96c4e9475792293814608c93b2dc383a6c1cb09e",
+  "identity_note": "Use source-audit-authorized-point.json and per-run identities; empty git-diff-based source lists in late status files reflect the completed save commit, not missing source.",
   "files": {
+    "work/core-integration-audit/HANDOFF-STATUS.json": "3c421e172696d53b807198b56a297e281103a6b257ca8ddd6450b2f5c739ab59",
     "work/core-integration-audit/add_authorized_point.py": "8e598894c71af6c8ab8071b6f0b6d189946cbaef0fdf4e943226757f534202ee",
+    "work/core-integration-audit/archive-manifest.json": "d5797cd8b23b59512c4deca9d7abc72ae50a59191680b946bbacb5214f38b157",
     "work/core-integration-audit/audit_source.py": "4960032544a98a8e674c382ef59e6dc04ade9d8b8ebd778dd9f935e8b9695bd4",
     "work/core-integration-audit/audit_source_before_tx8.py": "48f3d02876c24b25b501f3e449f8a724b072a8d3a3ba1c59e4af4e043bf370b6",
     "work/core-integration-audit/build/astra-sim-face/.ninja_deps": "b12c64fbda07e6b164a693dc9646d52107b1d22d6c69848172db8e495fbb0b9b",
@@ -164,6 +168,7 @@
     "work/core-integration-audit/results/joint-default-migration/run.log": "49a74f1148932548edec9a1888c30442ea8cdf312f2ae9bff5ae17d802218f40",
     "work/core-integration-audit/results/joint-unit-final/identity.json": "6fefa90f2fef0ff06fae66008f835e3f48c5d6203feab11b4b9da2ae1088c11b",
     "work/core-integration-audit/results/joint-unit-final/run.log": "fbb5dafe0a61ec65cdc661d784bf8344ac85643931c1eac4264355677c27af7e",
+    "work/core-integration-audit/results/wscllm-build-authorized-point/interrupted-identity.json": "5a8b4037a23af9c8647df3e0bc31897160b63a0d4f566035b4056778a22c7b08",
     "work/core-integration-audit/results/wscllm-build-authorized-point/run.log": "fbe9639e1e5e08640fcc985908fcd103a6c1f0a7b7719dfff8f87fba8594a0fa",
     "work/core-integration-audit/results/wscllm-build-final/identity.json": "45532a08da15b6877daedaf8cc9d9a7ec9cc30d788b9aa59977aac87c93914fe",
     "work/core-integration-audit/results/wscllm-build-final/run.log": "af454387159974b8e5d19f59b4c33afa13630d8b53653ebac3d6d0d45b1aeb20",
@@ -187,7 +192,7 @@
     "work/core-integration-audit/source-audit-authorized-point.json": "4703afdade5507f1cedc09b1862b83b5359702ef0761c48b64e50c4406fcabff",
     "work/core-integration-audit/source-audit-before-tx8-point.json": "33d8a1627fe42eba4a3d9cb5f75ae09105c5c9c9b561b89457a47aa3100bb58b",
     "work/core-integration-audit/source-audit.json": "510676cc84ca5625f3eb8f89cc681c33c735e75ec7da9b84f9b99824464bd65c",
-    "work/core-integration-audit/stop-processes.json": "9c07a34f6f82dc6fb6fbd19b94145c0d4fbfd1f25227a2738603c467e61a2695"
+    "work/core-integration-audit/stop-processes.json": "03ebbcb3f791acbd33492f8e0bc3eab83f4efb73630b036c4486f6e2346233bc"
   },
-  "archive_sha256": "fe27d0693f6e51683dfb1290974206ed4238d114d09ed6d2fca694ae7fd2d170"
+  "archive_sha256": "a0fffc3215c6980d4a30f98a71261184dbc0c3d89875b7f0bdf1edc1324ba61c"
 }
