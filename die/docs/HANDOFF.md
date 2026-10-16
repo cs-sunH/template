@@ -1,5 +1,14 @@
 # Codex Cloud 开发交接状态
 
+## 当前自主接续（2026-10-17；覆盖下方历史停止状态）
+
+用户已授权持续开发；当前分支 `codex/die-numeric-continue-20261017` 从真实最新恢复分支 `9c464cac9447f97569e547bc7c1e7f6094cc63a1` 建立，普通 merge 保留 `main@021a47fed65554bba6264fe8ca58dc12ec1d82ee` 的共享指针；恢复 merge 为 `931855f`。未reset/force，未从旧Core重写。原499项停止归档的archive及逐项bytes/SHA全部核验并恢复work，没有旧ELF。
+
+- Current Status / Completed / Tests：A+B生产源码仍SHA256 `6fcc637e13c876d240d92d8677e8f9d2e323b325aea46176848063ffe93e710e`，未采用研究候选。基线与归档C2分别全新Release构建静态/CABI库；修审查driver重复ID，仅给第二epoch唯一ID2，保留所有旧断言；新增曲线活动进入第二epoch、legacy活动在1ns ready的混合对照。**C2实际6/7，新增混合ready失败，明确不采用**；原六项（含修复后真实到达的clock守卫）通过。基线3/7，原tiny终态/1ns正尾/clock及progress守卫失败保留。完整命令/源/库/ELF/hash/raw见[新证据](evidence/numeric-continue-20261017/c2-review/summary.json)及[复现](analysis/numeric-continue-20261017/README.md)。这些是合成数值正确性对照，不是目标硬件测量/完整53项当前重验。
+- Important Decisions：整数ready对所有活动都是精确外部边界，不能在混合竞争中给legacy活动提前服务；微事件不能仅因一个参与角色可推进而宣称全部physical credit可表示。保持原credit/LP/one-ULP/工作量/容量/精度及速度合同。C3仅在work隔离研究，尚未采用或发布。
+- Next Step / Files：先执行C3 exact-ready/全部选中credit参与角色的定向真实验证及独立审查；通过后才做fresh全源/完整回归/API/正常30性能。五仓FACE-LRU、WS、WSLRU当前A+B native在独立fresh冻结目录继续，结果未完成不算通过；正式canonical24 SDK保持。后续仍capacity1 Norm/原busy/长行/R>1和性能。
+- Blocking Issues / Handoff Notes：当前无必须用户决定的阻碍。main仍未合入A+B，正式SDK未publisher，工程 **NOT ACCEPTED**；本节检查点不表示停止。旧53/53、10库/98配置及各native结果沿9c464ca的明确身份保留，不冒充新候选通过。
+
 ## 最新有效停止交接（2026-10-17；覆盖下方全部持续开发状态）
 
 用户已要求立即停止；没有启动新开发、实验或回归。检查时已无构建/测试进程，子代理亦已停止。**本节为恢复入口，下方“继续开发”及旧停止章节均为历史。**

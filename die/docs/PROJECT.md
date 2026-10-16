@@ -1,5 +1,7 @@
 # die 子项目：项目说明与验收标准
 
+2026-10-17 用户恢复持续自主开发：已从真实最新 `codex/die-runtime-continue-20261016@9c464ca` 接续并保留main交接指针。A+B公共源码保持；C2实际混合ready回归失败，不采用。当前C3隔离研究及剩余三仓native推进中，以[HANDOFF顶部](HANDOFF.md)与新身份/原始证据为准；下方停止状态均历史，正式SDK未发布、工程NOT ACCEPTED。
+
 ## 当前持续开发（2026-10-16）
 
 用户已恢复持续自主开发。`codex/die-runtime-continue-20261016` 从恢复分支2750e24安全接续并普通合并main94d1978，A+B全新Release完整53/53通过，fresh main两新测试实际red；公开API/8真实轨迹除修复的fork外逐字段相同。严格矩阵78/84保留六舍入失败，两套正常30性能均failed；新组合五仓验证和当前Core七epoch Norm数值修复仍进行中。有效状态以[HANDOFF顶部](HANDOFF.md)为准，下方停止状态均为历史。正式SDK仍canonical24，工程NOT ACCEPTED。

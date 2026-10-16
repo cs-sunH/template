@@ -1,0 +1,86 @@
+{
+  "scope": "fresh synthetic 7-control comparison, not full regression/API/performance",
+  "c2_status": "rejected: starts queued legacy service before integer ready boundary",
+  "results": [
+    {
+      "label": "baseline",
+      "cases": [
+        {
+          "case": "exact_integer_ready_must_not_gain_pre_ready_service",
+          "passed": true,
+          "error": ""
+        },
+        {
+          "case": "curved_predecessor_cannot_start_legacy_before_ready",
+          "passed": true,
+          "error": ""
+        },
+        {
+          "case": "full_positive_terminal",
+          "passed": false,
+          "error": ""
+        },
+        {
+          "case": "positive_tail_above_one_ns",
+          "passed": false,
+          "error": ""
+        },
+        {
+          "case": "terminal_curve_does_not_change_later_legacy",
+          "passed": true,
+          "error": ""
+        },
+        {
+          "case": "unrepresentable_selected_progress_fails_before_tiny_mutation",
+          "passed": false,
+          "error": "numerical_failure: credit crossed a finite buffer boundary: buffer=0 credit=-2.199023255586624145508e+03 capacity=3.469446951953614188824e-18"
+        },
+        {
+          "case": "unrepresentable_clock_fails_before_tiny_service",
+          "passed": false,
+          "error": ""
+        }
+      ]
+    },
+    {
+      "label": "c2",
+      "cases": [
+        {
+          "case": "exact_integer_ready_must_not_gain_pre_ready_service",
+          "passed": true,
+          "error": ""
+        },
+        {
+          "case": "curved_predecessor_cannot_start_legacy_before_ready",
+          "passed": false,
+          "error": ""
+        },
+        {
+          "case": "full_positive_terminal",
+          "passed": true,
+          "error": ""
+        },
+        {
+          "case": "positive_tail_above_one_ns",
+          "passed": true,
+          "error": ""
+        },
+        {
+          "case": "terminal_curve_does_not_change_later_legacy",
+          "passed": true,
+          "error": ""
+        },
+        {
+          "case": "unrepresentable_selected_progress_fails_before_tiny_mutation",
+          "passed": true,
+          "error": "numerical_failure: positive curved event cannot advance its represented physical progress"
+        },
+        {
+          "case": "unrepresentable_clock_fails_before_tiny_service",
+          "passed": true,
+          "error": "numerical_failure: positive curved event cannot advance represented clock"
+        }
+      ]
+    }
+  ]
+}
