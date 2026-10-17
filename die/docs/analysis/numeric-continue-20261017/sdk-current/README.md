@@ -84,3 +84,23 @@ WSLRU 原 suite 因缺 `online.die_model_oracle` 跳过 1 项，Python 进程返
 每阶段另逐文件核实正式五份 canonical24 共 120 文件；记录冻结源与导出时
 生产源码差异，后续模型变动不会被本冻结结果自动覆盖。完整五仓业务 E2E、
 CPU≤10% 比较、SDK 发布及目标硬件校准均未由本检查点验收。
+
+## 用户停止时的已完成 native 收尾
+
+用户要求立即停止后，只核对和归档已经结束的进程，没有启动新的构建或测试。
+原 native runner 的 16 阶段已经全部终结，五仓 fresh native build 全部成功。
+实际 C++ 为 **22 passed / 4 failed / 0 skipped**；FACE、FACE-LRU、WSCLLM、
+WSCLLM-LRU 各 3/4，四个失败均保留原实际 R4 FFN、完整预测 body-only guard
+拒绝及原始中止日志。抛出之后的本生命周期进程后续分支没有执行，不记通过。
+JOINT 完整 C++ **10/10**、native Python **6/6**，没有 skip。
+
+证据入口为
+[native/checkpoint-summary.json](../../../evidence/numeric-continue-20261017/sdk-current/native/checkpoint-summary.json)，
+其 `results-text.tar.gz` 保存 358 项原始 text/metadata，逐 hash/字节及解压
+roundtrip 已核验；`verification-native.json` 独立核验 16 条命令身份。
+WS 两仓原 `checks.zero_skips=false` 对业务终态 `Skipped` 的词匹配误报保留，
+汇总按真实 CTest result line 实核 0 个测试跳过，四项失败结论不改变。
+
+五份 native coarse 库与实际当前公共库均为 `7e3f0fb6…783714`，正式五份
+canonical24 共 120 文件仍逐字节吻合。完整业务/CPU、正式 SDK 发布与最终
+工程验收未执行；工程 **NOT ACCEPTED**。后续只按用户重新授权接续。

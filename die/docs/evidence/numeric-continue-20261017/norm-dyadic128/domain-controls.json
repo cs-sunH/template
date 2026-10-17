@@ -1,0 +1,250 @@
+{
+  "cases": [
+    {
+      "name": "span_129",
+      "result": {
+        "reason": "alignment_exceeds_128_bits",
+        "supported": false,
+        "terms": [
+          {
+            "exponent": 0,
+            "mantissa_hex": "0x1",
+            "negative": false
+          },
+          {
+            "exponent": 128,
+            "mantissa_hex": "0x1",
+            "negative": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "mantissa_plus_shift_129",
+      "result": {
+        "reason": "alignment_exceeds_128_bits",
+        "supported": false,
+        "terms": [
+          {
+            "exponent": 0,
+            "mantissa_hex": "0x1",
+            "negative": false
+          },
+          {
+            "exponent": 127,
+            "mantissa_hex": "0x3",
+            "negative": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "positive_accumulator_overflow",
+      "result": {
+        "reason": "positive_accumulator_overflow",
+        "supported": false,
+        "terms": [
+          {
+            "exponent": 0,
+            "mantissa_hex": "0xffffffffffffffffffffffffffffffff",
+            "negative": false
+          },
+          {
+            "exponent": 0,
+            "mantissa_hex": "0x1",
+            "negative": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative_accumulator_overflow",
+      "result": {
+        "reason": "negative_accumulator_overflow",
+        "supported": false,
+        "terms": [
+          {
+            "exponent": 0,
+            "mantissa_hex": "0xffffffffffffffffffffffffffffffff",
+            "negative": true
+          },
+          {
+            "exponent": 0,
+            "mantissa_hex": "0x1",
+            "negative": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "maximum_128_integer",
+      "result": {
+        "base_exponent": 0,
+        "exponent": 0,
+        "lower_hex": "0xf.fffffffffffffffp+124",
+        "magnitude_hex": "0xffffffffffffffffffffffffffffffff",
+        "negative_group_hex": "0x0",
+        "positive_group_hex": "0xffffffffffffffffffffffffffffffff",
+        "reason": "supported",
+        "sign": 1,
+        "supported": true,
+        "terms": [
+          {
+            "exponent": 0,
+            "mantissa_hex": "0xffffffffffffffffffffffffffffffff",
+            "negative": false
+          }
+        ],
+        "upper_hex": "0x8p+125"
+      }
+    },
+    {
+      "name": "zero_cancel",
+      "result": {
+        "base_exponent": 0,
+        "exponent": 0,
+        "lower_hex": "0x0p+0",
+        "magnitude_hex": "0x0",
+        "negative_group_hex": "0xffffffffffffffffffffffffffffffff",
+        "positive_group_hex": "0xffffffffffffffffffffffffffffffff",
+        "reason": "supported_exact_zero",
+        "sign": 0,
+        "supported": true,
+        "terms": [
+          {
+            "exponent": 0,
+            "mantissa_hex": "0xffffffffffffffffffffffffffffffff",
+            "negative": false
+          },
+          {
+            "exponent": 0,
+            "mantissa_hex": "0xffffffffffffffffffffffffffffffff",
+            "negative": true
+          }
+        ],
+        "upper_hex": "0x0p+0"
+      }
+    },
+    {
+      "name": "output_overflow",
+      "result": {
+        "reason": "result_or_bound_overflow",
+        "supported": false,
+        "terms": [
+          {
+            "exponent": 16384,
+            "mantissa_hex": "0x1",
+            "negative": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "output_subnormal",
+      "result": {
+        "reason": "result_or_bound_subnormal",
+        "supported": false,
+        "terms": [
+          {
+            "exponent": -16383,
+            "mantissa_hex": "0x1",
+            "negative": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative_rounding_flip",
+      "result": {
+        "base_exponent": -64,
+        "exponent": -64,
+        "lower_hex": "-0x8.000000000000001p-3",
+        "magnitude_hex": "0x10000000000000001",
+        "negative_group_hex": "0x10000000000000001",
+        "positive_group_hex": "0x0",
+        "reason": "supported",
+        "sign": -1,
+        "supported": true,
+        "terms": [
+          {
+            "exponent": -64,
+            "mantissa_hex": "0x10000000000000001",
+            "negative": true
+          }
+        ],
+        "upper_hex": "-0x8p-3"
+      }
+    },
+    {
+      "name": "zero_terms_supported",
+      "result": {
+        "base_exponent": 0,
+        "exponent": 0,
+        "lower_hex": "0x0p+0",
+        "magnitude_hex": "0x0",
+        "negative_group_hex": "0x0",
+        "positive_group_hex": "0x0",
+        "reason": "supported_exact_zero",
+        "sign": 0,
+        "supported": true,
+        "terms": [
+          {
+            "exponent": -1234,
+            "mantissa_hex": "0x0",
+            "negative": true
+          },
+          {
+            "exponent": 999,
+            "mantissa_hex": "0x0",
+            "negative": false
+          }
+        ],
+        "upper_hex": "0x0p+0"
+      }
+    },
+    {
+      "name": "progress_one_supported",
+      "result": {
+        "base_exponent": 0,
+        "exponent": 0,
+        "lower_hex": "0x0p+0",
+        "magnitude_hex": "0x0",
+        "negative_group_hex": "0x1",
+        "positive_group_hex": "0x1",
+        "reason": "supported_exact_zero",
+        "sign": 0,
+        "supported": true,
+        "terms": [
+          {
+            "exponent": 0,
+            "mantissa_hex": "0x1",
+            "negative": false
+          },
+          {
+            "exponent": 0,
+            "mantissa_hex": "0x1",
+            "negative": true
+          }
+        ],
+        "upper_hex": "0x0p+0"
+      }
+    },
+    {
+      "name": "progress_subnormal_rejected",
+      "result": {
+        "reason": "nonzero_subnormal_or_invalid_progress",
+        "supported": false,
+        "terms": []
+      }
+    },
+    {
+      "name": "coefficient_subnormal_rejected",
+      "result": {
+        "reason": "nonfinite_or_subnormal_coefficient",
+        "supported": false,
+        "terms": []
+      }
+    }
+  ],
+  "kind": "domain_controls"
+}

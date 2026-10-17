@@ -1,0 +1,52 @@
+{
+  "scope": "Immediate stop handoff; no new experiment after stop. Fixed128 standalone only, no Runtime build/adoption or commit.",
+  "compressed_roundtrip_verified": {
+    "input.json": {
+      "original_sha256": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+      "original_bytes": 1102773,
+      "saved_sha256": "71fa5d0104508cd6f8b4c3b0ac70724aefe98a12a37497bcacac5f928c1d8cca",
+      "saved_bytes": 25095
+    },
+    "output.jsonl": {
+      "original_sha256": "0b69921f7bfa07c5c4d8bd23040af4e87be8ee9a5271a5be989c26af40ba636d",
+      "original_bytes": 1948178,
+      "saved_sha256": "e04087e7261abd9749a2f75e2b0ef56ff4f335bff680a0ea256f2a5b437381f8",
+      "saved_bytes": 72896
+    },
+    "report.json": {
+      "original_sha256": "f5fce35cd20c9fe0dec2bbb7d9a476c8d8334cfe3946aa529a0a910af449e5a5",
+      "original_bytes": 1674441,
+      "saved_sha256": "78f659d21fdaaefce864b3c17a48c93fce2ef794bbee19073c00ef69f5ce5833",
+      "saved_bytes": 82748
+    },
+    "attempt1.stdout.log": {
+      "original_sha256": "a17e31a8e4ae9edad6179727a5f24358d64f04c497be8940fd0004b0c2a1d97e",
+      "original_bytes": 8580,
+      "saved_sha256": "0033ffca1c4836d8286323ad596d4527adfceaafd421411c65a6a03aeeac122e",
+      "saved_bytes": 1635
+    }
+  },
+  "files_sha256": {
+    "die/docs/analysis/numeric-continue-20261017/norm-dyadic128/Dyadic128.hh": "aad3e040d9fb31791438754f4236b92f9aaf84e40b5f77a08dedcf137544b7f4",
+    "die/docs/analysis/numeric-continue-20261017/norm-dyadic128/README.md": "41dfac1853f74cbeee462341763ed8531425d7a87ee1b178fe2737f219bba16c",
+    "die/docs/analysis/numeric-continue-20261017/norm-dyadic128/evaluator.cc": "c4f131c62fb71fb79bb99478e32513026b6d1b929d0e0074669b0f693549cea7",
+    "die/docs/analysis/numeric-continue-20261017/norm-dyadic128/oracle_base.py": "6674ba4e1c6049caef63af118dcebc997c4aea500a8e519f39e2fbcfbf436bf9",
+    "die/docs/analysis/numeric-continue-20261017/norm-dyadic128/run.py": "8326808bb8b40efea3411aeb2894629608c589933f09c579899e6858d25f5ef3",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/STOP-STATUS.json": "1afb1cc27f65f005e99894cc1a3caaff3131e5765ae4ea4c51c4b79c8bda6f3a",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/attempt1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/attempt1.stdout.log.gz": "0033ffca1c4836d8286323ad596d4527adfceaafd421411c65a6a03aeeac122e",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/benchmark.json": "ce1d3035f2f26c6dcbefcbb0056a1c9cff92433800d6ed71ef155ca74717ba44",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/compile.stderr.log": "7f366967da4b7e0111b637f4e494e61a7cfb47e9373a5b40754be7c0fce3a7cf",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/compile.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/compiler_version.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/compiler_version.stdout.log": "00f7e3c3e6a0308d7b60cc02429720ef6000d84c0add523f7dc030058d19961b",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/domain-controls.json": "8b072e4c77e7a26cac4fcfb7137f8ac8d26cfd4f1ba2521d6f36b65c0eaa80ad",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/identity.json": "7b4b2707d4db3b20153250b9b7eab8807b0882931c55e6e509dd9749e217efee",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/input.json.gz": "71fa5d0104508cd6f8b4c3b0ac70724aefe98a12a37497bcacac5f928c1d8cca",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/output.jsonl.gz": "e04087e7261abd9749a2f75e2b0ef56ff4f335bff680a0ea256f2a5b437381f8",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/report.json.gz": "78f659d21fdaaefce864b3c17a48c93fce2ef794bbee19073c00ef69f5ce5833",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/run.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/run.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-dyadic128/summary.json": "a17e31a8e4ae9edad6179727a5f24358d64f04c497be8940fd0004b0c2a1d97e"
+  }
+}

@@ -1,0 +1,7 @@
+/workspace/template/work/norm-dyadic128-20261017/evaluator.cc: In function ‘int main(int, char**)’:
+/workspace/template/work/norm-dyadic128-20261017/evaluator.cc:49:2: warning: this ‘if’ clause does not guard... [-Wmisleading-indentation]
+   49 |  if(!abi)return 0;out<<json{{"kind","domain_controls"},{"cases",controls()}}.dump()<<'\n';
+      |  ^~
+/workspace/template/work/norm-dyadic128-20261017/evaluator.cc:49:19: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the ‘if’
+   49 |  if(!abi)return 0;out<<json{{"kind","domain_controls"},{"cases",controls()}}.dump()<<'\n';
+      |                   ^~~

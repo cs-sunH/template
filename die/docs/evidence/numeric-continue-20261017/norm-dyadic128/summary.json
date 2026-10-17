@@ -1,0 +1,283 @@
+{
+  "scope": "fixed unsigned128 dyadic arithmetic only; not Runtime integration, snapshot context, or API budget",
+  "abi": {
+    "kind": "abi",
+    "long_double_digits": 64,
+    "long_double_max_exponent": 16384,
+    "long_double_min_exponent": -16381,
+    "rounding": "FE_TONEAREST",
+    "supported": true,
+    "u128_bits": 128
+  },
+  "case_count": 1952,
+  "input_identical_to_v1": true,
+  "negative_true_inventory_case_count": 224,
+  "negative_true_headroom_case_count": 197,
+  "groups": {
+    "saved_internal": {
+      "q": {
+        "count": 222,
+        "supported": 222,
+        "unsupported": 0,
+        "reasons": {},
+        "exact_sign_errors": 0,
+        "exact_integer_identity_errors": 0,
+        "interval_errors": 0,
+        "negative_balance_retained": 0,
+        "interval_strictly_positive": 126,
+        "interval_strictly_negative": 0,
+        "interval_exact_zero": 96,
+        "interval_sign_uncertain": 0,
+        "point_interval_exact": 174,
+        "maximum_interval_width": "5.5511151231257827021181583404541015625E-17"
+      },
+      "h": {
+        "count": 222,
+        "supported": 222,
+        "unsupported": 0,
+        "reasons": {},
+        "exact_sign_errors": 0,
+        "exact_integer_identity_errors": 0,
+        "interval_errors": 0,
+        "negative_balance_retained": 8,
+        "interval_strictly_positive": 204,
+        "interval_strictly_negative": 8,
+        "interval_exact_zero": 10,
+        "interval_sign_uncertain": 0,
+        "point_interval_exact": 212,
+        "maximum_interval_width": "2.77555756156289135105907917022705078125E-17"
+      }
+    },
+    "saved_public": {
+      "q": {
+        "count": 148,
+        "supported": 148,
+        "unsupported": 0,
+        "reasons": {},
+        "exact_sign_errors": 0,
+        "exact_integer_identity_errors": 0,
+        "interval_errors": 0,
+        "negative_balance_retained": 10,
+        "interval_strictly_positive": 82,
+        "interval_strictly_negative": 10,
+        "interval_exact_zero": 56,
+        "interval_sign_uncertain": 0,
+        "point_interval_exact": 102,
+        "maximum_interval_width": "5.5511151231257827021181583404541015625E-17"
+      },
+      "h": {
+        "count": 148,
+        "supported": 148,
+        "unsupported": 0,
+        "reasons": {},
+        "exact_sign_errors": 0,
+        "exact_integer_identity_errors": 0,
+        "interval_errors": 0,
+        "negative_balance_retained": 6,
+        "interval_strictly_positive": 142,
+        "interval_strictly_negative": 6,
+        "interval_exact_zero": 0,
+        "interval_sign_uncertain": 0,
+        "point_interval_exact": 134,
+        "maximum_interval_width": "1.08420217248550443400745280086994171142578125E-19"
+      }
+    },
+    "source_formula_boundary_neighbors": {
+      "q": {
+        "count": 1562,
+        "supported": 1446,
+        "unsupported": 116,
+        "reasons": {
+          "nonzero_subnormal_or_invalid_progress": 116
+        },
+        "exact_sign_errors": 0,
+        "exact_integer_identity_errors": 0,
+        "interval_errors": 0,
+        "negative_balance_retained": 206,
+        "interval_strictly_positive": 882,
+        "interval_strictly_negative": 206,
+        "interval_exact_zero": 358,
+        "interval_sign_uncertain": 0,
+        "point_interval_exact": 1230,
+        "maximum_interval_width": "5.5511151231257827021181583404541015625E-17"
+      },
+      "h": {
+        "count": 1562,
+        "supported": 1446,
+        "unsupported": 116,
+        "reasons": {
+          "nonzero_subnormal_or_invalid_progress": 116
+        },
+        "exact_sign_errors": 0,
+        "exact_integer_identity_errors": 0,
+        "interval_errors": 0,
+        "negative_balance_retained": 161,
+        "interval_strictly_positive": 1198,
+        "interval_strictly_negative": 161,
+        "interval_exact_zero": 87,
+        "interval_sign_uncertain": 0,
+        "point_interval_exact": 1231,
+        "maximum_interval_width": "5.5511151231257827021181583404541015625E-17"
+      }
+    },
+    "dyadic_capacity1": {
+      "q": {
+        "count": 20,
+        "supported": 20,
+        "unsupported": 0,
+        "reasons": {},
+        "exact_sign_errors": 0,
+        "exact_integer_identity_errors": 0,
+        "interval_errors": 0,
+        "negative_balance_retained": 2,
+        "interval_strictly_positive": 7,
+        "interval_strictly_negative": 2,
+        "interval_exact_zero": 11,
+        "interval_sign_uncertain": 0,
+        "point_interval_exact": 20,
+        "maximum_interval_width": "0"
+      },
+      "h": {
+        "count": 20,
+        "supported": 20,
+        "unsupported": 0,
+        "reasons": {},
+        "exact_sign_errors": 0,
+        "exact_integer_identity_errors": 0,
+        "interval_errors": 0,
+        "negative_balance_retained": 2,
+        "interval_strictly_positive": 7,
+        "interval_strictly_negative": 2,
+        "interval_exact_zero": 11,
+        "interval_sign_uncertain": 0,
+        "point_interval_exact": 20,
+        "maximum_interval_width": "0"
+      }
+    }
+  },
+  "domain_controls": [
+    {
+      "name": "span_129",
+      "passed": true,
+      "supported": false,
+      "reason": "alignment_exceeds_128_bits"
+    },
+    {
+      "name": "mantissa_plus_shift_129",
+      "passed": true,
+      "supported": false,
+      "reason": "alignment_exceeds_128_bits"
+    },
+    {
+      "name": "positive_accumulator_overflow",
+      "passed": true,
+      "supported": false,
+      "reason": "positive_accumulator_overflow"
+    },
+    {
+      "name": "negative_accumulator_overflow",
+      "passed": true,
+      "supported": false,
+      "reason": "negative_accumulator_overflow"
+    },
+    {
+      "name": "maximum_128_integer",
+      "passed": true,
+      "supported": true,
+      "reason": "supported"
+    },
+    {
+      "name": "zero_cancel",
+      "passed": true,
+      "supported": true,
+      "reason": "supported_exact_zero"
+    },
+    {
+      "name": "output_overflow",
+      "passed": true,
+      "supported": false,
+      "reason": "result_or_bound_overflow"
+    },
+    {
+      "name": "output_subnormal",
+      "passed": true,
+      "supported": false,
+      "reason": "result_or_bound_subnormal"
+    },
+    {
+      "name": "negative_rounding_flip",
+      "passed": true,
+      "supported": true,
+      "reason": "supported"
+    },
+    {
+      "name": "zero_terms_supported",
+      "passed": true,
+      "supported": true,
+      "reason": "supported_exact_zero"
+    },
+    {
+      "name": "progress_one_supported",
+      "passed": true,
+      "supported": true,
+      "reason": "supported_exact_zero"
+    },
+    {
+      "name": "progress_subnormal_rejected",
+      "passed": true,
+      "supported": false,
+      "reason": "nonzero_subnormal_or_invalid_progress"
+    },
+    {
+      "name": "coefficient_subnormal_rejected",
+      "passed": true,
+      "supported": false,
+      "reason": "nonfinite_or_subnormal_coefficient"
+    }
+  ],
+  "benchmark": {
+    "scope": "standalone dyadic arithmetic only; not Runtime/API budget",
+    "eligible_samples": 1836,
+    "batches": 5,
+    "rounds_per_batch": 100,
+    "methods": {
+      "direct": {
+        "batch_average_ns_per_scalar": [
+          6.08959422657952,
+          6.087415577342048,
+          6.037802287581699,
+          6.062949346405229,
+          6.033575708061002
+        ],
+        "median_batch_average_ns": 6.062949346405229,
+        "min_batch_average_ns": 6.033575708061002,
+        "max_batch_average_ns": 6.08959422657952
+      },
+      "dyadic128_checked_interval": {
+        "batch_average_ns_per_scalar": [
+          132.32048747276687,
+          216.70928649237473,
+          218.27653867102396,
+          217.13192265795206,
+          131.91647331154684
+        ],
+        "median_batch_average_ns": 216.70928649237473,
+        "min_batch_average_ns": 131.91647331154684,
+        "max_batch_average_ns": 218.27653867102396
+      },
+      "dyadic128_checked_sign": {
+        "batch_average_ns_per_scalar": [
+          110.46143518518518,
+          193.93463779956426,
+          194.13520697167755,
+          111.44143518518518,
+          194.08837962962963
+        ],
+        "median_batch_average_ns": 193.93463779956426,
+        "min_batch_average_ns": 110.46143518518518,
+        "max_batch_average_ns": 194.13520697167755
+      }
+    }
+  },
+  "proof_scope": "exact algebraic dyadic identity plus pre-shift bit-width and unsigned group-overflow checks; directed LD bounds constructed from leading64/remainder with normal/finite exponent checks; sample comparisons independently verify implementation but do not replace proof or integration/snapshot gates"
+}

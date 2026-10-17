@@ -1,0 +1,210 @@
+{
+  "scope": "Immediate stop handoff; no new experiment after stop. Fixed128 standalone only, no Runtime build/adoption or commit.",
+  "actual_results": {
+    "case_count": 1952,
+    "negative_inventory": 224,
+    "negative_headroom": 197,
+    "groups": {
+      "saved_internal": {
+        "q": {
+          "count": 222,
+          "supported": 222,
+          "unsupported": 0,
+          "reasons": {},
+          "interval_sign_uncertain": 0
+        },
+        "h": {
+          "count": 222,
+          "supported": 222,
+          "unsupported": 0,
+          "reasons": {},
+          "interval_sign_uncertain": 0
+        }
+      },
+      "saved_public": {
+        "q": {
+          "count": 148,
+          "supported": 148,
+          "unsupported": 0,
+          "reasons": {},
+          "interval_sign_uncertain": 0
+        },
+        "h": {
+          "count": 148,
+          "supported": 148,
+          "unsupported": 0,
+          "reasons": {},
+          "interval_sign_uncertain": 0
+        }
+      },
+      "source_formula_boundary_neighbors": {
+        "q": {
+          "count": 1562,
+          "supported": 1446,
+          "unsupported": 116,
+          "reasons": {
+            "nonzero_subnormal_or_invalid_progress": 116
+          },
+          "interval_sign_uncertain": 0
+        },
+        "h": {
+          "count": 1562,
+          "supported": 1446,
+          "unsupported": 116,
+          "reasons": {
+            "nonzero_subnormal_or_invalid_progress": 116
+          },
+          "interval_sign_uncertain": 0
+        }
+      },
+      "dyadic_capacity1": {
+        "q": {
+          "count": 20,
+          "supported": 20,
+          "unsupported": 0,
+          "reasons": {},
+          "interval_sign_uncertain": 0
+        },
+        "h": {
+          "count": 20,
+          "supported": 20,
+          "unsupported": 0,
+          "reasons": {},
+          "interval_sign_uncertain": 0
+        }
+      }
+    },
+    "domain_controls": [
+      {
+        "name": "span_129",
+        "passed": true,
+        "supported": false,
+        "reason": "alignment_exceeds_128_bits"
+      },
+      {
+        "name": "mantissa_plus_shift_129",
+        "passed": true,
+        "supported": false,
+        "reason": "alignment_exceeds_128_bits"
+      },
+      {
+        "name": "positive_accumulator_overflow",
+        "passed": true,
+        "supported": false,
+        "reason": "positive_accumulator_overflow"
+      },
+      {
+        "name": "negative_accumulator_overflow",
+        "passed": true,
+        "supported": false,
+        "reason": "negative_accumulator_overflow"
+      },
+      {
+        "name": "maximum_128_integer",
+        "passed": true,
+        "supported": true,
+        "reason": "supported"
+      },
+      {
+        "name": "zero_cancel",
+        "passed": true,
+        "supported": true,
+        "reason": "supported_exact_zero"
+      },
+      {
+        "name": "output_overflow",
+        "passed": true,
+        "supported": false,
+        "reason": "result_or_bound_overflow"
+      },
+      {
+        "name": "output_subnormal",
+        "passed": true,
+        "supported": false,
+        "reason": "result_or_bound_subnormal"
+      },
+      {
+        "name": "negative_rounding_flip",
+        "passed": true,
+        "supported": true,
+        "reason": "supported"
+      },
+      {
+        "name": "zero_terms_supported",
+        "passed": true,
+        "supported": true,
+        "reason": "supported_exact_zero"
+      },
+      {
+        "name": "progress_one_supported",
+        "passed": true,
+        "supported": true,
+        "reason": "supported_exact_zero"
+      },
+      {
+        "name": "progress_subnormal_rejected",
+        "passed": true,
+        "supported": false,
+        "reason": "nonzero_subnormal_or_invalid_progress"
+      },
+      {
+        "name": "coefficient_subnormal_rejected",
+        "passed": true,
+        "supported": false,
+        "reason": "nonfinite_or_subnormal_coefficient"
+      }
+    ],
+    "benchmark": {
+      "scope": "standalone dyadic arithmetic only; not Runtime/API budget",
+      "eligible_samples": 1836,
+      "batches": 5,
+      "rounds_per_batch": 100,
+      "methods": {
+        "direct": {
+          "batch_average_ns_per_scalar": [
+            6.08959422657952,
+            6.087415577342048,
+            6.037802287581699,
+            6.062949346405229,
+            6.033575708061002
+          ],
+          "median_batch_average_ns": 6.062949346405229,
+          "min_batch_average_ns": 6.033575708061002,
+          "max_batch_average_ns": 6.08959422657952
+        },
+        "dyadic128_checked_interval": {
+          "batch_average_ns_per_scalar": [
+            132.32048747276687,
+            216.70928649237473,
+            218.27653867102396,
+            217.13192265795206,
+            131.91647331154684
+          ],
+          "median_batch_average_ns": 216.70928649237473,
+          "min_batch_average_ns": 131.91647331154684,
+          "max_batch_average_ns": 218.27653867102396
+        },
+        "dyadic128_checked_sign": {
+          "batch_average_ns_per_scalar": [
+            110.46143518518518,
+            193.93463779956426,
+            194.13520697167755,
+            111.44143518518518,
+            194.08837962962963
+          ],
+          "median_batch_average_ns": 193.93463779956426,
+          "min_batch_average_ns": 110.46143518518518,
+          "max_batch_average_ns": 194.13520697167755
+        }
+      }
+    }
+  },
+  "header_api": {
+    "path": "work/norm-dyadic128-20261017/Dyadic128.hh",
+    "namespace": "norm_dyadic128",
+    "function": "Evaluation evaluate(const Sample&, bool head, bool make_interval)",
+    "input": "Sample initial/capacity doubles, d[3] double coefficients, p[3] LD64 represented progress, n<=3",
+    "output": "result.supported/reason, exact sign/zero and directed LD lower/upper; integer magnitude/exponent; normalized input terms"
+  },
+  "limitations": "Research core not integrated into Runtime, no integration/snapshot-context or 50us budget proof; unsupported cases are not silently treated as safe. User stopped before further review/adoption."
+}

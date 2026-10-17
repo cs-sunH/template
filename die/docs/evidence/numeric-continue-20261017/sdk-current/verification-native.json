@@ -1,0 +1,106 @@
+{
+  "phase": "native",
+  "archive_manifest_sha256": "886a92b4b5dc8538b5974ae1e5f40b8637969a8ada9f8cec958cb275b7ded881",
+  "files_verified": 4,
+  "text_entries_verified": 358,
+  "command_hash_encoding": "UTF-8 json.dumps({command,cwd,environment}, sort_keys=True, separators=(comma,colon), ensure_ascii=False)",
+  "commands": {
+    "astra-sim-face-LRU-native-build": {
+      "command_cwd_environment_sha256": "2cb1dedd4c2396bf738c88ec733488872aa57bfdce73d407eeafe8fe827cf67e",
+      "identity_sha256": "dad52ce4338b7ed2dacc8b6af90494b9358f181ccb996eee34ad798372af7d21",
+      "status": "passed",
+      "recorded_log_sha256": "c5113ee9ea48c895a277ba311d2b504dc6c2e09dccb86dbf6741b36f88db8740"
+    },
+    "astra-sim-face-LRU-native-configure": {
+      "command_cwd_environment_sha256": "6e53f2484b0adba881d20440d1e651aee526b8a10eb2e7bed00a9daa22a55652",
+      "identity_sha256": "bc8cfa2448058c237b3e5bcad7496397bd67cd3ea879975c6c828d8c0f6d613e",
+      "status": "passed",
+      "recorded_log_sha256": "6905e186784b1778fddfce22156d69c47d054c08f34f3dca376241884f3209fb"
+    },
+    "astra-sim-face-LRU-native-consumers": {
+      "command_cwd_environment_sha256": "7458e6f1367e3edb84f98ed2e6cc0d09eaca8812c28c82a751cb0aa1e24791f3",
+      "identity_sha256": "0f718fa843a8903fdcdf692c85d553055ca34e446a42066aff441cedc2ace0bc",
+      "status": "failed",
+      "recorded_log_sha256": "b4cc758dcda60ad7639e97ec8455488af395f237993316a920e75a7292738360"
+    },
+    "astra-sim-face-native-build": {
+      "command_cwd_environment_sha256": "596bf42fabf7c05ebcbd7e6ed5dea8de60f241e7e3b3306e2012dde46e6dcbfc",
+      "identity_sha256": "9166bb212866d335eafc1b603d23a3d5481d08472f09f5237fe7043939234a7a",
+      "status": "passed",
+      "recorded_log_sha256": "df0a42dcd71a331aa073a5b2e97045b80c80b058516fbe5bb87418e813448139"
+    },
+    "astra-sim-face-native-configure": {
+      "command_cwd_environment_sha256": "d7cab2df56a075d45328470fa79e5a988b62cba215df142600c2e4d8903a122c",
+      "identity_sha256": "77318c1a215deea76c8e2ddb87fe5ed6fe4d8fafe57261f98f687dc5c28d5d3b",
+      "status": "passed",
+      "recorded_log_sha256": "f54ae2e1c6d0831af7b7545c95a1a13b4c745d934d8ccca3a6a8ecfb93786b4e"
+    },
+    "astra-sim-face-native-consumers": {
+      "command_cwd_environment_sha256": "cf6324e7ea6e68bd98a46f5a9e8d989defa0c182025f67b018ce6d8b1c8a18b6",
+      "identity_sha256": "215a64007b01ad99c5e1489420fa9ff9498a5843f8891c40013e14fc24af5eb8",
+      "status": "failed",
+      "recorded_log_sha256": "5c8df5ce191d796b5dcc1c5221fa0e549467567e255a5e1b489d19f55b33e93c"
+    },
+    "astra-sim-joint-native-build": {
+      "command_cwd_environment_sha256": "ca1db45d2ec61918f875c59b67e0838501a02f99282d626b56380b5cb0a9fc1f",
+      "identity_sha256": "732ea9bd72d69a2cdc1d7ada7f61521927712c2998d9c51d6b3f1b0e8927b7e0",
+      "status": "passed",
+      "recorded_log_sha256": "3a1339171fb1287925fbbf9d18e6e40bf4f778db0994682cbf156de7ff27bb27"
+    },
+    "astra-sim-joint-native-configure": {
+      "command_cwd_environment_sha256": "631df6285cf67fc097590bf799fa4a278393bef4553f948fa7a73efd9e055d02",
+      "identity_sha256": "7a4c5f6bb5cb623570240b2e568ad05674a8367e47266d4fb836e21210b383d8",
+      "status": "passed",
+      "recorded_log_sha256": "73b66a396e44777a662550c717ce5deccc404ec3f8add7269729bdf8568aced5"
+    },
+    "astra-sim-joint-native-consumers": {
+      "command_cwd_environment_sha256": "635e8f01c038d8918d6842b1edc7d57942bf8902fe213d4b41259f7936cafe3e",
+      "identity_sha256": "3f3d4878b438e7e76cb2e5ac779395e35948032ae262549114a5efc939918c82",
+      "status": "passed",
+      "recorded_log_sha256": "9694d76294a853db1139a8ec685ec677b80d5ced67f806499356e917c869f5f8"
+    },
+    "astra-sim-joint-native-python": {
+      "command_cwd_environment_sha256": "0d0a4f9fb61c511610bf72b43d7fe4358c8d713b08d2a6c3236226657c8050a0",
+      "identity_sha256": "9389c5149f21633531b16a0a3f4f02764243b3d5b1a3b801eea2b060092d6919",
+      "status": "passed",
+      "recorded_log_sha256": "12322dc23711d293fdc22716f2df26967cacce7604c66d939ad29039f1c188a0"
+    },
+    "astra-sim-wscllm-LRU-native-build": {
+      "command_cwd_environment_sha256": "54683845be15ab35869062cba3e8a27a05ac0c1f9a36a6cb3affb70ee701589e",
+      "identity_sha256": "379866fbecad6e14a586d821c89fb2364207b3de9e67da8604a5952ed9ef1fec",
+      "status": "passed",
+      "recorded_log_sha256": "ab19dd28971be21b85da21db16008e3d1f69df331413cbfbbf2b480af0ee6ee4"
+    },
+    "astra-sim-wscllm-LRU-native-configure": {
+      "command_cwd_environment_sha256": "d75d2f5752d862f25f2156fd95782411e0bf742fd59c1abeb93d1d7b0cddbfbc",
+      "identity_sha256": "dd55a65445d769e3746d21be5f1194002a50e9047e76ee1337dcc3bc41b2fdc9",
+      "status": "passed",
+      "recorded_log_sha256": "26bcdb6fb14953f7fb50c8e6ac1d7821ea81d6a8d914d42a9235b25633e1991d"
+    },
+    "astra-sim-wscllm-LRU-native-consumers": {
+      "command_cwd_environment_sha256": "69714673c1fb52091c0ede1ac2462cb4182318f746e0e3a6ce11e39602213f47",
+      "identity_sha256": "94eef89ff4ce56f69c7f1f2da5b53dfa9682fe992d0bfc117b96b60432bd45a9",
+      "status": "failed",
+      "recorded_log_sha256": "6b5c1051a2c8cf9fcf829d746572e032cbf8ecce2496c8f95f46628dfc3c3cbc"
+    },
+    "astra-sim-wscllm-native-build": {
+      "command_cwd_environment_sha256": "7305f5d3fbeb50ae666849d362e857dc6eefc1ebd3d5cbe20c922eca34800c43",
+      "identity_sha256": "1b9b52bead9d21a5562fbc94006f1f73e54f903f3d6122b4ca925d84b62f16d1",
+      "status": "passed",
+      "recorded_log_sha256": "52ccf01c84d352858d78c0af359a17c0f9c507317c46e50c3008076d5ba25517"
+    },
+    "astra-sim-wscllm-native-configure": {
+      "command_cwd_environment_sha256": "affc96757582d1e6a2a96ae6665467a2ab9f73d154bcbe91c3c94bb1ef67be99",
+      "identity_sha256": "9ed4f88c5bc1d8a1856d69d46424e94d4f7e1c99a234e197bdc8699a9068b235",
+      "status": "passed",
+      "recorded_log_sha256": "31830cd98cc984bf5714c00d8450ad79f064ce706464ad9a6ad16e4cc898e158"
+    },
+    "astra-sim-wscllm-native-consumers": {
+      "command_cwd_environment_sha256": "59352df898589043a386ba2e261d9cb04cd1a2743f0f24f5cab3524dcc703ea9",
+      "identity_sha256": "726c2aa7d2928f67d5fe1f75aff221acda3432eecaa79f121920969cd7af5515",
+      "status": "failed",
+      "recorded_log_sha256": "5f86bd7b2d5b4028842eeecb59d57b5f78600f35a11ed18aa18acb20af3f9bba"
+    }
+  },
+  "verifier_sha256": "35159b621fb6c5590c5dfc78b553a4d71d9f392362e5778884481bd414405411"
+}

@@ -1,0 +1,66 @@
+{
+  "scope": "fixed unsigned128 dyadic arithmetic only; not Runtime integration, snapshot context, or API budget",
+  "input_sha256": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+  "source_sha256": "c4f131c62fb71fb79bb99478e32513026b6d1b929d0e0074669b0f693549cea7",
+  "core_header_sha256": "aad3e040d9fb31791438754f4236b92f9aaf84e40b5f77a08dedcf137544b7f4",
+  "oracle_sha256": "6674ba4e1c6049caef63af118dcebc997c4aea500a8e519f39e2fbcfbf436bf9",
+  "runner_sha256": "8326808bb8b40efea3411aeb2894629608c589933f09c579899e6858d25f5ef3",
+  "json_header_sha256": "e832d339d9e0c042e7dff807754769d778cf5d6ae9730ce21eed56de99cb5e86",
+  "commands": [
+    {
+      "label": "compiler_version",
+      "command": [
+        "c++",
+        "--version"
+      ],
+      "returncode": 0,
+      "elapsed_s": 0.0041005611419677734
+    },
+    {
+      "label": "compile",
+      "command": [
+        "c++",
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-ffp-contract=off",
+        "-I/workspace/template/astra-sim-wscllm/extern/helper",
+        "/workspace/template/work/norm-dyadic128-20261017/evaluator.cc",
+        "-o",
+        "/workspace/template/work/norm-dyadic128-20261017/evaluator"
+      ],
+      "returncode": 0,
+      "elapsed_s": 5.133796453475952
+    },
+    {
+      "label": "run",
+      "command": [
+        "/workspace/template/work/norm-dyadic128-20261017/evaluator",
+        "/workspace/template/work/norm-dyadic128-20261017/input.json",
+        "/workspace/template/work/norm-dyadic128-20261017/output.jsonl"
+      ],
+      "returncode": 0,
+      "elapsed_s": 0.7133936882019043
+    }
+  ],
+  "host": "Linux-6.18.44-x86_64-with-glibc2.41",
+  "executable_sha256": "6d9930e0e84b9e555ecafe2a73d0ad1a11fc50848653980d910456c88f6be573",
+  "outputs_sha256": {
+    "attempt1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "benchmark.json": "ce1d3035f2f26c6dcbefcbb0056a1c9cff92433800d6ed71ef155ca74717ba44",
+    "domain-controls.json": "8b072e4c77e7a26cac4fcfb7137f8ac8d26cfd4f1ba2521d6f36b65c0eaa80ad",
+    "run.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "input.json": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+    "summary.json": "a17e31a8e4ae9edad6179727a5f24358d64f04c497be8940fd0004b0c2a1d97e",
+    "run.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "report.json": "f5fce35cd20c9fe0dec2bbb7d9a476c8d8334cfe3946aa529a0a910af449e5a5",
+    "output.jsonl": "0b69921f7bfa07c5c4d8bd23040af4e87be8ee9a5271a5be989c26af40ba636d",
+    "compile.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "compiler_version.stdout.log": "00f7e3c3e6a0308d7b60cc02429720ef6000d84c0add523f7dc030058d19961b",
+    "compile.stderr.log": "7f366967da4b7e0111b637f4e494e61a7cfb47e9373a5b40754be7c0fce3a7cf",
+    "compiler_version.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "attempt1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

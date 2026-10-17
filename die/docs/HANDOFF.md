@@ -1,5 +1,42 @@
 # Codex Cloud 开发交接状态
 
+## 最新有效停止交接（2026-10-17；覆盖下方全部持续开发指令/状态）
+
+用户已要求立即停止；本账号不再启动新开发、实验或非必要测试。**从独立分支
+`codex/die-numeric-continue-20261017` 最终远端HEAD恢复，不能仅从main恢复。**
+生产源码提交为 **`c734ce1145915279bc26367cb8e1e5076629adfe`**，Execution.cc SHA256
+`54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab`；
+后续提交仅SDK验证/离线算术研究/交接，未更改该生产源码。
+
+- **已验范围：** 当前fresh Release58/58；五新测试对fresh A+B真实red；跨库snapshot通过。
+  严格矩阵仍78/84，六原失败保留。严格API全字段比较false，13个estimate busy微差
+  （最多4.538e-15ns/一个double投影1ULP），其他字段/8实际轨迹/28ABI符号相同。
+  两配置各一次正常30样本当前预算全过，非全业务/硬件校准验收。
+- **五仓当前冻结：** c734ce1/33文件digest `0fb24b47de6b9a3622508d59b60d86542ee2413a20d4a482add0f3cdd56ef7dc`；
+  10ABI/98配置通过，Python384pass/1原optional skip，strict33阶段32pass/1failed。
+  新native五仓fresh构建均成功；FACE/FACE-LRU/WS/WSLRU各3/4（原R4 guard失败），
+  JOINT10/10 C++和6/6 Python通过；合计22 C++pass/4fail/实际0skip。
+  不冒充完整R4业务通过；旧A+B结果另存，不能混用。
+- **未完成/风险：** 实际当前Runtime完整7epoch Norm仍5.130029297s无next，11观察中6非法库存，
+  terminal totals未达到；11快照与A+B逐byte相同。容量1/长行/R>1/busy及完整CPU业务未解。
+  v1 affine被拒；v2 FMA样本符号修正但区间未认证且成本高；固定128位dyadic仅离线研究，
+  未接Runtime/未验snapshot/未测API预算。六矩阵失败、所有旧失败/可用性guard保持。
+- **恢复/证据：** [停止详情及Next Step](analysis/numeric-continue-20261017/STOP-HANDOFF-20261017.md)；
+  [当前Runtime355项归档](evidence/numeric-continue-20261017/runtime-checkpoint/manifest.json)、
+  [当前SDK](analysis/numeric-continue-20261017/sdk-current/README.md)、
+  [当前Norm真实red](analysis/numeric-continue-20261017/NORM-CURRENT.md)、
+  `analysis/`与`evidence/numeric-continue-20261017/{norm-affine-v2,norm-dyadic128}/`。
+  归档保留源码/输入/原始日志/失败，无旧ELF；下一账号按manifest恢复后fresh构建。
+- **状态：** main仅共享交接入口，未激活A+B/本次数值Runtime；正式五仓SDK仍canonical24，
+  publisher未运行；工程 **NOT ACCEPTED**。独立分支远端保存不等于main集成、SDK发布或验收。
+  main共享入口指向本分支最终保存SHA；完整证据/源码以本分支为准。
+
+**下一步：** fetch核实该分支及main，保留两边有效修改；先审查受限128位算术证明，
+再决定最窄affine physical-view隔离实验（同一物理视图贯通LP/event/terminal/import，
+积分前所有角色可表示progress与精确库存验证）；随后处理真实R4可用性及剩余业务/性能。
+不恢复旧Core、旧candidate2或逐K路线，不改参考/容差/速度门槛。本账号交接后停止。
+
+
 ## 最新持续研发检查点（2026-10-17；覆盖下方阶段/停止状态）
 
 - Current Status / Completed：工作分支 `codex/die-numeric-continue-20261017` 保留真实最新恢复 `9c464ca` 与main `021a47f`。当前已验证开发源码 `Execution.cc` SHA256 **`54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab`**：正小曲线事件、全活动精确整数ready、严格target/真ceil、微步前逐角色进度及原公式credit预检。未改变13资源、Q/alpha/PRIVATE、原busy/工作量或任何容差门槛；不增加tile/K/repeat状态。

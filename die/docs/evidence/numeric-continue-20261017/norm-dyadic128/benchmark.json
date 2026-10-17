@@ -1,0 +1,31 @@
+{
+  "batches": 5,
+  "eligible_samples": 1836,
+  "kind": "benchmark",
+  "methods": {
+    "direct": [
+      6.08959422657952,
+      6.087415577342048,
+      6.037802287581699,
+      6.062949346405229,
+      6.033575708061002
+    ],
+    "dyadic128_checked_interval": [
+      132.32048747276687,
+      216.70928649237473,
+      218.27653867102396,
+      217.13192265795206,
+      131.91647331154684
+    ],
+    "dyadic128_checked_sign": [
+      110.46143518518518,
+      193.93463779956426,
+      194.13520697167755,
+      111.44143518518518,
+      194.08837962962963
+    ]
+  },
+  "observable_sink_hex": "0xe.3e3f53p+24",
+  "rounds_per_batch": 100,
+  "scope": "standalone dyadic arithmetic only; not Runtime/API budget"
+}
