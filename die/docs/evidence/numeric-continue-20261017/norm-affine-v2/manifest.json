@@ -1,0 +1,66 @@
+{
+  "scope": "frozen-input standalone FMA arithmetic only; no Runtime build/adoption, no v3 implementation",
+  "input_frozen_to_v1": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+  "compressed_roundtrip_verified": {
+    "input.json": {
+      "original_bytes": 1102773,
+      "original_sha256": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+      "saved_bytes": 25095,
+      "saved_sha256": "71fa5d0104508cd6f8b4c3b0ac70724aefe98a12a37497bcacac5f928c1d8cca"
+    },
+    "output.jsonl": {
+      "original_bytes": 5638695,
+      "original_sha256": "4d3f966bc2f7a7d15ac6d3e69b338c01ea079284db8f9962f0b8fd133cda7568",
+      "saved_bytes": 147303,
+      "saved_sha256": "55e1a925f2dddb264b9cb1b6b2129f90ca9b61203bce066c8f2fa74726062378"
+    },
+    "report.json": {
+      "original_bytes": 3855258,
+      "original_sha256": "153e489dee62973133fce8a319d3762a589af89b84aa97dcea4d6d0348335c2e",
+      "saved_bytes": 322225,
+      "saved_sha256": "540957ec9b56bff703fb4479e3254dfcb9d67853ccff7c76eff9344be2636edf"
+    },
+    "v1-oracle-recheck.json": {
+      "original_bytes": 8915823,
+      "original_sha256": "0410f8f3c4f5ad8b3d4a799a4cb2e9e78b39a2adc7fc0e92a985f6722b7ad972",
+      "saved_bytes": 622368,
+      "saved_sha256": "bc1ce44646c4bbd84897e825b74d65786099b65d39efa0027d263907012715b1"
+    },
+    "unchanged-expressions.jsonl": {
+      "original_bytes": 6056477,
+      "original_sha256": "af042cf76c3bacfc80d67134e7d5ab54834552d00f5fc42e827d7ee3f0c59e1d",
+      "saved_bytes": 151370,
+      "saved_sha256": "3455a59d599da4d5188c899765562a14dcb141ec87f147f30b097b0890a47044"
+    },
+    "attempt1.stdout.log": {
+      "original_bytes": 10657,
+      "original_sha256": "d2d377665e369fee4ca5e42d600eebbe99e6a65ed2f6290036d7ed74cc831424",
+      "saved_bytes": 1748,
+      "saved_sha256": "668ed67fe27bb6eacc19935bc53531d8a0ffa88c9fd7b31baef1b920495d596e"
+    }
+  },
+  "files_sha256": {
+    "die/docs/analysis/numeric-continue-20261017/norm-affine-v2/INTEGER-SPLIT-REVIEW.md": "f449c318c42c83763a35e9d9b06be8e862e4ff1d2e14135f85c85fb8d0170aa2",
+    "die/docs/analysis/numeric-continue-20261017/norm-affine-v2/README.md": "2dde45977f01526b16fc5baf7dabc0ca46a6baae2524afa83afa6aa583a8edd1",
+    "die/docs/analysis/numeric-continue-20261017/norm-affine-v2/evaluator.cc": "7dcffe7fc453ccac1a631747009c1b4ee9c12af823284b2e4668c06684de3617",
+    "die/docs/analysis/numeric-continue-20261017/norm-affine-v2/oracle_base.py": "6674ba4e1c6049caef63af118dcebc997c4aea500a8e519f39e2fbcfbf436bf9",
+    "die/docs/analysis/numeric-continue-20261017/norm-affine-v2/run.py": "618e1c5640ccc4e3057defb94caca00f4252c5e5e2ffb2d259560df7ae402241",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/attempt1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/attempt1.stdout.log.gz": "668ed67fe27bb6eacc19935bc53531d8a0ffa88c9fd7b31baef1b920495d596e",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/benchmark.json": "2c917cadc81201e55249420b7092eb2304a956b7086de5eb4d539e9c4949c2d4",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/compile.stderr.log": "e598007d95e69927ee0e81c6e3d5d6eb45b5231293c33dd31fb919f3978e79f0",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/compile.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/compiler_version.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/compiler_version.stdout.log": "00f7e3c3e6a0308d7b60cc02429720ef6000d84c0add523f7dc030058d19961b",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/domain-and-examples.json": "193958968fad88164c4cd8fd4067d864bd1d0ecfa33b8ea2598e0e238919131a",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/identity.json": "de2c8738198fcb38dd30869d323ec78a5af8a1d9293796a84a4cc377e250490a",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/input.json.gz": "71fa5d0104508cd6f8b4c3b0ac70724aefe98a12a37497bcacac5f928c1d8cca",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/output.jsonl.gz": "55e1a925f2dddb264b9cb1b6b2129f90ca9b61203bce066c8f2fa74726062378",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/report.json.gz": "540957ec9b56bff703fb4479e3254dfcb9d67853ccff7c76eff9344be2636edf",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/run.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/run.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/summary.json": "d2d377665e369fee4ca5e42d600eebbe99e6a65ed2f6290036d7ed74cc831424",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/unchanged-expressions.jsonl.gz": "3455a59d599da4d5188c899765562a14dcb141ec87f147f30b097b0890a47044",
+    "die/docs/evidence/numeric-continue-20261017/norm-affine-v2/v1-oracle-recheck.json.gz": "bc1ce44646c4bbd84897e825b74d65786099b65d39efa0027d263907012715b1"
+  }
+}

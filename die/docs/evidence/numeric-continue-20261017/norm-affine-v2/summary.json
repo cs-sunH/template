@@ -1,0 +1,293 @@
+{
+  "scope": "standalone fixed-term FMA arithmetic at frozen represented progress; not integration, snapshot context, Runtime speed or hardware accuracy",
+  "abi": {
+    "kind": "abi",
+    "long_double_digits": 64,
+    "long_double_max_exponent": 16384,
+    "long_double_min_exponent": -16381,
+    "rounding": "verified FE_TONEAREST; no fast math; ffp-contract=off"
+  },
+  "case_count": 1952,
+  "input_frozen_and_v1_outputs_unchanged": true,
+  "negative_true_inventory_case_count": 224,
+  "negative_true_headroom_case_count": 197,
+  "groups": {
+    "saved_internal": {
+      "q": {
+        "count": 222,
+        "normal_domain_count": 222,
+        "unsupported_underflow_domain_count": 0,
+        "nonfinite_count": 0,
+        "nonzero_errors": 48,
+        "normal_nonzero_errors": 48,
+        "max_absolute_error": "1.27393755267046770995875704102218151092529296875E-17",
+        "max_absolute_error_case": 34,
+        "normal_max_absolute_error": "1.27393755267046770995875704102218151092529296875E-17",
+        "normal_max_absolute_error_case": 34,
+        "point_sign_errors": 0,
+        "normal_point_sign_errors": 0,
+        "incorrect_rounding_count": 0,
+        "normal_incorrect_rounding_count": 0,
+        "product_decomposition_errors": 0,
+        "normal_product_decomposition_errors": 0,
+        "interval_excludes_reference": 0,
+        "interval_uncertain": 34,
+        "interval_certified_positive": 116,
+        "interval_certified_negative": 0,
+        "interval_exact_zero": 72,
+        "old_wrong_sign_corrected": 0,
+        "old_correct_sign_regressed": 0
+      },
+      "h": {
+        "count": 222,
+        "normal_domain_count": 222,
+        "unsupported_underflow_domain_count": 0,
+        "nonfinite_count": 0,
+        "nonzero_errors": 10,
+        "normal_nonzero_errors": 10,
+        "max_absolute_error": "2.1684043449710088680149056017398834228515625E-19",
+        "max_absolute_error_case": 50,
+        "normal_max_absolute_error": "2.1684043449710088680149056017398834228515625E-19",
+        "normal_max_absolute_error_case": 50,
+        "point_sign_errors": 0,
+        "normal_point_sign_errors": 0,
+        "incorrect_rounding_count": 0,
+        "normal_incorrect_rounding_count": 0,
+        "product_decomposition_errors": 0,
+        "normal_product_decomposition_errors": 0,
+        "interval_excludes_reference": 0,
+        "interval_uncertain": 8,
+        "interval_certified_positive": 204,
+        "interval_certified_negative": 0,
+        "interval_exact_zero": 10,
+        "old_wrong_sign_corrected": 4,
+        "old_correct_sign_regressed": 0
+      }
+    },
+    "saved_public": {
+      "q": {
+        "count": 148,
+        "normal_domain_count": 148,
+        "unsupported_underflow_domain_count": 0,
+        "nonfinite_count": 0,
+        "nonzero_errors": 46,
+        "normal_nonzero_errors": 46,
+        "max_absolute_error": "1.26206850349706682645756217198140802793204784393310546875E-17",
+        "max_absolute_error_case": 230,
+        "normal_max_absolute_error": "1.26206850349706682645756217198140802793204784393310546875E-17",
+        "normal_max_absolute_error_case": 230,
+        "point_sign_errors": 0,
+        "normal_point_sign_errors": 0,
+        "incorrect_rounding_count": 0,
+        "normal_incorrect_rounding_count": 0,
+        "product_decomposition_errors": 0,
+        "normal_product_decomposition_errors": 0,
+        "interval_excludes_reference": 0,
+        "interval_uncertain": 10,
+        "interval_certified_positive": 80,
+        "interval_certified_negative": 6,
+        "interval_exact_zero": 52,
+        "old_wrong_sign_corrected": 0,
+        "old_correct_sign_regressed": 0
+      },
+      "h": {
+        "count": 148,
+        "normal_domain_count": 148,
+        "unsupported_underflow_domain_count": 0,
+        "nonfinite_count": 0,
+        "nonzero_errors": 14,
+        "normal_nonzero_errors": 14,
+        "max_absolute_error": "5.42101086242752217003726400434970855712890625E-20",
+        "max_absolute_error_case": 355,
+        "normal_max_absolute_error": "5.42101086242752217003726400434970855712890625E-20",
+        "normal_max_absolute_error_case": 355,
+        "point_sign_errors": 0,
+        "normal_point_sign_errors": 0,
+        "incorrect_rounding_count": 0,
+        "normal_incorrect_rounding_count": 0,
+        "product_decomposition_errors": 0,
+        "normal_product_decomposition_errors": 0,
+        "interval_excludes_reference": 0,
+        "interval_uncertain": 6,
+        "interval_certified_positive": 142,
+        "interval_certified_negative": 0,
+        "interval_exact_zero": 0,
+        "old_wrong_sign_corrected": 0,
+        "old_correct_sign_regressed": 0
+      }
+    },
+    "source_formula_boundary_neighbors": {
+      "q": {
+        "count": 1562,
+        "normal_domain_count": 1489,
+        "unsupported_underflow_domain_count": 73,
+        "nonfinite_count": 0,
+        "nonzero_errors": 288,
+        "normal_nonzero_errors": 220,
+        "max_absolute_error": "2.77555756156289135105907917022705078125E-17",
+        "max_absolute_error_case": 534,
+        "normal_max_absolute_error": "2.77555756156289135105907917022705078125E-17",
+        "normal_max_absolute_error_case": 534,
+        "point_sign_errors": 0,
+        "normal_point_sign_errors": 0,
+        "incorrect_rounding_count": 0,
+        "normal_incorrect_rounding_count": 0,
+        "product_decomposition_errors": 0,
+        "normal_product_decomposition_errors": 0,
+        "interval_excludes_reference": 0,
+        "interval_uncertain": 459,
+        "interval_certified_positive": 689,
+        "interval_certified_negative": 45,
+        "interval_exact_zero": 253,
+        "old_wrong_sign_corrected": 26,
+        "old_correct_sign_regressed": 0
+      },
+      "h": {
+        "count": 1562,
+        "normal_domain_count": 1489,
+        "unsupported_underflow_domain_count": 73,
+        "nonfinite_count": 0,
+        "nonzero_errors": 236,
+        "normal_nonzero_errors": 219,
+        "max_absolute_error": "2.77555756156289135105907917022705078125E-17",
+        "max_absolute_error_case": 508,
+        "normal_max_absolute_error": "2.77555756156289135105907917022705078125E-17",
+        "normal_max_absolute_error_case": 508,
+        "point_sign_errors": 0,
+        "normal_point_sign_errors": 0,
+        "incorrect_rounding_count": 0,
+        "normal_incorrect_rounding_count": 0,
+        "product_decomposition_errors": 0,
+        "normal_product_decomposition_errors": 0,
+        "interval_excludes_reference": 0,
+        "interval_uncertain": 296,
+        "interval_certified_positive": 1043,
+        "interval_certified_negative": 40,
+        "interval_exact_zero": 67,
+        "old_wrong_sign_corrected": 36,
+        "old_correct_sign_regressed": 0
+      }
+    },
+    "dyadic_capacity1": {
+      "q": {
+        "count": 20,
+        "normal_domain_count": 20,
+        "unsupported_underflow_domain_count": 0,
+        "nonfinite_count": 0,
+        "nonzero_errors": 0,
+        "normal_nonzero_errors": 0,
+        "max_absolute_error": "0",
+        "max_absolute_error_case": null,
+        "normal_max_absolute_error": "0",
+        "normal_max_absolute_error_case": null,
+        "point_sign_errors": 0,
+        "normal_point_sign_errors": 0,
+        "incorrect_rounding_count": 0,
+        "normal_incorrect_rounding_count": 0,
+        "product_decomposition_errors": 0,
+        "normal_product_decomposition_errors": 0,
+        "interval_excludes_reference": 0,
+        "interval_uncertain": 1,
+        "interval_certified_positive": 7,
+        "interval_certified_negative": 2,
+        "interval_exact_zero": 10,
+        "old_wrong_sign_corrected": 0,
+        "old_correct_sign_regressed": 0
+      },
+      "h": {
+        "count": 20,
+        "normal_domain_count": 20,
+        "unsupported_underflow_domain_count": 0,
+        "nonfinite_count": 0,
+        "nonzero_errors": 0,
+        "normal_nonzero_errors": 0,
+        "max_absolute_error": "0",
+        "max_absolute_error_case": null,
+        "normal_max_absolute_error": "0",
+        "normal_max_absolute_error_case": null,
+        "point_sign_errors": 0,
+        "normal_point_sign_errors": 0,
+        "incorrect_rounding_count": 0,
+        "normal_incorrect_rounding_count": 0,
+        "product_decomposition_errors": 0,
+        "normal_product_decomposition_errors": 0,
+        "interval_excludes_reference": 0,
+        "interval_uncertain": 1,
+        "interval_certified_positive": 7,
+        "interval_certified_negative": 2,
+        "interval_exact_zero": 10,
+        "old_wrong_sign_corrected": 0,
+        "old_correct_sign_regressed": 0
+      }
+    }
+  },
+  "fma_compared_with_direct": {
+    "saved_internal": {
+      "equal:q": 178,
+      "equal:h": 168,
+      "improved:h": 54,
+      "improved:q": 44
+    },
+    "saved_public": {
+      "equal:q": 110,
+      "equal:h": 96,
+      "improved:h": 52,
+      "improved:q": 38
+    },
+    "source_formula_boundary_neighbors": {
+      "improved:q": 596,
+      "equal:h": 1037,
+      "equal:q": 966,
+      "improved:h": 525
+    },
+    "dyadic_capacity1": {
+      "equal:q": 20,
+      "equal:h": 20
+    }
+  },
+  "interval_policy": "exactly v1 gamma8 direct-expression bound plus triangle transfer; no tighter FMA bound is asserted; unsupported underflow domain ungraded",
+  "benchmark": {
+    "scope": "tiny arithmetic evaluator only; not Runtime or API speed budget",
+    "eligible_samples": 1879,
+    "batches": 5,
+    "rounds_per_batch": 100,
+    "methods": {
+      "direct": {
+        "batch_average_ns_per_scalar_dot": [
+          8.95010643959553,
+          8.86181479510378,
+          8.719797764768494,
+          8.782663650878126,
+          8.823837147418839
+        ],
+        "median_batch_average_ns": 8.823837147418839,
+        "min_batch_average_ns": 8.719797764768494,
+        "max_batch_average_ns": 8.95010643959553
+      },
+      "fma_product_residual_compensated": {
+        "batch_average_ns_per_scalar_dot": [
+          939.8827168706758,
+          954.7833688131985,
+          764.2262054284193,
+          668.0001091005854,
+          763.7359712613093
+        ],
+        "median_batch_average_ns": 764.2262054284193,
+        "min_batch_average_ns": 668.0001091005854,
+        "max_batch_average_ns": 954.7833688131985
+      },
+      "structural_anchor_compensated": {
+        "batch_average_ns_per_scalar_dot": [
+          21.807815327301757,
+          21.951726982437467,
+          22.032344332091537,
+          21.69324906865354,
+          104.01625332623736
+        ],
+        "median_batch_average_ns": 21.951726982437467,
+        "min_batch_average_ns": 21.69324906865354,
+        "max_batch_average_ns": 104.01625332623736
+      }
+    }
+  }
+}

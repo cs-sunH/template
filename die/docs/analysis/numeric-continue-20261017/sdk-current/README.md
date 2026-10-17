@@ -29,11 +29,15 @@ python die/docs/analysis/core-resume-20261016/run_isolated_sdk.py \
   --phases abi python --jobs 2 --execute
 python die/docs/analysis/numeric-continue-20261017/sdk-current/archive_phase.py \
   --phase abi-python
+python die/docs/analysis/numeric-continue-20261017/sdk-current/verify_archive.py \
+  --phase abi-python
 python die/docs/analysis/core-resume-20261016/run_isolated_sdk.py \
   --snapshot work/sdk-numeric-current-20261017 \
   --output work/sdk-numeric-current-20261017/native-results \
   --phases native --jobs 2 --execute
 python die/docs/analysis/numeric-continue-20261017/sdk-current/archive_phase.py \
+  --phase native
+python die/docs/analysis/numeric-continue-20261017/sdk-current/verify_archive.py \
   --phase native
 ```
 

@@ -1,0 +1,7 @@
+/workspace/template/work/norm-affine-evaluator-20261017-v2/evaluator.cc: In function ‘int main(int, char**)’:
+/workspace/template/work/norm-affine-evaluator-20261017-v2/evaluator.cc:50:2: warning: this ‘if’ clause does not guard... [-Wmisleading-indentation]
+   50 |  if(argc!=3)return 2;std::ifstream in(argv[1]);json cases;in>>cases;std::ofstream out(argv[2]);
+      |  ^~
+/workspace/template/work/norm-affine-evaluator-20261017-v2/evaluator.cc:50:22: note: ...this statement, but the latter is misleadingly indented as if it were guarded by the ‘if’
+   50 |  if(argc!=3)return 2;std::ifstream in(argv[1]);json cases;in>>cases;std::ofstream out(argv[2]);
+      |                      ^~~

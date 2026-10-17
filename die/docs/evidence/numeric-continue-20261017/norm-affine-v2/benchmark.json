@@ -1,0 +1,34 @@
+{
+  "batches": 5,
+  "eligible_samples": 1879,
+  "kind": "benchmark",
+  "methods": {
+    "direct": [
+      8.95010643959553,
+      8.86181479510378,
+      8.719797764768494,
+      8.782663650878126,
+      8.823837147418839
+    ],
+    "fma_product_residual_compensated": [
+      939.8827168706758,
+      954.7833688131985,
+      764.2262054284193,
+      668.0001091005854,
+      763.7359712613093
+    ],
+    "structural_anchor_compensated": [
+      21.807815327301757,
+      21.951726982437467,
+      22.032344332091537,
+      21.69324906865354,
+      104.01625332623736
+    ]
+  },
+  "observable_sink": {
+    "decimal": "2.378963430000000000000e+08",
+    "hex": "0xe.2e0297p+24"
+  },
+  "rounds_per_batch": 100,
+  "scope": "tiny arithmetic evaluator only; not Runtime or API speed budget"
+}

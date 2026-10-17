@@ -1,0 +1,69 @@
+{
+  "scope": "standalone fixed-term FMA arithmetic at frozen represented progress; not integration, snapshot context, Runtime speed or hardware accuracy",
+  "input_sha256": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+  "frozen_v1_input_sha256": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+  "frozen_v1_report_sha256": "e27593defe0eeed5f9fb4431f759ab44983ae943ad3740cfa894157301b48869",
+  "frozen_v1_output_sha256": "98b63f543c969b58470b7168f5167de1bb1cb3819e2b22148b6758e8dba85307",
+  "oracle_sha256": "6674ba4e1c6049caef63af118dcebc997c4aea500a8e519f39e2fbcfbf436bf9",
+  "runner_sha256": "618e1c5640ccc4e3057defb94caca00f4252c5e5e2ffb2d259560df7ae402241",
+  "source_sha256": "7dcffe7fc453ccac1a631747009c1b4ee9c12af823284b2e4668c06684de3617",
+  "json_header_sha256": "e832d339d9e0c042e7dff807754769d778cf5d6ae9730ce21eed56de99cb5e86",
+  "commands": [
+    {
+      "label": "compiler_version",
+      "command": [
+        "c++",
+        "--version"
+      ],
+      "returncode": 0,
+      "elapsed_s": 0.0021593570709228516
+    },
+    {
+      "label": "compile",
+      "command": [
+        "c++",
+        "-std=c++17",
+        "-O2",
+        "-Wall",
+        "-Wextra",
+        "-Wpedantic",
+        "-ffp-contract=off",
+        "-I/workspace/template/astra-sim-wscllm/extern/helper",
+        "/workspace/template/work/norm-affine-evaluator-20261017-v2/evaluator.cc",
+        "-o",
+        "/workspace/template/work/norm-affine-evaluator-20261017-v2/evaluator"
+      ],
+      "returncode": 0,
+      "elapsed_s": 5.413143157958984
+    },
+    {
+      "label": "run",
+      "command": [
+        "/workspace/template/work/norm-affine-evaluator-20261017-v2/evaluator",
+        "/workspace/template/work/norm-affine-evaluator-20261017-v2/input.json",
+        "/workspace/template/work/norm-affine-evaluator-20261017-v2/output.jsonl"
+      ],
+      "returncode": 0,
+      "elapsed_s": 1.8048887252807617
+    }
+  ],
+  "host": "Linux-6.18.44-x86_64-with-glibc2.41",
+  "executable_sha256": "35df0e1e76c6b991a5271e236ee968e3bf7f43b73520f3697af4e895dbfd1314",
+  "outputs_sha256": {
+    "attempt1.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "benchmark.json": "2c917cadc81201e55249420b7092eb2304a956b7086de5eb4d539e9c4949c2d4",
+    "run.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "input.json": "000cebcb1a2d8027bc8bb353f04a95076929ea53320333a0898f1086a43e4700",
+    "summary.json": "d2d377665e369fee4ca5e42d600eebbe99e6a65ed2f6290036d7ed74cc831424",
+    "run.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "report.json": "153e489dee62973133fce8a319d3762a589af89b84aa97dcea4d6d0348335c2e",
+    "output.jsonl": "4d3f966bc2f7a7d15ac6d3e69b338c01ea079284db8f9962f0b8fd133cda7568",
+    "v1-oracle-recheck.json": "0410f8f3c4f5ad8b3d4a799a4cb2e9e78b39a2adc7fc0e92a985f6722b7ad972",
+    "compile.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "compiler_version.stdout.log": "00f7e3c3e6a0308d7b60cc02429720ef6000d84c0add523f7dc030058d19961b",
+    "unchanged-expressions.jsonl": "af042cf76c3bacfc80d67134e7d5ab54834552d00f5fc42e827d7ee3f0c59e1d",
+    "compile.stderr.log": "e598007d95e69927ee0e81c6e3d5d6eb45b5231293c33dd31fb919f3978e79f0",
+    "compiler_version.stderr.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "attempt1.stdout.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
