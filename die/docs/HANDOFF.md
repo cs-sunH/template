@@ -1,5 +1,30 @@
 # Codex Cloud 开发交接状态
 
+## 最新停止交接共享入口（2026-10-17；覆盖下方全部持续研发状态）
+
+用户已要求立即停止开发；全部现有成果已安全保存到独立分支并实际push/ls-remote核实：
+**[`codex/die-numeric-continue-20261017@940b1ff7ca67ec9ff8ec3735e5679e25af48e21b`](https://github.com/cs-sunH/template/tree/940b1ff7ca67ec9ff8ec3735e5679e25af48e21b)**。
+[权威HANDOFF](https://github.com/cs-sunH/template/blob/940b1ff7ca67ec9ff8ec3735e5679e25af48e21b/die/docs/HANDOFF.md)
+及[停止详情/复现/下一步](https://github.com/cs-sunH/template/blob/940b1ff7ca67ec9ff8ec3735e5679e25af48e21b/die/docs/analysis/numeric-continue-20261017/STOP-HANDOFF-20261017.md)。
+下一账号fetch全部heads，核实该分支最终HEAD，不仅从main判断进度；保留main其他有效修改。
+
+- 最新有效生产源码为分支内 `c734ce1145915279bc26367cb8e1e5076629adfe`，Execution.cc SHA256
+  `54b8f6f37ec7fc7f45549e51b4c86b8e70888b0cc923f3286cd269721ea38aab`；后续只证据/研究/交接。
+  fresh Release58/58；严格矩阵78/84（六原失败），严格API比较false（13个estimate busy微差），
+  两配置本次各一次30样本预算通过；不代表稳定全业务或目标硬件校准。
+- 当前新冻结SDK10ABI/98配置通过，Python384pass/1原optional skip；五仓fresh native均构建成功，
+  C++22pass/4原R4guard fail/实际0skip，JOINT10 C+++6Python通过。完整证据按源码身份保存，
+  不把旧A+B结果算入当前。当前Norm完整七epoch仍真实停滞/库存错误；128位dyadic仅离线算术研究，未接Runtime。
+- 355项Runtime文本、当前SDK ABI202/native358项及v2/v3研究源码/输入/原始结果已无ELF归档、实核hash。
+  子代理与现有进程均收尾停止，没有因交接启动新功能、实验或回归。
+- **本main提交仅共享交接指针，未合入A+B/新数值源码。正式五仓SDK未发布、publisher未运行，工程NOT ACCEPTED。**
+  远端保存、main源码集成、SDK发布与最终验收各自独立；下方持续开发指令均为历史。
+
+下一步按分支停止详情：先恢复/核验源码与证据，审查受限128位求值器后再决定最窄affine物理视图隔离实验，
+随后处理真实R4可用性及完整业务/CPU/精度；不恢复旧Core、旧candidate2或逐K路线，不放宽任何门槛。
+本账号交接后停止。
+
+
 ## 最新持续研发入口（2026-10-17；覆盖下方旧停止指针）
 
 用户已恢复持续自主研发。最新有效源码与完整证据保存在 [`codex/die-numeric-continue-20261017@c734ce1145915279bc26367cb8e1e5076629adfe`](https://github.com/cs-sunH/template/tree/c734ce1145915279bc26367cb8e1e5076629adfe)，后续接续应fetch核实该分支最新HEAD，不能仅从main推断源码进度。[权威HANDOFF](https://github.com/cs-sunH/template/blob/c734ce1145915279bc26367cb8e1e5076629adfe/die/docs/HANDOFF.md)与[当前复现/范围](https://github.com/cs-sunH/template/blob/c734ce1145915279bc26367cb8e1e5076629adfe/die/docs/analysis/numeric-continue-20261017/README.md)。
