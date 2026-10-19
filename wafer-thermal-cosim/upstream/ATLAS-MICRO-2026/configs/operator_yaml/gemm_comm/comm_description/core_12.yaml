@@ -1,0 +1,190 @@
+communication:
+  on_chip:
+    - tx:
+        buffer_load:
+          - name: noc_tx8_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx8
+            is_send: true
+            src: 12
+            dst: 8
+            flit_num: 256
+            init_flit_id: 0
+      rx:
+        buffer_load:
+        buffer_store:
+        vector:
+        noc:
+
+    - tx:
+        buffer_load:
+          - name: noc_tx8_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx8
+            is_send: true
+            src: 12
+            dst: 8
+            flit_num: 256
+            init_flit_id: 256
+      rx:
+        buffer_load:
+        buffer_store:
+        vector:
+        noc:
+
+    - tx:
+        buffer_load:
+          - name: noc_tx8_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx8
+            is_send: true
+            src: 12
+            dst: 8
+            flit_num: 256
+            init_flit_id: 512
+      rx:
+        buffer_load:
+          - name: reduce8_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx8_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce8_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce8
+            vec_count: 16384
+        noc:
+          - name: noc_rx8
+            is_send: false
+            src: 8
+            dst: 12
+            flit_num: 256
+            init_flit_id: 512
+
+    - tx:
+        buffer_load:
+          - name: noc_tx8_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx8
+            is_send: true
+            src: 12
+            dst: 8
+            flit_num: 256
+            init_flit_id: 768
+      rx:
+        buffer_load:
+          - name: reduce8_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx8_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce8_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce8
+            vec_count: 16384
+        noc:
+          - name: noc_rx8
+            is_send: false
+            src: 8
+            dst: 12
+            flit_num: 256
+            init_flit_id: 1024
+
+    - tx:
+        buffer_load:
+        noc:
+      rx:
+        buffer_load:
+          - name: reduce8_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx8_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce8_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce8
+            vec_count: 16384
+        noc:
+          - name: noc_rx8
+            is_send: false
+            src: 8
+            dst: 12
+            flit_num: 256
+            init_flit_id: 1536
+
+    - tx:
+        buffer_load:
+        noc:
+      rx:
+        buffer_load:
+          - name: reduce8_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx8_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce8_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce8
+            vec_count: 16384
+        noc:
+          - name: noc_rx8
+            is_send: false
+            src: 8
+            dst: 12
+            flit_num: 256
+            init_flit_id: 1792
+
+  dram:
+    - name: output
+      is_write: false
+      access_base: [0, 1536]
+      access_extent: [16, 512]
+      access_stride_add: [1, 1]
+      access_offset_add: [16, 1536]
+      init_iter: 0
+      stride_iter: 1
+      total_iter: 3
+
+    - name: output
+      is_write: false
+      access_base: [0, 0]
+      access_extent: [16, 512]
+      access_stride_add: [1, 1]
+      access_offset_add: [16, 512]
+      init_iter: 2
+      stride_iter: 1
+      total_iter: 1
+    
+    - name: input
+      is_write: true
+      access_base: [0, 0]
+      access_extent: [16, 512]
+      access_stride_add: [1, 1]
+      access_offset_add: [16, 512]
+      init_iter: 4
+      stride_iter: 1
+      total_iter: 4

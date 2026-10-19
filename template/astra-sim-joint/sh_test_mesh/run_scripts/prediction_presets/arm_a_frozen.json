@@ -1,0 +1,13 @@
+{
+  "version": "predcfg-v5-20261016",
+  "projection_mode": "frozen_diagnostic",
+  "future_demand_mode": "none",
+  "history_use": "shadow",
+  "stage_policy": "two_stage",
+  "settlement_policy": "consolidate",
+  "frozen_diagnostic": {
+    "frozen_horizon_mode": "per_action",
+    "resource_rule": "decision-tick active-set shares held fixed for the whole candidate; HBM N-way, NoC per-link capacity/active-flow and pool port N-way rules taken from the shared physical contract, only the share reallocation on events is disabled (A02 adjudication: A is the required diagnostic arm, not a hidden rollback of the formal path)",
+    "service_estimate_rule": "service efficiency and conditional remaining-length estimates stay at their decision-tick values; no event-driven recalibration inside the candidate horizon"
+  }
+}

@@ -1,0 +1,159 @@
+{
+  "schema_version": 1,
+  "hardware": {
+    "nx": 4,
+    "ny": 2,
+    "dies_per_instance": 2,
+    "module_width_m": 0.025,
+    "module_height_m": 0.032,
+    "compute_side_m": 0.01732,
+    "compute_groups_per_side": 2,
+    "pe_ops_s_per_die": 50000000000000.0,
+    "vec_ops_s_per_die": 5000000000000.0,
+    "hbm_bytes_s_per_die": 820000000000.0,
+    "d2d_bytes_s_per_direction": 256000000000.0,
+    "dram_bytes_s": 64000000000.0,
+    "dram_gateway_die": 0,
+    "hbm_capacity_bytes_per_die": 32000000000,
+    "kv_budget_bytes_per_die": 600000000,
+    "dram_capacity_bytes": 128000000000,
+    "d2d_hop_latency_s": 1e-08,
+    "receive_scratch_bytes_per_die": 2000000000,
+    "non_kv_reserved_bytes_per_die": 8000000000,
+    "sram_capacity_bytes_per_die": 67108864
+  },
+  "model": {
+    "layers": 32,
+    "hidden": 4096,
+    "kv_heads": 8,
+    "head_dim": 128,
+    "kv_element_bytes": 2,
+    "weight_bytes": 0.5,
+    "parameters": 7000000000,
+    "activation_bytes": 2,
+    "sram_reuse_factor": 16,
+    "kv_adaptation_ops_per_byte": 8,
+    "kv_adaptation_read_write_factor": 2,
+    "kv_compatible": true,
+    "compatibility_evidence": "synthetic_declared_transform_not_quality_validated",
+    "same_model_adaptation_ops_per_byte": 0
+  },
+  "workload": {
+    "agents": 8,
+    "rounds": 2,
+    "prompt_tokens": 128,
+    "shared_tokens": 512,
+    "history_tokens": 64,
+    "output_tokens": 16,
+    "context_limit_tokens": 2048,
+    "communication_mode": "kv",
+    "mapping": "joint",
+    "kv_policy": "reuse_aware",
+    "arrival_interval_s": 0.001
+  },
+  "energy": {
+    "pe_j_per_op": 2e-13,
+    "vec_j_per_op": 4e-12,
+    "sram_j_per_byte": 2e-13,
+    "hbm_j_per_byte": 3e-11,
+    "dram_j_per_byte": 8e-11,
+    "noc_j_per_byte": 4e-13,
+    "d2d_j_per_bit": 4.5e-13,
+    "dram_io_j_per_byte": 2e-11,
+    "idle_compute_w_per_die": 12,
+    "idle_hbm_w_per_die": 4,
+    "idle_router_w_per_die": 1,
+    "leak_compute_w_at_300k": 8,
+    "leak_beta_per_k": 0.012,
+    "dram_background_w": 8,
+    "cacti_calibration": null
+  },
+  "thermal": {
+    "backend": "rc_liquid",
+    "window_s": 0.01,
+    "initial_k": 300.0,
+    "inlet_k": 300.0,
+    "silicon_thickness_m": 5e-05,
+    "silicon_volumetric_heat_capacity_j_m3k": 2453489.999878007,
+    "silicon_k_w_mk": 130.0,
+    "htc_w_m2k": 26582.5068641967,
+    "tim_areal_resistance_m2k_w": 0.0,
+    "hbm_capacity_j_k_per_die": 0.009813861859912034,
+    "router_capacity_j_k_per_die": 0.0021247223398943543,
+    "hbm_cooling_g_w_k": 2.126579283130245,
+    "router_cooling_g_w_k": 0.4604090188878869,
+    "substrate_die_lateral_g_w_k": 0.01465885416666666,
+    "coolant_mass_flow_kg_s_per_row": 0.0031904000000000004,
+    "coolant_cp_j_kgk": 4185.193580742227,
+    "coolant_segment_volume_m3": 4.000000000000001e-08,
+    "coolant_density_kg_m3": 997.0,
+    "throttle_k": 343.15,
+    "resume_k": 338.15,
+    "throttle_ratio": 0.6,
+    "idle_cooldown_s": 0.02,
+    "three_dice": {
+      "step_s": 0.01,
+      "channel_height_um": 100.0,
+      "channel_length_um": 500.0,
+      "wall_length_um": 500.0,
+      "first_wall_length_um": 250.0,
+      "last_wall_length_um": 250.0,
+      "grid_cell_width_um": 4000.0,
+      "active_layer_um": 50.0,
+      "passive_die_um": 50.0,
+      "flow_rate_ml_min": 384.0,
+      "htc_side_w_m2k": 27132.0,
+      "htc_top_w_m2k": 47132.0,
+      "htc_bottom_w_m2k": 57132.0,
+      "coolant_vhc_j_um3k": 4.172638e-12
+    }
+  },
+  "simulation": {
+    "max_simulated_s": 1000,
+    "max_events": 2000000,
+    "wall_budget_s": 3600,
+    "record_every_windows": 1
+  },
+  "thermal_calibration": {
+    "status": "exploratory_candidate_fit_to_pinned_3d_ice_reference",
+    "empirical_silicon_calibration": false,
+    "reference_commit": "4953952a1ef6d38807ff307212a6f15e5b2ef935",
+    "training_profile": "hotspots on dies 0/1/4/5, then 2/3/6/7, then checkerboard; phase edges at 40/80 ms",
+    "held_out_profile": "hotspots on dies 2/3/4/7, then 0/3/4/7, then 1/2/5/6; phase edges at 30/70 ms",
+    "fit_method": "bounded scipy.optimize.least_squares over all training block/time residuals; no additive offset or temperature scaling",
+    "initial_parameters": {
+      "htc_w_m2k": 52132.0,
+      "tim_areal_resistance_m2k_w": 0.0,
+      "rc_effective_silicon_capacity_scale": 1.0
+    },
+    "fitted_parameters": {
+      "htc_w_m2k": 26582.5068641967,
+      "tim_areal_resistance_m2k_w": 0.0,
+      "rc_effective_silicon_capacity_scale": 1.4999999999254165
+    },
+    "parameter_bounds": {
+      "htc_w_m2k": [
+        15000.0,
+        100000.0
+      ],
+      "rc_effective_silicon_capacity_scale": [
+        0.5,
+        1.5
+      ],
+      "tim_areal_resistance_m2k_w": "fixed to the source assumption; HTC and TIM are series-equivalent in this RC topology"
+    },
+    "acceptance_gate": {
+      "held_out_rmse_k_max": 0.05,
+      "held_out_peak_abs_delta_k_max": 0.1,
+      "held_out_rmse_must_improve": true
+    },
+    "parameter_provenance": {
+      "reference_htc_and_material": "pinned 3D-ICE official 4RM stack plus configs/thermal/3dice_8die_reference.json",
+      "fit_bounds": "engineering bounds around source-derived fast-RC defaults, not measured-property intervals",
+      "tim_resistance": "fixed at zero source assumption because TIM and HTC are not separately identifiable in this RC topology",
+      "capacity_scale": "effective fast-RC capacity parameter; 3D-ICE physical material values remain unchanged"
+    },
+    "scientific_accuracy_gate": "failed",
+    "configuration_role": "superseded RC-only exploratory candidate; do not use as validated calibration"
+  }
+}

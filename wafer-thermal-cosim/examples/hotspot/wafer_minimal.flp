@@ -1,0 +1,6 @@
+# Three contiguous regions in a simplified 15 mm x 5 mm wafer cross-section.
+# The side HBM block is represented as a thermal block with its own power input.
+# Line format: name width height left_x bottom_y (meters).
+die0 0.005 0.005 0.000 0.000
+die1 0.005 0.005 0.005 0.000
+side_hbm 0.005 0.005 0.010 0.000

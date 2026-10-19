@@ -1,0 +1,304 @@
+communication:
+  on_chip:
+    - tx:
+        buffer_load:
+        noc:
+      rx:
+        buffer_load:
+          - name: reduce3_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx3_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce3_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce3
+            vec_count: 16384
+        noc:
+          - name: noc_rx3
+            is_send: false
+            src: 3
+            dst: 7
+            flit_num: 256
+            init_flit_id: 0
+
+    - tx:
+        buffer_load:
+          - name: noc_tx11_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx11
+            is_send: true
+            src: 7
+            dst: 11
+            flit_num: 256
+            init_flit_id: 0
+      rx:
+        buffer_load:
+          - name: reduce3_load
+            byte_count: 32768
+            is_write: false
+          - name: reduce11_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx3_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce3_store
+            byte_count: 16384
+            is_write: true
+          - name: noc_rx11_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce11_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce3
+            vec_count: 16384
+          - name: reduce11
+            vec_count: 16384
+        noc:
+          - name: noc_rx3
+            is_send: false
+            src: 3
+            dst: 7
+            flit_num: 256
+            init_flit_id: 256
+          - name: noc_rx11
+            is_send: false
+            src: 11
+            dst: 7
+            flit_num: 256
+            init_flit_id: 0
+
+    - tx:
+        buffer_load:
+          - name: noc_tx3_load
+            byte_count: 16384
+            is_write: false
+          - name: noc_tx11_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx3
+            is_send: true
+            src: 7
+            dst: 3
+            flit_num: 256
+            init_flit_id: 256
+          - name: noc_tx11
+            is_send: true
+            src: 7
+            dst: 11
+            flit_num: 256
+            init_flit_id: 512
+      rx:
+        buffer_load:
+          - name: reduce3_load
+            byte_count: 32768
+            is_write: false
+          - name: reduce11_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx3_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce3_store
+            byte_count: 16384
+            is_write: true
+          - name: noc_rx11_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce11_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce3
+            vec_count: 16384
+          - name: reduce11
+            vec_count: 16384
+        noc:
+          - name: noc_rx3
+            is_send: false
+            src: 3
+            dst: 7
+            flit_num: 256
+            init_flit_id: 512
+          - name: noc_rx11
+            is_send: false
+            src: 11
+            dst: 7
+            flit_num: 256
+            init_flit_id: 256
+
+    - tx:
+        buffer_load:
+          - name: noc_tx3_load
+            byte_count: 16384
+            is_write: false
+          - name: noc_tx11_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx3
+            is_send: true
+            src: 7
+            dst: 3
+            flit_num: 256
+            init_flit_id: 768
+          - name: noc_tx11
+            is_send: true
+            src: 7
+            dst: 11
+            flit_num: 256
+            init_flit_id: 1024
+      rx:
+        buffer_load:
+          - name: reduce3_load
+            byte_count: 32768
+            is_write: false
+          - name: reduce11_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx3_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce3_store
+            byte_count: 16384
+            is_write: true
+          - name: noc_rx11_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce11_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce3
+            vec_count: 16384
+          - name: reduce11
+            vec_count: 16384
+        noc:
+          - name: noc_rx3
+            is_send: false
+            src: 3
+            dst: 7
+            flit_num: 256
+            init_flit_id: 768
+          - name: noc_rx11
+            is_send: false
+            src: 11
+            dst: 7
+            flit_num: 256
+            init_flit_id: 768
+
+    - tx:
+        buffer_load:
+          - name: noc_tx3_load
+            byte_count: 16384
+            is_write: false
+          - name: noc_tx11_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx3
+            is_send: true
+            src: 7
+            dst: 3
+            flit_num: 256
+            init_flit_id: 1280
+          - name: noc_tx11
+            is_send: true
+            src: 7
+            dst: 11
+            flit_num: 256
+            init_flit_id: 1536
+      rx:
+        buffer_load:
+          - name: reduce11_load
+            byte_count: 32768
+            is_write: false
+        buffer_store:
+          - name: noc_rx11_store
+            byte_count: 16384
+            is_write: true
+          - name: reduce11_store
+            byte_count: 16384
+            is_write: true
+        vector:
+          - name: reduce11
+            vec_count: 16384
+        noc:
+          - name: noc_rx11
+            is_send: false
+            src: 11
+            dst: 7
+            flit_num: 256
+            init_flit_id: 1280
+
+    - tx:
+        buffer_load:
+          - name: noc_tx3_load
+            byte_count: 16384
+            is_write: false
+        noc:
+          - name: noc_tx3
+            is_send: true
+            src: 7
+            dst: 3
+            flit_num: 256
+            init_flit_id: 1792
+      rx:
+        buffer_load:
+        buffer_store:
+        vector:
+        noc:
+
+  dram:
+    - name: output
+      is_write: false
+      access_base: [0, 0]
+      access_extent: [16, 512]
+      access_stride_add: [1, 1]
+      access_offset_add: [16, 512]
+      init_iter: 0
+      stride_iter: 1
+      total_iter: 2
+
+    - name: output
+      is_write: false
+      access_base: [0, 1536]
+      access_extent: [16, 512]
+      access_stride_add: [1, 1]
+      access_offset_add: [16, 1536]
+      init_iter: 1
+      stride_iter: 1
+      total_iter: 2
+    
+    - name: input
+      is_write: true
+      access_base: [0, 1024]
+      access_extent: [16, 512]
+      access_stride_add: [1, 1]
+      access_offset_add: [16, 512]
+      init_iter: 4
+      stride_iter: 1
+      total_iter: 2
+    
+    - name: input
+      is_write: true
+      access_base: [0, 512]
+      access_extent: [16, 512]
+      access_stride_add: [1, 1]
+      access_offset_add: [16, 1536]
+      init_iter: 5
+      stride_iter: 1
+      total_iter: 2

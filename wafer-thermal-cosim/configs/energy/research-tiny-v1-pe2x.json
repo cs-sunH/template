@@ -1,0 +1,894 @@
+{
+  "accelergy_ert_components": {
+    "control_event": {
+      "action": "action",
+      "component": "wafer_research_v1.control_event",
+      "energy_pj_from_ert": 4.0,
+      "estimator": null
+    },
+    "d2d_bit": {
+      "action": "action",
+      "component": "wafer_research_v1.d2d_bit",
+      "energy_pj_from_ert": 0.45,
+      "estimator": null
+    },
+    "d2d_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.d2d_byte",
+      "energy_pj_from_ert": 3.6,
+      "estimator": null
+    },
+    "dram_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.dram_byte",
+      "energy_pj_from_ert": 116.764086914,
+      "estimator": null
+    },
+    "dram_io_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.dram_io_byte",
+      "energy_pj_from_ert": 20.0,
+      "estimator": null
+    },
+    "dram_read_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.dram_read_byte",
+      "energy_pj_from_ert": 122.176904297,
+      "estimator": null
+    },
+    "dram_write_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.dram_write_byte",
+      "energy_pj_from_ert": 111.351269531,
+      "estimator": null
+    },
+    "hbm_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.hbm_byte",
+      "energy_pj_from_ert": 21.2895812988,
+      "estimator": null
+    },
+    "hbm_read_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.hbm_read_byte",
+      "energy_pj_from_ert": 19.2333984375,
+      "estimator": null
+    },
+    "hbm_write_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.hbm_write_byte",
+      "energy_pj_from_ert": 23.3457641602,
+      "estimator": null
+    },
+    "noc_router_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.noc_router_byte",
+      "energy_pj_from_ert": 0.5773454532,
+      "estimator": null
+    },
+    "noc_router_byte_4_2": {
+      "action": "action",
+      "component": "wafer_research_v1.noc_router_byte_4_2",
+      "energy_pj_from_ert": 0.558709754021,
+      "estimator": null
+    },
+    "noc_router_byte_8_6": {
+      "action": "action",
+      "component": "wafer_research_v1.noc_router_byte_8_6",
+      "energy_pj_from_ert": 0.667475418037,
+      "estimator": null
+    },
+    "pe_mac": {
+      "action": "action",
+      "component": "wafer_research_v1.pe_mac",
+      "energy_pj_from_ert": 0.8,
+      "estimator": null
+    },
+    "pe_operation": {
+      "action": "action",
+      "component": "wafer_research_v1.pe_operation",
+      "energy_pj_from_ert": 0.4,
+      "estimator": null
+    },
+    "sram_read_access": {
+      "action": "action",
+      "component": "wafer_research_v1.sram_read_access",
+      "energy_pj_from_ert": 34.3892,
+      "estimator": null
+    },
+    "sram_read_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.sram_read_byte",
+      "energy_pj_from_ert": 0.268665625,
+      "estimator": null
+    },
+    "sram_write_access": {
+      "action": "action",
+      "component": "wafer_research_v1.sram_write_access",
+      "energy_pj_from_ert": 64.435,
+      "estimator": null
+    },
+    "sram_write_byte": {
+      "action": "action",
+      "component": "wafer_research_v1.sram_write_byte",
+      "energy_pj_from_ert": 0.5033984375,
+      "estimator": null
+    },
+    "vec_fma": {
+      "action": "action",
+      "component": "wafer_research_v1.vec_fma",
+      "energy_pj_from_ert": 8.0,
+      "estimator": null
+    },
+    "vec_operation": {
+      "action": "action",
+      "component": "wafer_research_v1.vec_operation",
+      "energy_pj_from_ert": 4.0,
+      "estimator": null
+    }
+  },
+  "actions": {
+    "control": {
+      "ert_action": "action",
+      "ert_component": "control_event",
+      "ert_energy_pj": 4.0,
+      "joules_per_unit": 4e-12,
+      "sensitivity": {
+        "high": 4e-11,
+        "interpretation": "controller implementation and event mix are unspecified; 0.1x..10x sensitivity only",
+        "low": 4e-13,
+        "nominal": 4e-12
+      },
+      "source": {
+        "activation_bytes": 2,
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "weight_bytes": 1
+      },
+      "status": "assumed_proxy",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "action"
+    },
+    "d2d": {
+      "ert_action": "action",
+      "ert_component": "d2d_byte",
+      "ert_energy_pj": 3.6,
+      "joules_per_unit": 3.6e-12,
+      "sensitivity": {
+        "high": 7.2e-12,
+        "interpretation": "explicit \u00b12x assumption sweep; not statistical uncertainty",
+        "low": 1.8e-12,
+        "nominal": 3.6e-12
+      },
+      "source": {
+        "activation_bytes": 2,
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "weight_bytes": 1
+      },
+      "status": "assumed_from_runtime_config",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "byte"
+    },
+    "dram": {
+      "ert_action": "action",
+      "ert_component": "dram_byte",
+      "ert_energy_pj": 116.764086914,
+      "joules_per_unit": 1.16764086914e-10,
+      "sensitivity": {
+        "high": 1.167640869140625e-10,
+        "low": 1.167640869140625e-10,
+        "nominal": 1.167640869140625e-10,
+        "read_write_mix_sensitivity": {
+          "read_fraction_0_2": 1.13516396484375e-10,
+          "read_fraction_0_8": 1.2001177734375002e-10
+        }
+      },
+      "source": {
+        "commit": "29817593b3389f1337235d63cac515024ab8fd6e",
+        "config": "upstream/DRAMsim3/configs/DDR4_8Gb_x8_3200.ini",
+        "energy_scope": "ACT + READ/WRITE command energy per target byte; REF and rank background energy remain in dram_background to avoid double counting",
+        "evidence": "local-results/research-v1/calibration/run-03/service-replay-evidence.json",
+        "license": "MIT",
+        "protocol": "DDR4",
+        "read_write_byte_mix": {
+          "read_fraction": 0.5,
+          "write_fraction": 0.5
+        },
+        "tool": "DRAMSim3"
+      },
+      "status": "dramsim3_model_derived",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "byte"
+    },
+    "dram_io": {
+      "ert_action": "action",
+      "ert_component": "dram_io_byte",
+      "ert_energy_pj": 20.0,
+      "joules_per_unit": 2e-11,
+      "sensitivity": {
+        "high": 4e-11,
+        "interpretation": "explicit \u00b12x assumption sweep; not statistical uncertainty",
+        "low": 1e-11,
+        "nominal": 2e-11
+      },
+      "source": {
+        "activation_bytes": 2,
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "weight_bytes": 1
+      },
+      "status": "assumed_from_runtime_config",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "byte"
+    },
+    "hbm": {
+      "ert_action": "action",
+      "ert_component": "hbm_byte",
+      "ert_energy_pj": 21.2895812988,
+      "joules_per_unit": 2.1289581298800002e-11,
+      "sensitivity": {
+        "high": 2.1289581298828123e-11,
+        "low": 2.1289581298828123e-11,
+        "nominal": 2.1289581298828123e-11,
+        "read_write_mix_sensitivity": {
+          "read_fraction_0_2": 2.2523291015625002e-11,
+          "read_fraction_0_8": 2.005587158203125e-11
+        }
+      },
+      "source": {
+        "commit": "29817593b3389f1337235d63cac515024ab8fd6e",
+        "config": "upstream/DRAMsim3/configs/HBM2_4Gb_x128.ini",
+        "energy_scope": "ACT + READ/WRITE command energy per target byte; REF and rank background energy remain in hbm_idle to avoid double counting",
+        "evidence": "local-results/research-v1/calibration/run-03/service-replay-evidence.json",
+        "license": "MIT",
+        "protocol": "HBM2",
+        "read_write_byte_mix": {
+          "read_fraction": 0.5,
+          "write_fraction": 0.5
+        },
+        "tool": "DRAMSim3"
+      },
+      "status": "dramsim3_model_derived",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "byte"
+    },
+    "noc": {
+      "ert_action": "action",
+      "ert_component": "noc_router_byte",
+      "ert_energy_pj": 0.5773454532,
+      "joules_per_unit": 5.773454532e-13,
+      "sensitivity": {
+        "high": 6.674754180371609e-13,
+        "interpretation": "range across completed traffic/mesh/load runs; not target-silicon error bars",
+        "low": 5.23229242500884e-13,
+        "nominal": 5.773454532001202e-13
+      },
+      "source": {
+        "commit": "28f43299f1706a3160ffac721ca461d74eb6e618",
+        "energy_scope": "router input-buffer, switch and output dynamic components per runtime hop-endpoint action byte; excludes BookSim channels, clocks, leakage and all D2D PHY energy",
+        "evidence": "local-results/research-v1/calibration/run-03/service-replay-evidence.json",
+        "license": "Stanford BSD-3-Clause-style redistribution terms",
+        "technology_model": "bundled 2007 32 nm high-performance file",
+        "tool": "BookSim 2"
+      },
+      "status": "booksim_model_derived",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "topology_joules_per_unit": {
+        "4x2": {
+          "ert_action": "action",
+          "ert_component": "noc_router_byte_4_2",
+          "ert_energy_pj": 0.558709754021,
+          "joules_per_unit": 5.58709754021e-13,
+          "sensitivity": {
+            "high": 6.333330409978287e-13,
+            "interpretation": "BookSim-derived per-hop-endpoint action value for this exact mesh; observed range is not target-silicon uncertainty",
+            "low": 5.23229242500884e-13,
+            "nominal": 5.587097540211876e-13,
+            "observed_uniform_rows": 5
+          },
+          "source": {
+            "commit": "28f43299f1706a3160ffac721ca461d74eb6e618",
+            "energy_scope": "router input-buffer, switch and output dynamic components per runtime hop-endpoint action byte; excludes BookSim channels, clocks, leakage and all D2D PHY energy",
+            "evidence": "local-results/research-v1/calibration/run-03/service-replay-evidence.json",
+            "license": "Stanford BSD-3-Clause-style redistribution terms",
+            "technology_model": "bundled 2007 32 nm high-performance file",
+            "tool": "BookSim 2",
+            "topology": "4x2"
+          },
+          "status": "booksim_model_derived",
+          "temperature_domain_k": [
+            300,
+            400
+          ]
+        },
+        "8x6": {
+          "ert_action": "action",
+          "ert_component": "noc_router_byte_8_6",
+          "ert_energy_pj": 0.667475418037,
+          "joules_per_unit": 6.67475418037e-13,
+          "sensitivity": {
+            "high": 6.674754180371609e-13,
+            "interpretation": "BookSim-derived per-hop-endpoint action value for this exact mesh; observed range is not target-silicon uncertainty",
+            "low": 6.674754180371609e-13,
+            "nominal": 6.674754180371609e-13,
+            "observed_uniform_rows": 1
+          },
+          "source": {
+            "commit": "28f43299f1706a3160ffac721ca461d74eb6e618",
+            "energy_scope": "router input-buffer, switch and output dynamic components per runtime hop-endpoint action byte; excludes BookSim channels, clocks, leakage and all D2D PHY energy",
+            "evidence": "local-results/research-v1/calibration/run-03/service-replay-evidence.json",
+            "license": "Stanford BSD-3-Clause-style redistribution terms",
+            "technology_model": "bundled 2007 32 nm high-performance file",
+            "tool": "BookSim 2",
+            "topology": "8x6"
+          },
+          "status": "booksim_model_derived",
+          "temperature_domain_k": [
+            300,
+            400
+          ]
+        }
+      },
+      "unit": "byte"
+    },
+    "pe": {
+      "ert_action": "action",
+      "ert_component": "pe_operation",
+      "ert_energy_pj": 0.4,
+      "joules_per_unit": 4e-13,
+      "sensitivity": {
+        "high": 8e-13,
+        "interpretation": "explicit \u00b12x assumption sweep; not statistical uncertainty",
+        "low": 2e-13,
+        "nominal": 4e-13
+      },
+      "source": {
+        "activation_bytes": 2,
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "weight_bytes": 1
+      },
+      "status": "assumed_from_runtime_config",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "op"
+    },
+    "sram_read": {
+      "ert_action": "action",
+      "ert_component": "sram_read_byte",
+      "ert_energy_pj": 0.268665625,
+      "joules_per_unit": 2.68665625e-13,
+      "sensitivity": {
+        "high": 2.6866562500000005e-13,
+        "interpretation": "whole-word CACTI access divided by configured access bytes; partial-word fixed decoder cost is not modeled",
+        "low": 2.6866562500000005e-13,
+        "nominal": 2.6866562500000005e-13
+      },
+      "source": {
+        "access_bytes": 128,
+        "commit": "1ffd8dfb10303d306ecd8d215320aea07651e878",
+        "license": "HP Software License Agreement notices in source; preserve notices",
+        "macro_bytes": 65536,
+        "node_nm": 22.0,
+        "path": "local-results/energy.local.json",
+        "repository": "https://github.com/HewlettPackard/cacti",
+        "roadmap": "itrs-hp",
+        "word_bits": 1024
+      },
+      "status": "cacti_model_derived",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "byte"
+    },
+    "sram_write": {
+      "ert_action": "action",
+      "ert_component": "sram_write_byte",
+      "ert_energy_pj": 0.5033984375,
+      "joules_per_unit": 5.033984375e-13,
+      "sensitivity": {
+        "high": 5.033984375000001e-13,
+        "interpretation": "whole-word CACTI access divided by configured access bytes; partial-word fixed decoder cost is not modeled",
+        "low": 5.033984375000001e-13,
+        "nominal": 5.033984375000001e-13
+      },
+      "source": {
+        "access_bytes": 128,
+        "commit": "1ffd8dfb10303d306ecd8d215320aea07651e878",
+        "license": "HP Software License Agreement notices in source; preserve notices",
+        "macro_bytes": 65536,
+        "node_nm": 22.0,
+        "path": "local-results/energy.local.json",
+        "repository": "https://github.com/HewlettPackard/cacti",
+        "roadmap": "itrs-hp",
+        "word_bits": 1024
+      },
+      "status": "cacti_model_derived",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "byte"
+    },
+    "vec": {
+      "ert_action": "action",
+      "ert_component": "vec_operation",
+      "ert_energy_pj": 4.0,
+      "joules_per_unit": 4e-12,
+      "sensitivity": {
+        "high": 8e-12,
+        "interpretation": "explicit \u00b12x assumption sweep; not statistical uncertainty",
+        "low": 2e-12,
+        "nominal": 4e-12
+      },
+      "source": {
+        "activation_bytes": 2,
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "weight_bytes": 1
+      },
+      "status": "assumed_from_runtime_config",
+      "temperature_dependence": "constant in this ERT; source action energy is evaluated at the recorded reference assumptions and is not a calibrated voltage/frequency surface",
+      "temperature_domain_k": [
+        300,
+        400
+      ],
+      "unit": "op"
+    }
+  },
+  "background": {
+    "compute_idle": {
+      "source": {
+        "activation_bytes": 2,
+        "key": "energy.idle_compute_w_per_die",
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "status": "assumed",
+        "weight_bytes": 1
+      },
+      "unit": "W/die",
+      "watts_per_unit": 12.0
+    },
+    "compute_leak": {
+      "beta_per_k": 0.012,
+      "maximum_temperature_k": 450.0,
+      "minimum_temperature_k": 300.0,
+      "model": "watts_per_die_at_reference * exp(beta_per_k * (temperature_k - reference_temperature_k))",
+      "reference_temperature_k": 300.0,
+      "source": {
+        "activation_bytes": 2,
+        "keys": [
+          "energy.leak_compute_w_at_300k",
+          "energy.leak_beta_per_k"
+        ],
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "status": "assumed",
+        "weight_bytes": 1
+      },
+      "unit": "W/die",
+      "watts_per_die_at_reference": 8.0
+    },
+    "dram_background": {
+      "source": {
+        "activation_bytes": 2,
+        "key": "energy.dram_background_w",
+        "owner_note": "Outside wafer heat grid; DRAMSim3 rank background stats are not added on top.",
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "status": "assumed",
+        "weight_bytes": 1
+      },
+      "thermal_destination": "external",
+      "unit": "W/external memory system",
+      "watts_per_unit": 8.0
+    },
+    "hbm_idle": {
+      "source": {
+        "activation_bytes": 2,
+        "key": "energy.idle_hbm_w_per_die",
+        "owner_note": "Single idle/refresh background owner; DRAMSim3 rank background is recorded but not added again.",
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "status": "assumed",
+        "weight_bytes": 1
+      },
+      "unit": "W/die",
+      "watts_per_unit": 4.0
+    },
+    "router_idle": {
+      "source": {
+        "activation_bytes": 2,
+        "key": "energy.idle_router_w_per_die",
+        "owner_note": "BookSim leakage and clock totals are excluded from NoC action energy.",
+        "path": "configs/research/tiny-analytical.json",
+        "precision_scope": "configured scalar-op coefficient; precision-agnostic assumption, not target-precision calibrated",
+        "reference": "energy.* in the supplied base runtime configuration",
+        "status": "assumed",
+        "weight_bytes": 1
+      },
+      "unit": "W/die",
+      "watts_per_unit": 1.0
+    },
+    "sram_leak": {
+      "macro_capacity_bytes": 65536,
+      "macro_count_per_die": 1024,
+      "model": "CACTI watts_per_64KiB_macro_at_temperature * macro_count_per_die",
+      "source": {
+        "access_bytes": 128,
+        "commit": "1ffd8dfb10303d306ecd8d215320aea07651e878",
+        "field": "temperature_sweep[].static_leakage_total_w",
+        "license": "HP Software License Agreement notices in source; preserve notices",
+        "macro_bytes": 65536,
+        "node_nm": 22.0,
+        "path": "local-results/energy.local.json",
+        "repository": "https://github.com/HewlettPackard/cacti",
+        "roadmap": "itrs-hp",
+        "status": "cacti_model_derived",
+        "word_bits": 1024
+      },
+      "sram_capacity_bytes_per_die": 67108864,
+      "unit": "W/die",
+      "watts_per_macro_by_temperature_k": [
+        {
+          "temperature_k": 300,
+          "watts_per_macro": 0.005748372600000001
+        },
+        {
+          "temperature_k": 310,
+          "watts_per_macro": 0.0058610426000000005
+        },
+        {
+          "temperature_k": 320,
+          "watts_per_macro": 0.0060112626
+        },
+        {
+          "temperature_k": 330,
+          "watts_per_macro": 0.0063492426
+        },
+        {
+          "temperature_k": 340,
+          "watts_per_macro": 0.0071754426
+        },
+        {
+          "temperature_k": 350,
+          "watts_per_macro": 0.0101422126
+        },
+        {
+          "temperature_k": 360,
+          "watts_per_macro": 0.0200190126
+        },
+        {
+          "temperature_k": 370,
+          "watts_per_macro": 0.03834561260000001
+        },
+        {
+          "temperature_k": 380,
+          "watts_per_macro": 0.0608782126
+        },
+        {
+          "temperature_k": 390,
+          "watts_per_macro": 0.1025631126
+        },
+        {
+          "temperature_k": 400,
+          "watts_per_macro": 0.2291221126
+        }
+      ]
+    }
+  },
+  "hardware_domain": {
+    "compute": {
+      "activation_bytes": 2,
+      "pe_energy_mode": "configured scalar-op coefficient, precision-agnostic assumption; MAC ERT action is 2x scalar op; not target-precision calibrated",
+      "pe_ops_s_per_die": 50000000000000.0,
+      "vec_ops_s_per_die": 5000000000000.0,
+      "vector_energy_mode": "configured FP32 scalar-op coefficient; FMA ERT action is 2x scalar op",
+      "weight_bytes": 1
+    },
+    "dram": {
+      "address_mapping": "rochrababgco",
+      "burst_length": 8,
+      "bus_width_bits_per_channel": 64,
+      "channel_size_mb": 16384,
+      "channels": 1,
+      "config": "DDR4_8Gb_x8_3200.ini",
+      "configured_capacity_bytes": 128000000000,
+      "device_width_bits": 8,
+      "modeled_capacity_bytes": 17179869184,
+      "organization_capacity_ratio_configured_to_simulator": 7.450580596923828,
+      "organization_sensitivity_accept_required": true,
+      "protocol": "DDR4",
+      "queue_structure": "PER_BANK",
+      "request_bytes": 64,
+      "row_buffer_policy": "OPEN_PAGE",
+      "tCK_ns": 0.63
+    },
+    "hbm": {
+      "address_mapping": "rorabgbachco",
+      "burst_length": 4,
+      "bus_width_bits_per_channel": 128,
+      "channel_size_mb": 512,
+      "channels": 8,
+      "config": "HBM2_4Gb_x128.ini",
+      "configured_capacity_bytes_per_die": 32000000000,
+      "device_width_bits": 128,
+      "modeled_capacity_bytes": 4294967296,
+      "organization_capacity_ratio_configured_to_simulator": 7.450580596923828,
+      "organization_sensitivity_accept_required": true,
+      "protocol": "HBM",
+      "queue_structure": "PER_BANK",
+      "request_bytes": 64,
+      "row_buffer_policy": "OPEN_PAGE",
+      "tCK_ns": 1.0
+    },
+    "noc": {
+      "flit_width_bits": 128,
+      "num_vcs": 4,
+      "packet_size_flits": 4,
+      "router": "iq",
+      "routing": "minimum_hop_anynet",
+      "supported_topologies": [
+        {
+          "channel_width_bits": 128,
+          "flit_width_bits": 128,
+          "nodes": 8,
+          "num_vcs": 4,
+          "nx": 4,
+          "ny": 2,
+          "packet_size_flits": 4,
+          "router": "iq",
+          "routers": 8,
+          "routing": "minimum_hop_anynet",
+          "topology": "rectangular_xy_mesh"
+        },
+        {
+          "channel_width_bits": 128,
+          "flit_width_bits": 128,
+          "nodes": 48,
+          "num_vcs": 4,
+          "nx": 8,
+          "ny": 6,
+          "packet_size_flits": 4,
+          "router": "iq",
+          "routers": 48,
+          "routing": "minimum_hop_anynet",
+          "topology": "rectangular_xy_mesh"
+        }
+      ]
+    },
+    "sram_capacity_bytes_per_die": 67108864
+  },
+  "metadata": {
+    "accelergy": {
+      "accelergy_source": "upstream/accelergy",
+      "accelergy_vendor_root": "local-results/research-v1/calibration/vendor",
+      "architecture_input": "local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/inputs/architecture.yaml",
+      "command": [
+        "/usr/bin/python3",
+        "-c",
+        "from accelergy.accelergy_console import run; run()",
+        "/home/sunhao/thermal/wafer-thermal-cosim/local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/inputs/architecture.yaml",
+        "-o",
+        "/home/sunhao/thermal/wafer-thermal-cosim/local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/output",
+        "-p",
+        "12",
+        "-f",
+        "ERT"
+      ],
+      "commit": "6911d15686ee7efdceba7d95605102df4472ae3a",
+      "component_count": 21,
+      "ert_output": "local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/output/ERT.yaml",
+      "ert_sha256": "458649c7b7df24bd297b7a1dcf0a4ad259be3d72dcbbd9cd2d7a9abbfcb8aac4",
+      "exit_code": 0,
+      "global_cycle_seconds_reference": 1.02960581652e-10,
+      "input_artifacts": {
+        "architecture": {
+          "path": "local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/inputs/architecture.yaml",
+          "sha256": "80a23f17cdde2865b89c38f1838dafafc138865be272a4d06392b917a3d81f92"
+        },
+        "primitive_library": {
+          "path": "configs/energy/wafer_action.lib.yaml",
+          "sha256": "bbb0a0cc34e4ebe8a291769715bae33f797c66f3ddda87835a957e64ef267c0c"
+        },
+        "python_plugin": {
+          "path": "adapters/accelergy/wafer_action.py",
+          "sha256": "7de8b2187e32901c096a60ba90988276cbc71c4f7ca2c04411a77178d849058b"
+        }
+      },
+      "license": "MIT",
+      "package_version": "0.4",
+      "primitive_library": "configs/energy/wafer_action.lib.yaml",
+      "python_plugin": "adapters/accelergy/wafer_action.py",
+      "repository": "https://github.com/Accelergy-Project/accelergy",
+      "stdout_excerpt": "onds=1.02960581652e-10, action_latency_cycles=1)\n2026-10-10 22:29:39 INFO        WaferActionEstimator estimated 1.167640869140625e-10 with accuracy 100%. Messages:\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, technology, action_latency_cycles, cycle_seconds, n_instances) provided for wafer_action.__init__. Arguments used: (joules_per_action)\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, action_latency_cycles) provided for wafer_action.action. Arguments used: ()\n2026-10-10 22:29:39 INFO        \n2026-10-10 22:29:39 INFO        ENERGY ESTIMATION for wafer_action(joules_per_action=5.773454532001202e-13, global_cycle_seconds=1.02960581652e-10, technology=\"model_reference_only\", action_latency_cycles=1, cycle_seconds=1.02960581652e-10, n_instances=1).action(global_cycle_seconds=1.02960581652e-10, action_latency_cycles=1)\n2026-10-10 22:29:39 INFO        WaferActionEstimator estimated 5.773454532001202e-13 with accuracy 100%. Messages:\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, technology, action_latency_cycles, cycle_seconds, n_instances) provided for wafer_action.__init__. Arguments used: (joules_per_action)\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, action_latency_cycles) provided for wafer_action.action. Arguments used: ()\n2026-10-10 22:29:39 INFO        \n2026-10-10 22:29:39 INFO        ENERGY ESTIMATION for wafer_action(joules_per_action=4.5e-13, global_cycle_seconds=1.02960581652e-10, technology=\"model_reference_only\", action_latency_cycles=1, cycle_seconds=1.02960581652e-10, n_instances=1).action(global_cycle_seconds=1.02960581652e-10, action_latency_cycles=1)\n2026-10-10 22:29:39 INFO        WaferActionEstimator estimated 4.5e-13 with accuracy 100%. Messages:\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, technology, action_latency_cycles, cycle_seconds, n_instances) provided for wafer_action.__init__. Arguments used: (joules_per_action)\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, action_latency_cycles) provided for wafer_action.action. Arguments used: ()\n2026-10-10 22:29:39 INFO        \n2026-10-10 22:29:39 INFO        ENERGY ESTIMATION for wafer_action(joules_per_action=3.6e-12, global_cycle_seconds=1.02960581652e-10, technology=\"model_reference_only\", action_latency_cycles=1, cycle_seconds=1.02960581652e-10, n_instances=1).action(global_cycle_seconds=1.02960581652e-10, action_latency_cycles=1)\n2026-10-10 22:29:39 INFO        WaferActionEstimator estimated 3.6e-12 with accuracy 100%. Messages:\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, technology, action_latency_cycles, cycle_seconds, n_instances) provided for wafer_action.__init__. Arguments used: (joules_per_action)\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, action_latency_cycles) provided for wafer_action.action. Arguments used: ()\n2026-10-10 22:29:39 INFO        \n2026-10-10 22:29:39 INFO        ENERGY ESTIMATION for wafer_action(joules_per_action=2e-11, global_cycle_seconds=1.02960581652e-10, technology=\"model_reference_only\", action_latency_cycles=1, cycle_seconds=1.02960581652e-10, n_instances=1).action(global_cycle_seconds=1.02960581652e-10, action_latency_cycles=1)\n2026-10-10 22:29:39 INFO        WaferActionEstimator estimated 2e-11 with accuracy 100%. Messages:\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, technology, action_latency_cycles, cycle_seconds, n_instances) provided for wafer_action.__init__. Arguments used: (joules_per_action)\n2026-10-10 22:29:39 INFO        | Unused arguments (global_cycle_seconds, action_latency_cycles) provided for wafer_action.action. Arguments used: ()\n2026-10-10 22:29:39 INFO        energy reference table is saved to:\n2026-10-10 22:29:39 INFO        /home/sunhao/thermal/wafer-thermal-cosim/local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/output/ERT.yaml\n",
+      "stdout_log": "local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/accelergy.log",
+      "working_directory": "local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/work"
+    },
+    "artifacts": {
+      "accelergy_inputs": {
+        "architecture": {
+          "path": "local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/inputs/architecture.yaml",
+          "sha256": "80a23f17cdde2865b89c38f1838dafafc138865be272a4d06392b917a3d81f92"
+        },
+        "primitive_library": {
+          "path": "configs/energy/wafer_action.lib.yaml",
+          "sha256": "bbb0a0cc34e4ebe8a291769715bae33f797c66f3ddda87835a957e64ef267c0c"
+        },
+        "python_plugin": {
+          "path": "adapters/accelergy/wafer_action.py",
+          "sha256": "7de8b2187e32901c096a60ba90988276cbc71c4f7ca2c04411a77178d849058b"
+        }
+      },
+      "base_config": {
+        "path": "configs/research/tiny-analytical.json",
+        "sha256": "30d87b2d4f551af7da5833273435d174fbcafcc5218985014f1569d452e0081b"
+      },
+      "cacti_table": {
+        "path": "local-results/energy.local.json",
+        "sha256": "32fd646d8492503720acf2c7d7f8c191a295105bf563fbe103483d1e0947505d"
+      },
+      "energy_generator": {
+        "path": "scripts/generate_energy_tables.py",
+        "sha256": "a19a46a5c9aa00300ad9efab939bdf8c82b3aee9de76643d21f1d286d8b6c49e"
+      },
+      "ert_sha256": "458649c7b7df24bd297b7a1dcf0a4ad259be3d72dcbbd9cd2d7a9abbfcb8aac4",
+      "ert_yaml": "local-results/research-v1/calibration/energy-tiny/accelergy/scale-2/output/ERT.yaml",
+      "service_evidence": {
+        "path": "local-results/research-v1/calibration/run-03/service-replay-evidence.json",
+        "sha256": "c58b83d35eaa359d9f9c1181dbac52fb75ff73d157cc10fd9c11e54fc67d6599"
+      },
+      "service_table": {
+        "path": "configs/energy/service-v1.json",
+        "sha256": "b368e79473f4a503058d8ed85bbcfc6cfba5f449fdda57449b1dcecb5d3107a8"
+      }
+    },
+    "calibration_basis": "mixed upstream models and explicit assumptions; not target 7 nm calibration",
+    "generated_at_local": "2026-10-10T22:29:39.907188+08:00",
+    "generator": "scripts/generate_energy_tables.py",
+    "generator_sha256": "a19a46a5c9aa00300ad9efab939bdf8c82b3aee9de76643d21f1d286d8b6c49e",
+    "license_notes": {
+      "accelergy": "MIT upstream framework; custom local estimator remains part of the project",
+      "booksim": "Stanford BSD-3-Clause-style terms",
+      "cacti": "HP Software License Agreement notices; preserve source notices",
+      "dramsim3": "MIT"
+    },
+    "limitations": [
+      "ERT is a true Accelergy 0.4 output from the pinned upstream source and local primitive estimator; it is not a target PDK characterization.",
+      "PE, Vec, control, D2D PHY, DRAM IO, idle/leakage assumptions originate in the existing local runtime config and are explicitly marked assumed.",
+      "SRAM uses a 22 nm ITRS-HP CACTI 7 64 KiB/1024-bit macro; per-byte conversion linearizes one full 128-byte word and does not model partial-word fixed access cost.",
+      "HBM2 and DDR4 action energy uses DRAMSim3 ACT+READ/WRITE command energy per target byte. REF command energy and rank standby/background are reported in replay evidence but excluded from per-byte actions; configured hbm_idle/dram_background remains the sole background owner.",
+      "NoC action energy uses BookSim router input-buffer/switch/output dynamic components only; BookSim channel, clock and leakage totals are excluded. D2D PHY remains a separate configured assumption.",
+      "The direction-neutral HBM/DRAM runtime action uses an explicit 50/50 read/write byte mixture; direction-specific ERT entries and 20/80, 80/20 sensitivity values are also preserved.",
+      "CACTI leakage is per macro and the runtime lookup multiplies by the exact 1024 macros per configured 64 MiB die. DRAM background and DRAM cell energy remain outside the wafer heat grid; dram_io is on-wafer and mapped to the current router/IO thermal lump.",
+      "No 7 nm calibration, target D2D PHY, foundry SRAM compiler, or temperature-scaled PE/Vec/HBM/NoC action surface is available in these inputs."
+    ],
+    "model_mismatches": [
+      "BookSim router dynamic energy uses its bundled 2007 32 nm high-performance power model.",
+      "SRAM uses the pinned CACTI 7 ITRS-HP 22 nm macro model, not a target foundry SRAM compiler.",
+      "Configured HBM/DDR capacity budgets differ from DRAMSim3 channel organizations; strict consumers must explicitly accept the organization sensitivity.",
+      "PE, Vec, control, D2D PHY, DRAM IO and multiple background coefficients are assumptions from the supplied run config, not measured target actions."
+    ],
+    "pe_scale": 2.0,
+    "status": "generated_from_upstream_ert_with_explicit_assumptions",
+    "target_calibrated": false
+  },
+  "runtime_action_map": {
+    "control": [
+      "control_event",
+      "action"
+    ],
+    "d2d": [
+      "d2d_byte",
+      "byte"
+    ],
+    "dram": [
+      "dram_byte",
+      "byte"
+    ],
+    "dram_io": [
+      "dram_io_byte",
+      "byte"
+    ],
+    "hbm": [
+      "hbm_byte",
+      "byte"
+    ],
+    "noc": [
+      "noc_router_byte",
+      "byte"
+    ],
+    "pe": [
+      "pe_operation",
+      "op"
+    ],
+    "sram_read": [
+      "sram_read_byte",
+      "byte"
+    ],
+    "sram_write": [
+      "sram_write_byte",
+      "byte"
+    ],
+    "vec": [
+      "vec_operation",
+      "op"
+    ]
+  },
+  "schema_version": "wafer-thermal-cosim.energy-action-table.v1",
+  "sources": {
+    "accelergy": {
+      "commit": "6911d15686ee7efdceba7d95605102df4472ae3a",
+      "license": "MIT",
+      "package_version": "0.4",
+      "repository": "https://github.com/Accelergy-Project/accelergy"
+    },
+    "booksim": {
+      "commit": "28f43299f1706a3160ffac721ca461d74eb6e618",
+      "license": "Stanford BSD-3-Clause-style terms",
+      "repository": "https://github.com/booksim/booksim2",
+      "table": "local-results/research-v1/calibration/run-03/service-replay-evidence.json"
+    },
+    "cacti": {
+      "commit": "1ffd8dfb10303d306ecd8d215320aea07651e878",
+      "license": "HP Software License Agreement notices; preserve source notices",
+      "repository": "https://github.com/HewlettPackard/cacti",
+      "table": "local-results/energy.local.json"
+    },
+    "dramsim3": {
+      "commit": "29817593b3389f1337235d63cac515024ab8fd6e",
+      "license": "MIT",
+      "repository": "https://github.com/umd-memsys/DRAMsim3",
+      "table": "local-results/research-v1/calibration/run-03/service-replay-evidence.json"
+    }
+  },
+  "strict_default": true,
+  "temperature_domain_k": [
+    300,
+    400
+  ],
+  "units": {
+    "background": "W per die/macro/system",
+    "dynamic": "J per action unit"
+  }
+}

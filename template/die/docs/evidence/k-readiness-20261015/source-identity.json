@@ -1,0 +1,17 @@
+{
+  "base_commit": "e73a378511f34c50261d6074e437e382e8ae68a2",
+  "files": {
+    "die/src/Execution.cc": "a354856928328ad3a9371b3a7068033bb13bb88701bbeb53af2d1d5445d378ab",
+    "die/src/GemmOSResourceFacts.hh": "4caa3b16147e633a49d5cbf372d5cf5acdc618919d77b1aad770825fb7214f7c",
+    "die/src/GemmOSAccessCounter.hh": "650deaca5b9e592d55bf199638cd67ef0e60a31b001841981bdf8a4fddc43cb9",
+    "die/src/GemmOSGeometry.hh": "66e4c9957f0e69e868eeb78559e335c52c3b0bc41754929f374605e462134c58",
+    "die/include/coarse_die/Plan.hh": "fe822c3a5c0ca6e16c09de16c04449f21d4c8c983a5042356c0cf223d8776a09",
+    "die/tests/compiled_gemm_oracle_driver.cc": "760bd4231682891d5fc047208d7b579449b9f508ca8e2d9fb565e69b44169973",
+    "die/validation/grouped_gemm_oracle.py": "7c62ab241e77dd3600136fbec797627bd32f9e63d95820e4948f78e98bd54499",
+    "die/validation/compiled_gemm_oracle.py": "8a900374203019a962c53fd0f6b53ff54b7af362671172021f09e8f33da5fe7d"
+  },
+  "executed_probe_source_sha256": "ae7aadf8ca54fd94d2419a1543e8cac3a30662dba8216d53af48c66500f8f3d9",
+  "binary_not_committed": true,
+  "executed_probe_binary_sha256": "bf64ba4f40df6d3243cf69dcf8b782a3df6fae6e246ea5e34e8b37b1377f8af1",
+  "linked_static_library_sha256": "f938faab0e30196246db00618febfe918d7a7e17f0f56c91eaa240d7b226ec12"
+}

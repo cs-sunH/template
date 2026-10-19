@@ -1,0 +1,1103 @@
+/******************************************************************************
+ * This file is part of 3D-ICE, version 4.0 .                                 *
+ *                                                                            *
+ * 3D-ICE is free software: you can  redistribute it and/or  modify it  under *
+ * the terms of the  GNU General  Public  License as  published by  the  Free *
+ * Software  Foundation, either  version  3  of  the License,  or  any  later *
+ * version.                                                                   *
+ *                                                                            *
+ * 3D-ICE is  distributed  in the hope  that it will  be useful, but  WITHOUT *
+ * ANY  WARRANTY; without  even the  implied warranty  of MERCHANTABILITY  or *
+ * FITNESS  FOR A PARTICULAR  PURPOSE. See the GNU General Public License for *
+ * more details.                                                              *
+ *                                                                            *
+ * You should have  received a copy of  the GNU General  Public License along *
+ * with 3D-ICE. If not, see <http://www.gnu.org/licenses/>.                   *
+ *                                                                            *
+ *                             Copyright (C) 2021                             *
+ *   Embedded Systems Laboratory - Ecole Polytechnique Federale de Lausanne   *
+ *                            All Rights Reserved.                            *
+ *                                                                            *
+ * Authors: Arvind Sridhar              Alessandro Vincenzi                   *
+ *          Giseong Bak                 Martino Ruggiero                      *
+ *          Thomas Brunschwiler         Eder Zulian                           *
+ *          Federico Terraneo           Darong Huang                          *
+ *          Kai Zhu                     Luis Costero                          *
+ *          Marina Zapater              David Atienza                         *
+ *                                                                            *
+ * For any comment, suggestion or request  about 3D-ICE, please  register and *
+ * write to the mailing list (see http://listes.epfl.ch/doc.cgi?liste=3d-ice) *
+ * Any usage  of 3D-ICE  for research,  commercial or other  purposes must be *
+ * properly acknowledged in the resulting products or publications.           *
+ *                                                                            *
+ * EPFL-STI-IEL-ESL                     Mail : 3d-ice@listes.epfl.ch          *
+ * Batiment ELG, ELG 130                       (SUBSCRIPTION IS NECESSARY)    *
+ * Station 11                                                                 *
+ * 1015 Lausanne, Switzerland           Url  : http://esl.epfl.ch/3d-ice      *
+ ******************************************************************************/
+
+#include <stdlib.h> // For the memory functions malloc/calloc/free
+
+#include "power_grid.h"
+#include "macros.h"
+
+/******************************************************************************/
+
+void power_grid_init (PowerGrid_t *pgrid)
+{
+    pgrid->NLayers           = (CellIndex_t) 0u ;
+    pgrid->NCells            = (CellIndex_t) 0u ;
+    pgrid->NCellsLayer       = (CellIndex_t) 0u ;
+    pgrid->LayersTypeProfile = NULL ;
+    pgrid->FloorplansProfile = NULL ;
+    pgrid->Sources           = NULL ;
+    pgrid->Channel           = NULL ;
+    pgrid->TopHeatSink       = NULL ;
+    pgrid->BottomHeatSink    = NULL ;
+    pgrid->HeatSinkTopTcs    = NULL ;
+    pgrid->HeatSinkBottomTcs = NULL ;
+    pgrid->CellsCapacities   = NULL ;
+}
+
+/******************************************************************************/
+
+Error_t power_grid_build (PowerGrid_t *pgrid, Dimensions_t *dimensions)
+{
+    pgrid->NLayers     = get_number_of_layers (dimensions) ;
+    pgrid->NCells      = get_number_of_cells  (dimensions) ;
+    pgrid->NCellsLayer = get_layer_area       (dimensions) ;
+
+    pgrid->LayersTypeProfile =
+
+        (StackLayerType_t *) malloc (pgrid->NLayers * sizeof (StackLayerType_t)) ;
+
+    if (pgrid->LayersTypeProfile == NULL)
+
+        return TDICE_FAILURE ;
+
+    pgrid->FloorplansProfile =
+
+        (Floorplan_t **) malloc (pgrid->NLayers * sizeof (Floorplan_t *)) ;
+
+    if (pgrid->FloorplansProfile == NULL)
+    {
+        free (pgrid->LayersTypeProfile) ;
+
+        return TDICE_FAILURE ;
+    }
+
+    pgrid->Sources = (Source_t *) calloc (pgrid->NCells, sizeof(Source_t)) ;
+
+    if (pgrid->Sources == NULL)
+    {
+        fprintf (stderr, "Cannot malloc source vector\n") ;
+
+        free (pgrid->LayersTypeProfile) ;
+        free (pgrid->FloorplansProfile) ;
+
+        return TDICE_FAILURE ;
+    }
+
+    // Update HeatSinkTopTcs and HeatSinkBottomTcs for non-uniform scenario
+    if (dimensions->NonUniform == 1)
+    {
+        // enumerate the top layer
+        CellIndex_t cell_num_top_layer = 0;
+        Non_uniform_cellListNode_t* cell_tmp = dimensions->Cell_list.Last;
+        CellIndex_t layer_info = cell_tmp->Data.layer_info;
+        for(; cell_tmp != NULL && layer_info == cell_tmp->Data.layer_info; cell_tmp=cell_tmp->Prev)
+        {
+            cell_num_top_layer++;
+            layer_info = cell_tmp->Data.layer_info;
+        }
+
+        pgrid->HeatSinkTopTcs = (SolidTC_t *) calloc (cell_num_top_layer, sizeof (SolidTC_t)) ;
+
+        if (pgrid->HeatSinkTopTcs == NULL)
+        {
+            free (pgrid->LayersTypeProfile) ;
+            free (pgrid->FloorplansProfile) ;
+            free (pgrid->Sources) ;
+
+            return TDICE_FAILURE ;
+        }
+
+        // enumerate the bottom layer
+        CellIndex_t cell_num_bottom_layer = 0;
+        cell_tmp = dimensions->Cell_list.First;
+        layer_info = cell_tmp->Data.layer_info;
+        for(; cell_tmp != NULL && layer_info == cell_tmp->Data.layer_info; cell_tmp=cell_tmp->Next)
+        {
+            cell_num_bottom_layer++;
+            layer_info = cell_tmp->Data.layer_info;
+        }
+
+        pgrid->HeatSinkBottomTcs = (SolidTC_t *) calloc (cell_num_bottom_layer, sizeof (SolidTC_t)) ;
+
+        if (pgrid->HeatSinkBottomTcs == NULL)
+        {
+            free (pgrid->LayersTypeProfile) ;
+            free (pgrid->FloorplansProfile) ;
+            free (pgrid->Sources) ;
+            free (pgrid->HeatSinkTopTcs) ;
+
+            return TDICE_FAILURE ;
+        }
+    }
+    else
+    {
+        pgrid->HeatSinkTopTcs = (SolidTC_t *) calloc (pgrid->NCellsLayer, sizeof (SolidTC_t)) ;
+
+        if (pgrid->HeatSinkTopTcs == NULL)
+        {
+            free (pgrid->LayersTypeProfile) ;
+            free (pgrid->FloorplansProfile) ;
+            free (pgrid->Sources) ;
+
+            return TDICE_FAILURE ;
+        }
+
+        pgrid->HeatSinkBottomTcs = (SolidTC_t *) calloc (pgrid->NCellsLayer, sizeof (SolidTC_t)) ;
+
+        if (pgrid->HeatSinkBottomTcs == NULL)
+        {
+            free (pgrid->LayersTypeProfile) ;
+            free (pgrid->FloorplansProfile) ;
+            free (pgrid->Sources) ;
+            free (pgrid->HeatSinkTopTcs) ;
+
+            return TDICE_FAILURE ;
+        }
+    }
+
+    pgrid->CellsCapacities = (Capacity_t *) calloc (pgrid->NCells, sizeof(Capacity_t)) ;
+
+    if (pgrid->CellsCapacities == NULL)
+    {
+        free (pgrid->LayersTypeProfile) ;
+        free (pgrid->FloorplansProfile) ;
+        free (pgrid->Sources) ;
+        free (pgrid->HeatSinkTopTcs) ;
+        free (pgrid->HeatSinkBottomTcs) ;
+
+        return TDICE_FAILURE ;
+    }
+
+
+    CellIndex_t lindex = 0 ;
+
+    while (lindex != pgrid->NLayers)
+    {
+        pgrid->LayersTypeProfile [lindex] = TDICE_LAYER_NONE ;
+        pgrid->FloorplansProfile [lindex] = NULL ;
+
+        lindex++ ;
+    }
+
+    return TDICE_SUCCESS ;
+}
+
+/******************************************************************************/
+
+void power_grid_destroy (PowerGrid_t *pgrid)
+{
+    if (pgrid->LayersTypeProfile != NULL)  free (pgrid->LayersTypeProfile) ;
+
+    if (pgrid->FloorplansProfile != NULL)  free (pgrid->FloorplansProfile) ;
+
+    if (pgrid->Sources != NULL)            free (pgrid->Sources) ;
+
+    if (pgrid->HeatSinkTopTcs != NULL)     free (pgrid->HeatSinkTopTcs) ;
+
+    if (pgrid->HeatSinkBottomTcs != NULL)  free (pgrid->HeatSinkBottomTcs) ;
+
+    if (pgrid->CellsCapacities != NULL)    free (pgrid->CellsCapacities) ;
+
+    power_grid_init (pgrid) ;
+}
+
+/******************************************************************************/
+
+void power_grid_fill
+(
+    PowerGrid_t        *pgrid,
+    ThermalGrid_t      *tgrid,
+    StackElementList_t *list,
+    Dimensions_t       *dimensions
+)
+{
+    StackElementListNode_t *stkeln ;
+
+    for (stkeln  = stack_element_list_end (list) ;
+         stkeln != NULL ;
+         stkeln  = stack_element_list_prev (stkeln))
+    {
+        StackElement_t *stack_element = stack_element_list_data (stkeln) ;
+
+        CellIndex_t index = stack_element->Offset ;
+
+        switch (stack_element->SEType)
+        {
+            case TDICE_STACK_ELEMENT_DIE :
+            {
+                CellIndex_t tmp = 0u ;
+                LayerListNode_t *lnd ;
+
+                for (lnd  = layer_list_end (&stack_element->Pointer.Die->Layers) ;
+                     lnd != NULL ;
+                     lnd  = layer_list_prev (lnd))
+                {
+                    pgrid->LayersTypeProfile [index + tmp] = TDICE_LAYER_SOLID ;
+
+                    pgrid->FloorplansProfile [index + tmp] = NULL ;
+
+                    tmp++ ;
+                }
+
+                tmp = stack_element->Pointer.Die->SourceLayerOffset ;
+
+                pgrid->LayersTypeProfile [index + tmp] = TDICE_LAYER_SOURCE ;
+
+                pgrid->FloorplansProfile [index + tmp] = &stack_element->Pointer.Die->Floorplan ;
+
+                break ;
+            }
+            case TDICE_STACK_ELEMENT_LAYER :
+            {
+                pgrid->LayersTypeProfile [index] = TDICE_LAYER_SOLID ;
+
+                pgrid->FloorplansProfile [index] = NULL ;
+
+                break ;
+            }
+            case TDICE_STACK_ELEMENT_CHANNEL :
+            {
+                pgrid->Channel = stack_element->Pointer.Channel ;
+
+                switch (pgrid->Channel->ChannelModel)
+                {
+                    case TDICE_CHANNEL_MODEL_MC_4RM :
+
+                        pgrid->LayersTypeProfile [index] = TDICE_LAYER_CHANNEL_4RM ;
+
+                        break ;
+
+                    case TDICE_CHANNEL_MODEL_MC_2RM :
+
+                        pgrid->LayersTypeProfile [index    ] = TDICE_LAYER_BOTTOM_WALL ;
+                        pgrid->LayersTypeProfile [index + 1] = TDICE_LAYER_VWALL_CHANNEL ;
+                        pgrid->LayersTypeProfile [index + 2] = TDICE_LAYER_CHANNEL_2RM ;
+                        pgrid->LayersTypeProfile [index + 3] = TDICE_LAYER_TOP_WALL ;
+
+                        break ;
+
+                    case TDICE_CHANNEL_MODEL_PF_INLINE :
+
+                        pgrid->LayersTypeProfile [index    ] = TDICE_LAYER_BOTTOM_WALL ;
+                        pgrid->LayersTypeProfile [index + 1] = TDICE_LAYER_VWALL_PINFINS ;
+                        pgrid->LayersTypeProfile [index + 2] = TDICE_LAYER_PINFINS_INLINE ;
+                        pgrid->LayersTypeProfile [index + 3] = TDICE_LAYER_TOP_WALL ;
+
+                        break ;
+
+                    case TDICE_CHANNEL_MODEL_PF_STAGGERED :
+
+                        pgrid->LayersTypeProfile [index    ] = TDICE_LAYER_BOTTOM_WALL ;
+                        pgrid->LayersTypeProfile [index + 1] = TDICE_LAYER_VWALL_PINFINS ;
+                        pgrid->LayersTypeProfile [index + 2] = TDICE_LAYER_PINFINS_STAGGERED ;
+                        pgrid->LayersTypeProfile [index + 3] = TDICE_LAYER_TOP_WALL ;
+
+                        break ;
+
+                    case TDICE_CHANNEL_MODEL_NONE :
+
+                        fprintf (stderr, "WARNING: unset channel model\n") ;
+
+                        break ;
+
+                    default :
+
+                        fprintf (stderr,
+                            "WARNING: unknown channel model %d\n",
+                            stack_element->Pointer.Channel->ChannelModel) ;
+
+                        break ;
+                }
+
+                break ;
+            }
+
+            case TDICE_STACK_ELEMENT_NONE :
+
+                fprintf (stderr, "Error! Found stack element with unset type\n") ;
+                break ;
+
+            default :
+
+                fprintf (stderr, "Error! Unknown stack element type %d\n", stack_element->SEType) ;
+
+        } /* switch stack_element->Type */
+    }
+
+    CellIndex_t layer ;
+    CellIndex_t row ;
+    CellIndex_t column ;
+
+    Capacity_t *tmp = pgrid->CellsCapacities ;
+
+    // NOTE: if the top heatsink is pluggable, there are more elements to fill
+    if (dimensions->NonUniform == 1)
+    {
+        for( Non_uniform_cellListNode_t* i_cell = dimensions->Cell_list.First; i_cell != NULL; i_cell = i_cell->Next)
+        {
+            if (i_cell->Data.layer_info >= dimensions->Grid.NLayers)
+            {
+                break; //don't fill for spreder layer
+            }
+            *tmp++ = get_capacity_non_uniform (tgrid, dimensions, i_cell) ;
+        }
+                
+    }
+    else{
+        for (layer  = first_layer (dimensions) ;
+            layer <= last_layer  (dimensions) ; layer++)
+
+            for (row  = first_row (dimensions) ;
+                row <= last_row  (dimensions) ; row++)
+
+                for (column  = first_column (dimensions) ;
+                    column <= last_column  (dimensions) ; column++)
+
+                    *tmp++ = get_capacity (tgrid, dimensions, layer, row, column) ;
+    }
+
+
+    StackElement_t *bmost = stack_element_list_data (stack_element_list_end   (list)) ;
+    StackElement_t *tmost = stack_element_list_data (stack_element_list_begin (list)) ;
+
+    if (tmost->TopSink != NULL)
+    {
+        pgrid->TopHeatSink = tmost->TopSink ;
+
+        if(tmost->TopSink->SinkModel == TDICE_HEATSINK_TOP)
+        {
+            if (pgrid->LayersTypeProfile [pgrid->NLayers - 1] == TDICE_LAYER_SOLID)
+
+                pgrid->LayersTypeProfile [pgrid->NLayers - 1] = TDICE_LAYER_SOLID_CONNECTED_TO_AMBIENT ;
+
+            else if (pgrid->LayersTypeProfile [pgrid->NLayers - 1] == TDICE_LAYER_SOURCE)
+
+                pgrid->LayersTypeProfile [pgrid->NLayers - 1] = TDICE_LAYER_SOURCE_CONNECTED_TO_AMBIENT ;
+
+            row    = (CellIndex_t) 0u ;
+            column = (CellIndex_t) 0u ;
+            layer  = last_layer  (dimensions) ;
+
+            //Add non-unifrom grid scenario for HeatSinkTopTcs
+            SolidTC_t *tmp = pgrid->HeatSinkTopTcs ;
+            if (dimensions->NonUniform == 1)
+            {
+                // top heatsink grids are aligned with the top layer
+                CellIndex_t last_layer_index = dimensions->Cell_list.Last->Data.layer_info;
+                //no source layer
+                if (pgrid->LayersTypeProfile [pgrid->NLayers - 1] == TDICE_LAYER_SOLID_CONNECTED_TO_AMBIENT)
+                {
+                    for( Non_uniform_cellListNode_t* cell_tmp = dimensions->Cell_list.First;
+                         cell_tmp != NULL;
+                         cell_tmp=cell_tmp->Next)
+                    {
+                        if (cell_tmp->Data.layer_info == last_layer_index)
+                        {   
+                             *tmp += (  2.0
+                                       * get_thermal_conductivity (tgrid->LayersProfile + last_layer_index,
+                                                                  0, 0,
+                                                                  dimensions, 2)
+                                       * tgrid->TopHeatSink->AmbientHTC
+                                       * cell_tmp->Data.length
+                                       * cell_tmp->Data.width
+                                     )
+                                     /
+                                     (  get_cell_height (dimensions, last_layer_index)
+                                       * tgrid->TopHeatSink->AmbientHTC
+                                       + 2.0
+                                       * get_thermal_conductivity (tgrid->LayersProfile + last_layer_index,
+                                                                   0, 0,
+                                                                   dimensions, 2)
+                                     ) ;
+                             tmp++;
+                        }
+                    }
+                }
+                else if (pgrid->LayersTypeProfile [pgrid->NLayers - 1] == TDICE_LAYER_SOURCE_CONNECTED_TO_AMBIENT) //source layer
+                {
+                    for( Non_uniform_cellListNode_t* cell_tmp = dimensions->Cell_list.First;
+                         cell_tmp != NULL;
+                         cell_tmp=cell_tmp->Next)
+                    {
+                        if (cell_tmp->Data.layer_info == last_layer_index)
+                        {   
+                             *tmp += (  2.0
+                                       * get_thermal_conductivity_non_uniform (cell_tmp, 2)
+                                       * tgrid->TopHeatSink->AmbientHTC
+                                       * cell_tmp->Data.length
+                                       * cell_tmp->Data.width
+                                     )
+                                     /
+                                     (  get_cell_height (dimensions, last_layer_index)
+                                       * tgrid->TopHeatSink->AmbientHTC
+                                       + 2.0
+                                       * get_thermal_conductivity_non_uniform (cell_tmp, 2)
+                                     ) ;
+                             tmp++;
+                        }
+                    }
+                }
+                
+            }
+            else   //uniform
+            {
+                for (row  = first_row (dimensions) ;
+                    row <= last_row  (dimensions) ; row++)
+                {
+                    for (column  = first_column (dimensions) ;
+                        column <= last_column  (dimensions) ; column++)
+                    {
+                        *tmp++ += get_conductance_top (tgrid, dimensions, layer, row, column) ;
+
+                    } // FOR_EVERY_COLUMN
+                } // FOR_EVERY_ROW
+            }
+
+        }
+        else if(tmost->TopSink->SinkModel == TDICE_HEATSINK_TOP_PLUGGABLE)
+        {
+            if (pgrid->LayersTypeProfile [pgrid->NLayers - 1] == TDICE_LAYER_SOLID)
+
+                pgrid->LayersTypeProfile [pgrid->NLayers - 1] = TDICE_LAYER_SOLID_CONNECTED_TO_SPREADER ;
+
+            else if (pgrid->LayersTypeProfile [pgrid->NLayers - 1] == TDICE_LAYER_SOURCE)
+
+                pgrid->LayersTypeProfile [pgrid->NLayers - 1] = TDICE_LAYER_SOURCE_CONNECTED_TO_SPREADER ;
+            
+            // Add the missing capacities to pgrid->CellsCapacities
+            for(row = 0; row < tmost->TopSink->NRows; row++)
+                for(column = 0; column < tmost->TopSink->NColumns; column++)
+                    *tmp++ = get_spreader_capacity(tmost->TopSink);
+        }
+        else
+        {
+            fprintf (stderr, "Unknown top heatsink model\n") ;
+        }
+    }
+
+    if (bmost->BottomSink != NULL)
+    {
+        pgrid->BottomHeatSink = bmost->BottomSink ;
+
+        if (pgrid->LayersTypeProfile [ 0 ] == TDICE_LAYER_SOLID)
+
+            pgrid->LayersTypeProfile [ 0 ] = TDICE_LAYER_SOLID_CONNECTED_TO_PCB ;
+
+        else if (pgrid->LayersTypeProfile [ 0 ] == TDICE_LAYER_SOURCE)
+
+            pgrid->LayersTypeProfile [ 0 ] = TDICE_LAYER_SOURCE_CONNECTED_TO_PCB ;
+
+        else if (   pgrid->LayersTypeProfile [ 0 ] == TDICE_LAYER_SOLID_CONNECTED_TO_AMBIENT
+                 || pgrid->LayersTypeProfile [ 0 ] == TDICE_LAYER_SOURCE_CONNECTED_TO_AMBIENT
+                 || pgrid->LayersTypeProfile [ 0 ] == TDICE_LAYER_SOLID_CONNECTED_TO_SPREADER
+                 || pgrid->LayersTypeProfile [ 0 ] == TDICE_LAYER_SOURCE_CONNECTED_TO_SPREADER)
+
+            fprintf (stderr, "Top and bottom sink on the same layer ! not handled yed\n") ;
+        
+        row    = (CellIndex_t) 0u ;
+        column = (CellIndex_t) 0u ;
+        SolidTC_t *tmp = pgrid->HeatSinkBottomTcs ;
+
+        if (dimensions->NonUniform == 1)
+        {
+            // bottom heatsink grids are aligned with the bottom layer
+            Non_uniform_cellListNode_t* cell_tmp = dimensions->Cell_list.First;
+            if (pgrid->LayersTypeProfile [ 0 ] == TDICE_LAYER_SOLID_CONNECTED_TO_PCB)  // no source layer
+            {
+                for( CellIndex_t layer_info = cell_tmp->Data.layer_info;
+                     cell_tmp != NULL && layer_info == cell_tmp->Data.layer_info;
+                     cell_tmp=cell_tmp->Next)
+                {
+                    
+                    *tmp += ( get_thermal_conductivity (tgrid->LayersProfile + layer_info,
+                                                         0, 0,
+                                                         dimensions, 2)
+                              * cell_tmp->Data.length
+                              * cell_tmp->Data.width
+                            )
+                              / (get_cell_height (dimensions, layer_info) / 2.0) ;
+                    tmp++;
+                }
+            }
+            else if (pgrid->LayersTypeProfile [ 0 ] == TDICE_LAYER_SOURCE_CONNECTED_TO_PCB)  //source layer
+            {
+                for( CellIndex_t layer_info = cell_tmp->Data.layer_info;
+                     cell_tmp != NULL && layer_info == cell_tmp->Data.layer_info;
+                     cell_tmp=cell_tmp->Next)
+                {
+                    
+                    *tmp += (  get_thermal_conductivity_non_uniform (cell_tmp, 2)
+                             * cell_tmp->Data.length
+                             * cell_tmp->Data.width
+                            )
+                             / (get_cell_height (dimensions, layer_info) / 2.0) ;
+                    tmp++;
+                }
+            }
+                
+        }
+        else  //uniform
+        {
+            for (row  = first_row (dimensions) ;
+                row <= last_row  (dimensions) ; row++)
+            {
+                for (column  = first_column (dimensions) ;
+                    column <= last_column  (dimensions) ; column++)
+                {
+                    *tmp++ += get_conductance_bottom (tgrid, dimensions, 0, row, column) ;
+
+                } // FOR_EVERY_COLUMN
+            } // FOR_EVERY_ROW
+        }
+
+
+    }
+}
+
+/******************************************************************************/
+
+Error_t update_source_vector
+(
+    PowerGrid_t    *pgrid,
+    Dimensions_t   *dimensions
+)
+{
+    // reset all the source vector to 0
+
+    Quantity_t   layer ;
+    CellIndex_t  ccounter ;
+    Source_t    *sources ;
+
+    for (ccounter  = 0u,            sources = pgrid->Sources ;
+         ccounter != pgrid->NCells ;
+         ccounter++,                sources++)
+
+        *sources = (Source_t) 0.0 ;
+
+    if (dimensions->NonUniform==1)
+    {
+        sources = pgrid->Sources;
+        Non_uniform_cellListNode_t* cell_node = dimensions->Cell_list.First;
+        for (layer  = 0u;
+            layer != pgrid->NLayers ;
+            layer++)
+            {
+                switch (pgrid->LayersTypeProfile [layer])
+                {
+                    case TDICE_LAYER_SOURCE :
+                    case TDICE_LAYER_SOURCE_CONNECTED_TO_SPREADER :
+                    {
+                        Floorplan_t *floorplan = pgrid->FloorplansProfile [layer];
+                        Source_t *sources_temp = sources;
+
+                        Quantity_t index = 0u ;
+
+                        FloorplanElementListNode_t *flpeln ;
+
+                        for (flpeln  = floorplan_element_list_begin (&floorplan->ElementsList) ;
+                            flpeln != NULL ;
+                            flpeln  = floorplan_element_list_next (flpeln))
+                        {
+                            FloorplanElement_t *flpel = floorplan_element_list_data (flpeln) ;
+
+                            if (is_empty_powers_queue (flpel->PowerValues) == true)
+
+                                return TDICE_FAILURE ;
+                            
+                            CellIndex_t cell_per_element = (flpel->ICElements.First->Data.Discr_X) * (flpel->ICElements.First->Data.Discr_Y );
+                            
+                            floorplan->Bpowers [ index ] = get_from_powers_queue (flpel->PowerValues) ;
+                            for(CellIndex_t i = 0; i<cell_per_element; i++)
+                            {
+                                *(sources_temp) += floorplan->Bpowers [ index ] / cell_per_element;
+                                sources_temp++;
+                            }
+                            index++;
+                        }
+
+                        break ;
+                    }
+                    case TDICE_LAYER_SOLID :
+                    case TDICE_LAYER_SOLID_CONNECTED_TO_SPREADER :
+                    case TDICE_LAYER_VWALL_CHANNEL :
+                    case TDICE_LAYER_VWALL_PINFINS :
+                    case TDICE_LAYER_TOP_WALL :
+                    case TDICE_LAYER_BOTTOM_WALL :
+
+                        break ;
+
+                    case TDICE_LAYER_SOLID_CONNECTED_TO_AMBIENT :
+                    {
+                        Source_t  *tmpS = sources ;
+                        SolidTC_t *tmpT = pgrid->HeatSinkTopTcs ;
+
+                        Non_uniform_cellListNode_t* cell_node_tmp;
+                        for (cell_node_tmp =  cell_node;
+                            cell_node_tmp != NULL; cell_node_tmp = cell_node_tmp->Next)
+
+                                *tmpS++ += pgrid->TopHeatSink->AmbientTemperature * *tmpT++ ;
+
+                        break ;
+                    }
+
+                    case TDICE_LAYER_SOURCE_CONNECTED_TO_AMBIENT :
+                    {
+                        Source_t  *tmpS = sources ;
+                        SolidTC_t *tmpT = pgrid->HeatSinkTopTcs ;
+                        Non_uniform_cellListNode_t* cell_node_tmp;
+                        for (cell_node_tmp =  cell_node;
+                            cell_node_tmp != NULL; cell_node_tmp = cell_node_tmp->Next)
+                        {
+                            *tmpS++ += pgrid->TopHeatSink->AmbientTemperature * *tmpT++ ; 
+                            //fprintf (stdout, "%d\n", cell_node_tmp->Data.layer_info) ; fflush (stdout) ;
+                        }
+                        Floorplan_t *floorplan = pgrid->FloorplansProfile [layer];
+                        Source_t *sources_temp = sources;
+                        Quantity_t index = 0u ;
+                        FloorplanElementListNode_t *flpeln ;
+
+                        for (flpeln  = floorplan_element_list_begin (&floorplan->ElementsList) ;
+                            flpeln != NULL ;
+                            flpeln  = floorplan_element_list_next (flpeln))
+                        {
+                            FloorplanElement_t *flpel = floorplan_element_list_data (flpeln) ;
+
+                            if (is_empty_powers_queue (flpel->PowerValues) == true)
+
+                                return TDICE_FAILURE ;
+                            
+                            CellIndex_t cell_per_element = (flpel->ICElements.First->Data.Discr_X) * (flpel->ICElements.First->Data.Discr_Y );
+                            
+                            floorplan->Bpowers [ index ] = get_from_powers_queue (flpel->PowerValues) ;
+                            for(CellIndex_t i = 0; i<cell_per_element; i++)
+                            {
+                                *(sources_temp) += floorplan->Bpowers [ index ] / cell_per_element;
+                                sources_temp++;
+                            }
+                            index++;
+                        }
+
+                        break ;
+                    }
+
+                    case TDICE_LAYER_SOLID_CONNECTED_TO_PCB :
+                    {
+                        Source_t  *tmpS = sources ;
+                        SolidTC_t *tmpT = pgrid->HeatSinkBottomTcs ;
+
+                        Non_uniform_cellListNode_t* cell_node_tmp;
+                        for (cell_node_tmp =  cell_node;
+                            cell_node_tmp != NULL && cell_node_tmp ->Data.layer_info == layer; cell_node_tmp = cell_node_tmp->Next)
+                        {
+                            *tmpS++ += pgrid->BottomHeatSink->AmbientTemperature * *tmpT++ ;
+                            //fprintf (stdout, "%d\n", cell_node_tmp->Data.layer_info) ; fflush (stdout) ;
+                        }
+                        break ;
+                    }
+
+                    case TDICE_LAYER_SOURCE_CONNECTED_TO_PCB :
+                    {
+                        Source_t  *tmpS = sources ;
+                        SolidTC_t *tmpT = pgrid->HeatSinkBottomTcs ;
+
+                        Non_uniform_cellListNode_t* cell_node_tmp;
+                        for (cell_node_tmp =  cell_node;
+                            cell_node_tmp != NULL && cell_node_tmp ->Data.layer_info == layer; cell_node_tmp = cell_node_tmp->Next)
+
+                                *tmpS++ += pgrid->BottomHeatSink->AmbientTemperature * *tmpT++ ;
+
+
+                        Floorplan_t *floorplan = pgrid->FloorplansProfile [layer];
+                        Source_t *sources_temp = sources;
+
+                        Quantity_t index = 0u ;
+
+                        FloorplanElementListNode_t *flpeln ;
+
+                        for (flpeln  = floorplan_element_list_begin (&floorplan->ElementsList) ;
+                            flpeln != NULL ;
+                            flpeln  = floorplan_element_list_next (flpeln))
+                        {
+                            FloorplanElement_t *flpel = floorplan_element_list_data (flpeln) ;
+
+                            if (is_empty_powers_queue (flpel->PowerValues) == true)
+
+                                return TDICE_FAILURE ;
+                            
+                            CellIndex_t cell_per_element = (flpel->ICElements.First->Data.Discr_X) * (flpel->ICElements.First->Data.Discr_Y );
+                            
+                            floorplan->Bpowers [ index ] = get_from_powers_queue (flpel->PowerValues) ;
+                            for(CellIndex_t i = 0; i<cell_per_element; i++)
+                            {
+                                *(sources_temp) += floorplan->Bpowers [ index ] / cell_per_element;
+                                sources_temp++;
+                            }
+                            index++;
+                        }
+
+                        break ;
+                    }
+
+                    case TDICE_LAYER_CHANNEL_4RM :
+                    case TDICE_LAYER_CHANNEL_2RM :
+                    case TDICE_LAYER_PINFINS_INLINE :
+                    case TDICE_LAYER_PINFINS_STAGGERED :
+                    {
+                        Source_t *tmp = sources ;
+
+                        CellIndex_t column ;
+
+                        for (column = first_column (dimensions) ; column <= last_column (dimensions) ; column++)
+                        {
+                            if (IS_CHANNEL_COLUMN (pgrid->Channel->ChannelModel, column) == true)
+                            {
+                                *tmp =   (Source_t) 2.0
+
+                                    * get_convective_term
+
+                                            (pgrid->Channel, dimensions, layer, first_row (dimensions), column)
+
+                                    * pgrid->Channel->Coolant.TIn ;
+
+                            }
+
+                            tmp++ ;
+
+                        } // FOR_EVERY_COLUMN
+
+                        break ;
+                    }
+
+                    case TDICE_LAYER_NONE :
+
+                        fprintf (stderr, "ERROR: unset layer type\n") ;
+
+                        return TDICE_FAILURE ;
+
+                    default:
+                        fprintf (stderr, "ERROR: unknown layer type in non-uniform grid scenario %d\n",
+                            pgrid->LayersTypeProfile [layer]) ;
+
+                        return TDICE_FAILURE ;
+
+
+                }
+
+                for ( ; cell_node != NULL; cell_node = cell_node->Next)
+                {
+                    if (cell_node->Data.layer_info != layer)
+                        break;
+                    sources++;
+                }
+
+
+            }
+    }
+    else
+    {
+        for (layer  = 0u,             sources = pgrid->Sources ;
+            layer != pgrid->NLayers ;
+            layer++,                 sources += get_layer_area (dimensions))
+        {
+            switch (pgrid->LayersTypeProfile [layer])
+            {
+                case TDICE_LAYER_SOURCE :
+                case TDICE_LAYER_SOURCE_CONNECTED_TO_SPREADER :
+                {
+                    Error_t error = fill_sources_floorplan
+
+                        (pgrid->FloorplansProfile [layer], sources) ;
+
+                    if (error == TDICE_FAILURE)
+
+                        return TDICE_FAILURE ;
+
+                    break ;
+                }
+
+                case TDICE_LAYER_SOLID_CONNECTED_TO_AMBIENT :
+                {
+                    Source_t  *tmpS = sources ;
+                    SolidTC_t *tmpT = pgrid->HeatSinkTopTcs ;
+
+                    CellIndex_t index = (CellIndex_t) 0u ;
+
+                    for (index  = (CellIndex_t) 0u ;
+                        index != pgrid->NCellsLayer ; index++)
+
+                            *tmpS++ += pgrid->TopHeatSink->AmbientTemperature * *tmpT++ ;
+
+                    break ;
+                }
+
+                case TDICE_LAYER_SOURCE_CONNECTED_TO_AMBIENT :
+                {
+                    Source_t  *tmpS = sources ;
+                    SolidTC_t *tmpT = pgrid->HeatSinkTopTcs ;
+
+                    CellIndex_t index = (CellIndex_t) 0u ;
+
+                    for (index  = (CellIndex_t) 0u ;
+                        index != pgrid->NCellsLayer ; index++)
+
+                            *tmpS++ += pgrid->TopHeatSink->AmbientTemperature * *tmpT++ ;
+
+                    Error_t error = fill_sources_floorplan
+
+                        (pgrid->FloorplansProfile [layer], sources) ;
+
+                    if (error == TDICE_FAILURE)
+
+                        return TDICE_FAILURE ;
+
+                    break ;
+                }
+
+                case TDICE_LAYER_SOLID_CONNECTED_TO_PCB :
+                {
+                    Source_t  *tmpS = sources ;
+                    SolidTC_t *tmpT = pgrid->HeatSinkBottomTcs ;
+
+                    CellIndex_t index = (CellIndex_t) 0u ;
+
+                    for (index  = (CellIndex_t) 0u ;
+                        index != pgrid->NCellsLayer ; index++)
+
+                            *tmpS++ += pgrid->BottomHeatSink->AmbientTemperature * *tmpT++ ;
+
+                    break ;
+                }
+
+                case TDICE_LAYER_SOURCE_CONNECTED_TO_PCB :
+                {
+                    Source_t  *tmpS = sources ;
+                    SolidTC_t *tmpT = pgrid->HeatSinkBottomTcs ;
+
+                    CellIndex_t index = (CellIndex_t) 0u ;
+
+                    for (index  = (CellIndex_t) 0u ;
+                        index != pgrid->NCellsLayer ; index++)
+
+                            *tmpS++ += pgrid->BottomHeatSink->AmbientTemperature * *tmpT++ ;
+
+                    Error_t error = fill_sources_floorplan
+
+                        (pgrid->FloorplansProfile [layer], sources) ;
+
+                    if (error == TDICE_FAILURE)
+
+                        return TDICE_FAILURE ;
+
+                    break ;
+                }
+
+                case TDICE_LAYER_CHANNEL_4RM :
+                case TDICE_LAYER_CHANNEL_2RM :
+                case TDICE_LAYER_PINFINS_INLINE :
+                case TDICE_LAYER_PINFINS_STAGGERED :
+                {
+                    Source_t *tmp = sources ;
+
+                    CellIndex_t column ;
+
+                    for (column = first_column (dimensions) ; column <= last_column (dimensions) ; column++)
+                    {
+                        if (IS_CHANNEL_COLUMN (pgrid->Channel->ChannelModel, column) == true)
+                        {
+                            *tmp =   (Source_t) 2.0
+
+                                * get_convective_term
+
+                                        (pgrid->Channel, dimensions, layer, first_row (dimensions), column)
+
+                                * pgrid->Channel->Coolant.TIn ;
+
+                        }
+
+                        tmp++ ;
+
+                    } // FOR_EVERY_COLUMN
+
+                    break ;
+                }
+
+                case TDICE_LAYER_SOLID :
+                case TDICE_LAYER_SOLID_CONNECTED_TO_SPREADER :
+                case TDICE_LAYER_VWALL_CHANNEL :
+                case TDICE_LAYER_VWALL_PINFINS :
+                case TDICE_LAYER_TOP_WALL :
+                case TDICE_LAYER_BOTTOM_WALL :
+
+                    break ;
+
+                case TDICE_LAYER_NONE :
+
+                    fprintf (stderr, "ERROR: unset layer type\n") ;
+
+                    return TDICE_FAILURE ;
+
+            default :
+
+                fprintf (stderr, "ERROR: unknown layer type %d\n",
+                    pgrid->LayersTypeProfile [layer]) ;
+
+                return TDICE_FAILURE ;
+            }
+        }
+    }
+
+/*    for (ccounter  = 0u,            sources = pgrid->Sources ;
+    ccounter != pgrid->NCells ;
+    ccounter++,                sources++)
+        printf("%d: %f\n", ccounter, *sources) ;
+*/
+    return TDICE_SUCCESS ;
+}
+
+/******************************************************************************/
+
+void update_channel_sources (PowerGrid_t *pgrid, Dimensions_t *dimensions)
+{
+    Quantity_t   layer ;
+    Source_t    *sources ;
+
+    for (layer  = 0u,             sources = pgrid->Sources ;
+         layer != pgrid->NLayers ;
+         layer++,                 sources += get_layer_area (dimensions))
+    {
+            switch (pgrid->LayersTypeProfile [layer])
+        {
+            case TDICE_LAYER_CHANNEL_4RM :
+            case TDICE_LAYER_CHANNEL_2RM :
+            case TDICE_LAYER_PINFINS_INLINE :
+            case TDICE_LAYER_PINFINS_STAGGERED :
+            {
+                Source_t *tmp = sources ;
+
+                CellIndex_t column ;
+
+                for (column = first_column (dimensions) ; column <= last_column (dimensions) ; column++)
+                {
+                    if (IS_CHANNEL_COLUMN (pgrid->Channel->ChannelModel, column) == true)
+                    {
+                        *tmp =   (Source_t) 2.0
+
+                               * get_convective_term
+
+                                    (pgrid->Channel, dimensions, layer, first_row (dimensions), column)
+
+                               * pgrid->Channel->Coolant.TIn ;
+
+                    }
+
+                    tmp++ ;
+
+                } // FOR_EVERY_COLUMN
+
+                break ;
+            }
+
+            case TDICE_LAYER_SOURCE :
+            case TDICE_LAYER_SOLID_CONNECTED_TO_AMBIENT :
+            case TDICE_LAYER_SOLID_CONNECTED_TO_PCB :
+            case TDICE_LAYER_SOLID_CONNECTED_TO_SPREADER :
+            case TDICE_LAYER_SOURCE_CONNECTED_TO_AMBIENT :
+            case TDICE_LAYER_SOURCE_CONNECTED_TO_PCB :
+            case TDICE_LAYER_SOURCE_CONNECTED_TO_SPREADER :
+            case TDICE_LAYER_SOLID :
+            case TDICE_LAYER_VWALL_CHANNEL :
+            case TDICE_LAYER_VWALL_PINFINS :
+            case TDICE_LAYER_TOP_WALL :
+            case TDICE_LAYER_BOTTOM_WALL :
+
+                break ;
+
+            case TDICE_LAYER_NONE :
+
+                fprintf (stderr, "ERROR: unset layer type\n") ;
+
+                return ;
+
+            default :
+
+                fprintf (stderr, "ERROR: unknown layer type %d\n",
+                    pgrid->LayersTypeProfile [layer]) ;
+
+                return ;
+        }
+    }
+}
+
+/******************************************************************************/
+
+Error_t insert_power_values (PowerGrid_t *pgrid, PowersQueue_t *pvalues)
+{
+    Quantity_t layer ;
+
+    for (layer = 0u ; layer != pgrid->NLayers ; layer++)
+    {
+        switch (pgrid->LayersTypeProfile [layer])
+        {
+            case TDICE_LAYER_SOURCE :
+            case TDICE_LAYER_SOURCE_CONNECTED_TO_AMBIENT :
+            case TDICE_LAYER_SOURCE_CONNECTED_TO_PCB :
+            case TDICE_LAYER_SOURCE_CONNECTED_TO_SPREADER :
+            {
+                Error_t result = insert_power_values_floorplan
+
+                    (pgrid->FloorplansProfile [layer], pvalues) ;
+
+                if (result == TDICE_FAILURE)
+
+                    return TDICE_FAILURE ;
+
+                break ;
+            }
+
+            case TDICE_LAYER_CHANNEL_4RM :
+            case TDICE_LAYER_CHANNEL_2RM :
+            case TDICE_LAYER_PINFINS_INLINE :
+            case TDICE_LAYER_PINFINS_STAGGERED :
+            case TDICE_LAYER_SOLID_CONNECTED_TO_AMBIENT :
+            case TDICE_LAYER_SOLID_CONNECTED_TO_PCB :
+            case TDICE_LAYER_SOLID_CONNECTED_TO_SPREADER :
+            case TDICE_LAYER_SOLID :
+            case TDICE_LAYER_VWALL_CHANNEL :
+            case TDICE_LAYER_VWALL_PINFINS :
+            case TDICE_LAYER_TOP_WALL :
+            case TDICE_LAYER_BOTTOM_WALL :
+
+                break ;
+
+            case TDICE_LAYER_NONE :
+
+                fprintf (stderr, "ERROR: unset layer type\n") ;
+
+                return TDICE_FAILURE ;
+
+            default :
+
+                fprintf (stderr, "ERROR: unknown layer type %d\n",
+                    pgrid->LayersTypeProfile [layer]) ;
+
+                return TDICE_FAILURE ;
+        }
+    }
+
+    return TDICE_SUCCESS ;
+}

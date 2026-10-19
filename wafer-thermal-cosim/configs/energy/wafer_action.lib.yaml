@@ -1,0 +1,7 @@
+version: 0.4
+classes:
+  - name: wafer_action
+    attributes:
+      joules_per_action: must_specify
+    actions:
+      - name: action

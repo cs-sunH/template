@@ -1,0 +1,417 @@
+/******************************************************************************
+ * This file is part of 3D-ICE, version 4.0 .                                 *
+ *                                                                            *
+ * 3D-ICE is free software: you can  redistribute it and/or  modify it  under *
+ * the terms of the  GNU General  Public  License as  published by  the  Free *
+ * Software  Foundation, either  version  3  of  the License,  or  any  later *
+ * version.                                                                   *
+ *                                                                            *
+ * 3D-ICE is  distributed  in the hope  that it will  be useful, but  WITHOUT *
+ * ANY  WARRANTY; without  even the  implied warranty  of MERCHANTABILITY  or *
+ * FITNESS  FOR A PARTICULAR  PURPOSE. See the GNU General Public License for *
+ * more details.                                                              *
+ *                                                                            *
+ * You should have  received a copy of  the GNU General  Public License along *
+ * with 3D-ICE. If not, see <http://www.gnu.org/licenses/>.                   *
+ *                                                                            *
+ *                             Copyright (C) 2021                             *
+ *   Embedded Systems Laboratory - Ecole Polytechnique Federale de Lausanne   *
+ *                            All Rights Reserved.                            *
+ *                                                                            *
+ * Authors: Arvind Sridhar              Alessandro Vincenzi                   *
+ *          Giseong Bak                 Martino Ruggiero                      *
+ *          Thomas Brunschwiler         Eder Zulian                           *
+ *          Federico Terraneo           Darong Huang                          *
+ *          Kai Zhu                     Luis Costero                          *
+ *          Marina Zapater              David Atienza                         *
+ *                                                                            *
+ * For any comment, suggestion or request  about 3D-ICE, please  register and *
+ * write to the mailing list (see http://listes.epfl.ch/doc.cgi?liste=3d-ice) *
+ * Any usage  of 3D-ICE  for research,  commercial or other  purposes must be *
+ * properly acknowledged in the resulting products or publications.           *
+ *                                                                            *
+ * EPFL-STI-IEL-ESL                     Mail : 3d-ice@listes.epfl.ch          *
+ * Batiment ELG, ELG 130                       (SUBSCRIPTION IS NECESSARY)    *
+ * Station 11                                                                 *
+ * 1015 Lausanne, Switzerland           Url  : http://esl.epfl.ch/3d-ice      *
+ ******************************************************************************/
+
+#include <stdlib.h> // For the memory functions malloc/free
+
+#include "ic_element.h"
+#include "macros.h"
+
+/******************************************************************************/
+
+void ic_element_init (ICElement_t *icel)
+{
+    icel->SW_X      = (ChipDimension_t) 0.0 ;
+    icel->SW_Y      = (ChipDimension_t) 0.0 ;
+    icel->Length    = (ChipDimension_t) 0.0 ;
+    icel->Width     = (ChipDimension_t) 0.0 ;
+    icel->Discr_X     = (ChipDimension_t) 0.0 ;
+    icel->Discr_Y     = (ChipDimension_t) 0.0 ;
+    icel->SW_Row    = (CellIndex_t) 0u ;
+    icel->SW_Column = (CellIndex_t) 0u ;
+    icel->NE_Row    = (CellIndex_t) 0u ;
+    icel->NE_Column = (CellIndex_t) 0u ;
+    icel->Index_start = (CellIndex_t) 0u ;
+    icel->Index_end = (CellIndex_t) 0u ;
+    material_init (&icel->Material) ;
+}
+
+/******************************************************************************/
+
+void ic_element_copy (ICElement_t *dst, ICElement_t *src)
+{
+    ic_element_destroy (dst) ;
+
+    dst->SW_X      = src->SW_X ;
+    dst->SW_Y      = src->SW_Y ;
+    dst->Length    = src->Length ;
+    dst->Width     = src->Width ;
+    dst->Discr_X     = src->Discr_X ;
+    dst->Discr_Y     = src->Discr_Y ;
+    dst->SW_Row    = src->SW_Row ;
+    dst->SW_Column = src->SW_Column ;
+    dst->NE_Row    = src->NE_Row ;
+    dst->NE_Column = src->NE_Column ;
+    dst->Index_start    = src->Index_start ;
+    dst->Index_end = src->Index_end ;
+    material_copy(&dst->Material, &src->Material);
+}
+
+/******************************************************************************/
+
+void ic_element_destroy (ICElement_t *icel)
+{
+    // Nothing to do ...
+    material_destroy (&icel->Material) ;
+    ic_element_init (icel) ;
+}
+
+/******************************************************************************/
+
+ICElement_t *ic_element_calloc ( void )
+{
+    ICElement_t *icel = (ICElement_t *) malloc (sizeof(ICElement_t));
+
+    if (icel != NULL)
+
+        ic_element_init (icel) ;
+
+    return icel ;
+}
+
+/*****************************************************************************/
+
+ICElement_t *ic_element_clone (ICElement_t *icel)
+{
+    if (icel == NULL)
+
+        return NULL ;
+
+    ICElement_t *newi = ic_element_calloc ( ) ;
+
+    if (newi != NULL)
+
+        ic_element_copy (newi, icel) ;
+
+    return newi ;
+}
+
+/*****************************************************************************/
+
+void ic_element_free (ICElement_t *icel)
+{
+    if (icel == NULL)
+
+        return ;
+
+    ic_element_destroy (icel) ;
+
+    free (icel) ;
+}
+
+/******************************************************************************/
+
+bool ic_element_equal (ICElement_t *icel, ICElement_t *other)
+{
+    return    icel->SW_X   == other->SW_X
+           && icel->SW_Y   == other->SW_Y
+           && icel->Length == other->Length
+           && icel->Width  == other->Width ;
+}
+
+/******************************************************************************/
+
+void ic_element_print
+(
+    ICElement_t *icel,
+    FILE        *stream,
+    String_t     prefix
+)
+{
+    fprintf (stream,
+        "%s   rectangle (%.1f, %.1f, %.1f, %.1f ) ;\n",
+        prefix, icel->SW_X, icel->SW_Y,
+                icel->Length, icel->Width) ;
+}
+
+/******************************************************************************/
+
+bool ic_element_has_center
+(
+    ICElement_t     *icelement,
+    CellDimension_t  cellx,
+    CellDimension_t  celly
+)
+{
+    return (    cellx >= icelement->SW_X
+            &&  celly >= icelement->SW_Y
+            &&  cellx  < icelement->SW_X + icelement->Length
+            &&  celly  < icelement->SW_Y + icelement->Width) ;
+}
+
+/******************************************************************************/
+
+bool check_intersection
+(
+    ICElement_t *icelement_a,
+    ICElement_t *icelement_b
+)
+{
+    if (icelement_a == icelement_b)
+
+        return false ;
+    ChipDimension_t minkowski_x1 = icelement_a->SW_X - icelement_b->SW_X - icelement_b->Length ;
+    ChipDimension_t minkowski_y1 = icelement_a->SW_Y - icelement_b->SW_Y - icelement_b->Width ;
+    ChipDimension_t minkowski_x2 = icelement_a->SW_X + icelement_a->Length - icelement_b->SW_X ;
+    ChipDimension_t minkowski_y2 = icelement_a->SW_Y + icelement_a->Width - icelement_b->SW_Y ;
+    if (fabs(minkowski_x1 * minkowski_x2) > EPSILON && fabs(minkowski_y1 * minkowski_y2) > EPSILON )
+    {
+        if (minkowski_x1 * minkowski_x2 < 0 && minkowski_y1 * minkowski_y2 < 0)
+            return true ;
+    }
+
+    return false ;
+        
+
+    // if (   (icelement_a->SW_X + icelement_a->Length)
+    //        <= icelement_b->SW_X
+    //     || icelement_a->SW_X
+    //        >= (icelement_b->SW_X + icelement_b->Length))
+
+    //     return false ;
+
+    // if (   (icelement_a->SW_Y + icelement_a->Width)
+    //        <= icelement_b->SW_Y
+    //     || icelement_a->SW_Y
+    //        >= (icelement_b->SW_Y + icelement_b->Width))
+
+    //     return false ;
+
+    // return true ;
+
+}
+/******************************************************************************/
+
+bool check_location (ICElement_t *icel, Dimensions_t *dimensions)
+{
+    return (   (icel->SW_X <  0.0)
+
+               || ((icel->SW_X + icel->Length - get_chip_length (dimensions)) > EPSILON)
+
+            || (icel->SW_Y <  0.0)
+
+               || ((icel->SW_Y + icel->Width - get_chip_width (dimensions)) > EPSILON) ) ;
+}
+
+/******************************************************************************/
+
+void align_to_grid (ICElement_t *icel, Dimensions_t *dimensions)
+{
+    /* We "search" for these values instead of computing them directly
+       since the lengths of the cells along the length of the ic might not
+       be uniform
+    */
+
+    /* West side */
+
+    CellIndex_t column_index = first_column (dimensions) ;
+
+    while (get_cell_location_x (dimensions, column_index + 1) <= icel->SW_X)
+
+        column_index++ ;
+
+    icel->SW_Column = column_index-- ;
+
+    /* East side */
+
+    while (get_cell_location_x (dimensions, column_index + 1) < icel->SW_X + icel->Length)
+
+        column_index++ ;
+
+    icel->NE_Column = column_index ;
+
+    /* South side */
+
+    CellIndex_t row_index = first_row (dimensions) ;
+
+    while (get_cell_location_y (dimensions, row_index + 1) <= icel->SW_Y)
+
+        row_index++ ;
+
+    icel->SW_Row = row_index-- ;
+
+    /* North side */
+
+    while (get_cell_location_y (dimensions, row_index + 1) < icel->SW_Y + icel->Width)
+
+        row_index++ ;
+
+    icel->NE_Row = row_index ;
+}
+
+/******************************************************************************/
+
+Temperature_t get_max_temperature_ic_element
+(
+    ICElement_t   *icel,
+    Dimensions_t  *dimensions,
+    Temperature_t *temperatures
+)
+{
+    CellIndex_t row    = icel->SW_Row ;
+    CellIndex_t column = icel->SW_Column ;
+    Temperature_t max_temperature;
+
+    if (dimensions->NonUniform == 1)
+    {
+        max_temperature = *(temperatures + icel->Index_start) ;
+        for (CellIndex_t i = icel->Index_start; i<= icel->Index_end; i++)
+        {
+            max_temperature = MAX
+            (
+                max_temperature,
+                *(temperatures + i)
+            ) ;
+        }
+    }
+    else
+    {
+        max_temperature =
+
+            *(temperatures + get_cell_offset_in_layer(dimensions, row, column)) ;
+
+        for (row = icel->SW_Row ; row <= icel->NE_Row ; row++)
+        {
+            for (column = icel->SW_Column ; column <= icel->NE_Column ; column++)
+            {
+                max_temperature = MAX
+                (
+                    max_temperature,
+                    *(temperatures + get_cell_offset_in_layer (dimensions, row, column))
+                ) ;
+
+            } // FOR_EVERY_IC_ELEMENT_COLUMN
+        } // FOR_EVERY_IC_ELEMENT_ROW
+    }
+
+    return max_temperature ;
+}
+
+/******************************************************************************/
+
+Temperature_t get_min_temperature_ic_element
+(
+    ICElement_t   *icel,
+    Dimensions_t  *dimensions,
+    Temperature_t *temperatures
+)
+{
+    CellIndex_t row    = icel->SW_Row ;
+    CellIndex_t column = icel->SW_Column ;
+    Temperature_t min_temperature;
+
+    if (dimensions->NonUniform == 1)
+    {
+        min_temperature =
+
+            *(temperatures + icel->Index_start) ;
+        for (CellIndex_t i = icel->Index_start; i<= icel->Index_end; i++)
+        {
+            min_temperature = MIN
+            (
+                min_temperature,
+                *(temperatures + i)
+            ) ;
+        }
+    }
+    else
+    {
+        min_temperature =
+
+            *(temperatures + get_cell_offset_in_layer(dimensions, row, column)) ;
+
+        for (row = icel->SW_Row ; row <= icel->NE_Row ; row++)
+        {
+            for (column = icel->SW_Column ; column <= icel->NE_Column ; column++)
+            {
+                min_temperature = MIN
+                (
+                    min_temperature,
+                    *(temperatures + get_cell_offset_in_layer (dimensions, row, column))
+                ) ;
+
+            } // FOR_EVERY_IC_ELEMENT_COLUMN
+        } // FOR_EVERY_IC_ELEMENT_ROW
+    }
+
+
+
+    return min_temperature ;
+}
+
+/******************************************************************************/
+
+Temperature_t get_avg_temperature_ic_element
+(
+    ICElement_t   *icel,
+    Dimensions_t  *dimensions,
+    Temperature_t *temperatures
+)
+{
+    CellIndex_t row ;
+    CellIndex_t column ;
+    CellIndex_t counter = 0u ;
+
+    Temperature_t avg_temperature = 0.0 ;
+
+    if (dimensions->NonUniform == 1)
+    {
+        for (CellIndex_t i = icel->Index_start; i<= icel->Index_end; i++)
+        {
+            avg_temperature +=  *(temperatures + i) ;
+            counter++ ;
+        }
+    }
+    else
+    {
+        for (row = icel->SW_Row ; row <= icel->NE_Row ; row++)
+        {
+            for (column = icel->SW_Column ; column <= icel->NE_Column ; column++)
+            {
+                avg_temperature +=
+
+                    *(temperatures + get_cell_offset_in_layer (dimensions, row, column)) ;
+
+                counter++ ;
+
+            } // FOR_EVERY_IC_ELEMENT_COLUMN
+        } // FOR_EVERY_IC_ELEMENT_ROW
+    }
+    return avg_temperature / (Temperature_t) counter ;
+}
+
+/******************************************************************************/

@@ -1,0 +1,31 @@
+{
+  "calibration": {
+    "energy_table": "configs/energy/research-tiny-v1.json",
+    "service_table": "configs/energy/service-v1.json",
+    "strict": true,
+    "accept_assumed_energy": true,
+    "hardware": {
+      "compute": {
+        "weight_bytes": 1,
+        "activation_bytes": 2
+      },
+      "noc": {
+        "flit_width_bits": 128,
+        "num_vcs": 4,
+        "packet_size_flits": 4,
+        "router": "iq",
+        "routing": "minimum_hop_anynet"
+      },
+      "hbm": {
+        "protocol": "HBM",
+        "config": "HBM2_4Gb_x128.ini",
+        "organization_sensitivity_accept": true
+      },
+      "dram": {
+        "protocol": "DDR4",
+        "config": "DDR4_8Gb_x8_3200.ini",
+        "organization_sensitivity_accept": true
+      }
+    }
+  }
+}

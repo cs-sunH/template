@@ -1,0 +1,25 @@
+architecture:
+  frequency: 1000
+  core_num: 16
+  core:
+    controller:
+      power: 0.0990
+      area: 0.3870
+    matrix:
+      mac_num: 128
+      power: 0.1122
+      area: 3.2813
+    vector:
+      vec_num: 32
+      power: 0.0541
+      area: 0.9690
+    buffer:
+      buffer_size: 38
+      read_bw: 256.0
+      write_bw: 256.0
+      power: 0.0617
+      area: 0.5485
+  dram:
+    config_path: configs/architecture/dram/edge/edge_25.6GBps.yaml
+    power: 0.1910
+    area: 1.3317

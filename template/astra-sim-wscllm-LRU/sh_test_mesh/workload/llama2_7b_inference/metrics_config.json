@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "detail_level": "full",
+  "memory": {
+    "chiplets_per_npu": 4
+  }
+}

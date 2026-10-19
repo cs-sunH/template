@@ -1,0 +1,298 @@
+/******************************************************************************
+ * This file is part of 3D-ICE, version 4.0 .                                 *
+ *                                                                            *
+ * 3D-ICE is free software: you can  redistribute it and/or  modify it  under *
+ * the terms of the  GNU General  Public  License as  published by  the  Free *
+ * Software  Foundation, either  version  3  of  the License,  or  any  later *
+ * version.                                                                   *
+ *                                                                            *
+ * 3D-ICE is  distributed  in the hope  that it will  be useful, but  WITHOUT *
+ * ANY  WARRANTY; without  even the  implied warranty  of MERCHANTABILITY  or *
+ * FITNESS  FOR A PARTICULAR  PURPOSE. See the GNU General Public License for *
+ * more details.                                                              *
+ *                                                                            *
+ * You should have  received a copy of  the GNU General  Public License along *
+ * with 3D-ICE. If not, see <http://www.gnu.org/licenses/>.                   *
+ *                                                                            *
+ *                             Copyright (C) 2021                             *
+ *   Embedded Systems Laboratory - Ecole Polytechnique Federale de Lausanne   *
+ *                            All Rights Reserved.                            *
+ *                                                                            *
+ * Authors: Arvind Sridhar              Alessandro Vincenzi                   *
+ *          Giseong Bak                 Martino Ruggiero                      *
+ *          Thomas Brunschwiler         Eder Zulian                           *
+ *          Federico Terraneo           Darong Huang                          *
+ *          Kai Zhu                     Luis Costero                          *
+ *          Marina Zapater              David Atienza                         *
+ *                                                                            *
+ * For any comment, suggestion or request  about 3D-ICE, please  register and *
+ * write to the mailing list (see http://listes.epfl.ch/doc.cgi?liste=3d-ice) *
+ * Any usage  of 3D-ICE  for research,  commercial or other  purposes must be *
+ * properly acknowledged in the resulting products or publications.           *
+ *                                                                            *
+ * EPFL-STI-IEL-ESL                     Mail : 3d-ice@listes.epfl.ch          *
+ * Batiment ELG, ELG 130                       (SUBSCRIPTION IS NECESSARY)    *
+ * Station 11                                                                 *
+ * 1015 Lausanne, Switzerland           Url  : http://esl.epfl.ch/3d-ice      *
+ ******************************************************************************/
+
+#ifndef _3DICE_SYSTEM_MATRIX_
+#define _3DICE_SYSTEM_MATRIX_
+
+/*! \file system_matrix.h */
+
+#ifdef __cplusplus
+extern "C"
+{
+#endif
+
+/******************************************************************************/
+
+#include "types.h"
+#include "string_t.h"
+
+#include "dimensions.h"
+#include "thermal_grid.h"
+#include "analysis.h"
+
+#include "slu_mt_ddefs.h"
+
+/******************************************************************************/
+
+    /*! \struct SystemMatrix_t
+     *
+     *  \brief Structure representing the squared matrix storing the
+     *         coefficients of the linear system that is solved tu run
+     *         the thermal simulation
+     *
+     * Compressed Column Storage (CCS): the matrix stores non zero values as
+     * sequences of columns.
+     */
+
+    struct SystemMatrix_t
+    {
+
+        /*! Pointer to the array storing the column pointers.
+         *  If the matrix is nxn, then n+1 column pointers are needed.
+         */
+
+        LUIndex_t *ColumnPointers ;
+
+        /*! Pointer to the array storing the row indexes
+         *  If the matrix has nnz elements, then nnz row indexes are needed */
+
+        LUIndex_t *RowIndices ;
+
+        /*! Pointer to the array storing the non zeroes coefficient */
+
+        SystemMatrixCoeff_t* Values ;
+
+        /*! The dimension n of the squared matrix nxn */
+
+        LUIndex_t Size ;
+
+        /*! The number of nonzeroes coefficients */
+
+        LUIndex_t NNz ;
+
+        /*! SuperLU matrix A (wrapper arount our SystemMatrix SM_A )*/
+
+        SuperMatrix SLUMatrix_A ;
+
+        /*! SuperLU matrix A after the permutation */
+
+        SuperMatrix SLUMatrix_A_Permuted ;
+
+        /*! SuperLU matrix L after the A=LU factorization */
+
+        SuperMatrix SLUMatrix_L ;
+
+        SystemMatrixCoeff_t *Nzval_L ;
+        LUIndex_t *Nzval_colbeg ;
+        LUIndex_t *Nzval_colend ;
+        LUIndex_t *Rowind_L ;
+        LUIndex_t *Rowind_colbeg ;
+        LUIndex_t *Rowind_colend ;
+        LUIndex_t *Col_to_sup ;
+        LUIndex_t *Sup_to_colbeg ;
+        LUIndex_t *Sup_to_colend ;
+
+
+        /*! SuperLU matrix U after the A=LU factorization */
+
+        SuperMatrix SLUMatrix_U ;
+
+        SystemMatrixCoeff_t *Nzval_U ;
+        LUIndex_t *Rowind_U ;
+        LUIndex_t *Colbeg ;
+        LUIndex_t *Colend ;
+
+        /*! SuperLU structure for statistics */
+
+        Gstat_t SLU_MT_Gstat ;
+
+        /*! SuperLU structure for factorization options */
+
+        superlumt_options_t SLU_Options ;
+
+        /*! SuperLU integer to code the result of the SLU routines */
+
+        int_t  SLU_Info ;
+
+    } ;
+
+    /*! Definition of the type SystemMatrix_t */
+
+    typedef struct SystemMatrix_t SystemMatrix_t ;
+
+
+
+/******************************************************************************/
+
+
+
+    /*! Inits the fields of the \a sysmatrix structure with default values
+     *
+     * \param sysmatrix the address of the structure to initalize
+     */
+
+    void system_matrix_init (SystemMatrix_t *sysmatrix) ;
+
+
+
+    /*! Allocates memory to store indexes and coefficients of a SystemMatrix
+     *
+     * \param sysmatrix the address of the system matrix
+     * \param size the dimension of the (square) matrix
+     * \param nnz  the number of nonzeroes coeffcients
+     * \param threads the number of threads
+     *
+     * \return \c TDICE_SUCCESS if the memory allocation succeded
+     * \return \c TDICE_FAILURE if the memory allocation fails
+     */
+
+    Error_t system_matrix_build
+
+        (SystemMatrix_t *sysmatrix, CellIndex_t size, CellIndex_t nnz, CellIndex_t threads) ;
+
+
+
+
+    /*! Allocates memory to store L matrix of a SystemMatrix
+     *
+     * \param sysmatrix the address of the system matrix
+     *
+     * \return \c TDICE_SUCCESS if the memory allocation succeded
+     * \return \c TDICE_FAILURE if the memory allocation fails
+     */
+
+    Error_t allocate_L_Matrix
+
+        (SystemMatrix_t *sysmatrix);
+
+
+
+    /*! Allocates memory to store U matrix of a SystemMatrix
+     *
+     * \param sysmatrix the address of the system matrix
+     *
+     * \return \c TDICE_SUCCESS if the memory allocation succeded
+     * \return \c TDICE_FAILURE if the memory allocation fails
+     */
+
+    Error_t allocate_U_Matrix
+
+        (SystemMatrix_t *sysmatrix);
+
+
+
+    /*! Destroys the content of the fields of the structure \a sysmatrix
+     *
+     * The function releases any dynamic memory used by the structure and
+     * resets its state calling \a system_matrix_init .
+     *
+     * \param sysmatrix the address of the structure to destroy
+     */
+
+    void system_matrix_destroy (SystemMatrix_t *sysmatrix) ;
+
+
+
+    /*! Fills the system matrix
+     *
+     *  The function fills, layer by layer, all the columns
+     *  of the system matrix.
+     *
+     *  \param sysmatrix         pointer to the system matrix to fill
+     *  \param thermal_grid pointer to the thermal grid structure
+     *  \param analysis     pointer to the structure containing info
+     *                      about the type of thermal analysis
+     *  \param dimensions   pointer to the structure containing the
+     *                      dimensions of the IC
+     */
+
+    void fill_system_matrix
+    (
+        SystemMatrix_t *sysmatrix,
+        ThermalGrid_t  *thermal_grid,
+        Analysis_t     *analysis,
+        Dimensions_t   *dimensions
+    ) ;
+
+
+
+    /*! Perform the A=LU decomposition on the system matrix
+     *
+     * \param sysmatrix pointer to the (system) matrix \a A to factorize
+     *
+     * \return \c TDICE_SUCCESS if the factorization succeded
+     * \return \c TDICE_FAILURE if some error occured
+     */
+
+    Error_t do_factorization (SystemMatrix_t *sysmatrix) ;
+
+
+
+    /*! Solve the linear system b = A/b
+     *
+     * \param sysmatrix pointer to the (system) matrix \a A
+     * \param b    pointer to the input vector \a b
+     *
+     * \return \c TDICE_SUCCESS if the solution b has been found
+     * \return \c TDICE_FAILURE if some error occured
+     */
+
+    Error_t solve_sparse_linear_system (SystemMatrix_t *sysmatrix, SuperMatrix *b) ;
+
+
+
+    /*! Generates a text file storing the sparse matrix
+     *
+     * The file will contain one row of the form row-column-value" for each
+     * zero coefficient (COO format). The first row (or column) has index 1
+     * (matlab compatibile)
+     *
+     * \param sysmatrix      the system matrix structure
+     * \param file_name the name of the file to create
+     */
+
+    void system_matrix_print (SystemMatrix_t sysmatrix, String_t file_name) ;
+
+    /*! Generates a text file storing the vector b
+     *
+     * \param vector    array structure
+     * \param len       length of the array
+     * \param file_name the name of the file to create
+     */
+
+    void Vector_b_print (double *vector, LUIndex_t len, String_t file_name) ;
+/******************************************************************************/
+
+
+/******************************************************************************/
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _3DICE_SYSTEM_MATRIX_ */

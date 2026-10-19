@@ -1,0 +1,137 @@
+{
+  "schema-version": 1,
+  "slug": "face_case5_config_c",
+  "label": "C / FACE Case 5",
+  "paper-case": "FACE Case 5 (500 mm^2 compute die, 4 HBM2E chiplets)",
+  "mesh": {
+    "rows": 9,
+    "columns": 6,
+    "topology-by-network-dimension": [
+      "Line",
+      "Line"
+    ]
+  },
+  "local-hbm": {
+    "bandwidth-gbps": 1640.0,
+    "latency-ns": 100,
+    "capacity-profiles": {
+      "paper-64gib": {
+        "bytes": 68719476736,
+        "label": "64 GiB paper configuration",
+        "note": "FACE Case 5 provides 64 GiB of local HBM per NPU in the paper configuration."
+      },
+      "validation-160gib": {
+        "bytes": 171798691840,
+        "label": "160 GiB validation extension",
+        "note": "Validation-only capacity extension for workloads that require 160 GiB of local HBM per NPU."
+      },
+      "validation-die-64g": {
+        "bytes": 64000000000,
+        "label": "64 GB die-derived validation capacity",
+        "note": "Die-backend aligned capacity: exactly the HBM capacity derived by the die cost library from the die node (4 x 16 GB), required by config_resolver when the die node is present."
+      },
+      "validation-coarse-144g": {
+        "bytes": 144000000000,
+        "label": "144 GB coarse_die_v2 die-derived capacity",
+        "note": "coarse_die_v2 backend aligned: exactly 2 rows x 2 stacks x 36 GB per die"
+      }
+    }
+  },
+  "d2d": {
+    "bandwidth-gbps": 4050.0,
+    "latency-ns": 5
+  },
+  "remote-memory": {
+    "memory-type": "PER_NPU_MEMORY_EXPANSION",
+    "bandwidth-gbps": 512.0,
+    "latency-ns": 100,
+    "npu-selection": "mesh-boundary",
+    "logical-pool": "unified-kv-cache-pool"
+  },
+  "notes": [
+    "The physical mesh is row-major with 9 rows and 6 columns.",
+    "The analytical network lists dimensions as columns then rows.",
+    "D2D latency is modeled as a per-hop adjacent-link latency. It is independent of the on-die noc-width-bits.",
+    "The remote-memory pool is attached to every physical mesh-boundary NPU.",
+    "The 512 GB/s remote-memory bandwidth and 100 ns latency are shared simulator assumptions.",
+    "The capacity profile describes local HBM placement per NPU.",
+    "User-authorized engineering comparison point (2026-10-16): 10 x 10 Core grid on a 25 mm x 32 mm compute Die (800 mm2), 0.75 MiB SRAM/Core and 512-bit NoC. Architectural PE peak is 126.6 INT4 TOPS, numerically compared with the TX8 128 BF16 TFLOPS reference; precision and independent measurement are not equivalent. Vec FP32-equivalent peak is 12.65728 T eq-op/s, not the TX8 1 T reference. Legacy HBM remains the preserved 4 x 16 GB / 410 GB/s per-stack reference (64 GB and 1640 GB/s), not current DOCX HBM3E.",
+    "Factory compute default (phase 2, 2026-10-18): the coarse-die node (coarse_die_v2 typed descriptor, materialized verbatim into resolved_die_model.json) replaces the legacy die node as the checked-in backend; die (mesh_die_v1) and compute.peak-perf-tflops remain supported as mutually exclusive alternatives and their aligned capacity profiles are kept for explicit fixtures."
+  ],
+  "coarse-die": {
+    "schema": "coarse_die_v2",
+    "source_revision": "41f119135fd2d4cc87292f59b4b00adc918eece0",
+    "core_resource_table": {
+      "id": "core32_v1",
+      "rows_sha256": "d66b4a76122742ed91102d75305e01f10a8241213c96ed2289ecd51a1f7aa346"
+    },
+    "source_constants": {
+      "process_node_nm": 7,
+      "clock_hz": 1000000000.0,
+      "sram_wordwidth_bits": 1024,
+      "sram_short_side_mm": 0.13925,
+      "vec_lane_width_mm": 0.1897,
+      "vec_lane_height_mm": 0.1265,
+      "vec_lane_fp32_eq_ops_per_s": 3955400000.0,
+      "pe_area_mm2": 3.76e-05,
+      "pe_int4_ops_per_mac": 2,
+      "pe_per_vec_ratio": 19.777,
+      "noc_base_area_fraction": 0.15,
+      "noc_fixed_fraction": 0.2,
+      "noc_width_fraction": 0.8,
+      "noc_base_width_bits": 256,
+      "hbm_sku": "Micron MT65B18G16120A00QH-92:A",
+      "hbm_stack_capacity_bytes": 36000000000.0,
+      "hbm_stack_peak_bytes_per_s": 1177600000000.0,
+      "hbm_stack_width_bits": 1024,
+      "hbm_transfer_per_s": 9200000000.0,
+      "hbm_stack_width_mm": 10.98,
+      "hbm_stack_height_mm": 10.98,
+      "hbm_stack_thickness_mm": 0.78,
+      "hbm_gap_mm": 0.15,
+      "bump_pitch_mm": 0.055,
+      "bump_communication_fraction": 0.4,
+      "bump_rate_bits_per_s": 2500000000.0,
+      "sram_quarter_mib_long_side_mm": 0.40662
+    },
+    "architecture": {
+      "sram_mib_per_core": 0.25,
+      "noc_width_bits": 256,
+      "core_columns_nx": 8,
+      "core_rows_ny": 11,
+      "core_pitch_x_mm": 0,
+      "core_pitch_y_mm": 0,
+      "die_extra_width_mm": 0.1,
+      "die_extra_height_mm": 0.1,
+      "die_geometry": "explicit",
+      "hbm_stacks_per_row": 2,
+      "hbm_placement_mode": "two_sides_one_row_each",
+      "system_region_width_mm": 215,
+      "system_region_height_mm": 215,
+      "die_width_mm": 21,
+      "die_height_mm": 29
+    },
+    "performance_profile": {
+      "execution_profile": "int4_matrix_vec_fp32_assumed_v1",
+      "calibration_status": "assumed",
+      "timing_topology_profile": "distributed_ideal_v2",
+      "routing_profile": "mapped_uniform_sources_v2",
+      "pipeline_profile": "pipeline_fluid_v2",
+      "granularity_validation": "not_run",
+      "physical_topology_validation": "unverified",
+      "eta_pe": 0.9,
+      "eta_vec": 0.9,
+      "eta_hbm_matrix": 0.7,
+      "eta_hbm_vector": 0.7,
+      "eta_sram": 1.0,
+      "eta_local": 0.7,
+      "eta_mesh": 0.7,
+      "eta_inject": 0.7,
+      "rho_sram": 0.9,
+      "launch_ns_per_macro": 1000,
+      "memory_setup_ns_per_macro": 0,
+      "kappa_quant_eqops": 4,
+      "kappa_acc_convert_eqops": 2
+    }
+  }
+}

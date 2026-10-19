@@ -1,0 +1,18 @@
+tensor:
+  - name: input
+    base_addr: 0
+    shape: [16, 2048]
+    strides: [2048, 1]
+    element_size: 2
+
+  - name: weight
+    base_addr: 65536
+    shape: [2048, 2048]
+    strides: [1, 2048]
+    element_size: 2
+
+  - name: output
+    base_addr: 8454144
+    shape: [16, 2048]
+    strides: [2048, 1]
+    element_size: 2

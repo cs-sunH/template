@@ -1,0 +1,38 @@
+# R5-F3 port (2026-09-30, from the face repo): the clean scripts and README
+# treat these artifact classes as "gitignored by design" — without this file
+# the premise was false and every run dirtied the worktree. Mirrors
+# sh_test_mesh/run_scripts/clean_test_records.sh + clean_build_artifacts.sh.
+# Never ignore source: traces/ keeps its *.py materializer scripts.
+
+# build trees (clean_build_artifacts.sh)
+/build/
+/build_congestion_aware/
+
+# run products (clean_test_records.sh)
+/sh_test_mesh/generated/
+/sh_test_mesh/results/
+/sh_test_mesh/run_logs/
+/log/
+/sh_test_mesh/log/
+/sh_test_mesh/workload/llama2_7b_inference/online_runs/
+/sh_test_mesh/runs/
+**/completion_fixture/
+**/hbm_nway_fixture/
+
+# materialized queue/sidecar data: traces/ keeps only *.py materializers
+/sh_test_mesh/workload/llama2_7b_inference/traces/*
+!/sh_test_mesh/workload/llama2_7b_inference/traces/*.py
+
+# caches
+__pycache__/
+.pytest_cache/
+
+# chakra et_def protobuf derived artifacts. Revised 2026-10-17 by consensus
+# decision 6=(a): only the Python binding et_def_pb2.py is now TRACKED
+# (regenerated with pinned protoc 3.21.12; anti-drift check at
+# schema/protobuf/verify_et_def_pb2.py + sh_test_mesh/tests/
+# test_et_def_pb2_consistency.py). The C++ et_def.pb.cc/.h remain CMake
+# build artifacts generated into the build tree and stay ignored.
+# Do NOT ignore et_def.proto itself.
+/extern/graph_frontend/chakra/schema/protobuf/et_def.pb.cc
+/extern/graph_frontend/chakra/schema/protobuf/et_def.pb.h

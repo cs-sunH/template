@@ -1,0 +1,31 @@
+architecture:
+  frequency: 1000
+  core_num: 16
+  core:
+    controller:
+      power: 0.7250
+      area: 3.6650
+    matrix:
+      mac_num: 5440
+      power: 2.2135
+      area: 9.2972
+    vector:
+      vec_num: 2720
+      power: 2.1338
+      area: 7.0834
+    buffer:
+      buffer_size: 4096
+      read_bw: 32768.0
+      write_bw: 32768.0
+      power: 5.0869
+      area: 15.7843
+  dram:
+    config_path: configs/architecture/dram/cloud/cloud_1TBps.yaml
+    power: 5.3330
+    area: 4.9980
+  noc:
+    topology: mesh
+    config_path: configs/architecture/noc/4x4_mesh
+    flit_size: 128
+    power: 0.4754
+    area: 6.5970

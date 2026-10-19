@@ -1,0 +1,12 @@
+system:
+  type: edge
+  chip:
+    config_path: configs/architecture/chip/test_edge_channel.yaml
+    intra_channel_vector_length: 0
+    channel_num: 8
+    channel_bandwidth: 12.8 # GB/s
+    channel_energy: 7.0 # pJ/bit
+  npu:
+    frequency: 1000 # MHz
+    vec_length: 1024
+    vec_energy: 0.78 # pJ/bit

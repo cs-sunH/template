@@ -1,0 +1,13 @@
+*.egg-info/
+build/
+*_pb2*.py*
+!et_def_pb2.py
+!verify_et_def_pb2.py
+*.pyc
+__pycache__/
+*.egg
+*.et
+*.dot
+.pyre
+*et_def.pb.cc
+*et_def.pb.h

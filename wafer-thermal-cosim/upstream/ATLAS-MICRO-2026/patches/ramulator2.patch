@@ -1,0 +1,1454 @@
+From 6321a76d20f69e0bb974f67cbbc524a7eca26ece Mon Sep 17 00:00:00 2001
+From: leesou <leesou@pku.edu.cn>
+Date: Thu, 9 Jul 2026 16:30:17 +0000
+Subject: [PATCH] Initial commit
+
+---
+ CMakeLists.txt                                |  36 +-
+ src/addr_mapper/addr_mapper.h                 |   4 +-
+ src/addr_mapper/impl/linear_mappers.cpp       | 106 ++--
+ src/addr_mapper/impl/linear_mappers.h         |  63 +++
+ src/base/request.h                            |  10 +-
+ src/dram/CMakeLists.txt                       |   1 +
+ src/dram/dram.h                               |   1 +
+ src/dram/impl/HB-DRAM.cpp                     | 460 ++++++++++++++++++
+ src/dram/lambdas/preq.h                       |  28 ++
+ src/dram_controller/controller.h              |   2 +
+ .../impl/generic_dram_controller.cpp          |   9 +
+ .../impl/refresh/all_bank_refresh.cpp         |  19 +-
+ src/frontend/CMakeLists.txt                   |   2 +
+ src/frontend/frontend.h                       |  29 +-
+ src/frontend/impl/hb_frontend.cpp             | 320 ++++++++++++
+ .../impl/generic_DRAM_system.cpp              |  46 +-
+ src/memory_system/memory_system.h             |  16 +
+ 17 files changed, 1073 insertions(+), 79 deletions(-)
+ create mode 100644 src/addr_mapper/impl/linear_mappers.h
+ create mode 100644 src/dram/impl/HB-DRAM.cpp
+ create mode 100644 src/frontend/impl/hb_frontend.cpp
+
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 94a917b..22e0452 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -1,11 +1,3 @@
+-cmake_minimum_required(VERSION 3.14)
+-
+-project(
+-  Ramulator
+-  VERSION 2.0
+-  LANGUAGES CXX
+-)
+-
+ #### Prompt the build type ####
+ if(NOT CMAKE_BUILD_TYPE)
+   set(CMAKE_BUILD_TYPE "Release" CACHE STRING "" FORCE)
+@@ -27,26 +19,14 @@ set(CMAKE_CXX_EXTENSIONS OFF)
+ include(FetchContent)
+ set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "Skip updating the external dependencies after populating them for the first time")
+ 
+-message("Configuring yaml-cpp...")
+-option(YAML_CPP_BUILD_CONTRIB "Enable yaml-cpp contrib in library" OFF)
+-option(YAML_CPP_BUILD_TOOLS "Enable parse tools" OFF)
+-option(YAML_BUILD_SHARED_LIBS "Build yaml-cpp as a shared library" OFF)
+-FetchContent_Declare(
+-  yaml-cpp                             
+-  GIT_REPOSITORY https://github.com/jbeder/yaml-cpp.git
+-  GIT_TAG        yaml-cpp-0.7.0                        
+-  SOURCE_DIR     ${CMAKE_SOURCE_DIR}/ext/yaml-cpp
+-)
+-FetchContent_MakeAvailable(yaml-cpp)
+ include_directories(${yaml-cpp_SOURCE_DIR}/include)
+-message("Done configuring yaml-cpp.")
+ 
+ message("Configuring spdlog...")
+ FetchContent_Declare(
+   spdlog                             
+   GIT_REPOSITORY https://github.com/gabime/spdlog.git
+   GIT_TAG        v1.11.0     
+-  SOURCE_DIR     ${CMAKE_SOURCE_DIR}/ext/spdlog
++  SOURCE_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/ext/spdlog
+ )
+ FetchContent_MakeAvailable(spdlog)
+ include_directories(${spdlog_SOURCE_DIR}/include)
+@@ -57,24 +37,28 @@ FetchContent_Declare(
+     argparse
+     GIT_REPOSITORY https://github.com/p-ranav/argparse.git
+     GIT_TAG        v2.9     
+-    SOURCE_DIR     ${CMAKE_SOURCE_DIR}/ext/argparse
++    SOURCE_DIR     ${CMAKE_CURRENT_SOURCE_DIR}/ext/argparse
+ )
+ FetchContent_MakeAvailable(argparse)
+ include_directories(${argparse_SOURCE_DIR}/include)
+ message("Done configuring argparse.")
+ ##################################
+ 
+-include_directories(${CMAKE_SOURCE_DIR}/src)
++include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
+ 
+ add_library(ramulator SHARED)
+-set_target_properties(ramulator PROPERTIES
+-  LIBRARY_OUTPUT_DIRECTORY  ${PROJECT_SOURCE_DIR}
+-)
+ target_link_libraries(
+   ramulator 
+   PUBLIC yaml-cpp
+   PUBLIC spdlog
+ )
++target_include_directories(
++  ramulator
++  PUBLIC src
++  PUBLIC ${spdlog_SOURCE_DIR}/include
++  PUBLIC ${yaml-cpp_SOURCE_DIR}/include
++  PUBLIC ${argparse_SOURCE_DIR}/include
++)
+ 
+ add_executable(ramulator-exe)
+ target_link_libraries(
+diff --git a/src/addr_mapper/addr_mapper.h b/src/addr_mapper/addr_mapper.h
+index d324fbe..fc117b2 100644
+--- a/src/addr_mapper/addr_mapper.h
++++ b/src/addr_mapper/addr_mapper.h
+@@ -17,7 +17,9 @@ class IAddrMapper {
+      * @brief  Applies the address mapping to a physical address and returns the DRAM address vector
+      * 
+      */
+-    virtual void apply(Request& req) = 0;   
++    virtual void apply(Request& req) = 0;  
++
++    virtual Addr_t get_tx_offset() { return -1; } 
+ };
+ 
+ }       // namespace Ramulator
+diff --git a/src/addr_mapper/impl/linear_mappers.cpp b/src/addr_mapper/impl/linear_mappers.cpp
+index 3792f08..4aa85aa 100644
+--- a/src/addr_mapper/impl/linear_mappers.cpp
++++ b/src/addr_mapper/impl/linear_mappers.cpp
+@@ -1,54 +1,12 @@
++#include <iostream>
+ #include <vector>
+ 
+ #include "base/base.h"
+-#include "dram/dram.h"
+-#include "addr_mapper/addr_mapper.h"
+-#include "memory_system/memory_system.h"
++#include "base/type.h"
++#include "linear_mappers.h"
+ 
+-namespace Ramulator {
+-
+-class LinearMapperBase : public IAddrMapper {
+-  public:
+-    IDRAM* m_dram = nullptr;
+-
+-    int m_num_levels = -1;          // How many levels in the hierarchy?
+-    std::vector<int> m_addr_bits;   // How many address bits for each level in the hierarchy?
+-    Addr_t m_tx_offset = -1;
+-
+-    int m_col_bits_idx = -1;
+-    int m_row_bits_idx = -1;
+-
+-
+-  protected:
+-    void setup(IFrontEnd* frontend, IMemorySystem* memory_system) {
+-      m_dram = memory_system->get_ifce<IDRAM>();
+-
+-      // Populate m_addr_bits vector with the number of address bits for each level in the hierachy
+-      const auto& count = m_dram->m_organization.count;
+-      m_num_levels = count.size();
+-      m_addr_bits.resize(m_num_levels);
+-      for (size_t level = 0; level < m_addr_bits.size(); level++) {
+-        m_addr_bits[level] = calc_log2(count[level]);
+-      }
+-
+-      // Last (Column) address have the granularity of the prefetch size
+-      m_addr_bits[m_num_levels - 1] -= calc_log2(m_dram->m_internal_prefetch_size);
+-
+-      int tx_bytes = m_dram->m_internal_prefetch_size * m_dram->m_channel_width / 8;
+-      m_tx_offset = calc_log2(tx_bytes);
+ 
+-      // Determine where are the row and col bits for ChRaBaRoCo and RoBaRaCoCh
+-      try {
+-        m_row_bits_idx = m_dram->m_levels("row");
+-      } catch (const std::out_of_range& r) {
+-        throw std::runtime_error(fmt::format("Organization \"row\" not found in the spec, cannot use linear mapping!"));
+-      }
+-
+-      // Assume column is always the last level
+-      m_col_bits_idx = m_num_levels - 1;
+-    }
+-
+-};
++namespace Ramulator {
+ 
+ 
+ class ChRaBaRoCo final : public LinearMapperBase, public Implementation {
+@@ -123,4 +81,60 @@ class MOP4CLXOR final : public LinearMapperBase, public Implementation {
+     }
+ };
+ 
++
++// Ch is inserted into RoBaRaCo, the lowest bit of Ch is indicated by m_channel_lowest_bit
++class OneLevelInterleave final : public LinearMapperBase, public Implementation {
++  RAMULATOR_REGISTER_IMPLEMENTATION(IAddrMapper, OneLevelInterleave, "OneLevelInterleave", "Applies a one level interleave mapping to the address.");
++
++  int m_channel_lowest_bit = -1; // NOTE: This value excludes the bit number of m_tx_offset
++  int m_channel_highest_bit = -1;
++  int m_channel_lower_value_mask = 0;
++  int m_channel_value_mask = 0;
++
++  public:
++    void init() override {
++      if(m_config["channel_lowest_bit"]) {
++        m_channel_lowest_bit = m_config["channel_lowest_bit"].as<int>();
++      }
++      else {
++        std::cout << "[WARNING] channel_lowest_bit is not specified in the config file." << std::endl;
++        std::cout << "          Using default mapping RoBaRaCoCh (i.e., channel_lowest_bit = 0)." << std::endl;
++        m_channel_lowest_bit = 0;
++      }
++    };
++
++    void setup(IFrontEnd* frontend, IMemorySystem* memory_system) override {
++      LinearMapperBase::setup(frontend, memory_system);
++
++      m_channel_highest_bit = m_channel_lowest_bit + m_addr_bits[0] - 1;
++      m_channel_lower_value_mask = (1 << m_channel_lowest_bit) - 1;
++      m_channel_value_mask = (1 << m_addr_bits[0]) - 1;
++    }
++
++    Addr_t get_ch_offset() override {
++      return m_channel_lowest_bit;
++    }
++
++    void apply(Request& req) override {
++      req.addr_vec.resize(m_num_levels, -1);
++
++      // First remove m_tx_offset
++      Addr_t addr = req.addr >> m_tx_offset;
++
++      // Then extract channel value
++      req.addr_vec[0] = (addr >> m_channel_lowest_bit) & m_channel_value_mask;
++
++      // Remove channel bits, convert from [High][Ch][Low] to [High][Low] in bit representation
++      Addr_t remaining_addr = ((addr >> (m_channel_highest_bit+1)) << m_channel_lowest_bit)
++                            | (addr & m_channel_lower_value_mask);
++      
++      // The remaining process is identical to RoBaRaCoCh
++      req.addr_vec[m_addr_bits.size() - 1] = slice_lower_bits(remaining_addr, m_addr_bits[m_addr_bits.size() - 1]);
++      for (int i = 1; i <= m_row_bits_idx; i++) {
++        req.addr_vec[i] = slice_lower_bits(remaining_addr, m_addr_bits[i]);
++      }
++    }
++};
++
++
+ }   // namespace Ramulator
+\ No newline at end of file
+diff --git a/src/addr_mapper/impl/linear_mappers.h b/src/addr_mapper/impl/linear_mappers.h
+new file mode 100644
+index 0000000..6247238
+--- /dev/null
++++ b/src/addr_mapper/impl/linear_mappers.h
+@@ -0,0 +1,63 @@
++#include <vector>
++
++#include "base/base.h"
++#include "dram/dram.h"
++#include "addr_mapper/addr_mapper.h"
++#include "memory_system/memory_system.h"
++
++
++namespace Ramulator {
++
++
++class LinearMapperBase : public IAddrMapper {
++  public:
++    IDRAM* m_dram = nullptr;
++        
++    int m_num_levels = -1;          // How many levels in the hierarchy?
++    std::vector<int> m_addr_bits;   // How many address bits for each level in the hierarchy?
++    Addr_t m_tx_offset = -1;
++        
++    int m_col_bits_idx = -1;
++    int m_row_bits_idx = -1;
++        
++    Addr_t get_tx_offset() override {
++      return m_tx_offset;
++    }
++
++    virtual Addr_t get_ch_offset() {
++      return 0;
++    }
++        
++  protected:
++    void setup(IFrontEnd* frontend, IMemorySystem* memory_system) {
++      m_dram = memory_system->get_ifce<IDRAM>();
++
++      // Populate m_addr_bits vector with the number of address bits for each level in the hierachy
++      const auto& count = m_dram->m_organization.count;
++      m_num_levels = count.size();
++      m_addr_bits.resize(m_num_levels);
++      for (size_t level = 0; level < m_addr_bits.size(); level++) {
++        m_addr_bits[level] = calc_log2(count[level]);
++      }
++
++      // Last (Column) address have the granularity of the prefetch size
++      m_addr_bits[m_num_levels - 1] -= calc_log2(m_dram->m_internal_prefetch_size);
++
++      int tx_bytes = m_dram->m_internal_prefetch_size * m_dram->m_channel_width / 8;
++      m_tx_offset = calc_log2(tx_bytes);
++
++      // Determine where are the row and col bits for ChRaBaRoCo and RoBaRaCoCh
++      try {
++        m_row_bits_idx = m_dram->m_levels("row");
++      } catch (const std::out_of_range& r) {
++        throw std::runtime_error(fmt::format("Organization \"row\" not found in the spec, cannot use linear mapping!"));
++      }
++
++      // Assume column is always the last level
++      m_col_bits_idx = m_num_levels - 1;
++    }
++
++};
++
++
++}
+diff --git a/src/base/request.h b/src/base/request.h
+index 528831b..12124ec 100644
+--- a/src/base/request.h
++++ b/src/base/request.h
+@@ -46,7 +46,7 @@ struct Request {
+ 
+ struct ReqBuffer {
+   std::list<Request> buffer;
+-  size_t max_size = 32;
++  size_t max_size = 256;
+ 
+ 
+   using iterator = std::list<Request>::iterator;
+@@ -56,6 +56,14 @@ struct ReqBuffer {
+ 
+   size_t size() const { return buffer.size(); }
+ 
++  bool empty() {
++    if (buffer.size() == 0) {
++      return true;
++    } else {
++      return false;
++    }
++  }
++
+   bool enqueue(const Request& request) {
+     if (buffer.size() <= max_size) {
+       buffer.push_back(request);
+diff --git a/src/dram/CMakeLists.txt b/src/dram/CMakeLists.txt
+index f36a4cf..30c10c2 100644
+--- a/src/dram/CMakeLists.txt
++++ b/src/dram/CMakeLists.txt
+@@ -17,6 +17,7 @@ target_sources(
+   impl/HBM.cpp
+   impl/HBM2.cpp
+   impl/HBM3.cpp
++  impl/HB-DRAM.cpp
+ )
+ 
+ target_link_libraries(
+diff --git a/src/dram/dram.h b/src/dram/dram.h
+index 823c827..e802b9e 100644
+--- a/src/dram/dram.h
++++ b/src/dram/dram.h
+@@ -23,6 +23,7 @@ class IDRAM : public Clocked<IDRAM> {
+     SpecDef m_levels;                   // Definition (i.e., names and ids) of the levels in the hierarchy
+     Organization m_organization;        // The organization of the device (density, dq, levels)
+     int m_channel_width = -1;           // Channel width (should be set by the implementation's config)
++    int m_temperature = -1;
+ 
+ 
+   /************************************************
+diff --git a/src/dram/impl/HB-DRAM.cpp b/src/dram/impl/HB-DRAM.cpp
+new file mode 100644
+index 0000000..eb664c3
+--- /dev/null
++++ b/src/dram/impl/HB-DRAM.cpp
+@@ -0,0 +1,460 @@
++#include "dram/dram.h"
++#include "dram/lambdas.h"
++
++namespace Ramulator {
++
++class HBDRAM : public IDRAM, public Implementation {
++  RAMULATOR_REGISTER_IMPLEMENTATION(IDRAM, HBDRAM, "HBDRAM", "Hybrid-Bonding DRAM Device Model")
++
++  public:
++    inline static const std::map<std::string, Organization> org_presets = {
++      //      name        density   DQ    Ch Bg Ba    Ro    Co
++      {"HBDRAM_4Gb_1024pin",   {1<<12,  1024,  {1, 1, 1, 1<<15, 1<<7}}},
++      // Used for channel organization exploration
++      {"HBDRAM_2Gb_512pin",   {1<<11,  512,  {1, 1, 1, 1<<14, 1<<8}}},
++      {"HBDRAM_1Gb_256pin",   {1<<10,  256,  {1, 1, 1, 1<<13, 1<<9}}},
++      {"HBDRAM_8Gb_2048pin",   {1<<13,  2048,  {1, 1, 1, 1<<16, 1<<6}}},
++      {"HBDRAM_16Gb_4096pin",   {1<<14,  4096,  {1, 1, 1, 1<<17, 1<<5}}},
++      {"HBDRAM_32Gb_8192pin",   {1<<15,  8192,  {1, 1, 1, 1<<18, 1<<4}}},
++      // Used for bank organization exploration
++      {"HBDRAM_4Gb_1024pin_256col",   {1<<12,  1024,  {1, 1, 1, 1<<14, 1<<8}}},
++      {"HBDRAM_4Gb_1024pin_512col",   {1<<12,  1024,  {1, 1, 1, 1<<13, 1<<9}}},
++      {"HBDRAM_4Gb_1024pin_64col",   {1<<12,  1024,  {1, 1, 1, 1<<16, 1<<6}}},
++      {"HBDRAM_4Gb_1024pin_32col",   {1<<12,  1024,  {1, 1, 1, 1<<17, 1<<5}}},
++      {"HBDRAM_4Gb_1024pin_16col",   {1<<12,  1024,  {1, 1, 1, 1<<18, 1<<4}}},
++      // Used for full space e2e exploration
++      {"HBDRAM_2Gb_512pin_32KB",   {1<<11,  512,  {1, 1, 1, 1<<13, 1<<9}}},
++      {"HBDRAM_2Gb_512pin_64KB",   {1<<11,  512,  {1, 1, 1, 1<<12, 1<<10}}},
++      {"HBDRAM_2Gb_512pin_8KB",   {1<<11,  512,  {1, 1, 1, 1<<15, 1<<7}}},
++      {"HBDRAM_2Gb_512pin_4KB",   {1<<11,  512,  {1, 1, 1, 1<<16, 1<<6}}},
++      {"HBDRAM_2Gb_512pin_2KB",   {1<<11,  512,  {1, 1, 1, 1<<17, 1<<5}}},
++
++      {"HBDRAM_1Gb_256pin_32KB",   {1<<10,  256,  {1, 1, 1, 1<<12, 1<<10}}},
++      {"HBDRAM_1Gb_256pin_64KB",   {1<<10,  256,  {1, 1, 1, 1<<11, 1<<11}}},
++      {"HBDRAM_1Gb_256pin_8KB",   {1<<10,  256,  {1, 1, 1, 1<<14, 1<<8}}},
++      {"HBDRAM_1Gb_256pin_4KB",   {1<<10,  256,  {1, 1, 1, 1<<15, 1<<7}}},
++      {"HBDRAM_1Gb_256pin_2KB",   {1<<10,  256,  {1, 1, 1, 1<<16, 1<<6}}},
++
++      {"HBDRAM_8Gb_2048pin_32KB",   {1<<13,  2048,  {1, 1, 1, 1<<15, 1<<7}}},
++      {"HBDRAM_8Gb_2048pin_64KB",   {1<<13,  2048,  {1, 1, 1, 1<<14, 1<<8}}},
++      {"HBDRAM_8Gb_2048pin_8KB",   {1<<13,  2048,  {1, 1, 1, 1<<17, 1<<5}}},
++      {"HBDRAM_8Gb_2048pin_4KB",   {1<<13,  2048,  {1, 1, 1, 1<<18, 1<<4}}},
++      {"HBDRAM_8Gb_2048pin_2KB",   {1<<13,  2048,  {1, 1, 1, 1<<19, 1<<3}}},
++
++      {"HBDRAM_16Gb_4096pin_32KB",   {1<<14,  4096,  {1, 1, 1, 1<<16, 1<<6}}},
++      {"HBDRAM_16Gb_4096pin_64KB",   {1<<14,  4096,  {1, 1, 1, 1<<15, 1<<7}}},
++      {"HBDRAM_16Gb_4096pin_8KB",   {1<<14,  4096,  {1, 1, 1, 1<<18, 1<<4}}},
++      {"HBDRAM_16Gb_4096pin_4KB",   {1<<14,  4096,  {1, 1, 1, 1<<19, 1<<3}}},
++      {"HBDRAM_16Gb_4096pin_2KB",   {1<<14,  4096,  {1, 1, 1, 1<<20, 1<<2}}},
++
++      {"HBDRAM_32Gb_8192pin_32KB",   {1<<15,  8192,  {1, 1, 1, 1<<17, 1<<5}}},
++      {"HBDRAM_32Gb_8192pin_64KB",   {1<<15,  8192,  {1, 1, 1, 1<<16, 1<<6}}},
++      {"HBDRAM_32Gb_8192pin_8KB",   {1<<15,  8192,  {1, 1, 1, 1<<19, 1<<3}}},
++      {"HBDRAM_32Gb_8192pin_4KB",   {1<<15,  8192,  {1, 1, 1, 1<<20, 1<<2}}},
++      {"HBDRAM_32Gb_8192pin_2KB",   {1<<15,  8192,  {1, 1, 1, 1<<21, 1<<1}}},
++
++      // Used for cloud chip comp-bw allocation
++      {"HBDRAM_1Gb_1024pin_512col",   {1<<10,  1024,  {1, 1, 1, 1<<11, 1<<9}}},
++      {"HBDRAM_2Gb_1024pin_512col",   {1<<11,  1024,  {1, 1, 1, 1<<12, 1<<9}}},
++      {"HBDRAM_8Gb_1024pin_512col",   {1<<13,  1024,  {1, 1, 1, 1<<14, 1<<9}}},
++      {"HBDRAM_16Gb_1024pin_512col",   {1<<14,  1024,  {1, 1, 1, 1<<15, 1<<9}}},
++
++
++
++
++      // Edge DRAM full space
++      {"HBDRAM_2Gb_512pin_2KB_edge",   {1<<11,  512,  {1, 1, 1, 1<<17, 1<<5}}},
++      {"HBDRAM_2Gb_512pin_4KB_edge",   {1<<11,  512,  {1, 1, 1, 1<<16, 1<<6}}},
++      {"HBDRAM_2Gb_512pin_8KB_edge",   {1<<11,  512,  {1, 1, 1, 1<<15, 1<<7}}},
++      {"HBDRAM_2Gb_512pin_16KB_edge",   {1<<11,  512,  {1, 1, 1, 1<<14, 1<<8}}},
++      
++      {"HBDRAM_1Gb_256pin_2KB_edge",   {1<<10,  256,  {1, 1, 1, 1<<16, 1<<6}}},
++      {"HBDRAM_1Gb_256pin_4KB_edge",   {1<<10,  256,  {1, 1, 1, 1<<15, 1<<7}}},
++      {"HBDRAM_1Gb_256pin_8KB_edge",   {1<<10,  256,  {1, 1, 1, 1<<14, 1<<8}}},
++      {"HBDRAM_1Gb_256pin_16KB_edge",   {1<<10,  256,  {1, 1, 1, 1<<13, 1<<9}}},
++
++      {"HBDRAM_512Mb_128pin_2KB_edge",   {1<<9,  128,  {1, 1, 1, 1<<15, 1<<7}}},
++      {"HBDRAM_512Mb_128pin_4KB_edge",   {1<<9,  128,  {1, 1, 1, 1<<14, 1<<8}}},
++      {"HBDRAM_512Mb_128pin_8KB_edge",   {1<<9,  128,  {1, 1, 1, 1<<13, 1<<9}}},
++      {"HBDRAM_512Mb_128pin_16KB_edge",   {1<<9,  128,  {1, 1, 1, 1<<12, 1<<10}}},
++
++      {"HBDRAM_256Mb_64pin_2KB_edge",   {1<<8,  64,  {1, 1, 1, 1<<14, 1<<8}}},
++      {"HBDRAM_256Mb_64pin_4KB_edge",   {1<<8,  64,  {1, 1, 1, 1<<13, 1<<9}}},
++      {"HBDRAM_256Mb_64pin_8KB_edge",   {1<<8,  64,  {1, 1, 1, 1<<12, 1<<10}}},
++      {"HBDRAM_256Mb_64pin_16KB_edge",   {1<<8,  64,  {1, 1, 1, 1<<11, 1<<11}}},
++    };
++
++    inline static const std::map<std::string, std::vector<int>> timing_presets = {
++      {"HBDRAM_500Mbps",  {500,   1,   1,   8,      8,      6,   17,   23,  8,   2,    1,    3,    1,     12,   -1,    2000}},
++      {"HBDRAM_400Mbps",  {400,   1,   1,   7,      7,      5,   14,   19,  7,   2,    1,    3,    1,     10,   -1,    2500}},
++    };
++
++
++  /************************************************
++   *                Organization
++   ***********************************************/   
++    int m_internal_prefetch_size = 1;
++
++    inline static constexpr ImplDef m_levels = {
++      "channel", "bankgroup", "bank", "row", "column",    
++    };
++
++
++  /************************************************
++   *             Requests & Commands
++   ***********************************************/
++    inline static constexpr ImplDef m_commands = {
++      "ACT", 
++      "PRE",
++      "RD",  "WR",
++      "REFab"
++    };
++
++    inline static const ImplLUT m_command_scopes = LUT (
++      m_commands, m_levels, {
++        {"ACT",   "row"},
++        {"PRE",   "bank"},
++        {"RD",    "column"},  {"WR",     "column"},
++        {"REFab",  "bank"},
++      }
++    );
++
++    inline static const ImplLUT m_command_meta = LUT<DRAMCommandMeta> (
++      m_commands, {
++                // open?   close?   access?  refresh?
++        {"ACT",   {true,   false,   false,   false}},
++        {"PRE",   {false,  true,    false,   false}},
++        {"RD",    {false,  false,   true,    false}},
++        {"WR",    {false,  false,   true,    false}},
++        {"REFab", {false,  false,   false,   true }},
++      }
++    );
++
++    inline static constexpr ImplDef m_requests = {
++      "read", "write", "all-bank-refresh"
++    };
++
++    inline static const ImplLUT m_request_translations = LUT (
++      m_requests, m_commands, {
++        {"read", "RD"}, {"write", "WR"}, {"all-bank-refresh", "REFab"},
++      }
++    );
++
++   
++  /************************************************
++   *                   Timing
++   ***********************************************/
++    inline static constexpr ImplDef m_timings = {
++      "rate", 
++      "nBL", "nCL", "nRCDRD", "nRCDWR", "nRP", "nRAS", "nRC", "nWR", "nRTP", "nCWL",
++      "nWTR", "nRTW",
++      "nRFC", "nREFI",
++      "tCK_ps"
++    };
++
++
++  /************************************************
++   *                 Node States
++   ***********************************************/
++    inline static constexpr ImplDef m_states = {
++       "Opened", "Closed", "N/A", "Refreshing"
++    };
++
++    inline static const ImplLUT m_init_states = LUT (
++      m_levels, m_states, {
++        {"channel",   "N/A"}, 
++        {"bankgroup", "N/A"},
++        {"bank",      "Closed"},
++        {"row",       "Closed"},
++        {"column",    "N/A"},
++      }
++    );
++
++  public:
++    struct Node : public DRAMNodeBase<HBDRAM> {
++      Node(HBDRAM* dram, Node* parent, int level, int id) : DRAMNodeBase<HBDRAM>(dram, parent, level, id) {};
++    };
++    std::vector<Node*> m_channels;
++    
++    FuncMatrix<ActionFunc_t<Node>>  m_actions;
++    FuncMatrix<PreqFunc_t<Node>>    m_preqs;
++    FuncMatrix<RowhitFunc_t<Node>>  m_rowhits;
++    FuncMatrix<RowopenFunc_t<Node>> m_rowopens;
++
++
++  public:
++    void tick() override {
++      m_clk++;
++    };
++
++    void init() override {
++      RAMULATOR_DECLARE_SPECS();
++      set_organization();
++      set_timing_vals();
++
++      set_actions();
++      set_preqs();
++      set_rowhits();
++      set_rowopens();
++      
++      create_nodes();
++    };
++
++    void issue_command(int command, const AddrVec_t& addr_vec) override {
++      int channel_id = addr_vec[m_levels["channel"]];
++      m_channels[channel_id]->update_timing(command, addr_vec, m_clk);
++      m_channels[channel_id]->update_states(command, addr_vec, m_clk);
++    };
++
++    int get_preq_command(int command, const AddrVec_t& addr_vec) override {
++      int channel_id = addr_vec[m_levels["channel"]];
++      return m_channels[channel_id]->get_preq_command(command, addr_vec, m_clk);
++    };
++
++    bool check_ready(int command, const AddrVec_t& addr_vec) override {
++      int channel_id = addr_vec[m_levels["channel"]];
++      return m_channels[channel_id]->check_ready(command, addr_vec, m_clk);
++    };
++
++    bool check_rowbuffer_hit(int command, const AddrVec_t& addr_vec) override {
++      int channel_id = addr_vec[m_levels["channel"]];
++      return m_channels[channel_id]->check_rowbuffer_hit(command, addr_vec, m_clk);
++    };
++    
++    bool check_node_open(int command, const AddrVec_t& addr_vec) override {
++      int channel_id = addr_vec[m_levels["channel"]];
++      return m_channels[channel_id]->check_node_open(command, addr_vec, m_clk);
++    };
++
++  private:
++    void set_organization() {
++      // Organization
++      m_organization.count.resize(m_levels.size(), -1);
++
++      // Load organization preset if provided
++      if (auto preset_name = param_group("org").param<std::string>("preset").optional()) {
++        if (org_presets.count(*preset_name) > 0) {
++          m_organization = org_presets.at(*preset_name);
++        } else {
++          throw ConfigurationError("Unrecognized organization preset \"{}\" in {}!", *preset_name, get_name());
++        }
++      }
++
++      // Override the preset with any provided settings
++      if (auto dq = param_group("org").param<int>("dq").optional()) {
++        m_organization.dq = *dq;
++      }
++
++      // Channel width
++      // For hybrid bonding DRAM, channel width = DQ width
++      m_channel_width = param_group("org").param<int>("channel_width").default_val(m_organization.dq);
++
++      // Internal prefetch size
++      m_internal_prefetch_size = param_group("org").param<int>("internal_prefetch_size").default_val(1);
++
++      for (int i = 0; i < m_levels.size(); i++){
++        auto level_name = m_levels(i);
++        if (auto sz = param_group("org").param<int>(level_name).optional()) {
++          m_organization.count[i] = *sz;
++        }
++      }
++
++      if (auto density = param_group("org").param<int>("density").optional()) {
++        m_organization.density = *density;
++      }
++
++      // Sanity check: is the calculated channel density the same as the provided one?
++      size_t _density = size_t(m_organization.count[m_levels["bankgroup"]]) *
++                        size_t(m_organization.count[m_levels["bank"]]) *
++                        size_t(m_organization.count[m_levels["row"]]) *
++                        size_t(m_organization.count[m_levels["column"]]) *
++                        size_t(m_organization.dq) *
++                        size_t(m_internal_prefetch_size);
++      _density >>= 20;
++      if (m_organization.density != _density) {
++        throw ConfigurationError(
++            "Calculated {} channel density {} Mb does not equal the provided density {} Mb!", 
++            get_name(),
++            _density, 
++            m_organization.density
++        );
++      }
++
++    };
++
++    void set_timing_vals() {
++      m_timing_vals.resize(m_timings.size(), -1);
++
++      // Load timing preset if provided
++      bool preset_provided = false;
++      if (auto preset_name = param_group("timing").param<std::string>("preset").optional()) {
++        if (timing_presets.count(*preset_name) > 0) {
++          m_timing_vals = timing_presets.at(*preset_name);
++          preset_provided = true;
++        } else {
++          throw ConfigurationError("Unrecognized timing preset \"{}\" in {}!", *preset_name, get_name());
++        }
++      }
++
++      // Check for rate (in MT/s), and if provided, calculate and set tCK (in picosecond)
++      if (auto dq = param_group("timing").param<int>("rate").optional()) {
++        if (preset_provided) {
++          throw ConfigurationError("Cannot change the transfer rate of {} when using a speed preset !", get_name());
++        }
++        m_timing_vals("rate") = *dq;
++      }
++      int tCK_ps = 1E6 / (m_timing_vals("rate"));
++      m_timing_vals("tCK_ps") = tCK_ps;
++
++      // Refresh timings
++      // tRFC table (unit is nanosecond!)
++      constexpr int tRFC_TABLE[1][7] = {
++      //  0.5Gb  1Gb  2Gb  4Gb  8Gb  16Gb  32Gb
++        {15, 40, 65, 90, 115, 140, 170},
++      };
++
++      // tRFEFI table (unit is nanosecond!)
++      int tREFI_TABLE[4][7] = {
++        //  0.5Gb  1Gb  2Gb  4Gb  8Gb  16Gb  32Gb
++        {7800, 7800, 7800, 3900, 3900, 1950, 1950},
++        {3900, 3900, 3900, 1950, 1950, 975, 975},
++        {1950, 1950, 1950, 975, 975, 487, 487},
++        {975, 975, 975, 487, 487, 243, 243},
++      };
++
++      int density_id = [](int density_Mb) -> int { 
++        switch (density_Mb) {
++          case 256:  return 0;
++          case 512:  return 0;
++          case 1024:  return 1;
++          case 2048:  return 2;
++          case 4096:  return 3;
++          case 8192: return 4;
++          case 16384: return 5;
++          case 32768: return 6;
++          default:    return -1;
++        }
++      }(m_organization.density);
++      m_timing_vals("nRFC")  = JEDEC_rounding(tRFC_TABLE[0][density_id], tCK_ps);
++
++      // load temperature (expected working temperature, used for setting nREFI) preset when provided
++      m_temperature = 85;
++      if (auto temperature = param_group("timing").param<int>("temperature").optional()) {
++        m_temperature = *temperature;
++      }
++      int temperature_id = [](int temperature_Celsius) -> int {
++        if(temperature_Celsius <= 85) return 0;
++        if(temperature_Celsius <= 95) return 1;
++        if(temperature_Celsius <= 105) return 2;
++        return 3;
++      }(m_temperature);
++      m_timing_vals("nREFI")  = JEDEC_rounding(tREFI_TABLE[temperature_id][density_id], tCK_ps);
++
++      // Overwrite timing parameters with any user-provided value
++      // Rate and tCK should not be overwritten
++      for (int i = 1; i < m_timings.size() - 1; i++) {
++        auto timing_name = std::string(m_timings(i));
++
++        if (auto provided_timing = param_group("timing").param<int>(timing_name).optional()) {
++          // Check if the user specifies in the number of cycles (e.g., nRCD)
++          m_timing_vals(i) = *provided_timing;
++        } else if (auto provided_timing = param_group("timing").param<float>(timing_name.replace(0, 1, "t")).optional()) {
++          // Check if the user specifies in nanoseconds (e.g., tRCD)
++          m_timing_vals(i) = JEDEC_rounding(*provided_timing, tCK_ps);
++        }
++      }
++
++      // Check if there is any uninitialized timings
++      for (int i = 0; i < m_timing_vals.size(); i++) {
++        if (m_timing_vals(i) == -1) {
++          throw ConfigurationError("In \"{}\", timing {} is not specified!", get_name(), m_timings(i));
++        }
++      }      
++
++      // Set read latency
++      m_read_latency = m_timing_vals("nCL") + m_timing_vals("nBL");
++
++      // Populate the timing constraints
++      #define V(timing) (m_timing_vals(timing))
++      populate_timingcons(this, {
++          /*** Channel ***/ 
++          /// ACT command (for row commands)
++          {.level = "channel", .preceding = {"ACT"}, .following = {"ACT", "PRE", "REFab"}, .latency = 1},
++
++          // CAS <-> CAS
++          /// Data bus occupancy
++          {.level = "channel", .preceding = {"RD"}, .following = {"RD"}, .latency = V("nBL")},
++          {.level = "channel", .preceding = {"WR"}, .following = {"WR"}, .latency = V("nBL")},
++
++          // CAS <-> CAS
++          /// RD <-> WR, Minimum Read to Write, Assuming tWPRE = 1 tCK                          
++          {.level = "channel", .preceding = {"RD"}, .following = {"WR"}, .latency = V("nCL") + V("nBL") + 2 - V("nCWL")},
++          /// WR <-> RD, Minimum Read after Write
++          {.level = "channel", .preceding = {"WR"}, .following = {"RD"}, .latency = V("nCWL") + V("nBL") + V("nWTR")},              
++          /// RAS <-> REF
++          {.level = "channel", .preceding = {"ACT"}, .following = {"REFab"}, .latency = V("nRC")},          
++          {.level = "channel", .preceding = {"PRE"}, .following = {"REFab"}, .latency = V("nRP")},                  
++          {.level = "channel", .preceding = {"REFab"}, .following = {"ACT"}, .latency = V("nRFC")},          
++
++          /*** Bank ***/ 
++          {.level = "bank", .preceding = {"RD"},  .following = {"PRE"}, .latency = V("nRTP")},  
++          {.level = "bank", .preceding = {"ACT"}, .following = {"ACT"}, .latency = V("nRC")},  
++          {.level = "bank", .preceding = {"ACT"}, .following = {"RD"}, .latency = V("nRCDRD")},  
++          {.level = "bank", .preceding = {"ACT"}, .following = {"WR"}, .latency = V("nRCDWR")},  
++          {.level = "bank", .preceding = {"ACT"}, .following = {"PRE"}, .latency = V("nRAS")},  
++          {.level = "bank", .preceding = {"PRE"}, .following = {"ACT"}, .latency = V("nRP")},  
++          {.level = "bank", .preceding = {"RD"},  .following = {"PRE"}, .latency = V("nRTP")},  
++          {.level = "bank", .preceding = {"WR"},  .following = {"PRE"}, .latency = V("nCWL") + V("nBL") + V("nWR")},  
++        }
++      );
++      #undef V
++
++    };
++
++    void set_actions() {
++      m_actions.resize(m_levels.size(), std::vector<ActionFunc_t<Node>>(m_commands.size()));
++
++      // Bank actions
++      m_actions[m_levels["bank"]][m_commands["ACT"]] = Lambdas::Action::Bank::ACT<HBDRAM>;
++      m_actions[m_levels["bank"]][m_commands["PRE"]] = Lambdas::Action::Bank::PRE<HBDRAM>;
++    };
++
++    void set_preqs() {
++      m_preqs.resize(m_levels.size(), std::vector<PreqFunc_t<Node>>(m_commands.size()));
++
++      // Channel Actions
++      // TODO: change here (add a new Lambda function)
++      m_preqs[m_levels["channel"]][m_commands["REFab"]] = Lambdas::Preq::Channel::RequireHBBanksClosed<HBDRAM>;
++
++      // Bank actions
++      m_preqs[m_levels["bank"]][m_commands["RD"]] = Lambdas::Preq::Bank::RequireRowOpen<HBDRAM>;
++      m_preqs[m_levels["bank"]][m_commands["WR"]] = Lambdas::Preq::Bank::RequireRowOpen<HBDRAM>;
++    };
++
++    void set_rowhits() {
++      m_rowhits.resize(m_levels.size(), std::vector<RowhitFunc_t<Node>>(m_commands.size()));
++
++      m_rowhits[m_levels["bank"]][m_commands["RD"]] = Lambdas::RowHit::Bank::RDWR<HBDRAM>;
++      m_rowhits[m_levels["bank"]][m_commands["WR"]] = Lambdas::RowHit::Bank::RDWR<HBDRAM>;
++    }
++
++
++    void set_rowopens() {
++      m_rowopens.resize(m_levels.size(), std::vector<RowhitFunc_t<Node>>(m_commands.size()));
++
++      m_rowopens[m_levels["bank"]][m_commands["RD"]] = Lambdas::RowOpen::Bank::RDWR<HBDRAM>;
++      m_rowopens[m_levels["bank"]][m_commands["WR"]] = Lambdas::RowOpen::Bank::RDWR<HBDRAM>;
++    }
++
++
++    void create_nodes() {
++      int num_channels = m_organization.count[m_levels["channel"]];
++      for (int i = 0; i < num_channels; i++) {
++        Node* channel = new Node(this, nullptr, 0, i);
++        m_channels.push_back(channel);
++      }
++    };
++};
++
++
++}        // namespace Ramulator
+\ No newline at end of file
+diff --git a/src/dram/lambdas/preq.h b/src/dram/lambdas/preq.h
+index 698761b..e969d5a 100644
+--- a/src/dram/lambdas/preq.h
++++ b/src/dram/lambdas/preq.h
+@@ -114,6 +114,34 @@ namespace Channel {
+     }
+     return cmd;
+   };
++
++  template <class T>
++  int RequireHBBanksClosed(typename T::Node* node, int cmd, const AddrVec_t& addr_vec, Clk_t clk) {
++    if constexpr (T::m_levels["bank"] - T::m_levels["channel"] == 2) {
++      for (auto bg : node->m_child_nodes) {
++        for (auto bank: bg->m_child_nodes) {
++          if (bank->m_state == T::m_states["Closed"]) {
++            continue;
++          } else {
++            return T::m_commands["PRE"];
++          }
++        }
++      }
++    } else if constexpr (T::m_levels["bank"] - T::m_levels["channel"] == 3) {
++      for (auto pc : node->m_child_nodes) {
++        for (auto bg : pc->m_child_nodes) {
++          for (auto bank: bg->m_child_nodes) {
++            if (bank->m_state == T::m_states["Closed"]) {
++              continue;
++            } else {
++              return T::m_commands["PRE"];
++            }
++          }
++        }
++      }
++    }
++    return cmd;
++  };
+ }       // namespace Channel
+ }       // namespace Preq
+ }       // namespace Lambdas
+diff --git a/src/dram_controller/controller.h b/src/dram_controller/controller.h
+index ccbd9a6..d37d331 100644
+--- a/src/dram_controller/controller.h
++++ b/src/dram_controller/controller.h
+@@ -49,6 +49,8 @@ class IDRAMController : public Clocked<IDRAMController> {
+      * 
+      */
+     virtual void tick() = 0;
++
++    virtual bool is_finished() { return true; }
+    
+ };
+ 
+diff --git a/src/dram_controller/impl/generic_dram_controller.cpp b/src/dram_controller/impl/generic_dram_controller.cpp
+index a1f9f9b..4f1f4cb 100644
+--- a/src/dram_controller/impl/generic_dram_controller.cpp
++++ b/src/dram_controller/impl/generic_dram_controller.cpp
+@@ -224,6 +224,15 @@ class GenericDRAMController final : public IDRAMController, public Implementatio
+ 
+     };
+ 
++    bool is_finished() override {
++      if (pending.empty() &&
++          m_active_buffer.empty() &&
++          m_priority_buffer.empty() &&
++          m_read_buffer.empty() &&
++          m_write_buffer.empty())
++        return true;
++      return false;
++    }
+ 
+   private:
+     /**
+diff --git a/src/dram_controller/impl/refresh/all_bank_refresh.cpp b/src/dram_controller/impl/refresh/all_bank_refresh.cpp
+index cf27477..fde5e00 100644
+--- a/src/dram_controller/impl/refresh/all_bank_refresh.cpp
++++ b/src/dram_controller/impl/refresh/all_bank_refresh.cpp
+@@ -42,17 +42,30 @@ class AllBankRefresh : public IRefreshManager, public Implementation {
+ 
+       if (m_clk == m_next_refresh_cycle) {
+         m_next_refresh_cycle += m_nrefi;
+-        for (int r = 0; r < m_num_ranks; r++) {
++        
++        if(m_num_ranks > 0) {
++          for (int r = 0; r < m_num_ranks; r++) {
++            std::vector<int> addr_vec(m_dram_org_levels, -1);
++            addr_vec[0] = m_ctrl->m_channel_id;
++            addr_vec[1] = r;
++            Request req(addr_vec, m_ref_req_id);
++
++            bool is_success = m_ctrl->priority_send(req);
++            if (!is_success) {
++              throw std::runtime_error("Failed to send refresh!");
++            }
++          }
++        }
++        else {
+           std::vector<int> addr_vec(m_dram_org_levels, -1);
+           addr_vec[0] = m_ctrl->m_channel_id;
+-          addr_vec[1] = r;
+           Request req(addr_vec, m_ref_req_id);
+-
+           bool is_success = m_ctrl->priority_send(req);
+           if (!is_success) {
+             throw std::runtime_error("Failed to send refresh!");
+           }
+         }
++        
+       }
+     };
+ 
+diff --git a/src/frontend/CMakeLists.txt b/src/frontend/CMakeLists.txt
+index f464a22..5971099 100644
+--- a/src/frontend/CMakeLists.txt
++++ b/src/frontend/CMakeLists.txt
+@@ -7,6 +7,8 @@ target_sources(
+   impl/memory_trace/loadstore_trace.cpp
+   impl/memory_trace/readwrite_trace.cpp
+ 
++  impl/hb_frontend.cpp
++
+   impl/processor/simpleO3/simpleO3.cpp
+   impl/processor/simpleO3/core.h      impl/processor/simpleO3/core.cpp
+   impl/processor/simpleO3/llc.h       impl/processor/simpleO3/llc.cpp
+diff --git a/src/frontend/frontend.h b/src/frontend/frontend.h
+index a1855bb..bed5b15 100644
+--- a/src/frontend/frontend.h
++++ b/src/frontend/frontend.h
+@@ -6,18 +6,26 @@
+ #include <functional>
+ 
+ #include "base/base.h"
++#include "base/type.h"
+ #include "memory_system/memory_system.h"
+ 
++#include "common/data.h"
++#include "core/component.h"
++
+ 
+ namespace Ramulator {
+ 
++
++typedef atlasim::ComponentInput HBInput;
++
++
+ class IFrontEnd : public Clocked<IFrontEnd>, public TopLevel<IFrontEnd> {
+   RAMULATOR_REGISTER_INTERFACE(IFrontEnd, "Frontend", "The frontend that drives the simulation.");
+ 
+   friend class Factory;
+ 
+   protected:
+-    IMemorySystem* m_memory_system;
++    IMemorySystem* m_memory_system = nullptr;
+     uint m_clock_ratio = 1;
+ 
+   public:
+@@ -56,6 +64,25 @@ class IFrontEnd : public Clocked<IFrontEnd>, public TopLevel<IFrontEnd> {
+      * 
+      */
+     virtual bool receive_external_requests(int req_type_id, Addr_t addr, int source_id, std::function<void(Request&)> callback) { return false; }
++
++    /**
++     * Used for Hybrid Bonding DRAM's frontend
++     */
++    // Get necessary information for request generation
++    virtual void set_memory_system_info() { }
++    virtual Addr_t get_tx_bytes() { return 0; }
++    virtual Addr_t get_ch_offset() { return 0; }
++    // This function takes high-level MemoryAccess transactions from ATLAS simulator's "PE core --> DRAM wrapper" path,
++    // then translates each tensor tile's access to ramulator requests.
++    // Return value: Generated DRAM instruction number 
++    virtual int send(HBInput input) { return 0; }
++    // Get current tile's read bytes and write bytes
++    virtual int get_read_bytes() { return 0; }
++    virtual int get_write_bytes() { return 0; }
++    // Get all tiles' read bytes and write bytes;
++    virtual int get_total_read_bytes() { return 0; }
++    virtual int get_total_write_bytes() { return 0; }
++    
+ };
+ 
+ }        // namespace Ramulator
+diff --git a/src/frontend/impl/hb_frontend.cpp b/src/frontend/impl/hb_frontend.cpp
+new file mode 100644
+index 0000000..845977e
+--- /dev/null
++++ b/src/frontend/impl/hb_frontend.cpp
+@@ -0,0 +1,320 @@
++#include <cmath>
++#include <iostream>
++#include <unordered_set>
++// #include <bitset>
++
++#include "base/request.h"
++#include "base/type.h"
++#include "frontend/frontend.h"
++#include "addr_mapper/impl/linear_mappers.h"
++
++
++namespace Ramulator {
++
++namespace {
++
++template <typename ReqListT, typename ReqTypeT>
++void append_aligned_requests(
++    ReqListT& request_list,
++    Addr_t byte_addr,
++    Addr_t byte_count,
++    Addr_t tx_bytes,
++    ReqTypeT req_type
++) {
++    if(byte_count <= 0) {
++        return;
++    }
++    Addr_t aligned_addr = byte_addr - (byte_addr % tx_bytes);
++    Addr_t covered_bytes = (byte_addr - aligned_addr) + byte_count;
++    Addr_t req_count = static_cast<Addr_t>(std::ceil(covered_bytes * 1.0 / tx_bytes));
++    for(Addr_t idx = 0; idx < req_count; ++idx) {
++        request_list.emplace_back(aligned_addr + idx * tx_bytes, req_type);
++    }
++}
++
++}
++
++
++class HBFrontend : public IFrontEnd, public Implementation {
++    RAMULATOR_REGISTER_IMPLEMENTATION(IFrontEnd, HBFrontend, "HBFrontend", "Frontend for Hybrid Bonding memory.")
++
++public:
++    void init() override {
++        m_clock_ratio = param<uint>("clock_ratio").default_val(1);
++
++        read_req_to_send = 0;
++        write_req_to_send = 0;
++        read_request_list.clear();
++        write_request_list.clear();
++
++        read_bytes = 0;
++        write_bytes = 0;
++        total_read_bytes = 0;
++        total_write_bytes = 0;
++    }
++
++    void tick() override {
++        if(read_req_to_send < read_request_list.size()) {
++            while(true) {
++                bool request_sent = m_memory_system->send(read_request_list[read_req_to_send]);
++                if(request_sent)
++                    read_req_to_send++;
++                else
++                    break;
++                if(read_req_to_send >= read_request_list.size())
++                    break;
++            }
++        }
++        else if(write_req_to_send < write_request_list.size()) {
++            while(true) {
++                bool request_sent = m_memory_system->send(write_request_list[write_req_to_send]);
++                if(request_sent)
++                    write_req_to_send++;
++                else
++                    break;
++                if(write_req_to_send >= write_request_list.size())
++                    break;
++            }
++        }
++    }
++
++    void set_memory_system_info() override { 
++        if(m_memory_system == nullptr) {
++            std::cerr << "[WARNING] This frontend has not been connected to memory system." << std::endl;
++            std::cerr << "          Please call this function after calling connect_memory_system" << std::endl;
++            return;
++        }
++        channel_num = m_memory_system->get_channel_num();
++        if(channel_num <= 0) {
++            std::cerr << "[ERROR] Invalid channel number " << channel_num << "." << std::endl;
++            exit(-1);
++        }
++
++        addr_mapper = ((LinearMapperBase*)m_memory_system->get_addr_mapper());
++        if(addr_mapper == nullptr) {
++            std::cerr << "[ERROR] Memory system has not set address mapper." << std::endl;
++            exit(-1);
++        }
++
++        addr_mapping_type = addr_mapper->m_impl->get_name();
++        if(addr_mapping_type != "OneLevelInterleave") {
++            std::cerr << "[ERROR] Currently we only support OneLevelInterleave Address mapping." << std::endl;
++            exit(-1);
++        }
++        
++        Addr_t tx_offset = addr_mapper->get_tx_offset();
++        if(tx_offset == -1) {
++            std::cerr << "[ERROR] Invalid tx_offset value " << tx_offset << "." << std::endl;
++            exit(-1);
++        }
++        tx_bytes = 1 << tx_offset;
++
++        row_bits_idx = addr_mapper->m_row_bits_idx;
++        col_bits_idx = addr_mapper->m_col_bits_idx;
++    }
++
++    Addr_t get_tx_bytes() override {
++        return tx_bytes;
++    }
++
++    Addr_t get_ch_offset() override {
++        return addr_mapper->get_ch_offset();
++    }
++
++    int send(HBInput input) override {
++        read_req_to_send = 0;
++        write_req_to_send = 0;
++        read_request_list.clear();
++        write_request_list.clear();
++        read_bytes = 0;
++        write_bytes = 0;
++
++        for(auto tile: *input) {
++            std::vector<Ramulator::Request>& reqeust_list = tile["is_write"] ? write_request_list : read_request_list;
++            auto req_type = tile["is_write"] ? Ramulator::Request::Type::Write : Ramulator::Request::Type::Read;
++            int64_t layout_rank = tile.at("layout_rank");
++
++            std::vector<Addr_t> shape(layout_rank, 1);
++            std::vector<Addr_t> strides(layout_rank, 1);
++            std::vector<Addr_t> access_base(layout_rank, 0);
++            std::vector<Addr_t> access_extent(layout_rank, 1);
++            for(int64_t dim = 0; dim < layout_rank; ++dim) {
++                shape[dim] = tile.at("shape_" + std::to_string(dim));
++                strides[dim] = tile.at("stride_" + std::to_string(dim));
++            }
++            for(int64_t dim = 0; dim < layout_rank; ++dim) {
++                access_base[dim] = tile.at("access_base_" + std::to_string(dim));
++                access_extent[dim] = tile.at("access_extent_" + std::to_string(dim));
++            }
++
++            Addr_t accessed_elements = 1;
++            for(int64_t dim = 0; dim < layout_rank; ++dim) {
++                accessed_elements *= access_extent[dim];
++            }
++            if(tile["is_write"]) {
++                write_bytes += accessed_elements * tile["element_size"];
++            } else {
++                read_bytes += accessed_elements * tile["element_size"];
++            }
++
++            std::unordered_set<Addr_t> request_addr_set;
++            auto emit_legacy_contiguous_line = [&](Addr_t line_start_element_offset, Addr_t line_element_count) {
++                Addr_t byte_addr = tile.at("base_addr") + line_start_element_offset * tile.at("element_size");
++                Addr_t line_byte_count = line_element_count * tile.at("element_size");
++                Addr_t aligned_addr = byte_addr;
++                Addr_t req_count = static_cast<Addr_t>(std::ceil(line_byte_count * 1.0 / tx_bytes));
++                if(byte_addr % tx_bytes != 0) {
++                    aligned_addr = byte_addr - (byte_addr % tx_bytes);
++                    req_count = 1 + static_cast<Addr_t>(std::ceil(line_byte_count * 1.0 / tx_bytes));
++                }
++                for(Addr_t idx = 0; idx < req_count; ++idx) {
++                    request_addr_set.insert(aligned_addr + idx * tx_bytes);
++                }
++            };
++
++            int64_t contiguous_dim = -1;
++            for(int64_t dim = layout_rank - 1; dim >= 0; --dim) {
++                if(strides[dim] == 1) {
++                    contiguous_dim = dim;
++                    break;
++                }
++            }
++
++            if(contiguous_dim >= 0) {
++                std::function<void(int64_t, Addr_t)> emit_line_requests =
++                    [&](int64_t dim, Addr_t element_offset) {
++                        if(dim == layout_rank) {
++                            emit_legacy_contiguous_line(element_offset, access_extent[contiguous_dim]);
++                            return;
++                        }
++                        if(dim == contiguous_dim) {
++                            Addr_t coord = access_base[dim];
++                            emit_line_requests(dim + 1, element_offset + coord * strides[dim]);
++                            return;
++                        }
++                        for(Addr_t idx = 0; idx < access_extent[dim]; ++idx) {
++                            Addr_t coord = access_base[dim] + idx;
++                            emit_line_requests(dim + 1, element_offset + coord * strides[dim]);
++                        }
++                    };
++                emit_line_requests(0, 0);
++            } else {
++                std::function<void(int64_t, Addr_t)> emit_requests =
++                    [&](int64_t dim, Addr_t element_offset) {
++                        if(dim == layout_rank) {
++                            Addr_t byte_addr = tile.at("base_addr") + element_offset * tile.at("element_size");
++                            Addr_t aligned_addr = byte_addr - (byte_addr % tx_bytes);
++                            Addr_t covered_bytes = (byte_addr - aligned_addr) + tile.at("element_size");
++                            Addr_t req_count = static_cast<Addr_t>(std::ceil(covered_bytes * 1.0 / tx_bytes));
++                            for(Addr_t idx = 0; idx < req_count; ++idx) {
++                                request_addr_set.insert(aligned_addr + idx * tx_bytes);
++                            }
++                            return;
++                        }
++
++                        for(Addr_t idx = 0; idx < access_extent[dim]; ++idx) {
++                            Addr_t coord = access_base[dim] + idx;
++                            emit_requests(dim + 1, element_offset + coord * strides[dim]);
++                        }
++                    };
++                emit_requests(0, 0);
++            }
++
++            for(Addr_t req_addr : request_addr_set) {
++                reqeust_list.emplace_back(req_addr, req_type);
++            }
++        }
++
++        auto cmp = [this](const Ramulator::Request& r1, const Ramulator::Request& r2){
++            Ramulator::Request r1_copy(r1.addr, r1.type_id);
++            Ramulator::Request r2_copy(r2.addr, r2.type_id);
++            
++            addr_mapper->apply(r1_copy);
++            addr_mapper->apply(r2_copy);
++            
++            for(int i=row_bits_idx; i>=1; --i) {
++                if(r1_copy.addr_vec[i] != r2_copy.addr_vec[i]) {
++                    return r1_copy.addr_vec[i] < r2_copy.addr_vec[i];
++                }
++            }
++
++            if(r1_copy.addr_vec[col_bits_idx] != r2_copy.addr_vec[col_bits_idx]) {
++                return r1_copy.addr_vec[col_bits_idx] < r2_copy.addr_vec[col_bits_idx];
++            }
++
++            return r1_copy.addr_vec[0] < r2_copy.addr_vec[0];
++        };
++        auto sort_and_dedup = [&](std::vector<Ramulator::Request>& list) {
++            if (list.empty()) return;
++
++            std::sort(list.begin(), list.end(), cmp);
++
++            auto last = std::unique(
++                list.begin(), 
++                list.end(), 
++                [](const Ramulator::Request& a, const Ramulator::Request& b) {
++                    return a.addr == b.addr;
++                }
++            );
++
++            list.erase(last, list.end());
++        };
++
++        sort_and_dedup(read_request_list);
++        sort_and_dedup(write_request_list);
++
++        read_bytes = read_request_list.size() * tx_bytes;
++        write_bytes = write_request_list.size() * tx_bytes;
++        total_read_bytes += read_bytes;
++        total_write_bytes += write_bytes;
++        return read_request_list.size() + write_request_list.size();
++    }
++
++    int get_read_bytes() override {
++        return read_bytes;
++    }
++
++    int get_write_bytes() override {
++        return write_bytes;
++    }
++
++    int get_total_read_bytes() override {
++        return total_read_bytes;
++    }
++
++    int get_total_write_bytes() override {
++        return total_write_bytes;
++    }
++
++    bool is_finished() override {
++        bool read_req_send_finished = read_req_to_send >= read_request_list.size();
++        bool write_req_send_finished = write_req_to_send >= write_request_list.size();
++        return read_req_send_finished && write_req_send_finished;
++    }
++
++private:
++    // memory system information, used for request generation
++    int channel_num;
++    LinearMapperBase* addr_mapper;
++    std::string addr_mapping_type;
++    Addr_t tx_bytes; // (1 << m_tx_offset, byte count per read/write command)
++    int row_bits_idx;
++    int col_bits_idx;
++
++    // record for current tile's memory access
++    int read_req_to_send;
++    int write_req_to_send;
++    std::vector<Ramulator::Request> read_request_list;
++    std::vector<Ramulator::Request> write_request_list;
++
++    // current tile's access byte count
++    int read_bytes;
++    int write_bytes;
++
++    // all tiles' access byte count
++    int total_read_bytes;
++    int total_write_bytes;
++};
++
++
++}
+diff --git a/src/memory_system/impl/generic_DRAM_system.cpp b/src/memory_system/impl/generic_DRAM_system.cpp
+index a7cce15..2bfa749 100644
+--- a/src/memory_system/impl/generic_DRAM_system.cpp
++++ b/src/memory_system/impl/generic_DRAM_system.cpp
+@@ -1,3 +1,4 @@
++#include "base/type.h"
+ #include "memory_system/memory_system.h"
+ #include "translation/translation.h"
+ #include "dram_controller/controller.h"
+@@ -37,7 +38,7 @@ class GenericDRAMSystem final : public IMemorySystem, public Implementation {
+         m_controllers.push_back(controller);
+       }
+ 
+-      m_clock_ratio = param<uint>("clock_ratio").required();
++      m_clock_ratio = param<uint>("clock_ratio").default_val(1);
+ 
+       register_stat(m_clk).name("memory_system_cycles");
+       register_stat(s_num_read_requests).name("total_num_read_requests");
+@@ -80,10 +81,53 @@ class GenericDRAMSystem final : public IMemorySystem, public Implementation {
+       }
+     };
+ 
++    // The unit is GB/s
++    double get_max_bw() override {
++      // (1) BW = tx_bytes / (nBL * tCK)
++      double tx_bytes = m_dram->m_internal_prefetch_size * m_dram->m_channel_width / 8.0;
++      double BL_ns = m_dram->m_timing_vals("nBL") * m_dram->m_timing_vals("tCK_ps") / 1000.0;
++      double BW1 = tx_bytes / BL_ns;
++
++      // (2) BW = DQ * rate / 8
++      double DQ = m_dram->m_organization.dq;
++      double rate_Gbps = m_dram->m_timing_vals("rate") / 1000.0;
++      double BW2 = DQ * rate_Gbps / 8.0;
++
++      assert(std::abs(BW1 - BW2) < 1e-6);
++
++      int channel_num = m_dram->get_level_size("channel");
++      return BW1 * channel_num;
++    }
++
+     float get_tCK() override {
+       return m_dram->m_timing_vals("tCK_ps") / 1000.0f;
+     }
+ 
++    int get_clk() override {
++      return m_clk;
++    }
++
++    int get_channel_num() override {
++      return m_controllers.size();
++    }
++
++    // The unit is byte
++    Addr_t get_row_size() override {
++      return m_dram->m_organization.count[m_dram->m_levels("column")] * m_dram->m_organization.dq / 8;
++    }
++
++    IAddrMapper* get_addr_mapper() override {
++      return m_addr_mapper;
++    }
++
++    bool is_finished() override {
++      for (auto controller : m_controllers) {
++        if (!controller->is_finished())
++          return false;
++      }
++      return true;
++    }
++
+     // const SpecDef& get_supported_requests() override {
+     //   return m_dram->m_requests;
+     // };
+diff --git a/src/memory_system/memory_system.h b/src/memory_system/memory_system.h
+index beaf83c..56d5c3b 100644
+--- a/src/memory_system/memory_system.h
++++ b/src/memory_system/memory_system.h
+@@ -7,7 +7,9 @@
+ #include <functional>
+ 
+ #include "base/base.h"
++#include "base/type.h"
+ #include "frontend/frontend.h"
++#include "addr_mapper/addr_mapper.h"
+ 
+ namespace Ramulator {
+ 
+@@ -69,7 +71,21 @@ class IMemorySystem : public TopLevel<IMemorySystem> {
+     //  */
+     // virtual const SpecDef& get_supported_requests() = 0;
+ 
++    // The unit is GB/s
++    virtual double get_max_bw() { return 0.0; }
++
+     virtual float get_tCK() { return -1.0f; };
++
++    virtual int get_clk() { return -1; }
++
++    virtual int get_channel_num() { return -1; }
++
++    // The unit is byte
++    virtual Addr_t get_row_size() { return -1; }
++
++    virtual IAddrMapper* get_addr_mapper() { return nullptr; }
++
++    virtual bool is_finished() { return true; };
+ };
+ 
+ }        // namespace Ramulator
+
+base-commit: e442c64b2c0db7afd9d23173925d636ea2895a36
+-- 
+2.43.0
+

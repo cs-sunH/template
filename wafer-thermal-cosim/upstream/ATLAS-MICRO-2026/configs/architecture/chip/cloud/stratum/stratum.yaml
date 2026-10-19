@@ -1,0 +1,31 @@
+architecture:
+  frequency: 1000
+  core_num: 16
+  core:
+    controller:
+      power: 0.7250
+      area: 3.6650
+    matrix:
+      mac_num: 4096
+      power: 1.6667
+      area: 7.0002
+    vector:
+      vec_num: 256
+      power: 0.2008
+      area: 0.6667
+    buffer:
+      buffer_size: 2304
+      read_bw: 32768.0
+      write_bw: 32768.0
+      power: 5.0566
+      area: 14.7795
+  dram:
+    config_path: configs/architecture/dram/cloud/cloud_2TBps.yaml
+    power: 12.2360
+    area: 10.0450
+  noc:
+    topology: mesh
+    config_path: configs/architecture/noc/4x4_mesh
+    flit_size: 128
+    power: 0.4754
+    area: 6.5970

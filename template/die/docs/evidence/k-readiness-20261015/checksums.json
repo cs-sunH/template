@@ -1,0 +1,46 @@
+{
+  "packaging-validation.json": {
+    "sha256": "de659333380e7d2bd2d3bfa23ea048a90c5e5622190a76a73f2a53fd6bce44d9",
+    "bytes": 683
+  },
+  "previous-checkpoint-remote-verification.json": {
+    "sha256": "2ec58902318cc133c1b7bc554f4e88b299353f771d10e229f699c6b86ab89a6b",
+    "bytes": 150
+  },
+  "raw/build.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  "raw/compare.log": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  "raw/full_tile_k4096-report.json": {
+    "sha256": "7050430bbcb96e902cd4e75e6dc5bad0ad05dba135f7e756802be4dde4767a84",
+    "bytes": 79968
+  },
+  "raw/full_tile_k4096.json": {
+    "sha256": "58584fb6f54c8b3d907b3c1181286df27a70f9873f6ac33049a063f8082a0621",
+    "bytes": 30861
+  },
+  "raw/full_tile_k4096.stderr": {
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "bytes": 0
+  },
+  "raw/periodic-k-readiness-inventory-original.md": {
+    "sha256": "f9b578b6f604997995fd66ef550b7840126fee071cc2e278bcd68a5f9804c39c",
+    "bytes": 15615
+  },
+  "raw/probe.cc": {
+    "sha256": "ae7aadf8ca54fd94d2419a1543e8cac3a30662dba8216d53af48c66500f8f3d9",
+    "bytes": 7598
+  },
+  "source-identity.json": {
+    "sha256": "0e2e1d829e7188270c1b049bf3996dd99a5bc4e3a4ce46808b0835af54f7f3cf",
+    "bytes": 1277
+  },
+  "summary.json": {
+    "sha256": "15d7643e21faa5f2abbc6732e7d98d94f67914de957c4eedff52888d6fb42e60",
+    "bytes": 3199
+  }
+}

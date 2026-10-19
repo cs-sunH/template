@@ -1,0 +1,19 @@
+system:
+  type: cloud
+  chip:
+    config_path: configs/architecture/chip/test_chip_16ch.yaml
+  parallelism:
+    tp_size: 8
+    ep_size: 8
+    tp_scope: scale_up
+    ep_scope: scale_up
+  interconnect:
+    scale_up_latency: 4e-7
+    scale_up_bandwidth: 450 # GB/s
+    scale_up_energy: 1.3 # pJ/bit
+    scale_out_latency: 2e-6
+    scale_out_bandwidth: 50 # GB/s
+    scale_out_energy: 1.3 # pJ/bit
+  kv_cache:
+    max_context_length: 524288
+    block_size: 256

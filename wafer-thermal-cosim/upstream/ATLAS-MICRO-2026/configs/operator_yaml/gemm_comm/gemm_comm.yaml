@@ -1,0 +1,10 @@
+operator:
+  # Conduct 1d tidal mesh all reduce across PE(x,0)-PE(x,3)
+  # The total data volume size is (16, 2048)
+  - name: gemm_comm_example
+    type: communication
+    # For collective communication, all PEs pass through the same iterations
+    # However, in different topologies, each PE may have different transfer pattern
+    iteration: 6
+    core_num: 16
+    file_prefix: ./configs/operator_yaml/gemm_comm/comm_description/

@@ -1,0 +1,7 @@
+message("Configuring yaml-cpp...")
+option(YAML_CPP_BUILD_CONTRIB "Enable yaml-cpp contrib in library" OFF)
+option(YAML_CPP_BUILD_TOOLS "Enable parse tools" OFF)
+option(YAML_BUILD_SHARED_LIBS "Build yaml-cpp as a shared library" OFF)
+message("Done configuring yaml-cpp.")
+add_subdirectory(yaml-cpp)
+add_subdirectory(pybind11)
