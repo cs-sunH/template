@@ -4,7 +4,9 @@ from pathlib import Path
 
 def create_thermal(config,out):
     settings=config['thermal'];backend=settings.get('backend','rc_liquid')
-    if backend=='rc_liquid':return None
+    if backend=='rc_liquid':
+        from .thermal import LiquidRC
+        return LiquidRC(config)
     if backend=='hotspot':
         from .native import HotSpotThermal
         return HotSpotThermal(config,settings.get('hotspot_bridge','build/hotspot_bridge'),

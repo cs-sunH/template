@@ -1,72 +1,24 @@
 {
-  "schema_version": 1,
-  "hardware": {
-    "nx": 4,
-    "ny": 2,
-    "dies_per_instance": 2,
+  "schema_version": 2,
+  "geometry": {
+    "die_columns": 4,
+    "die_rows": 2,
     "module_width_m": 0.025,
     "module_height_m": 0.032,
     "compute_side_m": 0.01732,
     "compute_groups_per_side": 2,
-    "pe_ops_s_per_die": 50000000000000.0,
-    "vec_ops_s_per_die": 5000000000000.0,
-    "hbm_bytes_s_per_die": 820000000000.0,
-    "d2d_bytes_s_per_direction": 256000000000.0,
-    "dram_bytes_s": 64000000000.0,
-    "dram_gateway_die": 0,
-    "hbm_capacity_bytes_per_die": 32000000000,
-    "kv_budget_bytes_per_die": 600000000,
-    "dram_capacity_bytes": 128000000000,
-    "d2d_hop_latency_s": 1e-08,
-    "receive_scratch_bytes_per_die": 2000000000,
-    "non_kv_reserved_bytes_per_die": 8000000000,
-    "sram_capacity_bytes_per_die": 67108864
-  },
-  "model": {
-    "layers": 32,
-    "hidden": 4096,
-    "kv_heads": 8,
-    "head_dim": 128,
-    "kv_element_bytes": 2,
-    "weight_bytes": 0.5,
-    "parameters": 7000000000,
-    "activation_bytes": 2,
-    "sram_reuse_factor": 16,
-    "kv_adaptation_ops_per_byte": 8,
-    "kv_adaptation_read_write_factor": 2,
-    "kv_compatible": true,
-    "compatibility_evidence": "synthetic_declared_transform_not_quality_validated",
-    "same_model_adaptation_ops_per_byte": 0
-  },
-  "workload": {
-    "agents": 8,
-    "rounds": 2,
-    "prompt_tokens": 128,
-    "shared_tokens": 512,
-    "history_tokens": 64,
-    "output_tokens": 16,
-    "context_limit_tokens": 2048,
-    "communication_mode": "kv",
-    "mapping": "joint",
-    "kv_policy": "reuse_aware",
-    "arrival_interval_s": 0.001
-  },
-  "energy": {
-    "pe_j_per_op": 2e-13,
-    "vec_j_per_op": 4e-12,
-    "sram_j_per_byte": 2e-13,
-    "hbm_j_per_byte": 3e-11,
-    "dram_j_per_byte": 8e-11,
-    "noc_j_per_byte": 4e-13,
-    "d2d_j_per_bit": 4.5e-13,
-    "dram_io_j_per_byte": 2e-11,
-    "idle_compute_w_per_die": 12,
-    "idle_hbm_w_per_die": 4,
-    "idle_router_w_per_die": 1,
-    "leak_compute_w_at_300k": 8,
-    "leak_beta_per_k": 0.012,
-    "dram_background_w": 8,
-    "cacti_calibration": null
+    "hbm": {
+      "x_m": 0.0,
+      "y_m": 0.01747,
+      "width_m": 0.01626,
+      "height_m": 0.00492
+    },
+    "router": {
+      "x_m": 0.01747,
+      "y_m": 0.0,
+      "width_m": 0.001,
+      "height_m": 0.01732
+    }
   },
   "thermal": {
     "backend": "rc_liquid",
@@ -87,10 +39,6 @@
     "coolant_cp_j_kgk": 4185.193580742227,
     "coolant_segment_volume_m3": 4.000000000000001e-08,
     "coolant_density_kg_m3": 997.0,
-    "throttle_k": 343.15,
-    "resume_k": 338.15,
-    "throttle_ratio": 0.6,
-    "idle_cooldown_s": 0.02,
     "three_dice": {
       "step_s": 0.01,
       "channel_height_um": 100.0,
@@ -107,11 +55,5 @@
       "htc_bottom_w_m2k": 57132.0,
       "coolant_vhc_j_um3k": 4.172638e-12
     }
-  },
-  "simulation": {
-    "max_simulated_s": 1000,
-    "max_events": 2000000,
-    "wall_budget_s": 3600,
-    "record_every_windows": 1
   }
 }

@@ -12,11 +12,46 @@ import unittest
 import numpy as np
 
 from wafercosim.ice import ThreeDiceThermal
+from wafercosim.thermal import LiquidRC
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ROOT / "configs/thermal/3dice_8die_reference.json"
 BRIDGE = ROOT / "build/ice_bridge"
+
+
+class ThreeDiceGeometryTests(unittest.TestCase):
+    """Geometry and coolant conversion need no optional native executable."""
+
+    def test_reference_domain_covers_explicit_thermal_geometry(self):
+        config = json.loads(CONFIG.read_text())
+        backend = ThreeDiceThermal.__new__(ThreeDiceThermal)
+        backend.config = config
+        backend.blocks = LiquidRC(config).blocks
+        backend.ice_block_rects = backend._rotated_block_rects()
+        options = config["thermal"]["three_dice"]
+        for name in ("first_wall_length_um", "last_wall_length_um", "channel_length_um",
+                     "wall_length_um", "grid_cell_width_um"):
+            setattr(backend, name, options[name])
+        length, width, channels = backend._domain_geometry()
+        self.assertGreaterEqual(length, config["geometry"]["die_rows"]
+                                * config["geometry"]["module_height_m"] * 1e6)
+        self.assertGreaterEqual(width, config["geometry"]["die_columns"]
+                               * config["geometry"]["module_width_m"] * 1e6)
+        for x, y, w, h in backend.ice_block_rects:
+            self.assertGreaterEqual(length, x + w)
+            self.assertGreaterEqual(width, y + h)
+        self.assertGreater(channels, 0)
+
+    def test_flow_uses_thermal_die_rows_without_host_network_dimensions(self):
+        config = json.loads(CONFIG.read_text())
+        config["geometry"]["die_rows"] = 3
+        config["thermal"]["coolant_mass_flow_kg_s_by_row"] = [0.001] * 3
+        expected = 0.003 / config["thermal"]["coolant_density_kg_m3"] * 60e6
+        self.assertAlmostEqual(ThreeDiceThermal._flow_ml_min_from_rc_config(config), expected)
+        config["thermal"]["coolant_mass_flow_kg_s_by_row"] = [0.001, 0.002, 0.001]
+        with self.assertRaisesRegex(ValueError, "nonuniform"):
+            ThreeDiceThermal._flow_ml_min_from_rc_config(config)
 
 
 @unittest.skipUnless(BRIDGE.is_file(), "build the optional 3D-ICE bridge first")

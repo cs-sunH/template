@@ -19,6 +19,8 @@ HotSpot/3D-ICE 当前 native 状态不能 clone/restore；3D-ICE 还要求固定
 
 当前能量表包含明确的模型和工具域，不能称目标 7 nm 校准。外部 DRAM、冷却泵和片上 IO 的 owner 尚未在 joint PowerWindow 中统一。
 
+热配置采用 schema v2，只描述热几何和热物理参数。EnergyModel 如被 host 调用，必须接收调用方显式提供的 `hardware_facts`；热几何、校准选择和能量表中的参考 macro 组织都不是实际 host 硬件事实。迁移细节见 [`input_contract.md`](input_contract.md)。
+
 ## 下一步
 
 1. 为 joint 54 rank 建立显式 rank→thermal-die/source map。

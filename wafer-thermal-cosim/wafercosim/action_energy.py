@@ -1,7 +1,7 @@
 """Temperature-aware runtime lookup for an Accelergy-generated action ERT.
 
 Accelergy creates the offline primitive action table. This small online
-adapter applies the table to timestamped runtime counts, keeps background W
+adapter applies the table to host-supplied action counts, keeps background W
 separate from dynamic J, and provides provenance and strict domain checks.
 """
 
@@ -88,6 +88,33 @@ def _finite_positive(value: Any) -> bool:
     return _finite_nonnegative(value) and float(value) > 0
 
 
+def _positive_integer(value: Any, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EnergyCalibrationError(f"{name} must be a positive integer")
+    if isinstance(value, int):
+        if value <= 0:
+            raise EnergyCalibrationError(f"{name} must be a positive integer")
+        return value
+    if not math.isfinite(value) or value <= 0 or not value.is_integer():
+        raise EnergyCalibrationError(f"{name} must be a positive integer")
+    return int(value)
+
+
+def _positive_number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise EnergyCalibrationError(f"{name} must be finite and positive")
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        raise EnergyCalibrationError(f"{name} must be finite and positive")
+    return number
+
+
+def _nonempty_string(value: Any, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise EnergyCalibrationError(f"{name} must be a non-empty string")
+    return value
+
+
 def _sha256(path: Path | None) -> str | None:
     if path is None or not path.is_file():
         return None
@@ -99,7 +126,7 @@ def _sha256(path: Path | None) -> str | None:
 
 
 class EnergyModel:
-    """Evaluate dynamic action J and separate background W for a full run config.
+    """Evaluate dynamic action J and background W using explicit host facts.
 
     Expected config section::
 
@@ -107,16 +134,28 @@ class EnergyModel:
           "energy_table": "configs/energy/research-v1.json",
           "strict": true,
           "accept_assumed_energy": true,
-          "hardware": { ... exact model/NoC/memory descriptors ... }
+          "memory_organization_sensitivity_accept": {"hbm": true, "dram": true}
         }
+
+    A configured table requires ``hardware_facts`` as an explicit keyword-only
+    argument. It contains normalized host facts, including the NoC dimensions;
+    thermal geometry is never used as a hardware source. SRAM macro count and
+    capacity are supplied by the host and checked against the CACTI macro
+    organization in the table. The table's macro population remains reference
+    provenance only.
 
     `energy(kind, count, temperature_k)` returns Joules. `background(kind,
     count, temperature_k)` returns Watts. For `sram_leak`, count is a number of
-    dies; macro multiplicity is applied internally from the table's 64 KiB
-    CACTI organization.
+    dies; macro multiplicity is applied from the validated host SRAM facts.
     """
 
-    def __init__(self, config: dict[str, Any]):
+    def __init__(
+        self,
+        config: dict[str, Any],
+        *,
+        hardware_facts: dict[str, Any] | None = None,
+    ):
+        self._reject_legacy_configuration_sources(config)
         self.config = config
         calibration = config.get("calibration", {})
         table_value = calibration.get("energy_table")
@@ -128,11 +167,23 @@ class EnergyModel:
         self.accepted_memory_organization_mismatches: list[dict[str, Any]] = []
         self._last_downgrade: str | None = None
         self._noc_topology_key: str | None = None
+        self.hardware_facts: dict[str, Any] | None = None
+        self.hardware_facts_sha256: str | None = None
+        self._sram_macro_count_per_die: int | None = None
 
         if not table_value:
             self.strict = False
             self.issues.append("No energy_table configured; use configured coefficient fallback.")
             return
+        if hardware_facts is None:
+            raise EnergyCalibrationError(
+                "hardware_facts is required when calibration.energy_table is configured"
+            )
+        self.hardware_facts = self._normalize_hardware_facts(hardware_facts)
+        facts_json = json.dumps(
+            self.hardware_facts, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        self.hardware_facts_sha256 = hashlib.sha256(facts_json.encode("utf-8")).hexdigest()
         self.path = _resolve_path(table_value)
         if not self.path.is_file():
             raise FileNotFoundError(f"energy calibration table not found: {self.path}")
@@ -150,6 +201,103 @@ class EnergyModel:
             raise EnergyCalibrationError(
                 "energy calibration strict domain mismatch: " + "; ".join(self.issues)
             )
+
+    @staticmethod
+    def _reject_legacy_configuration_sources(config: dict[str, Any]) -> None:
+        if not isinstance(config, dict):
+            raise EnergyCalibrationError("energy model config must be an object")
+        retired_top_level = ("hardware", "model", "workload", "simulation", "compute", "mapping", "performance")
+        present = [key for key in retired_top_level if key in config]
+        if present:
+            raise EnergyCalibrationError(
+                "legacy execution configuration is not accepted by EnergyModel: "
+                + ", ".join(f"config.{key}" for key in present)
+                + "; pass actual hardware through hardware_facts"
+            )
+        calibration = config.get("calibration", {})
+        if not isinstance(calibration, dict):
+            raise EnergyCalibrationError("config.calibration must be an object")
+        retired_calibration = ("hardware", "service_table")
+        present = [key for key in retired_calibration if key in calibration]
+        if present:
+            raise EnergyCalibrationError(
+                "legacy calibration inputs are not accepted by EnergyModel: "
+                + ", ".join(f"calibration.{key}" for key in present)
+                + "; use hardware_facts and the configured energy table"
+            )
+
+    @staticmethod
+    def _normalize_hardware_facts(facts: dict[str, Any]) -> dict[str, Any]:
+        """Validate and canonicalize the host-fact contract before calibration checks."""
+        if not isinstance(facts, dict):
+            raise EnergyCalibrationError("hardware_facts must be an object")
+
+        normalized: dict[str, Any] = {
+            key: _positive_integer(facts.get(key), f"hardware_facts.{key}")
+            for key in ("sram_capacity_bytes_per_die", "hbm_capacity_bytes_per_die", "dram_capacity_bytes")
+        }
+        normalized.update({
+            key: _positive_number(facts.get(key), f"hardware_facts.{key}")
+            for key in ("pe_ops_s_per_die", "vec_ops_s_per_die")
+        })
+
+        def object_at(key: str, required: tuple[str, ...]) -> dict[str, Any]:
+            value = facts.get(key)
+            if not isinstance(value, dict):
+                raise EnergyCalibrationError(f"hardware_facts.{key} must be an object")
+            missing = [field for field in required if field not in value]
+            if missing:
+                raise EnergyCalibrationError(
+                    f"hardware_facts.{key} is missing required field(s): {', '.join(missing)}"
+                )
+            return value
+
+        compute = object_at("compute", ("weight_bytes", "activation_bytes"))
+        normalized["compute"] = {
+            key: _positive_number(compute[key], f"hardware_facts.compute.{key}")
+            for key in ("weight_bytes", "activation_bytes")
+        }
+
+        noc_fields = (
+            "nx", "ny", "flit_width_bits", "num_vcs", "packet_size_flits", "router", "routing"
+        )
+        noc = object_at("noc", noc_fields)
+        normalized["noc"] = {
+            key: (
+                _positive_integer(noc[key], f"hardware_facts.noc.{key}")
+                if key in {"nx", "ny", "flit_width_bits", "num_vcs", "packet_size_flits"}
+                else _nonempty_string(noc[key], f"hardware_facts.noc.{key}")
+            )
+            for key in noc_fields
+        }
+
+        for resource in ("hbm", "dram"):
+            facts_for_resource = object_at(resource, ("protocol", "config"))
+            normalized[resource] = {
+                key: _nonempty_string(
+                    facts_for_resource[key], f"hardware_facts.{resource}.{key}"
+                )
+                for key in ("protocol", "config")
+            }
+
+        sram = object_at(
+            "sram",
+            ("macro_capacity_bytes", "macro_count_per_die", "word_width_bits", "access_bytes"),
+        )
+        normalized["sram"] = {
+            key: _positive_integer(sram[key], f"hardware_facts.sram.{key}")
+            for key in ("macro_capacity_bytes", "macro_count_per_die", "word_width_bits", "access_bytes")
+        }
+        actual_capacity = (
+            normalized["sram"]["macro_capacity_bytes"]
+            * normalized["sram"]["macro_count_per_die"]
+        )
+        if normalized["sram_capacity_bytes_per_die"] != actual_capacity:
+            raise EnergyCalibrationError(
+                "hardware_facts.sram_capacity_bytes_per_die must equal "
+                "hardware_facts.sram.macro_capacity_bytes * macro_count_per_die"
+            )
+        return normalized
 
     def _validate_actions(self) -> None:
         actions = self.table.get("actions", {})
@@ -230,6 +378,8 @@ class EnergyModel:
             elif kind == "sram_leak":
                 if not _finite_positive(row.get("macro_count_per_die")):
                     self.issues.append("sram_leak macro_count_per_die is missing or nonpositive")
+                if not _finite_positive(row.get("macro_capacity_bytes")):
+                    self.issues.append("sram_leak macro_capacity_bytes is missing or nonpositive")
                 rows = row.get("watts_per_macro_by_temperature_k", [])
                 if len(rows) < 2 or any(
                     not _finite_nonnegative(item.get("watts_per_macro"))
@@ -265,13 +415,53 @@ class EnergyModel:
 
     def _validate_hardware_domain(self) -> None:
         domain = self.table.get("hardware_domain", {})
-        hardware = self.config.get("hardware", {})
-        sram_bytes = domain.get("sram_capacity_bytes_per_die")
-        if sram_bytes is not None:
-            if hardware.get("sram_capacity_bytes_per_die") != sram_bytes:
-                self.issues.append(
-                    "hardware.sram_capacity_bytes_per_die does not match the CACTI macro population"
+        assert self.hardware_facts is not None
+        facts = self.hardware_facts
+
+        # SRAM table organization describes the CACTI macro model. Its macro
+        # population/capacity are reference provenance; actual scale comes
+        # only from the host's explicit, internally consistent facts.
+        sram_row = self.table.get("background", {}).get("sram_leak", {})
+        source = sram_row.get("source", {})
+        reference_macro_capacity = sram_row.get("macro_capacity_bytes")
+        if reference_macro_capacity is None:
+            reference_macro_capacity = source.get("macro_bytes")
+        if not _finite_positive(reference_macro_capacity):
+            raise EnergyCalibrationError(
+                "energy table SRAM leakage row has no valid reference macro capacity"
+            )
+        if int(reference_macro_capacity) != facts["sram"]["macro_capacity_bytes"]:
+            raise EnergyCalibrationError(
+                "hardware_facts.sram.macro_capacity_bytes does not match the "
+                "energy-table CACTI macro organization"
+            )
+        for table_key, fact_key in (
+            ("word_bits", "word_width_bits"), ("access_bytes", "access_bytes")
+        ):
+            reference_value = source.get(table_key)
+            if reference_value is not None and int(reference_value) != facts["sram"][fact_key]:
+                raise EnergyCalibrationError(
+                    f"hardware_facts.sram.{fact_key} does not match the "
+                    f"energy-table CACTI organization ({table_key}={reference_value!r})"
                 )
+        self._sram_macro_count_per_die = facts["sram"]["macro_count_per_die"]
+
+        reference_macro_count = sram_row.get("macro_count_per_die")
+        reference_capacity = domain.get("sram_capacity_bytes_per_die")
+        if (
+            reference_capacity is not None
+            and _finite_positive(reference_macro_count)
+            and not math.isclose(
+                float(reference_capacity),
+                float(reference_macro_capacity) * float(reference_macro_count),
+                rel_tol=0.0,
+                abs_tol=0.0,
+            )
+        ):
+            self.issues.append(
+                "energy table SRAM reference capacity does not match its reference macro population"
+            )
+
         expected_compute = domain.get("compute", {})
         scaling = self.config.get("calibration", {}).get("resource_scaling", {})
         if not isinstance(scaling, dict):
@@ -291,14 +481,14 @@ class EnergyModel:
         for key in ("pe_ops_s_per_die", "vec_ops_s_per_die"):
             if key in expected_compute:
                 expected_rate = float(expected_compute[key]) * float(compute_scale)
-                actual_rate = hardware.get(key)
+                actual_rate = facts.get(key)
                 try:
                     matches = math.isclose(float(actual_rate), expected_rate, rel_tol=1e-12, abs_tol=0.0)
                 except (TypeError, ValueError):
                     matches = False
                 if not matches:
                     self.issues.append(
-                        f"hardware.{key}={actual_rate!r} does not match ERT source rate "
+                        f"hardware_facts.{key}={actual_rate!r} does not match ERT source rate "
                         f"{expected_compute[key]!r} times calibration.resource_scaling.compute={compute_scale!r}"
                     )
         for resource in ("hbm", "dram", "hbm_capacity", "dram_capacity"):
@@ -309,25 +499,25 @@ class EnergyModel:
                     f"calibration.resource_scaling.{resource} must be finite and positive"
                 )
 
-        requested = self.config.get("calibration", {}).get("hardware", {})
         expected_precision = {
             "weight_bytes": expected_compute.get("weight_bytes"),
             "activation_bytes": expected_compute.get("activation_bytes"),
         }
-        requested_compute = requested.get("compute", {})
+        requested_compute = facts["compute"]
         for key, expected in expected_precision.items():
             if expected is None:
                 continue
             if key not in requested_compute:
-                self.issues.append(f"calibration.hardware.compute.{key} is required")
+                self.issues.append(f"hardware_facts.compute.{key} is required")
             elif requested_compute[key] != expected:
                 self.issues.append(
-                    f"calibration.hardware.compute.{key}={requested_compute[key]!r} does not match ERT source {expected!r}"
+                    f"hardware_facts.compute.{key}={requested_compute[key]!r} does not match ERT source {expected!r}"
                 )
 
         expected_noc = domain.get("noc", {})
         supported_topologies = expected_noc.get("supported_topologies", [])
-        nx, ny = hardware.get("nx"), hardware.get("ny")
+        requested_noc = facts["noc"]
+        nx, ny = requested_noc["nx"], requested_noc["ny"]
         if supported_topologies:
             self._noc_topology_key = f"{nx}x{ny}" if nx is not None and ny is not None else None
             if not any(
@@ -345,25 +535,32 @@ class EnergyModel:
                 row = topology_values.get(key)
                 if row is None or not _finite_positive(row.get("joules_per_unit")):
                     self.issues.append(f"NoC energy action is missing a finite positive value for {key}")
-        requested_noc = requested.get("noc", {})
         for field in ("flit_width_bits", "num_vcs", "packet_size_flits", "router", "routing"):
-            if field not in requested_noc:
-                self.issues.append(f"calibration.hardware.noc.{field} is required")
-            elif requested_noc[field] != expected_noc.get(field):
+            if requested_noc[field] != expected_noc.get(field):
                 self.issues.append(
-                    f"calibration.hardware.noc.{field}={requested_noc[field]!r} does not match {expected_noc.get(field)!r}"
+                    f"hardware_facts.noc.{field}={requested_noc[field]!r} does not match {expected_noc.get(field)!r}"
                 )
+        calibration = self.config.get("calibration", {})
+        acceptance = calibration.get("memory_organization_sensitivity_accept", {})
+        if not isinstance(acceptance, dict):
+            self.issues.append("calibration.memory_organization_sensitivity_accept must be an object")
+            acceptance = {}
+        unknown_acceptance = set(acceptance) - {"hbm", "dram"}
+        if unknown_acceptance:
+            self.issues.append(
+                "unknown calibration.memory_organization_sensitivity_accept keys: "
+                + ", ".join(sorted(unknown_acceptance))
+            )
+
         for resource in ("hbm", "dram"):
             expected = domain.get(resource)
             if not expected:
                 continue
-            actual = requested.get(resource, {})
+            actual = facts[resource]
             for field in ("protocol", "config"):
-                if field not in actual:
-                    self.issues.append(f"calibration.hardware.{resource}.{field} is required")
-                elif actual[field] != expected.get(field):
+                if actual[field] != expected.get(field):
                     self.issues.append(
-                        f"calibration.hardware.{resource}.{field}={actual[field]!r} does not match {expected.get(field)!r}"
+                        f"hardware_facts.{resource}.{field}={actual[field]!r} does not match {expected.get(field)!r}"
                     )
             configured_capacity_key = {
                 "hbm": "hbm_capacity_bytes_per_die",
@@ -372,7 +569,7 @@ class EnergyModel:
             table_configured_capacity = expected.get(
                 "configured_capacity_bytes_per_die" if resource == "hbm" else "configured_capacity_bytes"
             )
-            runtime_capacity_raw = hardware.get(configured_capacity_key)
+            runtime_capacity_raw = facts.get(configured_capacity_key)
             try:
                 runtime_capacity_number = float(runtime_capacity_raw)
                 if not math.isfinite(runtime_capacity_number) or runtime_capacity_number <= 0:
@@ -396,7 +593,7 @@ class EnergyModel:
                 )
                 if not capacity_matches:
                     self.issues.append(
-                        f"hardware.{configured_capacity_key}={runtime_capacity_raw!r} does not match ERT source capacity "
+                        f"hardware_facts.{configured_capacity_key}={runtime_capacity_raw!r} does not match ERT source capacity "
                         f"{table_configured_capacity!r} times calibration.resource_scaling.{scale_key}={capacity_scale!r}"
                     )
             simulator_capacity = expected.get("modeled_capacity_bytes")
@@ -404,7 +601,7 @@ class EnergyModel:
                 simulator_capacity = int(simulator_capacity)
                 runtime_capacity_bytes = int(round(runtime_capacity_number))
                 if not math.isclose(runtime_capacity_number, runtime_capacity_bytes, rel_tol=0.0, abs_tol=1e-6):
-                    self.issues.append(f"hardware.{configured_capacity_key} must be an integer number of bytes")
+                    self.issues.append(f"hardware_facts.{configured_capacity_key} must be an integer number of bytes")
                 base_organization_mismatch = (
                     table_configured_capacity is not None
                     and int(table_configured_capacity) != simulator_capacity
@@ -413,12 +610,12 @@ class EnergyModel:
                 organization_accept_required = bool(
                     expected.get("organization_sensitivity_accept_required", False)
                 ) or base_organization_mismatch or current_organization_mismatch
-                if organization_accept_required and actual.get("organization_sensitivity_accept") is not True:
+                if organization_accept_required and acceptance.get(resource) is not True:
                     self.issues.append(
                         f"{resource} capacity/organization differs from its ERT source or DRAMSim3 organization; explicitly set "
-                        f"calibration.hardware.{resource}.organization_sensitivity_accept=true"
+                        f"calibration.memory_organization_sensitivity_accept.{resource}=true"
                     )
-                if organization_accept_required and actual.get("organization_sensitivity_accept") is True:
+                if organization_accept_required and acceptance.get(resource) is True:
                     mismatch = {
                         "resource": resource,
                         "base_ert_capacity_bytes": int(table_configured_capacity) if table_configured_capacity is not None else None,
@@ -569,7 +766,8 @@ class EnergyModel:
             temp_domain = [float(rows[0]["temperature_k"]), float(rows[-1]["temperature_k"])]
             temp = self._temperature(temperature_k, temp_domain)
             watts_per_macro = self._interpolate_rows(rows, temp, "watts_per_macro")
-            macro_count = float(row["macro_count_per_die"])
+            assert self._sram_macro_count_per_die is not None
+            macro_count = float(self._sram_macro_count_per_die)
             return amount * macro_count * watts_per_macro
         return amount * float(row["watts_per_unit"])
 
@@ -639,7 +837,16 @@ class EnergyModel:
                     else "no non-unit resource scaling"
                 ),
                 "energy_assumption": "J/op remains fixed under explicit compute throughput scaling, assuming unchanged voltage and implementation",
-                "capacity_assumption": "hbm_capacity and dram_capacity factors scale only the configured capacity budget against the source run config; they do not characterize a new DRAM organization, so organization_sensitivity_accept remains required",
+                "capacity_assumption": "hbm_capacity and dram_capacity factors scale explicit host capacities against the ERT source; they do not characterize a new DRAM organization, so memory_organization_sensitivity_accept remains required",
+            },
+            "hardware_facts_source": "explicit EnergyModel hardware_facts keyword argument",
+            "hardware_facts_sha256": self.hardware_facts_sha256,
+            "hardware_fact_summary": {
+                "sram_capacity_bytes_per_die": self.hardware_facts["sram_capacity_bytes_per_die"],
+                "sram_macro_capacity_bytes": self.hardware_facts["sram"]["macro_capacity_bytes"],
+                "sram_actual_macro_count_per_die": self.hardware_facts["sram"]["macro_count_per_die"],
+                "sram_reference_macro_count_per_die": self.table.get("background", {}).get("sram_leak", {}).get("macro_count_per_die"),
+                "noc_topology": self._noc_topology_key,
             },
             "assumption_ids": self._assumption_ids(),
             "accepted_memory_organization_mismatches": list(self.accepted_memory_organization_mismatches),

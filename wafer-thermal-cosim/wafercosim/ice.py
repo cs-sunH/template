@@ -70,14 +70,14 @@ class ThreeDiceThermal(LiquidRC):
         self.flow_area_m2 = (
             self.n_channels * self.channel_length_um * 1e-6 * self.channel_height_um * 1e-6
         )
-        self.flow_lanes = int(config["hardware"]["ny"])
+        self.flow_lanes = int(config["geometry"]["die_rows"])
         if self.flow_lanes <= 0:
-            raise ValueError("hardware.ny must be positive to map RC coolant rows")
+            raise ValueError("geometry.die_rows must be positive to map RC coolant rows")
         self.total_coolant_mass_flow_kg_s = (
             self.flow_ml_min * 1e-6 / 60.0 * float(config["thermal"]["coolant_density_kg_m3"])
         )
         self.rc_coolant_segment_volume_m3 = (
-            self.flow_area_m2 / self.flow_lanes * float(config["hardware"]["module_width_m"])
+            self.flow_area_m2 / self.flow_lanes * float(config["geometry"]["module_width_m"])
         )
         self.native_cells_per_source_layer = None
         self.native_rows = None
@@ -125,7 +125,7 @@ class ThreeDiceThermal(LiquidRC):
             raise
 
         # .T remains the per-project-block solid temperature vector expected by
-        # runtime.py. The complete persistent solid/coolant state lives inside
+        # the host. The complete persistent solid/coolant state lives inside
         # the retained 3D-ICE ThermalData_t in the child process.
         self.T = np.full(self.nsolid, self.initial_k, dtype=float)
         self.energy_residual_j = None
@@ -136,8 +136,8 @@ class ThreeDiceThermal(LiquidRC):
         row_flows = thermal.get("coolant_mass_flow_kg_s_by_row")
         if row_flows is not None:
             row_flows = [float(value) for value in row_flows]
-            if len(row_flows) != int(config["hardware"]["ny"]):
-                raise ValueError("coolant_mass_flow_kg_s_by_row must have one value per hardware row")
+            if len(row_flows) != int(config["geometry"]["die_rows"]):
+                raise ValueError("coolant_mass_flow_kg_s_by_row must have one value per geometry row")
             if any(not math.isclose(value, row_flows[0], rel_tol=1e-9, abs_tol=1e-12) for value in row_flows[1:]):
                 raise ValueError(
                     "3D-ICE 4RM uses one total flow shared uniformly across parallel channels; "
@@ -145,7 +145,7 @@ class ThreeDiceThermal(LiquidRC):
                 )
             mass_flow = sum(row_flows)
         else:
-            mass_flow = float(thermal["coolant_mass_flow_kg_s_per_row"]) * int(config["hardware"]["ny"])
+            mass_flow = float(thermal["coolant_mass_flow_kg_s_per_row"]) * int(config["geometry"]["die_rows"])
         density = float(thermal["coolant_density_kg_m3"])
         if not math.isfinite(mass_flow) or mass_flow <= 0:
             raise ValueError("total RC coolant mass flow must be finite and positive")
@@ -186,11 +186,11 @@ class ThreeDiceThermal(LiquidRC):
         ]
 
     def _domain_geometry(self) -> tuple[int, int, int]:
-        hardware = self.config["hardware"]
+        geometry = self.config["geometry"]
         # Preserve the full declared module plane, including unpowered space:
         # its channels still carry coolant and define lane area/residence time.
-        module_transverse_um = int(hardware["ny"]) * float(hardware["module_height_m"]) * 1e6
-        module_flow_length_um = int(hardware["nx"]) * float(hardware["module_width_m"]) * 1e6
+        module_transverse_um = int(geometry["die_rows"]) * float(geometry["module_height_m"]) * 1e6
+        module_flow_length_um = int(geometry["die_columns"]) * float(geometry["module_width_m"]) * 1e6
         max_x = max(
             module_transverse_um,
             max(x + width for x, _y, width, _height in self.ice_block_rects),

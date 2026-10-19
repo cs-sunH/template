@@ -1,56 +1,24 @@
 {
-  "schema_version": 1,
-  "hardware": {
-    "nx": 4,
-    "ny": 2,
-    "dies_per_instance": 2,
+  "schema_version": 2,
+  "geometry": {
+    "die_columns": 4,
+    "die_rows": 2,
     "module_width_m": 0.025,
     "module_height_m": 0.032,
     "compute_side_m": 0.01732,
     "compute_groups_per_side": 2,
-    "pe_ops_s_per_die": 50000000000000.0,
-    "vec_ops_s_per_die": 5000000000000.0,
-    "hbm_bytes_s_per_die": 820000000000.0,
-    "d2d_bytes_s_per_direction": 256000000000.0,
-    "dram_bytes_s": 64000000000.0,
-    "dram_gateway_die": 0,
-    "hbm_capacity_bytes_per_die": 32000000000,
-    "kv_budget_bytes_per_die": 600000000,
-    "dram_capacity_bytes": 128000000000,
-    "d2d_hop_latency_s": 1e-08,
-    "receive_scratch_bytes_per_die": 2000000000,
-    "non_kv_reserved_bytes_per_die": 8000000000,
-    "sram_capacity_bytes_per_die": 67108864
-  },
-  "model": {
-    "layers": 2,
-    "hidden": 64,
-    "kv_heads": 2,
-    "head_dim": 32,
-    "kv_element_bytes": 2,
-    "weight_bytes": 1,
-    "parameters": 98304,
-    "activation_bytes": 2,
-    "sram_reuse_factor": 4,
-    "kv_adaptation_ops_per_byte": 8,
-    "kv_adaptation_read_write_factor": 2,
-    "kv_compatible": true,
-    "compatibility_evidence": "synthetic_declared_transform_not_quality_validated",
-    "same_model_adaptation_ops_per_byte": 0,
-    "profile_key": "tiny-llm"
-  },
-  "workload": {
-    "agents": 8,
-    "rounds": 4,
-    "prompt_tokens": 16,
-    "shared_tokens": 32,
-    "history_tokens": 16,
-    "output_tokens": 8,
-    "context_limit_tokens": 256,
-    "communication_mode": "kv",
-    "mapping": "joint",
-    "kv_policy": "lru",
-    "arrival_interval_s": 0.001
+    "hbm": {
+      "x_m": 0.0,
+      "y_m": 0.01747,
+      "width_m": 0.01626,
+      "height_m": 0.00492
+    },
+    "router": {
+      "x_m": 0.01747,
+      "y_m": 0.0,
+      "width_m": 0.001,
+      "height_m": 0.01732
+    }
   },
   "energy": {
     "pe_j_per_op": 2e-13,
@@ -66,8 +34,7 @@
     "idle_router_w_per_die": 1,
     "leak_compute_w_at_300k": 8,
     "leak_beta_per_k": 0.012,
-    "dram_background_w": 8,
-    "cacti_calibration": null
+    "dram_background_w": 8
   },
   "thermal": {
     "backend": "rc_liquid",
@@ -87,20 +54,6 @@
     "coolant_mass_flow_kg_s_per_row": 0.005,
     "coolant_cp_j_kgk": 4180,
     "coolant_segment_volume_m3": 1e-06,
-    "coolant_density_kg_m3": 997,
-    "throttle_k": 343.15,
-    "resume_k": 338.15,
-    "throttle_ratio": 0.6,
-    "idle_cooldown_s": 0.05
-  },
-  "simulation": {
-    "max_simulated_s": 1000,
-    "max_events": 2000000,
-    "wall_budget_s": 3600,
-    "record_every_windows": 1,
-    "record_stage_events": true
-  },
-  "compute": {
-    "backend": "analytical"
+    "coolant_density_kg_m3": 997
   }
 }

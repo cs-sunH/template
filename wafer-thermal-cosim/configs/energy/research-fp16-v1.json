@@ -777,10 +777,6 @@
       "service_evidence": {
         "path": "local-results/research-v1/calibration/run-03/service-replay-evidence.json",
         "sha256": "c58b83d35eaa359d9f9c1181dbac52fb75ff73d157cc10fd9c11e54fc67d6599"
-      },
-      "service_table": {
-        "path": "configs/energy/service-v1.json",
-        "sha256": "b368e79473f4a503058d8ed85bbcfc6cfba5f449fdda57449b1dcecb5d3107a8"
       }
     },
     "calibration_basis": "mixed upstream models and explicit assumptions; not target 7 nm calibration",

@@ -3,6 +3,7 @@ import json
 import unittest
 from pathlib import Path
 import numpy as np
+from wafercosim.backends import create_thermal
 from wafercosim.thermal import LiquidRC
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -14,6 +15,64 @@ def config():
 
 
 class LiquidRCTests(unittest.TestCase):
+    def test_factory_constructs_rc_without_execution_configuration(self):
+        thermal = create_thermal(config(), ROOT)
+        self.assertIsInstance(thermal, LiquidRC)
+        self.assertEqual(thermal.ndie, 8)
+        self.assertEqual(thermal.nsolid, 48)
+
+    def test_host_supplied_block_footprints_are_preserved(self):
+        settings = config()
+        settings["geometry"]["hbm"] = {
+            "x_m": 0.001, "y_m": 0.019, "width_m": 0.015, "height_m": 0.005,
+        }
+        settings["geometry"]["router"] = {
+            "x_m": 0.018, "y_m": 0.002, "width_m": 0.002, "height_m": 0.015,
+        }
+        thermal = LiquidRC(settings)
+        for kind in ("hbm", "router"):
+            rectangle = settings["geometry"][kind]
+            for die in (0, thermal.ndie - 1):
+                block = thermal.blocks[thermal.die_blocks[die][kind][0]]
+                self.assertAlmostEqual(block.x,
+                    (die % thermal.nx) * settings["geometry"]["module_width_m"] + rectangle["x_m"])
+                self.assertAlmostEqual(block.y,
+                    (die // thermal.nx) * settings["geometry"]["module_height_m"] + rectangle["y_m"])
+                self.assertEqual((block.width, block.height), (rectangle["width_m"], rectangle["height_m"]))
+
+    def test_legacy_execution_inputs_are_rejected(self):
+        for name in ("hardware", "model", "workload", "simulation", "compute"):
+            with self.subTest(name=name):
+                settings = config()
+                settings[name] = {}
+                with self.assertRaisesRegex(ValueError, "execution inputs belong to the joint host"):
+                    LiquidRC(settings)
+        settings = config()
+        settings["thermal"]["throttle_ratio"] = 0.6
+        with self.assertRaisesRegex(ValueError, "unused throttle settings"):
+            LiquidRC(settings)
+        for name in ("mapping", "performance"):
+            with self.subTest(name=name):
+                settings = config()
+                settings[name] = {}
+                with self.assertRaisesRegex(ValueError, "unsupported thermal config fields"):
+                    LiquidRC(settings)
+
+    def test_invalid_geometry_is_rejected_before_constructing_network(self):
+        cases = (
+            ("die_columns", True), ("die_rows", 0),
+            ("compute_groups_per_side", 1.5), ("compute_side_m", float("nan")),
+            ("compute_side_m", 1.0),
+            ("hbm", {"x_m": 0, "y_m": 0, "width_m": 0, "height_m": 0.01}),
+            ("router", {"x_m": 1.0, "y_m": 0, "width_m": 0.001, "height_m": 0.01}),
+        )
+        for name, value in cases:
+            with self.subTest(name=name):
+                settings = config()
+                settings["geometry"][name] = value
+                with self.assertRaises(ValueError):
+                    LiquidRC(settings)
+
     def test_zero_power_equilibrium(self):
         thermal = LiquidRC(config())
         thermal.step(np.zeros(thermal.nsolid), 0.01)

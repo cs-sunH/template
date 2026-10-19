@@ -9,6 +9,7 @@ from collections import OrderedDict
 import numpy as np
 from scipy.sparse import lil_matrix, diags
 from scipy.sparse.linalg import splu
+from .config import thermal_geometry
 
 @dataclass
 class Block:
@@ -24,13 +25,13 @@ class LiquidRC:
     name = 'rc_liquid'
     def __init__(self, config):
         self.config = config
-        h, t = config['hardware'], config['thermal']
-        self.nx, self.ny = h['nx'], h['ny']
+        geometry, t = thermal_geometry(config), config['thermal']
+        self.nx, self.ny = geometry['die_columns'], geometry['die_rows']
         self.ndie = self.nx*self.ny
-        q = h['compute_groups_per_side']
+        q = geometry['compute_groups_per_side']
         self.q, self.blocks, self.die_blocks = q, [], {}
-        side = h['compute_side_m']
-        pitchx, pitchy = h['module_width_m'], h['module_height_m']
+        side = geometry['compute_side_m']
+        pitchx, pitchy = geometry['module_width_m'], geometry['module_height_m']
         for d in range(self.ndie):
             x, y = (d%self.nx)*pitchx, (d//self.nx)*pitchy
             ids = []
@@ -40,10 +41,12 @@ class LiquidRC:
                     self.blocks.append(Block(f'd{d}_c{iy*q+ix}', d, 'compute',
                         x+ix*side/q, y+iy*side/q, side/q, side/q))
             self.die_blocks[d] = {'compute': ids}
-            for kind, bx, by, w, hh in [('hbm', x, y+side+0.00015, 0.01626, 0.00492),
-                                        ('router', x+side+0.00015, y, 0.001, side)]:
+            for kind in ('hbm', 'router'):
+                rectangle = geometry[kind]
                 self.die_blocks[d][kind] = [len(self.blocks)]
-                self.blocks.append(Block(f'd{d}_{kind}', d, kind, bx, by, w, hh))
+                self.blocks.append(Block(f'd{d}_{kind}', d, kind,
+                    x+rectangle['x_m'], y+rectangle['y_m'],
+                    rectangle['width_m'], rectangle['height_m']))
         self.nsolid = len(self.blocks)
         n = self.nsolid+self.ndie
         self.C = np.zeros(n)

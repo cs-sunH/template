@@ -13,7 +13,6 @@ from pathlib import Path
 import numpy as np
 
 from .backends import close_thermal, create_thermal
-from .thermal import LiquidRC
 
 
 def _load(path: str) -> dict:
@@ -24,9 +23,6 @@ def _thermal(config: dict, backend: str | None, output: Path):
     config = json.loads(json.dumps(config))
     if backend:
         config.setdefault("thermal", {})["backend"] = backend
-    selected = config.get("thermal", {}).get("backend", "rc_liquid")
-    if selected == "rc_liquid":
-        return LiquidRC(config)
     return create_thermal(config, output)
 
 

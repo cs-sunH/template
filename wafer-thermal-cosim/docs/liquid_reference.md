@@ -7,7 +7,7 @@
 - LiquidRC：在线候选使用的低阶固体—冷却液模型；
 - HotSpot/3D-ICE：可选 native reference，需要单独 bridge。
 
-`configs/thermal/3dice_8die_reference.json` 是当前 4×2、8 die、规则 4RM 参考输入；它保留单 active plane、均匀网格、固定 0.01 s step 和显式总 flow 假设。它不代表目标晶圆层栈或制造参数。
+`configs/thermal/3dice_8die_reference.json` 是当前 schema v2 的 4×2、8 die、规则 4RM 参考输入；它保留单 active plane、均匀网格、固定 0.01 s step 和显式总 flow 假设。`geometry` 中 HBM/router 矩形显式保留此前模型内的相对位置与尺寸。它不代表目标晶圆层栈或制造参数；输入迁移和 host/热几何边界见 [`input_contract.md`](input_contract.md)。
 
 拟合脚本和已有结果均保留在原始备份中；held-out 精度 gate 失败，因此 `rc_reference_candidate.json` 只能作为候选参数，不能称为验证通过的液冷模型。
 

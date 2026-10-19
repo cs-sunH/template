@@ -25,7 +25,6 @@ def run_manifest(config: dict, summary: dict | None = None) -> dict:
     inputs = {}
     for name, value in {
         "energy_table": config.get("calibration", {}).get("energy_table"),
-        "cacti_table": config.get("energy", {}).get("cacti_calibration"),
     }.items():
         if value:
             inputs[name] = _describe(value)
