@@ -1,1 +1,0 @@
-{"bulk_load_progress": 0.8027777777777778, "bulk_compute_progress": 0.0027777777777777918, "per_core_input_blocks": [2.4000000000000004, 1.6], "per_core_input_bytes": [2457.6000000000004, 1638.4], "allocated_input_bytes_per_core": 2048, "fixed_input_slots_violated": true}

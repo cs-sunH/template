@@ -1,9 +1,0 @@
-test_legacy_wire_omits_new_fields (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_legacy_wire_omits_new_fields) ... ok
-test_native_world_snapshot_roundtrip_is_atomic_and_query_isolated (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_native_world_snapshot_roundtrip_is_atomic_and_query_isolated) ... ok
-test_real_native_and_cabi_same_plan (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_real_native_and_cabi_same_plan) ... ok
-test_scalar_endpoint_aliases_are_rejected (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_scalar_endpoint_aliases_are_rejected) ... ok
-
-----------------------------------------------------------------------
-Ran 4 tests in 0.055s
-
-OK

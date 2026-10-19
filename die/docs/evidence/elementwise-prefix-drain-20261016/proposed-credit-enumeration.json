@@ -1,9 +1,0 @@
-{
-  "scope": "independent small physical per-Core block enumeration for proposed max-Core affine credits; not timing calibration",
-  "checks": 184368,
-  "violations": [],
-  "progress_grid": 21,
-  "active_cores": "1..8",
-  "blocks_per_core": "up to 6",
-  "executions": "1..5"
-}

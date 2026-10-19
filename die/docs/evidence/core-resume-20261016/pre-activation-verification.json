@@ -1,8 +1,0 @@
-{
-  "status": "verified",
-  "sha256_checks": 535,
-  "production_matches_saved_migration": "b8ddbcfd62e03738b0c3996444355cbbe2e99b80",
-  "main_before": "d3a64a6c4cb23b8ce437438ed68217d7cee4af1f",
-  "engineering": "NOT ACCEPTED",
-  "formal_sdk": "canonical24 unchanged"
-}

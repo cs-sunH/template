@@ -1,9 +1,0 @@
-# infra-E7(2026-09-30):docker build 上下文瘦身——排除构建产物/物化数据/
-# 版本库与本地工具目录。镜像本身不 COPY 仓内文件(utils/build_docker_image.sh
-# 构建的系统依赖镜像,源码由 utils/start_docker_container.sh -v 挂载),这些
-# 目录只会无谓放大 build context 传输体积,且 build*/ 与 generated/ 属
-# gitignored 的本地产物。
-build*/
-sh_test_mesh/generated/
-.git
-.zcode

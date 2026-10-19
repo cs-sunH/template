@@ -1,7 +1,0 @@
-{
-  "TX8_\u5355die\u5efa\u6a21_\u7cbe\u7b80\u7248.xlsx": "eba181c80a2d51bd5a604bad6928610ea5039824b4ec4d5d9bd023ee4bda52ee",
-  "die/calibration/tx8_samples.json": "7a0c5ea7e6ae1d98c8244a7bcd2f07cedd6a95282dc8204b7d7fd35940471f45",
-  "die/configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
-  "die/tools/calibrate_tx8.py": "846062b493e639ea92ab66050efb4af2fd2ce597afa3375eaf798dd471f09138",
-  "die/src/Compiler.cc": "b4a4936630ded8b78f0a2168338406dd607678d7afb92a89c099aec6e493f52d"
-}

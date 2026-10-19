@@ -1,5 +1,0 @@
-Traceback (most recent call last):
-  File "/workspace/template/work/lru-online-workspace-20261014/e2e-large-workspace-probe/precompile_official_ffn.py", line 157, in <module>
-    "capacity_bytes_per_rank": int(json.loads(
-                                   ^^^^^^^^^^^
-KeyError: 'derived'

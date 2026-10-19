@@ -1,3 +1,0 @@
-2e61f0b85f5948288c157e0925cdbcdb4aff872da9930ea1f19d4a118197cb1e  work/lru-cpp-workspace-20261014/source-identity/metrics-alias-fix/source-sha256.txt
-72107154a4b3f94847024cda9df91921e3fbf31f98e756f12c31d601babd0abf  work/lru-cpp-workspace-20261014/source-identity/metrics-alias-fix/binary-sha256.txt
-2489d0af16d4da3b4920a8812b75a98e3e8ddd18d66b0444c498e328ba9bdfa0  work/lru-cpp-workspace-20261014/source-identity/metrics-alias-fix/selected-cpp-diff-including-workspace-v2.patch

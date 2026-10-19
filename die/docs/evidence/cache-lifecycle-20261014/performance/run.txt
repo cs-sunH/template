@@ -1,9 +1,0 @@
-C API cache probe status=ok output=/workspace/template/work/performance-cache-response/preflight/cabi_cache_gemm_1x128x128.json
-C API cache probe status=ok output=/workspace/template/work/performance-cache-response/preflight/cabi_cache_gemm_128x128x128.json
-C API cache probe status=ok output=/workspace/template/work/performance-cache-response/preflight/cabi_cache_attention_small_span.json
-benchmark status=passed output=/workspace/template/work/performance-cache-response/raw/cpp_compile_gemm_1x128x128.json
-C API cache probe status=ok output=/workspace/template/work/performance-cache-response/raw/cabi_cache_gemm_1x128x128.json
-benchmark status=passed output=/workspace/template/work/performance-cache-response/raw/cpp_compile_gemm_128x128x128.json
-C API cache probe status=ok output=/workspace/template/work/performance-cache-response/raw/cabi_cache_gemm_128x128x128.json
-benchmark status=passed output=/workspace/template/work/performance-cache-response/raw/cpp_compile_attention_small_span.json
-C API cache probe status=ok output=/workspace/template/work/performance-cache-response/raw/cabi_cache_attention_small_span.json

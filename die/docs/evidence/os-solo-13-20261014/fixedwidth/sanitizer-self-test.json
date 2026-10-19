@@ -1,9 +1,0 @@
-{
-  "status": "passed",
-  "compile_exit": 0,
-  "run_exit": 0,
-  "compile_command": "g++ -std=c++17 -Wall -Wextra -Werror -pedantic -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer work/os-fixedwidth-13-20261014/rational256_test.cc -o work/os-fixedwidth-13-20261014/rational256_test_sanitized",
-  "run_command": "work/os-fixedwidth-13-20261014/rational256_test_sanitized --self-test",
-  "scope": "standalone arithmetic C++ self-test only; not full differential/lifecycle under sanitizer",
-  "binary_sha256": "4c77a7188ebe9a382cd441f85ffc48c33484e7ff4fbf3448dfb2aa64a4cc00f0"
-}

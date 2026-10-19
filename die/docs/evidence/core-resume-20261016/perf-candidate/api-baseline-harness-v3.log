@@ -1,9 +1,0 @@
-Traceback (most recent call last):
-  File "/workspace/template/work/core-resume/die/docs/analysis/core-resume-20261016/capture_storage_candidate.py", line 119, in <module>
-    row['live_traces'] = [trace(model, picks, count, mode)
-                          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-  File "/workspace/template/work/core-resume/die/docs/analysis/core-resume-20261016/capture_storage_candidate.py", line 71, in trace
-    lib._check(lib.lib.die_coarse_fork_runtime_v2(runtime, ctypes.byref(fork)), 'fork')
-  File "/workspace/template/work/core-resume/die/validation/cabi.py", line 145, in _check
-    raise RuntimeError(f"{call} returned status {code}: {self._last_error()}")
-RuntimeError: fork returned status 1: {"field_path":"invalid_snapshot","reason":"invalid_snapshot: published activity allocation differs from canonical LP: id=4 saved_rate=7.862645685395645909011e+06 rebuilt_rate=7.862645685395650565624e+06 saved_alpha=6.878048780487804325645e-01 rebuilt_alpha=6.878048780487804325645e-01","schema_version":2,"status_code":1}

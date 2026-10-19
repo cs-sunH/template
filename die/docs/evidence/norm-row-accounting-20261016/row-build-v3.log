@@ -1,5 +1,0 @@
-[ 55%] Built target coarse_die
-[ 77%] Built target coarse_die_cabi
-[ 88%] Building CXX object CMakeFiles/coarse_norm_row_accounting_test.dir/tests/norm_row_accounting_test.cc.o
-[100%] Linking CXX executable coarse_norm_row_accounting_test
-[100%] Built target coarse_norm_row_accounting_test

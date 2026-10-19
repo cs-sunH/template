@@ -1,4 +1,0 @@
-. /workspace/cloud-setup/activate.sh
-cmake --build /workspace/template/work/build-joint --target NativeCoarseProjectionTest --parallel 2
-cmake --build /workspace/template/work/build-joint --target JointPipelineWindowTest NativeProjectionCApiTest NativeCoarseDieDomainTest --parallel 2
-ctest --test-dir /workspace/template/work/build-joint -R '^(JointPipelineWindowTest|NativeProjectionCApiTest|NativeCoarseProjectionTest|NativeCoarseDieDomainTest)$' --output-on-failure

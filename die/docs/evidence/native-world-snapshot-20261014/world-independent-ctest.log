@@ -1,8 +1,0 @@
-Internal ctest changing into directory: /workspace/template/work/world-snapshot-tests-20261014
-Test project /workspace/template/work/world-snapshot-tests-20261014
-    Start 3: NativeCoarseProjectionTest
-1/1 Test #3: NativeCoarseProjectionTest .......   Passed    0.59 sec
-
-100% tests passed, 0 tests failed out of 1
-
-Total Test time (real) =   0.59 sec

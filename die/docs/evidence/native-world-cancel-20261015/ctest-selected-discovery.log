@@ -1,8 +1,0 @@
-Internal ctest changing into directory: /workspace/template/work/build-native-cancel-v2
-Test project /workspace/template/work/build-native-cancel-v2
-  Test #1: JointPipelineWindowTest
-  Test #2: NativeProjectionCApiTest
-  Test #3: NativeCoarseProjectionTest
-  Test #4: NativeCoarseDieDomainTest
-
-Total Tests: 4

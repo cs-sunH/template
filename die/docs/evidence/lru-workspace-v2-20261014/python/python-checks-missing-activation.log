@@ -1,6 +1,0 @@
-Traceback (most recent call last):
-  File "/workspace/template/work/lru-workspace-20261014/final/run_python_checks.py", line 13, in <module>
-    from extern.graph_frontend.chakra.schema.protobuf import et_def_pb2
-  File "/workspace/template/astra-sim-wscllm-LRU/work/chakra-python-root/extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py", line 5, in <module>
-    from google.protobuf.internal import builder as _builder
-ModuleNotFoundError: No module named 'google'

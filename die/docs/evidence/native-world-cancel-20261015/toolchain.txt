@@ -1,9 +1,0 @@
-cmake version 3.31.10
-
-CMake suite maintained and supported by Kitware (kitware.com/cmake).
-ctest version 3.31.10
-
-CMake suite maintained and supported by Kitware (kitware.com/cmake).
-libprotoc 3.21.12
-g++ (Debian 14.2.0-19) 14.2.0
-libprotobuf32t64 3.21.12-11+deb13u1

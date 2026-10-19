@@ -1,4 +1,0 @@
-{"drains": ["face_overlap_request_0"], "exits": [], "instance_index": 0, "iterations": 8, "joiners": [], "member_count": 0, "member_iterations": 0, "pass_spans": 8, "prefill_chunks": 8, "tick": 1, "train_id": "batch_train_i0_1"}
-{"drains": ["face_overlap_request_1"], "exits": [], "instance_index": 1, "iterations": 1, "joiners": [], "member_count": 0, "member_iterations": 0, "pass_spans": 1, "prefill_chunks": 1, "tick": 150000, "train_id": "batch_train_i1_1"}
-{"drains": [], "exits": ["face_overlap_request_1"], "instance_index": 1, "iterations": 2, "joiners": ["face_overlap_request_1"], "member_count": 1, "member_iterations": 2, "pass_spans": 2, "prefill_chunks": 0, "tick": 187038, "train_id": "batch_train_i1_2"}
-{"drains": [], "exits": ["face_overlap_request_0"], "instance_index": 0, "iterations": 2, "joiners": ["face_overlap_request_0"], "member_count": 1, "member_iterations": 2, "pass_spans": 2, "prefill_chunks": 0, "tick": 288785, "train_id": "batch_train_i0_2"}

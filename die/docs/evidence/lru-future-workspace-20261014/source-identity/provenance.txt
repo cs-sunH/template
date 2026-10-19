@@ -1,1 +1,0 @@
-Current dirty source identity captured after successful final Online and two C ABI build. Base commit is a context reference; per-file hashes identify compiler inputs. Generated four-request fixture; no measurement, capacity override, or policy monkeypatch.

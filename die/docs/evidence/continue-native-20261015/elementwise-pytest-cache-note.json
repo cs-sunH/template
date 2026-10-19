@@ -1,6 +1,0 @@
-{
-  "incident": "The adapter pytest invocation used the repository root as cwd and created an incidental .pytest_cache outside the assigned work directory.",
-  "attribution": "All four files have the same test-run creation time; nodeids contains exactly the 45 staged adapter tests and no other task entries.",
-  "correction": "Atomically moved the complete known-own cache without deleting data to work/native-dependency-check/elementwise-preview/pytest-cache-created-by-adapter-tests",
-  "prevention": "Future adapter invocations use -p no:cacheprovider. No production source or other task file was changed."
-}

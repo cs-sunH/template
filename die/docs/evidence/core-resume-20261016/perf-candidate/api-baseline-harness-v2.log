@@ -1,4 +1,0 @@
-Traceback (most recent call last):
-  File "/workspace/template/work/core-resume/die/docs/analysis/core-resume-20261016/capture_storage_candidate.py", line 115, in <module>
-    raise AssertionError('expected exactly the invalid-dtype workspace failure')
-AssertionError: expected exactly the invalid-dtype workspace failure

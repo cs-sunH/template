@@ -1,5 +1,0 @@
-FAIL unit=2^-60 emptying physical progress: one unit of positive inventory/headroom pays exactly half a second
-FAIL unit=2^-60 emptying snapshot guards: changing physical credit inventory or Plan capacity rejects
-FAIL unit=2^-60 filling physical progress: one unit of positive inventory/headroom pays exactly half a second
-FAIL unit=2^-60 filling snapshot guards: changing physical credit inventory or Plan capacity rejects
-FAIL runtime_subunit_credit_test: unit=2^-60 emptying physical progress: one unit of positive inventory/headroom pays exactly half a second; unit=2^-60 emptying snapshot guards: changing physical credit inventory or Plan capacity rejects; unit=2^-60 filling physical progress: one unit of positive inventory/headroom pays exactly half a second; unit=2^-60 filling snapshot guards: changing physical credit inventory or Plan capacity rejects; 

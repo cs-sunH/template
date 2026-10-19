@@ -1,5 +1,0 @@
-[ 66%] Built target coarse_die
-[ 88%] Built target coarse_die_cabi
-[ 88%] Building CXX object CMakeFiles/coarse_service_curve_benchmark.dir/tests/service_curve_benchmark.cc.o
-[100%] Linking CXX executable coarse_service_curve_benchmark
-[100%] Built target coarse_service_curve_benchmark

@@ -1,5 +1,0 @@
-# Generated from /workspace/template/work/face-future-online-20261015/stage/face/sh_test_mesh/hardware/face_case5_config_c.json (capacity profile: validation-die-64g)
-topology: [ Line, Line ]
-npus_count: [ 6, 9 ]
-bandwidth: [ 4050.0, 4050.0 ]
-latency: [ 5, 5 ]

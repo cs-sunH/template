@@ -1,6 +1,0 @@
-PASS: C++ interval contains exact Fraction results for 1, 10, 100, 995
-PASS: C++ intervals enclose independent Python Q128 powers through 10^12
-PASS: 995-segment elapsed enclosure is < 1 ns wide
-PASS: integer-ns external stop certifies 123 safe, 124 next
-PASS: 1 state, 10 ledger values, 32 template steps, 0 expanded runtime events at all scales
-PASS: 256-bit input overflow and zero denominator fail closed

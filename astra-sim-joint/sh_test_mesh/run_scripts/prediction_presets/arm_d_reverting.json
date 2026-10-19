@@ -1,8 +1,0 @@
-{
-  "version": "predcfg-v4-20261014",
-  "projection_mode": "known_work",
-  "future_demand_mode": "reverting",
-  "history_use": "shadow",
-  "stage_policy": "two_stage",
-  "settlement_policy": "consolidate"
-}

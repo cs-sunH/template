@@ -1,6 +1,0 @@
-[ 33%] Built target coarse_die
-[ 66%] Built target die_model
-[100%] Built target joint_pipeline_core
-[100%] Building CXX object AstraSim/CMakeFiles/NativeCoarseProjectionTest.dir/astra-sim/workload/execution_driven/tests/native_coarse_projection_test.cc.o
-[100%] Linking CXX executable ../bin/NativeCoarseProjectionTest
-[100%] Built target NativeCoarseProjectionTest

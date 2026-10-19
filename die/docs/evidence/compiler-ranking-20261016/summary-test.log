@@ -1,8 +1,0 @@
-Internal ctest changing into directory: /workspace/template/work/build-die-continue
-Test project /workspace/template/work/build-die-continue
-    Start 1: coarse_compiler_summary_test
-1/1 Test #1: coarse_compiler_summary_test .....   Passed    0.62 sec
-
-100% tests passed, 0 tests failed out of 1
-
-Total Test time (real) =   0.62 sec

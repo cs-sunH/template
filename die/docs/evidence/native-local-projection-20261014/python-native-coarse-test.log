@@ -1,8 +1,0 @@
-test_legacy_wire_omits_new_fields (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_legacy_wire_omits_new_fields) ... ok
-test_real_native_and_cabi_same_plan (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_real_native_and_cabi_same_plan) ... ok
-test_scalar_endpoint_aliases_are_rejected (joint.test_native_coarse_projection.CoarseProjectionWireTest.test_scalar_endpoint_aliases_are_rejected) ... ok
-
-----------------------------------------------------------------------
-Ran 3 tests in 0.032s
-
-OK

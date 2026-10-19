@@ -1,7 +1,0 @@
-die/tests/ratio_allocator_test.cc: In function ‘bool {anonymous}::operator<(Fraction, Fraction)’:
-die/tests/ratio_allocator_test.cc:193:22: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
-  193 |   return static_cast<__int128>(lhs.n) * rhs.d <
-      |                      ^~~~~~~~
-die/tests/ratio_allocator_test.cc:194:22: warning: ISO C++ does not support ‘__int128’ for ‘type name’ [-Wpedantic]
-  194 |          static_cast<__int128>(rhs.n) * lhs.d;
-      |                      ^~~~~~~~

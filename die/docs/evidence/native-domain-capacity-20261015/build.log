@@ -1,9 +1,0 @@
-[ 25%] Built target coarse_die
-[ 50%] Built target die_model
-[ 50%] Building CXX object AstraSim/CMakeFiles/joint_pipeline_core.dir/astra-sim/workload/execution_driven/NativeProjection.cc.o
-[ 50%] Building CXX object AstraSim/CMakeFiles/joint_pipeline_core.dir/astra-sim/workload/execution_driven/NativeCoarseDieDomain.cc.o
-[ 50%] Linking CXX static library ../lib/libjoint_pipeline_core.a
-[ 75%] Built target joint_pipeline_core
-[100%] Building CXX object AstraSim/CMakeFiles/NativeCoarseDieDomainTest.dir/astra-sim/workload/execution_driven/tests/native_coarse_die_domain_test.cc.o
-[100%] Linking CXX executable ../bin/NativeCoarseDieDomainTest
-[100%] Built target NativeCoarseDieDomainTest

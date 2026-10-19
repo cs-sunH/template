@@ -1,8 +1,0 @@
-Internal ctest changing into directory: /workspace/template/work/consumer-availability/old-astra-sim-wscllm-build
-Test project /workspace/template/work/consumer-availability/old-astra-sim-wscllm-build
-    Start 45: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest
-1/1 Test #45: AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest ...   Passed    0.11 sec
-
-100% tests passed, 0 tests failed out of 1
-
-Total Test time (real) =   0.12 sec

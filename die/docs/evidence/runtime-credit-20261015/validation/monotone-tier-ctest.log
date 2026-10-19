@@ -1,8 +1,0 @@
-Internal ctest changing into directory: /workspace/template/work/build-attention
-Test project /workspace/template/work/build-attention
-    Start 18: coarse_runtime_credit_scale_test
-1/1 Test #18: coarse_runtime_credit_scale_test ...   Passed    0.02 sec
-
-100% tests passed, 0 tests failed out of 1
-
-Total Test time (real) =   0.02 sec

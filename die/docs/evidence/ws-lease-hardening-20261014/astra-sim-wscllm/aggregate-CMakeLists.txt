@@ -1,6 +1,0 @@
-cmake_minimum_required(VERSION 3.22)
-project(AstraSim_Analytical_Build)
-enable_testing()
-add_subdirectory(/workspace/template/astra-sim-wscllm astra_sim_build)
-add_subdirectory(/workspace/template/astra-sim-wscllm/extern/network_backend/analytical backend_build)
-add_subdirectory(/workspace/template/astra-sim-wscllm/astra-sim/network_frontend/analytical frontend_build)

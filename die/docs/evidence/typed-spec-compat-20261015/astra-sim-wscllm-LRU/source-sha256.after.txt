@@ -1,2 +1,0 @@
-a82aff65c723d0eb66d64ec71a55473363d4b03e6f65628fdca9c978eb8b5ea7  /workspace/template/astra-sim-wscllm-LRU/astra-sim/workload/DieModelAdapter.cc
-e909d286a55b59fca2746da88f2f2bfdaef5ade03ed1b596b475c4e9e6ad67f3  /workspace/template/astra-sim-wscllm-LRU/astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc

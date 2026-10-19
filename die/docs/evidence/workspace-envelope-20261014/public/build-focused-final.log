@@ -1,5 +1,0 @@
-[ 60%] Built target coarse_die
-[ 80%] Built target coarse_die_cabi
-[ 90%] Building CXX object CMakeFiles/coarse_workspace_envelope_test.dir/tests/workspace_envelope_test.cc.o
-[100%] Linking CXX executable coarse_workspace_envelope_test
-[100%] Built target coarse_workspace_envelope_test

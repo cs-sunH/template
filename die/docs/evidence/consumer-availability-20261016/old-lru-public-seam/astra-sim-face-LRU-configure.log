@@ -1,7 +1,0 @@
--- {fmt} version: 11.0.2
--- Build type: Release
--- Build spdlog: 1.14.1
--- Build type: Release
--- Configuring done (0.5s)
--- Generating done (0.5s)
--- Build files have been written to: /workspace/template/work/consumer-availability/old-astra-sim-face-LRU-build

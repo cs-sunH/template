@@ -1,6 +1,0 @@
-[1/6] Building CXX object CMakeFiles/coarse_hardware_input_test.dir/tests/hardware_input_test.cc.o
-[2/6] Linking CXX executable coarse_hardware_input_test
-[3/6] Building CXX object CMakeFiles/coarse_runtime_clock_translation_test.dir/tests/runtime_clock_translation_test.cc.o
-[4/6] Linking CXX executable coarse_runtime_clock_translation_test
-[5/6] Building CXX object CMakeFiles/coarse_capi_lifecycle_test.dir/tests/capi_lifecycle_test.cc.o
-[6/6] Linking CXX executable coarse_capi_lifecycle_test

@@ -1,2 +1,0 @@
-{"drains": ["session_workspace_e2e_s0_request_0"], "exits": [], "instance_index": 0, "iterations": 1, "joiners": [], "member_count": 0, "member_iterations": 0, "pass_spans": 1, "prefill_chunks": 1, "tick": 1, "train_id": "prefill_train_i0_1"}
-{"drains": [], "exits": ["session_workspace_e2e_s0_request_0"], "instance_index": 1, "iterations": 1, "joiners": ["session_workspace_e2e_s0_request_0"], "member_count": 1, "member_iterations": 1, "pass_spans": 1, "prefill_chunks": 0, "sentinel": false, "tick": 78069, "train_id": "batch_train_i1_1"}

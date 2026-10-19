@@ -1,8 +1,0 @@
-capture_command=source /workspace/cloud-setup/activate.sh && unset PROTOBUF_FROM_SOURCE
-captured_utc=2026-10-14T10:29:11Z
-PROTOBUF_FROM_SOURCE=<unset>
-Python 3.12.14
-Python protobuf 6.33.5
-libprotoc 3.21.12
-cmake version 3.31.10
-c++ (Debian 14.2.0-19) 14.2.0

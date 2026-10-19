@@ -1,8 +1,0 @@
-Internal ctest changing into directory: /workspace/template/work/build-joint
-Test project /workspace/template/work/build-joint
-    Start 32: AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest
-1/1 Test #32: AstraSim_Analytical_Congestion_Aware_CoarseWorkspaceRuntimeTest ...   Passed    0.02 sec
-
-100% tests passed, 0 tests failed out of 1
-
-Total Test time (real) =   0.03 sec

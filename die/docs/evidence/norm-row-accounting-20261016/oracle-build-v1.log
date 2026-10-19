@@ -1,4 +1,0 @@
-[ 75%] Built target coarse_die
-[ 87%] Building CXX object CMakeFiles/coarse_norm_oracle_driver.dir/tests/norm_oracle_driver.cc.o
-[100%] Linking CXX executable coarse_norm_oracle_driver
-[100%] Built target coarse_norm_oracle_driver

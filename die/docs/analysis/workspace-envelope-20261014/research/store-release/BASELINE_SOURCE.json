@@ -1,5 +1,0 @@
-{
-  "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/graph_batch_builder.py": "6d8e689e618c74dd64ddcc539dd55aad50d3feee2f4892a8702ed9629a2e0398",
-  "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/generate_wsc_llm_trace.py": "de65b0d0abcae44b42f14670f95f7a8ca87d667d72c1a09919295a12bad64a56",
-  "astra-sim-wscllm-LRU/sh_test_mesh/workload/llama2_7b_inference/online/online_service.py": "bcfca4e2d3ca36645f199045d763fc41ba2e80a08b3f31760c94799939ea667b"
-}

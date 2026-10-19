@@ -1,7 +1,0 @@
-sram_bytes_per_core=262144 rho=0.25
-full-plan fused_q_head_shard_v2 0 64204
-full_candidates=1 full_materialized=0 full_candidate_envelope=0
-child_candidates=2 child_materialized=1 child_candidate_envelope=8704
-fused_q_head_shard_v2 0 30604
-full_score_materialization_v2 8704 15940
-repeated_workspace=245760 repeated_plan_hash=3283ef35e93b58457e011f770a95647589b195fbe2c5335d1fcb6cdfaf7cc3a8

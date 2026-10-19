@@ -1,5 +1,0 @@
-[ 60%] Built target coarse_die
-[ 80%] Built target coarse_die_cabi
-[ 90%] Building CXX object CMakeFiles/coarse_capi_lifecycle_test.dir/tests/capi_lifecycle_test.cc.o
-[100%] Linking CXX executable coarse_capi_lifecycle_test
-[100%] Built target coarse_capi_lifecycle_test

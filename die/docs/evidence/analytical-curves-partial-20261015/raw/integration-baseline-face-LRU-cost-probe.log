@@ -1,1 +1,0 @@
-{"cost_only_symbol_exported": false, "expected_api": "old", "output": "/workspace/template/work/analytical-curves/integration/baseline-face-LRU-cost-probe.json", "scheduler_dispatch_cost_only_flags": [false], "variant": "astra-sim-face-LRU"}
