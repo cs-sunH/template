@@ -168,3 +168,27 @@ JOINT_THERMAL_MODE=closed_loop JOINT_THERMAL_CONFIG=$T/thermal/synthetic_run_con
 ```
 
 > 注：`JOINT_THERMAL_CONFIG` 必须是**绝对路径**；`--combo none` 必须显式给出，否则默认 T+J+E。
+
+---
+
+## 7. 推送状态与手动推送说明（2026-10-20）
+
+- 本地提交已完成（暂存仓 `/tmp/wsc-joint-push-staging`；该目录属一次性产物，`/tmp` 会被清空，**不要只依赖它**）。
+- **推送到 GitHub 失败**：本机到 `github.com` 的 **TCP 443 被阻断**（`curl` 10 s 超时；DNS 正常、ICMP ping 通；沙箱 `ICUBE_DISABLED_MODULES` 含 `git,ls-proxy`；常见本地代理端口均不可用；`~/.ssh` 无密钥，SSH 亦不可用）。
+- 为防成果丢失，已生成**持久化 thin bundle**：
+  `/home/sunhao/thermal/joint_thermal_push_2026-10-20.bundle`
+  （182 KB；`prerequisite = 150f6bf0ecef98eed77b32ecb32436fa447d8c94`，即拉取时的远端 `main`）。
+- 网络恢复后手动推送（任选其一，`<PAT>` 替换为方法文档中的 token）：
+  ```bash
+  # A) 暂存仓仍在时，直接推
+  cd /tmp/wsc-joint-push-staging && git push https://<PAT>@github.com/cs-sunH/template.git main
+
+  # B) /tmp 已清空时，从 bundle 取回提交再推
+  git clone https://github.com/cs-sunH/template.git /tmp/wsc-joint-push-staging \
+    && cd /tmp/wsc-joint-push-staging
+  git fetch /home/sunhao/thermal/joint_thermal_push_2026-10-20.bundle \
+    main:thermal-2026-10-20
+  git merge --ff-only thermal-2026-10-20
+  git push https://<PAT>@github.com/cs-sunH/template.git main
+  ```
+- **推送路径已按远端真实布局修正**：方法文档 §9 假设根级 `astra-sim-joint/`，但远端 `main` 顶层现为 `template/`（其中 `template/astra-sim-joint/` 906 文件）+ `wafer-thermal-cosim/`。本次改动只落在 `template/astra-sim-joint/`（93 处：75 新增 / 18 修改），**未触碰** `wafer-thermal-cosim/`、其他 simulator 变体与根文档。推送前已核验 `git status --short` 的路径清单。
