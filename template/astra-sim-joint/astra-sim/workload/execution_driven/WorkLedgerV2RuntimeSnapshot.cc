@@ -70,8 +70,17 @@ WorkLedgerV2Identity resolve_work_ledger_identity(
     const int rank, const uint64_t node_id) {
     const NodeStoreMeta meta = node_meta(graph_sources, rank, node_id);
     if (meta.request_id.empty() || meta.stage.empty()) {
+        // Two miss classes reach here: an id unknown to both the live store
+        // and the retired-identity index (a wiring error -- fail-closed), or
+        // a node that predates identity bookkeeping (only possible for the
+        // documented exogenous-background exemption below). The rank/node_id
+        // context names the offender for either diagnosis.
         throw std::runtime_error(
-            "active work-ledger identity lacks request/stage metadata");
+            "active work-ledger identity lacks request/stage metadata "
+            "(rank=" + std::to_string(rank) +
+            ", node_id=" + std::to_string(node_id) +
+            ", request_id='" + meta.request_id +
+            "', stage='" + meta.stage + "')");
     }
     return WorkLedgerV2Identity{meta.request_id, meta.stage, meta.generation,
                                 rank, node_id};

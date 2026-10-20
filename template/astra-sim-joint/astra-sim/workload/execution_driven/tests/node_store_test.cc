@@ -273,6 +273,37 @@ void test_node_gc() {
     expect(store.gc_erased_count() == 3, "E: a + p + c erased in total");
 }
 
+// ---------------------------------------------------------------- Part E2 --
+// 2026-10-19 retired-identity index: collect_garbage() retains the erased
+// node's (request_id, stage, generation), so meta_for still resolves a
+// collected parent that a LATER batch references at its commit transition.
+// Root cause of the multi-session workload abort: the work-ledger identity
+// enrichment resolved the parent through the live store only, while the
+// committer's affine map (the same quiescent-GC survival question) had
+// already documented that later batches legitimately reference erased
+// parents. Unknown ids stay nullopt (fail-closed intact).
+void test_retired_identity_after_gc() {
+    NodeStore store;
+    store.set_gc_enabled(true);
+    OnlineNode n;
+    n.kind = NodeKind::Compute;
+    n.name = "retired";
+    n.request_id = "req-4242";
+    n.stage = "decode";
+    n.generation = 1;
+    const uint64_t id = store.add_node(n);
+    store.finish_node(id);
+    store.collect_garbage();
+    expect(!store.node(id).has_value(),
+           "E2: node record erased by collect_garbage");
+    const auto meta = store.meta_for(id);
+    expect(meta.has_value() && meta->request_id == "req-4242" &&
+               meta->stage == "decode" && meta->generation == 1,
+           "E2: meta_for resolves the retired identity after GC");
+    expect(!store.meta_for(987654).has_value(),
+           "E2: unknown id stays nullopt (fail-closed intact)");
+}
+
 // ---------------------------------------------------------------- Part B --
 // Store-backed GraphSource semantics.
 void test_node_store_graph_source() {
@@ -949,6 +980,7 @@ int main(int argc, char* argv[]) {
 
     test_node_store();
     test_node_gc();
+    test_retired_identity_after_gc();
     test_node_store_graph_source();
     test_ready_issue_order_snapshot();
     test_free_snapshot_splice_differential();

@@ -1,0 +1,541 @@
+/******************************************************************************
+This source code is licensed under the MIT license found in the
+LICENSE file in the root directory of this source tree.
+
+event_queue_deferred_test.cc -- phase-1 step 1-1 unit tests for the map-version
+(std::map<EventTime, EventList>) EventQueue tick-end closing and same-tick
+deferred channel, plus the FluidScheduler deferred-flush integration
+(post-commit comm emission) and the map-specific fail-fast proof (case E).
+
+Cases:
+  A. tick-end callback is invoked exactly once per proceed(), after the
+     physical events and before the deferred drain;
+  B. deferred events execute in insertion order within the current tick, and
+     deferred-inside-deferred is drained by the same pass;
+  C. without a callback, 1000 randomized schedule/proceed runs are
+     event-for-event identical to the pre-extension reference implementation;
+  D. FluidScheduler integration: comm started from a tick-end callback
+     (deferred flush mode) does not trip the EventQueue strict-increase assert
+     and the flow completes; the legacy (non-deferred) start_flow path still
+     works from within a physical event handler.
+  F. Same-time physical FIFO remains exact with the inline-first EventList:
+     callback-appended events run after already queued events in the same pass.
+
+Build: registered in the CMake build (M12②) as target
+  AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest in
+  astra-sim/network_frontend/analytical/CMakeLists.txt (same shared-source +
+  execution_driven recipe as the sibling fixtures; the backend EventQueue and
+  FluidScheduler sources the old manual g++ line listed individually are
+  provided by the linked Analytical_Congestion_Aware static library).
+  Configure per README §2 (the build/astra_analytical aggregation with
+  -DNETWORK_BACKEND_BUILD_AS_LIBRARY=ON), then:
+    cmake --build build/astra_analytical/build_congestion_aware \
+          --target AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest -j
+    build/astra_analytical/build_congestion_aware/bin/\
+AstraSim_Analytical_Congestion_Aware_EventQueueDeferredTest
+  (the binary is emitted to <build-tree>/bin/ via the targets'
+  RUNTIME_OUTPUT_DIRECTORY ../bin; run it with no arguments)
+
+Assertions use the runtime expect() helper (same pattern as
+windowed_trace_reader_test.cc) so they survive -DNDEBUG Release builds;
+case E still relies on the PRODUCTION strict-increase assert inside the
+backend EventQueue for the SIGABRT verification.
+*******************************************************************************/
+
+#include <cstdio>
+#include <cstdlib>
+#include <list>
+#include <map>
+#include <memory>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <random>
+#include <utility>
+#include <vector>
+
+#include "common/EventQueue.h"
+#include "congestion_aware/Link.h"
+#include "congestion_aware/fluid/FluidScheduler.h"
+
+using namespace NetworkAnalytical;
+using namespace NetworkAnalyticalCongestionAware;
+
+namespace {
+
+bool g_ok = true;
+
+void expect(const bool cond, const char* what) {
+    if (!cond) {
+        std::fprintf(stderr,
+                     "[event_queue_deferred_test] FAIL: %s\n", what);
+        g_ok = false;
+    }
+}
+
+void noop_handler(void*) noexcept {}
+
+// ---------------------------------------------------------------------------
+// reference (pre-extension) EventQueue semantics -- oracle for case C
+// ---------------------------------------------------------------------------
+
+struct RefEventList {
+    EventTime event_time;
+    std::list<std::pair<Callback, CallbackArg>> events;
+};
+
+class ReferenceQueue {
+  public:
+    ReferenceQueue() = default;
+
+    [[nodiscard]] bool finished() const noexcept { return event_queue.empty(); }
+
+    [[nodiscard]] EventTime get_current_time() const noexcept { return current_time; }
+
+    void proceed() noexcept {
+        expect(!finished(), "reference proceed: queue not finished");
+        auto begin_it = event_queue.begin();
+        auto& front = begin_it->second;
+        expect(front.event_time > current_time,
+               "reference proceed: strict time increase");
+        current_time = front.event_time;
+        // mirror EventList::invoke_events: pop_front + invoke loop, so events
+        // scheduled at the current time from inside a handler (same-time
+        // merge) are picked up by the same pass
+        while (!front.events.empty()) {
+            front.events.front().first(front.events.front().second);
+            front.events.pop_front();
+        }
+        event_queue.erase(event_queue.begin());
+    }
+
+    void schedule_event(EventTime t, Callback cb, CallbackArg arg) noexcept {
+        // mirror the map-family schedule_event: try_emplace merges same-time
+        // events into the existing EventList (same-time merge semantics)
+        expect(t >= current_time,
+               "reference schedule: t >= current_time");
+        auto [it, inserted] = event_queue.try_emplace(t, RefEventList{t, {}});
+        (void)inserted;
+        it->second.events.emplace_back(cb, arg);
+    }
+
+  private:
+    EventTime current_time = 0;
+    std::map<EventTime, RefEventList> event_queue;
+};
+
+// ---------------------------------------------------------------------------
+// case A: tick-end callback exactly once per proceed, after physical events,
+// before deferred drain
+// ---------------------------------------------------------------------------
+
+struct CaseACtx {
+    std::vector<int> log;
+    int tick_end_count = 0;
+    EventQueue* eq = nullptr;
+};
+
+void case_a_physical(void* v) {
+    auto* c = static_cast<CaseACtx*>(v);
+    c->log.push_back(1);
+}
+
+void case_a_deferred(void* v) {
+    auto* c = static_cast<CaseACtx*>(v);
+    c->log.push_back(3);
+}
+
+void case_a_tick_end(void* v) {
+    auto* c = static_cast<CaseACtx*>(v);
+    ++c->tick_end_count;
+    c->log.push_back(2);
+    // schedule a deferred event from inside the callback: it must be drained
+    // by the same pass, after the callback
+    c->eq->schedule_event_deferred(case_a_deferred, c);
+}
+
+void test_case_a() {
+    EventQueue eq;
+    CaseACtx ctx;
+    ctx.eq = &eq;
+
+    // one deferred scheduled before the first proceed (drains at its end)
+    eq.schedule_event_deferred(case_a_deferred, &ctx);
+
+    eq.set_tick_end_callback(case_a_tick_end, &ctx);
+
+    // two physical events at t=10
+    eq.schedule_event(10, case_a_physical, &ctx);
+    eq.schedule_event(10, case_a_physical, &ctx);
+
+    eq.proceed();
+    expect(eq.get_current_time() == 10, "case A: current time is 10");
+    expect(ctx.tick_end_count == 1,
+           "case A: tick-end fired exactly once");
+    // physical, physical, tick-end, pre-scheduled deferred, callback deferred
+    expect(ctx.log == std::vector<int>({1, 1, 2, 3, 3}),
+           "case A: physical, physical, tick-end, deferred, "
+           "callback-deferred order");
+
+    // second tick: two physical events at t=20
+    eq.schedule_event(20, case_a_physical, &ctx);
+    eq.schedule_event(20, case_a_physical, &ctx);
+    eq.proceed();
+    expect(eq.get_current_time() == 20,
+           "case A: second tick current time is 20");
+    expect(ctx.tick_end_count == 2,
+           "case A: tick-end fired once per proceed");
+    expect(ctx.log == std::vector<int>({1, 1, 2, 3, 3, 1, 1, 2, 3}),
+           "case A: second tick appends 1,1,2,3");
+    expect(eq.finished(), "case A: queue finished after the second tick");
+
+    std::printf("[case A] PASS: tick-end exactly once per proceed, after "
+                "physical, before deferred\n");
+}
+
+// ---------------------------------------------------------------------------
+// case B: deferred insertion order + deferred-inside-deferred same-pass drain
+// ---------------------------------------------------------------------------
+
+struct CaseBCtx {
+    std::vector<int> log;
+    EventQueue* eq = nullptr;
+};
+
+void case_b_nested(void* v) {
+    auto* c = static_cast<CaseBCtx*>(v);
+    c->log.push_back(5);
+}
+
+void case_b_outer(void* v) {
+    auto* c = static_cast<CaseBCtx*>(v);
+    c->log.push_back(4);
+    // nested deferred must be drained by the same pass
+    c->eq->schedule_event_deferred(case_b_nested, c);
+}
+
+void case_b_physical(void* v) {
+    auto* c = static_cast<CaseBCtx*>(v);
+    c->log.push_back(0);
+}
+
+void test_case_b() {
+    EventQueue eq;
+    CaseBCtx ctx;
+    ctx.eq = &eq;
+    ctx.log.reserve(16);
+
+    // one physical event at t=10
+    eq.schedule_event(10, case_b_physical, &ctx);
+
+    // two deferred events, in order
+    eq.schedule_event_deferred(case_b_outer, &ctx);
+    eq.schedule_event_deferred(case_b_outer, &ctx);
+
+    eq.proceed();
+    expect(eq.get_current_time() == 10, "case B: current time is 10");
+    // physical(0), then both outer deferred in insertion order (4,4), then the
+    // two nested deferred appended by the outer ones, still in the same drain
+    // pass (5,5): FIFO order, same-pass nested drain
+    expect(ctx.log == std::vector<int>({0, 4, 4, 5, 5}),
+           "case B: FIFO order 0,4,4,5,5 in one drain pass");
+    expect(eq.finished(), "case B: queue finished");
+
+    std::printf("[case B] PASS: deferred insertion order + nested same-pass "
+                "drain\n");
+}
+
+// ---------------------------------------------------------------------------
+// case C: 1000 randomized ops identical to the reference implementation
+// ---------------------------------------------------------------------------
+
+struct DiffCtx {
+    int id;
+    std::vector<int>* log;
+};
+
+// Each queue records through its OWN context into its OWN log (review
+// 2026-09-26 cpp-ed-tests-a-1): a single handler writing both logs from one
+// shared context appended identical pairs on every fire, so any dispatch
+// order/count divergence between the real and reference queue was invisible.
+// Separate contexts keep the two dispatch sequences independently
+// observable, making the elementwise comparison below load-bearing.
+void diff_handler(void* v) {
+    auto* c = static_cast<DiffCtx*>(v);
+    c->log->push_back(c->id);
+}
+
+void test_case_c() {
+    std::mt19937 rng(20260815);
+    EventQueue eq;
+    ReferenceQueue ref;
+    auto real_log = std::vector<int>();
+    auto ref_log = std::vector<int>();
+    // Owning storage for the per-event handler contexts: both queues keep raw
+    // copies of these pointers until each event fires, and the drain loop at
+    // the end of this case runs every scheduled event to completion, so
+    // freeing here is after last use (2026-09-28: was a bare `new` with no
+    // delete).
+    std::vector<std::unique_ptr<DiffCtx>> ctxs;
+
+    std::uniform_int_distribution<int> op_dist(0, 99);
+    std::uniform_int_distribution<int> id_dist(0, 999);
+    std::uniform_int_distribution<int> time_dist(1, 50);
+
+    for (int step = 0; step < 1000; ++step) {
+        const int op = op_dist(rng);
+        if (op < 60) {
+            // schedule at a strictly future time (same-time scheduling from a
+            // handler is exercised separately in case D2, where it merges into
+            // the list currently being invoked)
+            const auto t = eq.get_current_time() +
+                           static_cast<EventTime>(time_dist(rng));
+            const int id = id_dist(rng);
+            auto* real_ctx = new DiffCtx{id, &real_log};
+            auto* ref_ctx = new DiffCtx{id, &ref_log};
+            ctxs.emplace_back(real_ctx);
+            ctxs.emplace_back(ref_ctx);
+            eq.schedule_event(t, diff_handler, real_ctx);
+            ref.schedule_event(t, diff_handler, ref_ctx);
+        } else {
+            // proceed when possible
+            if (eq.finished()) {
+                expect(ref.finished(),
+                       "case C: reference agrees the queue is finished");
+                continue;
+            }
+            expect(!ref.finished(),
+                   "case C: reference agrees the queue is not finished");
+            const auto real_before = real_log.size();
+            const auto ref_before = ref_log.size();
+            eq.proceed();
+            ref.proceed();
+            // event-for-event identical within this tick
+            const auto ref_appended = ref_log.size() - ref_before;
+            expect(real_log.size() - real_before == ref_appended,
+                   "case C: same number of events fired this tick");
+            for (size_t i = 0; i < ref_appended; ++i) {
+                expect(real_log[real_before + i] == ref_log[ref_before + i],
+                       "case C: event-for-event identical within the tick");
+            }
+            expect(eq.get_current_time() == ref.get_current_time(),
+                   "case C: clocks advance identically");
+        }
+    }
+
+    // drain leftovers and compare terminal state
+    while (!eq.finished()) {
+        expect(!ref.finished(),
+               "case C: drain -- reference still unfinished");
+        eq.proceed();
+        ref.proceed();
+        expect(eq.get_current_time() == ref.get_current_time(),
+               "case C: drain -- clocks advance identically");
+    }
+    expect(ref.finished(), "case C: reference finished after drain");
+    expect(real_log == ref_log, "case C: terminal logs identical");
+
+    std::printf("[case C] PASS: 1000 randomized ops identical to reference\n");
+}
+
+// ---------------------------------------------------------------------------
+// case D: FluidScheduler integration -- deferred flush vs legacy flush
+// ---------------------------------------------------------------------------
+
+struct FSIntCtx {
+    int completed = 0;
+    bool started = false;
+    FluidScheduler* fs = nullptr;
+    int ticks_seen = 0;
+};
+
+void flow_done_cb(void* v) {
+    auto* c = static_cast<FSIntCtx*>(v);
+    ++c->completed;
+}
+
+void fs_comm_tick_end(void* v) {
+    auto* c = static_cast<FSIntCtx*>(v);
+    ++c->ticks_seen;
+    if (c->started) {
+        return;
+    }
+    c->started = true;
+    auto route = std::make_shared<FluidRoute>(FluidRoute{{0}, 5});
+    c->fs->start_flow(1000, route, flow_done_cb, c);
+}
+
+void fs_comm_physical(void* v) {
+    // legacy path: start a flow from within a physical event handler
+    auto* c = static_cast<FSIntCtx*>(v);
+    auto route = std::make_shared<FluidRoute>(FluidRoute{{0}, 5});
+    c->fs->start_flow(1000, route, flow_done_cb, c);
+}
+
+void run_fs_scenario(bool deferred_mode) {
+    auto eq = std::make_shared<EventQueue>();
+    auto link = std::make_shared<Link>(0, 100.0 /* GB/s */, 10 /* ns */);
+    FluidScheduler fs(eq, {link}, 8, 8, 1ull << 30);
+    fs.set_deferred_flush_mode(deferred_mode);
+    fs.mark_event_loop_started();
+
+    FSIntCtx ctx;
+    ctx.fs = &fs;
+
+    if (deferred_mode) {
+        // comm emitted from the tick-end callback (post-commit emission);
+        // without the deferred channel this would insert a current_time event
+        // into the main queue and trip the strict-increase assert
+        eq->set_tick_end_callback(fs_comm_tick_end, &ctx);
+        eq->schedule_event(10, noop_handler, nullptr);
+    } else {
+        // legacy path: comm emitted from inside a physical event handler
+        eq->schedule_event(10, fs_comm_physical, &ctx);
+    }
+
+    size_t guard = 0;
+    while (!eq->finished()) {
+        eq->proceed();
+        expect(++guard < 1000000, "case D: no infinite event loop");
+    }
+    expect(ctx.completed == 1,
+           "case D: flow-completed callback fired once");
+
+    std::printf("[case D] PASS: FluidScheduler integration (%s flush mode), "
+                "no strict-increase abort, flow completed\n",
+                deferred_mode ? "deferred" : "legacy");
+}
+
+// ---------------------------------------------------------------------------
+// case E (map family): fail-fast proof -- schedule_event(current_time) from a
+// tick-end callback inserts a current_time EventList into the main map and the
+// NEXT proceed() must trip the EventQueue::proceed strict-increase guard;
+// schedule_event(future) from the callback lands in the map normally.
+// ---------------------------------------------------------------------------
+
+struct CaseECtx {
+    EventQueue* eq = nullptr;
+    bool bad = false;   // true -> schedule_event(current_time) in tick-end
+    bool fired = false; // schedule from the tick-end callback only once
+};
+
+void case_e_tick_end(void* v) {
+    auto* c = static_cast<CaseECtx*>(v);
+    if (c->fired) {
+        return;
+    }
+    c->fired = true;
+    if (c->bad) {
+        // hard-rule violation: same-tick event via the main queue
+        c->eq->schedule_event(c->eq->get_current_time(), noop_handler, nullptr);
+    } else {
+        // legal: strictly future event via the main queue
+        c->eq->schedule_event(c->eq->get_current_time() + 5, noop_handler, nullptr);
+    }
+}
+
+bool run_case_e_child(bool bad) {
+    EventQueue eq;
+    CaseECtx ctx;
+    ctx.eq = &eq;
+    ctx.bad = bad;
+    eq.set_tick_end_callback(case_e_tick_end, &ctx);
+    eq.schedule_event(10, noop_handler, nullptr);
+    eq.proceed();
+    if (bad) {
+        // the next proceed must abort on the strict-increase assert
+        eq.proceed();
+        return false;  // should not reach here in a failing build
+    }
+    // legal path: the future event is in the map and executes at t=15
+    expect(eq.get_current_time() == 10, "case E legal: current time is 10");
+    expect(!eq.finished(), "case E legal: future event still pending");
+    eq.proceed();
+    expect(eq.get_current_time() == 15,
+           "case E legal: future event fires at 15");
+    expect(eq.finished(),
+           "case E legal: queue finished after the future event");
+    return true;
+}
+
+void test_case_e() {
+    // legal variant runs in-process
+    expect(run_case_e_child(/*bad=*/false),
+           "case E: legal variant completes in-process");
+    // violating variant must abort (assert) -- verify in a forked child
+    pid_t pid = fork();
+    if (pid == 0) {
+        const bool reached_end = run_case_e_child(/*bad=*/true);
+        std::_Exit(reached_end ? 0 : 1);  // exits 0 only if no abort AND completed
+    }
+    int status = 0;
+    waitpid(pid, &status, 0);
+    // the child must have died from the assert (SIGABRT), not exited cleanly
+    expect(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT,
+           "case E: violating variant died from SIGABRT "
+           "(EventQueue::proceed strict-increase guard)");
+    std::printf("[case E] PASS: map fail-fast -- tick-end schedule_event("
+                "current_time) trips the strict-increase guard on the next "
+                "proceed; future event OK\n");
+}
+
+// ---------------------------------------------------------------------------
+// case F: inline-first EventList preserves callback-appended same-time FIFO
+// ---------------------------------------------------------------------------
+
+struct CaseFCtx {
+    EventQueue* eq = nullptr;
+    std::vector<int> log;
+};
+
+void case_f_nested(void* v) {
+    static_cast<CaseFCtx*>(v)->log.push_back(3);
+}
+
+void case_f_tail_nested(void* v) {
+    static_cast<CaseFCtx*>(v)->log.push_back(4);
+}
+
+void case_f_first(void* v) {
+    auto* const c = static_cast<CaseFCtx*>(v);
+    c->log.push_back(1);
+    c->eq->schedule_event(c->eq->get_current_time(), case_f_nested, c);
+}
+
+void case_f_tail(void* v) {
+    auto* const c = static_cast<CaseFCtx*>(v);
+    c->log.push_back(2);
+    c->eq->schedule_event(c->eq->get_current_time(), case_f_tail_nested, c);
+}
+
+void test_case_f() {
+    EventQueue eq;
+    CaseFCtx ctx;
+    ctx.eq = &eq;
+    eq.schedule_event(10, case_f_first, &ctx);
+    eq.schedule_event(10, case_f_tail, &ctx);
+    eq.proceed();
+    expect(ctx.log == std::vector<int>({1, 2, 3, 4}),
+           "case F: same-time FIFO order 1,2,3,4");
+    expect(eq.finished(), "case F: queue finished");
+    std::printf("[case F] PASS: inline-first same-time FIFO / nested append\n");
+}
+
+}  // namespace
+
+int main() {
+    test_case_a();
+    test_case_b();
+    test_case_c();
+    run_fs_scenario(/*deferred_mode=*/true);
+    run_fs_scenario(/*deferred_mode=*/false);
+    test_case_e();
+    test_case_f();
+    if (!g_ok) {
+        std::fprintf(stderr,
+                     "[event_queue_deferred_test] FAIL: see messages "
+                     "above\n");
+        return 1;
+    }
+    std::printf("ALL TESTS PASSED\n");
+    return 0;
+}

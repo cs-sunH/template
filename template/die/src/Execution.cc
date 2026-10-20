@@ -836,6 +836,14 @@ std::uint64_t row_bytes(std::uint64_t total, double fraction) {
   return static_cast<std::uint64_t>(std::floor(raw));
 }
 
+}  // namespace
+
+// Arbitration solver machinery. It lives in coarse_die::detail (not the
+// anonymous namespace) so the Runtime's reusable arbitration scratch can hold
+// a solver instance plus its result records by value; these names remain
+// internal to the library.
+namespace detail {
+
 enum class LpStatus { Optimal, Infeasible, Unbounded, PivotBudget };
 constexpr double kLpEpsilon = 1.0e-10;
 
@@ -851,26 +859,38 @@ struct LpResult {
 // while avoiding an allocation for every tableau row.
 class SimplexTableau {
  public:
+  SimplexTableau() = default;
   SimplexTableau(std::size_t rows,std::size_t columns)
       : columns_(columns),cells_(rows*columns,0.0) {}
+  // Reinitialize to the same all-zero grid a fresh construction would hold.
+  void reset(std::size_t rows,std::size_t columns) {
+    columns_=columns;
+    cells_.assign(rows*columns,0.0);
+  }
   double* operator[](std::size_t row) {return cells_.data()+row*columns_;}
   const double* operator[](std::size_t row) const {return cells_.data()+row*columns_;}
  private:
-  std::size_t columns_;
+  std::size_t columns_=0;
   std::vector<double> cells_;
 };
 
 class DenseSimplex {
  public:
-  DenseSimplex(const std::vector<detail::RatioRow>& input,
-               const std::vector<double>& objective,
-               std::size_t& pivot_count)
-      : m_(static_cast<int>(input.size())),
-        n_(static_cast<int>(objective.size())),
-        basis_(m_),
-        nonbasis_(n_ + 1),
-        tableau_(m_ + 2, n_ + 2),
-        pivot_count_(pivot_count) {
+  DenseSimplex() = default;
+  // Validation order, tableau layout, and pivot arithmetic are identical to
+  // the previous construct-per-solve form; load() writes into retained
+  // storage so consecutive arbitration solves reuse their buffers.
+  void load(const RatioRow* input,std::size_t input_rows,
+            const double* objective,std::size_t objective_columns,
+            std::size_t& pivot_count) {
+    m_=static_cast<int>(input_rows);
+    n_=static_cast<int>(objective_columns);
+    basis_.assign(static_cast<std::size_t>(m_),0);
+    nonbasis_.assign(static_cast<std::size_t>(n_)+1,0);
+    tableau_.reset(static_cast<std::size_t>(m_)+2,
+                   static_cast<std::size_t>(n_)+2);
+    pivot_count_=&pivot_count;
+    budget_exceeded_=false;
     for (int i = 0; i < m_; ++i) {
       const auto& row=input[static_cast<std::size_t>(i)];
       if (row.a.size() != static_cast<std::size_t>(n_)) {
@@ -906,8 +926,11 @@ class DenseSimplex {
     tableau_[m_ + 1][n_] = 1.0;
   }
 
-  LpResult solve() {
-    LpResult result;
+  void solve(LpResult& result) {
+    result.status = LpStatus::Infeasible;
+    result.objective = 0.0;
+    result.primal.clear();
+    result.dual_rows.clear();
     int row = 0;
     for (int i = 1; i < m_; ++i) {
       if (tableau_[i][n_ + 1] < tableau_[row][n_ + 1] - kEps ||
@@ -919,17 +942,17 @@ class DenseSimplex {
     if (m_ > 0 && tableau_[row][n_ + 1] < -kEps) {
       if (!pivot(row, n_)) {
         result.status = LpStatus::PivotBudget;
-        return result;
+        return;
       }
       const auto phase1 = simplex(1);
       if (phase1 == LpStatus::PivotBudget) {
         result.status = phase1;
-        return result;
+        return;
       }
       if (phase1 == LpStatus::Unbounded || tableau_[m_ + 1][n_ + 1] < -kEps ||
           std::abs(tableau_[m_ + 1][n_ + 1]) > 1.0e-7) {
         result.status = LpStatus::Infeasible;
-        return result;
+        return;
       }
       for (int i = 0; i < m_; ++i) {
         if (basis_[i] != -1) continue;
@@ -944,7 +967,7 @@ class DenseSimplex {
         if (column >= 0 && std::abs(tableau_[i][column]) > kEps) {
           if (!pivot(i, column)) {
             result.status = LpStatus::PivotBudget;
-            return result;
+            return;
           }
         }
       }
@@ -952,7 +975,7 @@ class DenseSimplex {
     const auto phase2 = simplex(2);
     if (phase2 != LpStatus::Optimal) {
       result.status = phase2;
-      return result;
+      return;
     }
     result.status = LpStatus::Optimal;
     result.objective = tableau_[m_][n_ + 1];
@@ -972,7 +995,7 @@ class DenseSimplex {
         }
       }
     }
-    return result;
+    return;
   }
 
  private:
@@ -982,11 +1005,11 @@ class DenseSimplex {
   std::vector<int> basis_;
   std::vector<int> nonbasis_;
   SimplexTableau tableau_;
-  std::size_t& pivot_count_;
+  std::size_t* pivot_count_ = nullptr;
   bool budget_exceeded_ = false;
 
   bool pivot(int row, int column) {
-    if (++pivot_count_ > 256) {
+    if (++(*pivot_count_) > 256) {
       budget_exceeded_ = true;
       return false;
     }
@@ -1050,7 +1073,85 @@ class DenseSimplex {
   }
 };
 
-}  // namespace
+// One arbitration variable before publication. The record keeps the exact
+// fields the previous per-call local structure held; pooling it only changes
+// where the storage lives, never its contents.
+struct ArbitrationRef {
+  Execution* execution = nullptr;
+  LiveActivity* live = nullptr;
+  std::uint64_t handle = 0;
+  std::string owner_key;
+  std::size_t first_resource = 0;
+  double q = 0.0;
+  double alpha = 0.0;
+  std::size_t multiplicity = 1;
+  std::vector<LiveActivity*> mirrors;
+  std::array<double, 2> credit_slope{};
+};
+
+// Set a pool's logical size while keeping every element's heap buffer alive:
+// shrinking moves tail elements into a spare list instead of destroying them,
+// growing moves them back. Only pools whose vector is handed to the unchanged
+// free-function APIs (which read size()) need this; internal pools keep a
+// separate logical count. Buffers converge to the bounded per-call
+// requirement instead of reallocating per restart, tier, or probe.
+template <typename T>
+inline void pool_set_size(std::vector<T>& pool, std::vector<T>& spares,
+                          std::size_t size) {
+  while (pool.size() > size) {
+    spares.push_back(std::move(pool.back()));
+    pool.pop_back();
+  }
+  while (pool.size() < size) {
+    if (spares.empty()) {
+      pool.emplace_back();
+    } else {
+      pool.push_back(std::move(spares.back()));
+      spares.pop_back();
+    }
+  }
+}
+
+// Bounded arbitration scratch reused across Runtime::allocate() calls
+// (roofline stage 3, WP3.3). Structural bounds: at most 96 arbitration
+// variables, 13 resource rows, private and boundary rows bounded by the
+// variable count, and a tier row count at most the base rows plus two rows
+// per variable — every pool's high-water mark is capped by those limits and
+// never grows with the number of events. Each call refills the logical
+// contents before reading them, so no value survives between arbitrations.
+struct ArbitrationScratch {
+  // Arbitration variables (physical size is the high-water mark).
+  std::vector<ArbitrationRef> refs;
+  std::size_t refs_count = 0;
+  // Constraint rows. base/normalized/rows/face use logical counts; base and
+  // packing/owners also keep exact vector sizes for the free-function calls.
+  std::vector<RatioRow> base, base_spares;
+  std::size_t base_count = 0;
+  std::vector<RatioRow> normalized;
+  std::vector<RatioRow> rows;
+  std::size_t rows_count = 0;
+  std::vector<RatioRow> face;
+  std::size_t face_count = 0;
+  std::vector<PackingRow> packing, packing_spares;
+  std::vector<std::string> owners, owners_spares;
+  std::vector<double> quantities;
+  // Signed-LP working state across restarts and tiers.
+  std::vector<bool> excluded, frozen;
+  std::vector<double> solved, variable_scale, objective, maximize;
+  std::vector<std::size_t> minimum_rows, freeze_indices;
+  // Owner aggregation replacing the per-restart string-keyed map: totals are
+  // accumulated in ref index order per owner, exactly as the map inserts did.
+  std::vector<std::size_t> ref_owner_index;
+  std::vector<long double> owner_totals;
+  std::vector<char> owner_participating;
+  // Distinct active executions in ascending handle order.
+  std::vector<std::pair<std::uint64_t, Execution*>> active_executions;
+  // Reused solver and its result records (tier and bottleneck-probe slots).
+  DenseSimplex simplex;
+  LpResult tier_result, probe_result;
+};
+
+}  // namespace detail
 
 // Everything recompute_credit can reuse from integrate()'s fused staging
 // sweep: the exact-order ledger sums, the initial-progress flag, and the
@@ -1088,6 +1189,28 @@ Runtime::Runtime(std::shared_ptr<const Hardware> hardware)
   validate_hardware(*hardware_);
   capacities_ = hardware_->rates;
 }
+
+// Out-of-line: the arbitration scratch member stays incomplete in the header.
+Runtime::~Runtime() = default;
+
+// ArbitrationScratchHandle special members (roofline stage 3, WP3.3 copy
+// fix): defined here so unique_ptr's delete on ArbitrationScratch only
+// instantiates in this TU. Copying drops the pool on purpose -- it is a pure
+// work buffer rebuilt before every read, so a copied Runtime (read-only
+// sampling paths) produces identical outputs while its own pool stays empty
+// until its first allocate().
+detail::ArbitrationScratchHandle::ArbitrationScratchHandle() = default;
+detail::ArbitrationScratchHandle::~ArbitrationScratchHandle() = default;
+detail::ArbitrationScratchHandle::ArbitrationScratchHandle(
+    const detail::ArbitrationScratchHandle&) {}
+detail::ArbitrationScratchHandle& detail::ArbitrationScratchHandle::operator=(
+    const detail::ArbitrationScratchHandle&) {
+  return *this;
+}
+detail::ArbitrationScratchHandle::ArbitrationScratchHandle(
+    detail::ArbitrationScratchHandle&&) noexcept = default;
+detail::ArbitrationScratchHandle& detail::ArbitrationScratchHandle::operator=(
+    detail::ArbitrationScratchHandle&&) noexcept = default;
 
 std::uint64_t Runtime::submit(std::shared_ptr<const Plan> plan, Owner owner,
                               std::uint64_t now_ns) {
@@ -1494,22 +1617,23 @@ void Runtime::allocate() { allocate(false, nullptr); }
 // Import-only witness: add at most one fixed set of componentwise nonpositive
 // initial-boundary rows. They are tautologies for nonnegative progress rates.
 // Normal runtime arbitration retains the original row set and arithmetic.
+//
+// Storage (roofline stage 3, WP3.3): arbitration variables, constraint rows,
+// owner inputs, and the simplex now live in arbitration_scratch_ and are
+// reused across calls (see ArbitrationScratch). Row content, row order,
+// column counts, owner key order, and the sequence of every floating-point
+// operation are unchanged, so arbitration output stays bit-identical to the
+// previous per-call construction.
 void Runtime::allocate(bool redundant_initial_boundaries,
                        std::size_t* import_pivots) {
   ++allocate_calls_;
   last_arbitration_={};
-  struct Ref {
-    Execution* execution = nullptr;
-    LiveActivity* live = nullptr;
-    std::uint64_t handle = 0;
-    std::string owner_key;
-    std::size_t first_resource = 0;
-    double q = 0.0;
-    double alpha = 0.0;
-    std::size_t multiplicity = 1;
-    std::vector<LiveActivity*> mirrors;
-    std::array<double, 2> credit_slope{};
-  };
+  if (!arbitration_scratch_.pool)
+    arbitration_scratch_.pool =
+        std::make_unique<detail::ArbitrationScratch>();
+  detail::ArbitrationScratch& scratch = *arbitration_scratch_.pool;
+  using detail::ArbitrationRef;
+  scratch.refs_count = 0;
 
   for (auto& [handle, execution] : executions_) {
     (void)handle;
@@ -1530,8 +1654,24 @@ void Runtime::allocate(bool redundant_initial_boundaries,
   ++allocation_updates_;
   ++generation_;
 
-  std::vector<Ref> refs;
-  std::map<std::string, long double> owner_q;
+  auto push_ref = [&](Execution& execution, LiveActivity& live,
+                      std::uint64_t handle, std::size_t first_resource,
+                      double q) {
+    if (scratch.refs.size() == scratch.refs_count) scratch.refs.emplace_back();
+    ArbitrationRef& ref = scratch.refs[scratch.refs_count++];
+    ref.execution = &execution;
+    ref.live = &live;
+    ref.handle = handle;
+    ref.first_resource = first_resource;
+    ref.q = q;
+    ref.alpha = 0.0;
+    ref.multiplicity = 1;
+    ref.mirrors.clear();
+    // Progress cannot change during allocation. Reuse its exact segment
+    // derivative for symmetry, singleton and tangent rows in this call.
+    ref.credit_slope = curve_derivative(live);
+  };
+
   for (auto& [handle, execution] : executions_) {
     (void)handle;
     if (execution.terminal || time_until(execution.ready_ns) > 0.0L) continue;
@@ -1549,26 +1689,22 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       while (first_resource < resource_count && live.definition.work[first_resource] <= 0.0) {
         ++first_resource;
       }
-      if(refs.empty())refs.reserve(3 * std::min<std::size_t>(executions_.size(), 32));
-      refs.push_back(Ref{&execution, &live, handle, {},
-                         first_resource, q, 0.0});
-      // Progress cannot change during allocation. Reuse its exact segment
-      // derivative for symmetry, singleton and tangent rows in this call.
-      refs.back().credit_slope = curve_derivative(live);
+      push_ref(execution, live, handle, first_resource, q);
     }
   }
-  if (refs.empty()) {
+  if (scratch.refs_count == 0) {
     ++arbitration_path_empty_;
     return;
   }
-  if (refs.size() > 96) {
-    for (Ref& ref : refs) ref.live->rate = 0.0;
+  if (scratch.refs_count > 96) {
+    for (std::size_t i = 0; i < scratch.refs_count; ++i)
+      scratch.refs[i].live->rate = 0.0;
     throw std::runtime_error("numerical_failure: active activity count exceeds 3x32 solver bound");
   }
   if (redundant_initial_boundaries) {
     std::set<std::tuple<std::uint64_t,std::uint64_t,std::uint64_t>> owners;
-    for (const auto& ref : refs) {
-      const auto& owner = ref.execution->owner;
+    for (std::size_t i = 0; i < scratch.refs_count; ++i) {
+      const auto& owner = scratch.refs[i].execution->owner;
       owners.emplace(owner.node_id, owner.execution_id, owner.generation);
     }
     if (owners.size() > 32)
@@ -1580,24 +1716,27 @@ void Runtime::allocate(bool redundant_initial_boundaries,
   // gain multiplicity; each owner's PRIVATE/credit constraints and alpha are
   // retained. No progress/phase epsilon is used. Owners split across multiple
   // executions remain on the full path to preserve their Q denominator.
-  const auto same_fair_owner = [](const Ref& a, const Ref& b) {
+  const auto same_fair_owner = [](const ArbitrationRef& a, const ArbitrationRef& b) {
     const auto& lhs=a.execution->owner;
     const auto& rhs=b.execution->owner;
     return std::tie(lhs.node_id,lhs.execution_id,lhs.generation)==
            std::tie(rhs.node_id,rhs.execution_id,rhs.generation);
   };
-  const bool multiple_owners = std::any_of(refs.begin(), refs.end(),
-      [&](const Ref& ref) { return !same_fair_owner(ref,refs.front()); });
+  const bool multiple_owners = std::any_of(scratch.refs.begin(),
+      scratch.refs.begin()+scratch.refs_count,
+      [&](const ArbitrationRef& ref) {
+        return !same_fair_owner(ref,scratch.refs.front());
+      });
   if (multiple_owners) {
     // Refs are collected contiguously per execution before the stable LP
     // sort. Store block ranges instead of allocating two maps and one vector
     // for each owner on every arbitration update.
     struct Block { std::size_t begin, end; unsigned boundary = 0; bool split_owner=false; };
     std::vector<Block> blocks;
-    blocks.reserve(refs.size());
-    for (std::size_t begin = 0; begin < refs.size();) {
+    blocks.reserve(scratch.refs_count);
+    for (std::size_t begin = 0; begin < scratch.refs_count;) {
       std::size_t end = begin + 1;
-      while (end < refs.size() && refs[end].handle == refs[begin].handle) ++end;
+      while (end < scratch.refs_count && scratch.refs[end].handle == scratch.refs[begin].handle) ++end;
       blocks.push_back({begin, end});
       begin = end;
     }
@@ -1606,16 +1745,16 @@ void Runtime::allocate(bool redundant_initial_boundaries,
     // refs.size() was checked against 96 before constructing these blocks.
     std::array<std::size_t,96> owner_order;
     std::iota(owner_order.begin(),owner_order.begin()+blocks.size(),std::size_t{0});
-    const auto fair_owner=[](const Ref& ref) {
+    const auto fair_owner=[](const ArbitrationRef& ref) {
       const auto& o=ref.execution->owner;
       return std::tie(o.node_id,o.execution_id,o.generation);
     };
-    std::sort(owner_order.begin(),owner_order.begin()+blocks.size(),[&](auto a,auto b) {
-      return fair_owner(refs[blocks[a].begin])<fair_owner(refs[blocks[b].begin]);
+    std::sort(owner_order.begin(),owner_order.begin()+blocks.size(),[&](auto a, auto b) {
+      return fair_owner(scratch.refs[blocks[a].begin])<fair_owner(scratch.refs[blocks[b].begin]);
     });
     for(std::size_t i=1;i<blocks.size();++i) {
       auto& previous=blocks[owner_order[i-1]];auto& current=blocks[owner_order[i]];
-      if(same_fair_owner(refs[previous.begin],refs[current.begin]))
+      if(same_fair_owner(scratch.refs[previous.begin],scratch.refs[current.begin]))
         previous.split_owner=current.split_owner=true;
     }
     const auto boundary_mask = [](const Execution& execution) {
@@ -1631,13 +1770,13 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       return mask;
     };
     for (auto& block : blocks)
-      block.boundary = boundary_mask(*refs[block.begin].execution);
+      block.boundary = boundary_mask(*scratch.refs[block.begin].execution);
     const auto equivalent_blocks = [&](const Block& lhs, const Block& rhs) {
       if (lhs.end - lhs.begin != rhs.end - rhs.begin ||
           lhs.boundary != rhs.boundary) return false;
       for (std::size_t i = 0; i < lhs.end - lhs.begin; ++i) {
-        const auto& a = refs[lhs.begin + i].live->definition;
-        const auto& b = refs[rhs.begin + i].live->definition;
+        const auto& a = scratch.refs[lhs.begin + i].live->definition;
+        const auto& b = scratch.refs[rhs.begin + i].live->definition;
         // Activity IDs are tracing/tie-break labels, not service constraints.
         // Symmetric owner blocks can contain distinct endpoint IDs and still
         // have the same unique max-min rate vector under owner permutation.
@@ -1645,13 +1784,13 @@ void Runtime::allocate(bool redundant_initial_boundaries,
             a.canonical_q != b.canonical_q ||
             a.private_time_s != b.private_time_s ||
             a.credit_delta != b.credit_delta ||
-            refs[lhs.begin + i].credit_slope !=
-                refs[rhs.begin + i].credit_slope) return false;
+            scratch.refs[lhs.begin + i].credit_slope !=
+                scratch.refs[rhs.begin + i].credit_slope) return false;
       }
       return true;
     };
     std::vector<std::size_t> representatives;
-    std::vector<bool> merged(refs.size(), false);
+    std::vector<bool> merged(scratch.refs_count, false);
     for (std::size_t index = 0; index < blocks.size(); ++index) {
       const Block& block = blocks[index];
       if(block.split_owner)continue;
@@ -1665,21 +1804,26 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       }
       const Block& representative_block = blocks[*match];
       for (std::size_t i = 0; i < block.end - block.begin; ++i) {
-        Ref& representative = refs[representative_block.begin + i];
+        ArbitrationRef& representative = scratch.refs[representative_block.begin + i];
         if (representative.mirrors.empty())
           representative.mirrors.reserve(blocks.size() - 1);
         ++representative.multiplicity;
-        representative.mirrors.push_back(refs[block.begin + i].live);
+        representative.mirrors.push_back(scratch.refs[block.begin + i].live);
         merged[block.begin + i] = true;
       }
     }
-    std::vector<Ref> reduced;
-    reduced.reserve(refs.size());
-    for (std::size_t i = 0; i < refs.size(); ++i)
-      if (!merged[i]) reduced.push_back(std::move(refs[i]));
-    refs = std::move(reduced);
+    // Compact the survivors in place, preserving their relative order.
+    // Copying (instead of moving into a fresh vector) keeps every pooled
+    // element's string and mirror buffers for later arbitrations.
+    std::size_t survivors = 0;
+    for (std::size_t i = 0; i < scratch.refs_count; ++i) {
+      if (merged[i]) continue;
+      if (survivors != i) scratch.refs[survivors] = scratch.refs[i];
+      ++survivors;
+    }
+    scratch.refs_count = survivors;
   }
-  const auto publish = [](Ref& ref, double rate, double alpha) {
+  const auto publish = [](ArbitrationRef& ref, double rate, double alpha) {
     ref.live->rate = rate;
     ref.live->alpha = alpha;
     for (auto* mirror : ref.mirrors) {
@@ -1687,15 +1831,15 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       mirror->alpha = alpha;
     }
   };
-  last_arbitration_.activities=refs.size();
-  if (refs.size() == 1) {
+  last_arbitration_.activities=scratch.refs_count;
+  if (scratch.refs_count == 1) {
     last_arbitration_.path=ArbitrationDiagnostics::Path::Singleton;
     ++arbitration_path_singleton_;
     // The one-variable max-min LP has an exact closed solution: its sole
     // activity receives the smallest physical/private bound, unless a signed
     // credit boundary blocks that direction. This is the same feasible set
     // as the general solver, without allocating a simplex tableau.
-    Ref& ref=refs.front();
+    ArbitrationRef& ref=scratch.refs.front();
     const auto& activity=ref.live->definition;
     double rate=std::numeric_limits<double>::infinity();
     for(std::size_t r=0;r<resource_count;++r)
@@ -1718,8 +1862,10 @@ void Runtime::allocate(bool redundant_initial_boundaries,
   // Identity comparisons above use the exact owner tuple. Materialize the
   // original string keys only for surviving solver variables, preserving
   // the solver's established key ordering and Q aggregation semantics.
-  for(auto& ref:refs)ref.owner_key=ref.execution->owner.key();
-  std::sort(refs.begin(), refs.end(), [](const Ref& lhs, const Ref& rhs) {
+  for(std::size_t i=0;i<scratch.refs_count;++i)
+    scratch.refs[i].owner_key=scratch.refs[i].execution->owner.key();
+  std::sort(scratch.refs.begin(), scratch.refs.begin()+scratch.refs_count,
+            [](const ArbitrationRef& lhs, const ArbitrationRef& rhs) {
     return std::tie(lhs.first_resource, lhs.execution->owner.node_id,
                     lhs.execution->owner.execution_id, lhs.execution->owner.generation,
                     lhs.live->definition.id, lhs.handle) <
@@ -1728,35 +1874,67 @@ void Runtime::allocate(bool redundant_initial_boundaries,
                     rhs.live->definition.id, rhs.handle);
   });
 
-  using Constraint = detail::RatioRow;
-  const std::size_t count = refs.size();
-  std::vector<Constraint> base;
-  base.reserve(resource_count + count + 2 * std::min(count, executions_.size()));
-
-  for (std::size_t resource = 0; resource < resource_count; ++resource) {
-    Constraint c{std::vector<double>(count, 0.0), capacities_[resource]};
-    bool used = false;
-    for (std::size_t i = 0; i < count; ++i) {
-      const double work = refs[i].live->definition.work[resource];
-      if (work > 0.0) {
-        c.a[i] = work * static_cast<double>(refs[i].multiplicity);
-        used = true;
+  const std::size_t count = scratch.refs_count;
+  scratch.base_count = 0;
+  auto next_base_row = [&]() -> detail::RatioRow& {
+    if (scratch.base.size() == scratch.base_count) {
+      if (!scratch.base_spares.empty()) {
+        scratch.base.push_back(std::move(scratch.base_spares.back()));
+        scratch.base_spares.pop_back();
+      } else {
+        scratch.base.emplace_back();
       }
     }
-    if (used) base.push_back(std::move(c));
+    return scratch.base[scratch.base_count++];
+  };
+  // Resource rows: identify rows some live activity actually uses before
+  // materializing coefficient storage. The previous form constructed a full
+  // zero vector for every resource row, including the ones it then dropped;
+  // appended row content and order are unchanged.
+  for (std::size_t resource = 0; resource < resource_count; ++resource) {
+    bool used = false;
+    for (std::size_t i = 0; i < count && !used; ++i)
+      used = scratch.refs[i].live->definition.work[resource] > 0.0;
+    if (!used) continue;
+    detail::RatioRow& row = next_base_row();
+    row.a.assign(count, 0.0);
+    row.b = capacities_[resource];
+    for (std::size_t i = 0; i < count; ++i) {
+      const double work = scratch.refs[i].live->definition.work[resource];
+      if (work > 0.0)
+        row.a[i] = work * static_cast<double>(scratch.refs[i].multiplicity);
+    }
   }
   for (std::size_t i = 0; i < count; ++i) {
-    const double private_time = refs[i].live->definition.private_time_s;
+    const double private_time = scratch.refs[i].live->definition.private_time_s;
     if (private_time <= 0.0) continue;
-    Constraint c{std::vector<double>(count, 0.0), 1.0 / private_time};
-    c.a[i] = 1.0;
-    base.push_back(std::move(c));
+    detail::RatioRow& row = next_base_row();
+    row.a.assign(count, 0.0);
+    row.b = 1.0 / private_time;
+    row.a[i] = 1.0;
   }
 
-  std::map<std::uint64_t, Execution*> active_executions;
-  for (const Ref& ref : refs) active_executions.emplace(ref.handle, ref.execution);
+  // Distinct active executions in ascending handle order: the exact
+  // iteration order of the previous per-call map, without its node
+  // allocations. All refs of one handle share the same execution.
+  scratch.active_executions.clear();
+  for (std::size_t i = 0; i < count; ++i)
+    scratch.active_executions.emplace_back(scratch.refs[i].handle,
+                                           scratch.refs[i].execution);
+  std::sort(scratch.active_executions.begin(), scratch.active_executions.end(),
+            [](const std::pair<std::uint64_t, Execution*>& lhs,
+               const std::pair<std::uint64_t, Execution*>& rhs) {
+              return lhs.first < rhs.first;
+            });
+  scratch.active_executions.erase(
+      std::unique(scratch.active_executions.begin(), scratch.active_executions.end(),
+                  [](const std::pair<std::uint64_t, Execution*>& lhs,
+                     const std::pair<std::uint64_t, Execution*>& rhs) {
+                    return lhs.first == rhs.first;
+                  }),
+      scratch.active_executions.end());
   std::size_t redundant_rows = 0;
-  for (const auto& [execution_handle, execution] : active_executions) {
+  for (const auto& [execution_handle, execution] : scratch.active_executions) {
     (void)execution_handle;
     for (std::size_t buffer = 0; buffer < 2; ++buffer) {
       const double capacity = execution->credit_capacity[buffer];
@@ -1782,9 +1960,9 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       if (redundant_initial_boundaries) {
         const auto& epoch = execution->plan->epochs.at(execution->epoch);
         bool all_nonnegative = true, all_nonpositive = true, nonzero = false;
-        for (const auto& ref : refs) {
-          if (ref.execution != execution) continue;
-          const double delta = ref.credit_slope[buffer];
+        for (std::size_t i = 0; i < count; ++i) {
+          if (scratch.refs[i].execution != execution) continue;
+          const double delta = scratch.refs[i].credit_slope[buffer];
           all_nonnegative = all_nonnegative && delta >= 0.0;
           all_nonpositive = all_nonpositive && delta <= 0.0;
           nonzero = nonzero || delta != 0.0;
@@ -1796,18 +1974,23 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       }
       if (!at_low && !at_high && !initial_low_witness && !initial_high_witness) continue;
       const auto add_boundary = [&](bool lower_boundary) {
-        Constraint c{std::vector<double>(count, 0.0), 0.0};
+        const std::size_t rollback = scratch.base_count;
+        detail::RatioRow& row = next_base_row();
+        row.a.assign(count, 0.0);
+        row.b = 0.0;
         bool used = false;
         for (std::size_t i = 0; i < count; ++i) {
-          if (refs[i].execution != execution) continue;
-          const double delta = refs[i].credit_slope[buffer];
+          if (scratch.refs[i].execution != execution) continue;
+          const double delta = scratch.refs[i].credit_slope[buffer];
           const double coefficient = lower_boundary ? -delta : delta;
           if (coefficient != 0.0) {
-            c.a[i] = coefficient;
+            row.a[i] = coefficient;
             used = true;
           }
         }
-        if (used) base.push_back(std::move(c));
+        // An all-zero boundary row was never appended in the previous form;
+        // hand the pooled row back instead.
+        if (!used) scratch.base_count = rollback;
       };
       const auto add_witness = [&](bool lower_boundary) {
         if (++redundant_rows > 64)
@@ -1820,126 +2003,163 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       if (initial_high_witness) add_witness(false);
     }
   }
+  // Exact vector size for the free-function APIs that read size().
+  detail::pool_set_size(scratch.base, scratch.base_spares, scratch.base_count);
 
-  const bool nonnegative=std::all_of(base.begin(),base.end(),[](const auto& row) {
-    return std::all_of(row.a.begin(),row.a.end(),[](double x){return x>=0.0;});
-  });
-  const bool curved_allocation=std::any_of(refs.begin(),refs.end(),[](const Ref& ref){
-      return !ref.live->definition.credit_curve.empty();});
+  const bool nonnegative=std::all_of(scratch.base.begin(),
+      scratch.base.begin()+scratch.base_count,[](const detail::RatioRow& row) {
+        return std::all_of(row.a.begin(),row.a.end(),[](double x){return x>=0.0;});
+      });
+  const bool curved_allocation=std::any_of(scratch.refs.begin(),
+      scratch.refs.begin()+count,[](const ArbitrationRef& ref){
+        return !ref.live->definition.credit_curve.empty();});
+  auto fill_owner_inputs = [&]() {
+    detail::pool_set_size(scratch.owners, scratch.owners_spares, count);
+    scratch.quantities.resize(count);
+    for (std::size_t i = 0; i < count; ++i) {
+      scratch.owners[i] = scratch.refs[i].owner_key;
+      scratch.quantities[i] = scratch.refs[i].q;
+    }
+  };
   if(nonnegative) {
-    std::vector<detail::PackingRow> packing;
-    packing.reserve(base.size());
-    for(const auto& row:base)packing.push_back({row.a,row.b});
-    std::vector<std::string> owners;std::vector<double> quantities, rates, shares;
-    owners.reserve(count);quantities.reserve(count);
-    for(const auto& ref:refs) { owners.push_back(ref.owner_key);quantities.push_back(ref.q); }
-    if(detail::allocate_packing(packing,owners,quantities,rates,shares,
+    detail::pool_set_size(scratch.packing, scratch.packing_spares,
+                          scratch.base_count);
+    for(std::size_t r=0;r<scratch.base_count;++r) {
+      scratch.packing[r].a.assign(scratch.base[r].a.begin(),
+                                  scratch.base[r].a.end());
+      scratch.packing[r].b=scratch.base[r].b;
+    }
+    fill_owner_inputs();
+    std::vector<double> rates, shares;
+    if(detail::allocate_packing(scratch.packing,scratch.owners,scratch.quantities,rates,shares,
                                 curved_allocation)) {
       last_arbitration_.path=ArbitrationDiagnostics::Path::Packing;
       ++arbitration_path_packing_;
-      last_arbitration_.constraint_rows=base.size();
-      for(std::size_t i=0;i<count;++i)publish(refs[i],rates[i],shares[i]);
+      last_arbitration_.constraint_rows=scratch.base_count;
+      for(std::size_t i=0;i<count;++i)publish(scratch.refs[i],rates[i],shares[i]);
       return;
     }
   }
   if(curved_allocation && count<=3) {
-    std::vector<std::string> owners;
-    std::vector<double> quantities,rates,shares;
-    owners.reserve(count);quantities.reserve(count);
-    for(const auto& ref:refs) {
-      owners.push_back(ref.owner_key);quantities.push_back(ref.q);
-    }
-    if(detail::allocate_ratio(base,owners,quantities,rates,shares)) {
+    fill_owner_inputs();
+    std::vector<double> rates, shares;
+    if(detail::allocate_ratio(scratch.base,scratch.owners,scratch.quantities,rates,shares)) {
       last_arbitration_.path=ArbitrationDiagnostics::Path::Ratio;
       ++arbitration_path_ratio_;
-      last_arbitration_.constraint_rows=base.size();
-      for(std::size_t i=0;i<count;++i)publish(refs[i],rates[i],shares[i]);
+      last_arbitration_.constraint_rows=scratch.base_count;
+      for(std::size_t i=0;i<count;++i)publish(scratch.refs[i],rates[i],shares[i]);
       return;
     }
   }
   last_arbitration_.path=ArbitrationDiagnostics::Path::SignedLP;
   ++arbitration_path_signed_lp_;
-  last_arbitration_.constraint_rows=base.size();
+  last_arbitration_.constraint_rows=scratch.base_count;
   const std::size_t prior_import_pivots = import_pivots ? *import_pivots : 0;
   std::size_t pivot_count = prior_import_pivots;
-  std::vector<bool> excluded(count, false);
-  std::vector<bool> frozen(count, false);
-  std::vector<double> solved(count, 0.0);
+  scratch.excluded.assign(count, false);
+  scratch.frozen.assign(count, false);
+  scratch.solved.assign(count, 0.0);
   auto failure = [&](const std::string& message) -> void {
-    for (Ref& ref : refs) ref.live->rate = 0.0;
+    for (std::size_t i = 0; i < count; ++i) scratch.refs[i].live->rate = 0.0;
     throw std::runtime_error("numerical_failure: " + message);
   };
-  auto solve_lp = [&](const std::vector<Constraint>& rows,
-                      const std::vector<double>& objective) -> LpResult {
-    DenseSimplex solver(rows, objective, pivot_count);
-    auto result=solver.solve();
+  auto solve_lp = [&](const detail::RatioRow* rows, std::size_t row_count,
+                      const double* objective, std::size_t columns,
+                      detail::LpResult& result) {
+    scratch.simplex.load(rows, row_count, objective, columns, pivot_count);
+    scratch.simplex.solve(result);
     // last_arbitration_.pivots is cumulative within this allocate call;
     // the observation counter accumulates only this invocation's share.
     const std::size_t cumulative=pivot_count-prior_import_pivots;
     solver_pivots_total_+=cumulative-last_arbitration_.pivots;
     last_arbitration_.pivots=cumulative;
     if (import_pivots) *import_pivots = pivot_count;
-    return result;
   };
+
+  // Owner aggregation: a ref's owner is matched by its exact key against
+  // earlier refs, once per call. Each restart then accumulates totals in ref
+  // index order — the per-owner addition sequence the string-keyed map
+  // performed — and validation covers exactly the owners that still have a
+  // participating ref.
+  scratch.ref_owner_index.resize(count);
+  std::size_t owner_runs = 0;
+  for (std::size_t i = 0; i < count; ++i) {
+    std::size_t owner = owner_runs;
+    for (std::size_t j = 0; j < i; ++j) {
+      if (scratch.refs[j].owner_key == scratch.refs[i].owner_key) {
+        owner = scratch.ref_owner_index[j];
+        break;
+      }
+    }
+    if (owner == owner_runs) ++owner_runs;
+    scratch.ref_owner_index[i] = owner;
+  }
+  scratch.owner_totals.assign(owner_runs, 0.0L);
+  scratch.owner_participating.assign(owner_runs, 0);
 
   std::size_t total_tiers = 0;
   for (std::size_t restart = 0; restart <= count; ++restart) {
-    owner_q.clear();
+    for (std::size_t j = 0; j < owner_runs; ++j) {
+      scratch.owner_totals[j] = 0.0L;
+      scratch.owner_participating[j] = 0;
+    }
     std::size_t participating = 0;
     for (std::size_t i = 0; i < count; ++i) {
-      if (excluded[i]) continue;
+      if (scratch.excluded[i]) continue;
       ++participating;
-      owner_q[refs[i].owner_key] += refs[i].q;
+      scratch.owner_totals[scratch.ref_owner_index[i]] += scratch.refs[i].q;
+      scratch.owner_participating[scratch.ref_owner_index[i]] = 1;
     }
     if (participating == 0) break;
-    for (const auto& [owner, total] : owner_q) {
-      (void)owner;
+    for (std::size_t j = 0; j < owner_runs; ++j) {
+      if (!scratch.owner_participating[j]) continue;
+      const long double total = scratch.owner_totals[j];
       if (!(total > 0.0L) || !std::isfinite(total)) {
         failure("owner canonical weight is invalid");
       }
     }
     for (std::size_t i = 0; i < count; ++i) {
-      if (excluded[i]) {
-        refs[i].alpha = 0.0;
-        frozen[i] = true;
-        solved[i] = 0.0;
+      if (scratch.excluded[i]) {
+        scratch.refs[i].alpha = 0.0;
+        scratch.frozen[i] = true;
+        scratch.solved[i] = 0.0;
         continue;
       }
-      const long double total = owner_q.at(refs[i].owner_key);
-      refs[i].alpha = static_cast<double>(static_cast<long double>(refs[i].q) / total);
-      if (!std::isfinite(refs[i].alpha) || refs[i].alpha <= 0.0) {
+      const long double total = scratch.owner_totals[scratch.ref_owner_index[i]];
+      scratch.refs[i].alpha = static_cast<double>(static_cast<long double>(scratch.refs[i].q) / total);
+      if (!std::isfinite(scratch.refs[i].alpha) || scratch.refs[i].alpha <= 0.0) {
         failure("owner weight underflowed the simplex precision");
       }
-      frozen[i] = false;
-      solved[i] = 0.0;
+      scratch.frozen[i] = false;
+      scratch.solved[i] = 0.0;
     }
 
     double z_scale = std::numeric_limits<double>::infinity();
-    std::vector<double> variable_scale(count, 1.0);
+    scratch.variable_scale.assign(count, 1.0);
     bool has_positive_upper_bound = false;
     for (std::size_t i = 0; i < count; ++i) {
-      if (excluded[i]) continue;
+      if (scratch.excluded[i]) continue;
       double upper_x = std::numeric_limits<double>::infinity();
       for (std::size_t resource = 0; resource < resource_count; ++resource) {
-        const double work = refs[i].live->definition.work[resource];
+        const double work = scratch.refs[i].live->definition.work[resource];
         if (work <= 0.0) continue;
-        const double coefficient = work / refs[i].q *
-            static_cast<double>(refs[i].multiplicity);
+        const double coefficient = work / scratch.refs[i].q *
+            static_cast<double>(scratch.refs[i].multiplicity);
         if (!std::isfinite(coefficient) || coefficient <= 0.0) {
           failure("resource coefficient is outside simplex precision");
         }
         upper_x = std::min(upper_x, capacities_[resource] / coefficient);
       }
-      const double private_time = refs[i].live->definition.private_time_s;
+      const double private_time = scratch.refs[i].live->definition.private_time_s;
       if (private_time > 0.0) {
-        upper_x = std::min(upper_x, refs[i].q / private_time);
+        upper_x = std::min(upper_x, scratch.refs[i].q / private_time);
       }
       if (!std::isfinite(upper_x) || upper_x < 0.0) {
         failure("activity has no finite canonical service bound");
       }
       if (upper_x > 0.0) {
         has_positive_upper_bound = true;
-        const double activity_scale = upper_x / refs[i].alpha;
+        const double activity_scale = upper_x / scratch.refs[i].alpha;
         if (!std::isfinite(activity_scale)) failure("fairness scale is nonfinite");
         z_scale = std::min(z_scale, activity_scale);
       }
@@ -1957,61 +2177,89 @@ void Runtime::allocate(bool redundant_initial_boundaries,
     // cancellation during simplex pivots can amplify that discrepancy.
     // One shared progress scale per owner keeps those equalities exact.
     for (std::size_t i = 0; i < count; ++i) {
-      if (excluded[i]) continue;
-      variable_scale[i] = static_cast<double>(
-          static_cast<long double>(z_scale) / owner_q.at(refs[i].owner_key));
-      if (!std::isfinite(variable_scale[i]) || variable_scale[i] <= 0.0) {
+      if (scratch.excluded[i]) continue;
+      scratch.variable_scale[i] = static_cast<double>(
+          static_cast<long double>(z_scale) / scratch.owner_totals[scratch.ref_owner_index[i]]);
+      if (!std::isfinite(scratch.variable_scale[i]) || scratch.variable_scale[i] <= 0.0) {
         failure("fairness variable scale is outside simplex precision");
       }
     }
 
-    std::vector<Constraint> normalized_base = base;
-    for (Constraint& row : normalized_base) {
+    // Rescaled base rows: refilled from base every restart before the
+    // per-row multiply, so no rescaled value can leak into a later restart.
+    if (scratch.normalized.size() < scratch.base_count)
+      scratch.normalized.resize(scratch.base_count);
+    for (std::size_t r = 0; r < scratch.base_count; ++r) {
+      scratch.normalized[r].a.assign(scratch.base[r].a.begin(),
+                                     scratch.base[r].a.end());
+      scratch.normalized[r].b = scratch.base[r].b;
+    }
+    for (std::size_t r = 0; r < scratch.base_count; ++r) {
       for (std::size_t i = 0; i < count; ++i) {
-        row.a[i] *= variable_scale[i];
+        scratch.normalized[r].a[i] *= scratch.variable_scale[i];
       }
     }
 
     bool restart_with_fewer_activities = false;
     double minimum_tier = 0.0;
-    while (std::any_of(frozen.begin(), frozen.end(), [](bool value) { return !value; })) {
+    while (std::any_of(scratch.frozen.begin(), scratch.frozen.begin()+count,
+                       [](bool value) { return !value; })) {
       if (++total_tiers > count * 2) failure("lexicographic max-min exceeded activity bound");
-      std::vector<Constraint> rows = normalized_base;
-      std::vector<std::size_t> minimum_rows(count, std::numeric_limits<std::size_t>::max());
+      scratch.rows_count = 0;
+      auto next_lp_row = [&]() -> detail::RatioRow& {
+        if (scratch.rows.size() == scratch.rows_count) scratch.rows.emplace_back();
+        return scratch.rows[scratch.rows_count++];
+      };
+      scratch.minimum_rows.assign(count, std::numeric_limits<std::size_t>::max());
+      // Base rows at tier width: [rescaled coefficients, 0.0] — exactly the
+      // content the previous count-wide copy followed by the resize to
+      // count+1 produced, without the per-tier row reallocation.
+      for (std::size_t r = 0; r < scratch.base_count; ++r) {
+        detail::RatioRow& row = next_lp_row();
+        row.a.assign(count + 1, 0.0);
+        for (std::size_t i = 0; i < count; ++i)
+          row.a[i] = scratch.normalized[r].a[i];
+        row.b = scratch.normalized[r].b;
+      }
       for (std::size_t i = 0; i < count; ++i) {
-        if (excluded[i]) {
-          Constraint upper{std::vector<double>(count + 1, 0.0), 0.0};
+        if (scratch.excluded[i]) {
+          detail::RatioRow& upper = next_lp_row();
+          upper.a.assign(count + 1, 0.0);
+          upper.b = 0.0;
           upper.a[i] = 1.0;
-          rows.push_back(std::move(upper));
-        } else if (frozen[i]) {
-          Constraint upper{std::vector<double>(count + 1, 0.0), solved[i]};
+        } else if (scratch.frozen[i]) {
+          detail::RatioRow& upper = next_lp_row();
+          upper.a.assign(count + 1, 0.0);
+          upper.b = scratch.solved[i];
           upper.a[i] = 1.0;
-          rows.push_back(std::move(upper));
-          Constraint lower{std::vector<double>(count + 1, 0.0), -solved[i]};
+          detail::RatioRow& lower = next_lp_row();
+          lower.a.assign(count + 1, 0.0);
+          lower.b = -scratch.solved[i];
           lower.a[i] = -1.0;
-          rows.push_back(std::move(lower));
         } else {
-          Constraint minimum{std::vector<double>(count + 1, 0.0), 0.0};
+          detail::RatioRow& minimum = next_lp_row();
+          minimum.a.assign(count + 1, 0.0);
+          minimum.b = 0.0;
           minimum.a[i] = -1.0;
           minimum.a[count] = 1.0;
-          minimum_rows[i] = rows.size();
-          rows.push_back(std::move(minimum));
+          scratch.minimum_rows[i] = scratch.rows_count - 1;
         }
       }
 
-      // Base rows were built with count columns. Add the shared tier variable.
-      for (std::size_t r = 0; r < normalized_base.size(); ++r) rows[r].a.resize(count + 1, 0.0);
-      std::vector<double> objective(count + 1, 0.0);
-      objective[count] = 1.0;
-      const LpResult tier = solve_lp(rows, objective);
-      if (tier.status == LpStatus::PivotBudget) failure("simplex exceeded global 256-pivot budget");
-      if (tier.status != LpStatus::Optimal || tier.primal.size() != count + 1 ||
+      // The shared tier variable completes the base rows' column count.
+      scratch.objective.assign(count + 1, 0.0);
+      scratch.objective[count] = 1.0;
+      solve_lp(scratch.rows.data(), scratch.rows_count, scratch.objective.data(),
+               count + 1, scratch.tier_result);
+      const detail::LpResult& tier = scratch.tier_result;
+      if (tier.status == detail::LpStatus::PivotBudget) failure("simplex exceeded global 256-pivot budget");
+      if (tier.status != detail::LpStatus::Optimal || tier.primal.size() != count + 1 ||
           !std::isfinite(tier.objective)) {
         failure("signed-credit max-min LP failed");
       }
       const double reported_z = std::max(0.0, tier.primal[count]);
       if (reported_z < minimum_tier -
-              kLpEpsilon * std::max(1.0, minimum_tier)) {
+              detail::kLpEpsilon * std::max(1.0, minimum_tier)) {
         failure("lexicographic minimum decreased beyond simplex precision");
       }
       // A simplex-feasible point can still fall just below the prior tier
@@ -2021,59 +2269,76 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       minimum_tier = normalized_z;
       const double z = normalized_z * z_scale;
       if (!std::isfinite(z)) failure("lexicographic objective overflowed");
-      std::vector<std::size_t> freeze_indices;
+      scratch.freeze_indices.clear();
       for (std::size_t i = 0; i < count; ++i) {
-        if (excluded[i] || frozen[i]) continue;
-        const std::size_t row = minimum_rows[i];
+        if (scratch.excluded[i] || scratch.frozen[i]) continue;
+        const std::size_t row = scratch.minimum_rows[i];
         if (row < tier.dual_rows.size() && tier.dual_rows[row] > 1.0e-8) {
-          freeze_indices.push_back(i);
+          scratch.freeze_indices.push_back(i);
         }
       }
 
-      if (freeze_indices.empty()) {
+      if (scratch.freeze_indices.empty()) {
         // A degenerate optimal dual can hide a forced minimum. Check each
         // activity against the same feasible minimum face, in stable order.
-        std::vector<Constraint> face = normalized_base;
+        scratch.face_count = 0;
+        auto next_face_row = [&]() -> detail::RatioRow& {
+          if (scratch.face.size() == scratch.face_count) scratch.face.emplace_back();
+          return scratch.face[scratch.face_count++];
+        };
+        for (std::size_t r = 0; r < scratch.base_count; ++r) {
+          detail::RatioRow& row = next_face_row();
+          row.a.assign(count, 0.0);
+          for (std::size_t i = 0; i < count; ++i)
+            row.a[i] = scratch.normalized[r].a[i];
+          row.b = scratch.normalized[r].b;
+        }
         for (std::size_t i = 0; i < count; ++i) {
-          if (excluded[i]) {
-            Constraint upper{std::vector<double>(count, 0.0), 0.0};
+          if (scratch.excluded[i]) {
+            detail::RatioRow& upper = next_face_row();
+            upper.a.assign(count, 0.0);
+            upper.b = 0.0;
             upper.a[i] = 1.0;
-            face.push_back(std::move(upper));
-          } else if (frozen[i]) {
-            Constraint upper{std::vector<double>(count, 0.0), solved[i]};
+          } else if (scratch.frozen[i]) {
+            detail::RatioRow& upper = next_face_row();
+            upper.a.assign(count, 0.0);
+            upper.b = scratch.solved[i];
             upper.a[i] = 1.0;
-            face.push_back(std::move(upper));
-            Constraint lower{std::vector<double>(count, 0.0), -solved[i]};
+            detail::RatioRow& lower = next_face_row();
+            lower.a.assign(count, 0.0);
+            lower.b = -scratch.solved[i];
             lower.a[i] = -1.0;
-            face.push_back(std::move(lower));
           } else {
-            Constraint minimum{std::vector<double>(count, 0.0), -normalized_z};
+            detail::RatioRow& minimum = next_face_row();
+            minimum.a.assign(count, 0.0);
+            minimum.b = -normalized_z;
             minimum.a[i] = -1.0;
-            face.push_back(std::move(minimum));
           }
         }
         for (std::size_t i = 0; i < count; ++i) {
-          if (excluded[i] || frozen[i]) continue;
-          std::vector<double> maximize(count, 0.0);
-          maximize[i] = 1.0;
-          const LpResult individual = solve_lp(face, maximize);
-          if (individual.status == LpStatus::PivotBudget) failure("simplex exceeded global 256-pivot budget");
-          if (individual.status != LpStatus::Optimal || individual.primal.size() != count) {
+          if (scratch.excluded[i] || scratch.frozen[i]) continue;
+          scratch.maximize.assign(count, 0.0);
+          scratch.maximize[i] = 1.0;
+          solve_lp(scratch.face.data(), scratch.face_count,
+                   scratch.maximize.data(), count, scratch.probe_result);
+          const detail::LpResult& individual = scratch.probe_result;
+          if (individual.status == detail::LpStatus::PivotBudget) failure("simplex exceeded global 256-pivot budget");
+          if (individual.status != detail::LpStatus::Optimal || individual.primal.size() != count) {
             failure("lexicographic bottleneck identification LP failed");
           }
           const double floor = normalized_z;
           const double tolerance = 1.0e-8 * std::max(1.0e-12, std::abs(floor));
-          if (individual.primal[i] <= floor + tolerance) freeze_indices.push_back(i);
+          if (individual.primal[i] <= floor + tolerance) scratch.freeze_indices.push_back(i);
         }
       }
-      if (freeze_indices.empty()) failure("lexicographic max-min found no forced activity");
+      if (scratch.freeze_indices.empty()) failure("lexicographic max-min found no forced activity");
       if (z == 0.0) {
         bool removed = false;
-        for (std::size_t i : freeze_indices) {
-          if (!excluded[i]) {
-            excluded[i] = true;
-            frozen[i] = true;
-            solved[i] = 0.0;
+        for (std::size_t i : scratch.freeze_indices) {
+          if (!scratch.excluded[i]) {
+            scratch.excluded[i] = true;
+            scratch.frozen[i] = true;
+            scratch.solved[i] = 0.0;
             removed = true;
           }
         }
@@ -2081,21 +2346,21 @@ void Runtime::allocate(bool redundant_initial_boundaries,
         restart_with_fewer_activities = true;
         break;
       }
-      for (std::size_t i : freeze_indices) {
-        frozen[i] = true;
-        solved[i] = normalized_z;
+      for (std::size_t i : scratch.freeze_indices) {
+        scratch.frozen[i] = true;
+        scratch.solved[i] = normalized_z;
       }
     }
     if (restart_with_fewer_activities) continue;
 
     for (std::size_t i = 0; i < count; ++i) {
-      if (excluded[i]) {
-        publish(refs[i], 0.0, 0.0);
+      if (scratch.excluded[i]) {
+        publish(scratch.refs[i], 0.0, 0.0);
         continue;
       }
-      if (!std::isfinite(solved[i]) || solved[i] < -1.0e-10) failure("nonfinite lexicographic solution");
-      publish(refs[i], std::max(0.0, solved[i] * variable_scale[i]),
-              refs[i].alpha);
+      if (!std::isfinite(scratch.solved[i]) || scratch.solved[i] < -1.0e-10) failure("nonfinite lexicographic solution");
+      publish(scratch.refs[i], std::max(0.0, scratch.solved[i] * scratch.variable_scale[i]),
+              scratch.refs[i].alpha);
     }
     // A binary64 LP rate can round a physical or tangent inequality upward
     // by an ulp. Long analytic intervals must not integrate that infeasible
@@ -2105,10 +2370,11 @@ void Runtime::allocate(bool redundant_initial_boundaries,
       bool certified=false;
       for(std::size_t pass=0;pass<=count;++pass) {
         bool changed=false;
-        for(const auto& row:base) {
+        for(std::size_t r=0;r<scratch.base_count;++r) {
+          const detail::RatioRow& row=scratch.base[r];
           long double used=0,largest=0;std::size_t chosen=count;
           for(std::size_t i=0;i<count;++i) {
-            const long double contribution=static_cast<long double>(row.a[i])*refs[i].live->rate;
+            const long double contribution=static_cast<long double>(row.a[i])*scratch.refs[i].live->rate;
             used+=contribution;
             if(row.a[i]>0 && contribution>largest) {largest=contribution;chosen=i;}
           }
@@ -2116,12 +2382,12 @@ void Runtime::allocate(bool redundant_initial_boundaries,
           if(excess<=0)continue;
           if(chosen==count || excess>1e-8L*std::max(1.0L,largest))
             failure("curved tangent rate is not feasible within LP precision");
-          const long double bound=static_cast<long double>(refs[chosen].live->rate)-excess/row.a[chosen];
+          const long double bound=static_cast<long double>(scratch.refs[chosen].live->rate)-excess/row.a[chosen];
           if(!(bound>0))failure("curved tangent rate has no positive rounded solution");
           double rounded=static_cast<double>(bound);
           if(static_cast<long double>(rounded)>bound)rounded=std::nextafter(rounded,0.0);
-          if(rounded>=refs[chosen].live->rate)rounded=std::nextafter(refs[chosen].live->rate,0.0);
-          publish(refs[chosen],rounded,refs[chosen].alpha);
+          if(rounded>=scratch.refs[chosen].live->rate)rounded=std::nextafter(scratch.refs[chosen].live->rate,0.0);
+          publish(scratch.refs[chosen],rounded,scratch.refs[chosen].alpha);
           ++last_arbitration_.tangent_rounds;
           changed=true;
         }
@@ -2132,9 +2398,43 @@ void Runtime::allocate(bool redundant_initial_boundaries,
     return;
   }
   for (std::size_t i = 0; i < count; ++i) {
-    publish(refs[i], 0.0, 0.0);
+    publish(scratch.refs[i], 0.0, 0.0);
   }
 }
+
+namespace {
+
+// Structured dedup for integrate's per-row owner-sharing check. Owner::key()
+// is injective over the fairness tuple (node_id, execution_id, generation) —
+// std::to_string of a uint64 emits decimal digits only, so the ':'-joined
+// key cannot collide across distinct tuples — therefore "a std::set of the
+// key strings reaches two entries" is exactly "some observed owner's tuple
+// differs from the first recorded one". Keeping the tuple directly removes
+// the per-activity string build and red-black tree allocation while the
+// boolean verdict stays bit-identical by construction. request_id stays out
+// because it is tracing metadata that must not mint extra owner weight.
+struct RowOwnerSharing {
+  bool has_owner = false;
+  bool shared = false;
+  std::uint64_t node_id = 0;
+  std::uint64_t execution_id = 0;
+  std::uint64_t generation = 0;
+
+  void observe(const Owner& owner) {
+    if (!has_owner) {
+      node_id = owner.node_id;
+      execution_id = owner.execution_id;
+      generation = owner.generation;
+      has_owner = true;
+      return;
+    }
+    if (shared) return;
+    shared = owner.node_id != node_id || owner.execution_id != execution_id ||
+             owner.generation != generation;
+  }
+};
+
+}  // namespace
 
 void Runtime::integrate(long double delta_ns) {
   if (delta_ns <= 0.0L) return;
@@ -2152,7 +2452,7 @@ void Runtime::integrate(long double delta_ns) {
   if (next_origin == std::numeric_limits<std::uint64_t>::max() &&
       next_fraction > 0.0L)
     throw std::overflow_error("overflow: fractional event exceeds uint64 nanoseconds");
-  std::array<std::set<std::string>, 2> row_owners;
+  std::array<RowOwnerSharing, 2> row_owners;
   bool compute_busy = false;
   bool hbm_busy = false;
   bool any_row_shared = false;
@@ -2365,11 +2665,11 @@ void Runtime::integrate(long double delta_ns) {
         if (resource == HBM0) {
           hbm_busy = true;
           row_busy[0] = true;
-          row_owners[0].insert(execution.owner.key());
+          row_owners[0].observe(execution.owner);
         } else if (resource == HBM1) {
           hbm_busy = true;
           row_busy[1] = true;
-          row_owners[1].insert(execution.owner.key());
+          row_owners[1].observe(execution.owner);
         }
       }
     }
@@ -2382,7 +2682,7 @@ void Runtime::integrate(long double delta_ns) {
   if (hbm_busy) hbm_busy_ns_.add(delta_ns);
   for (std::size_t row = 0; row < 2; ++row) {
     if (row_busy[row]) row_busy_ns_[row].add(delta_ns);
-    if (row_owners[row].size() >= 2) {
+    if (row_owners[row].shared) {
       any_row_shared = true;
       row_shared_ns_[row] += delta_ns;
     }
@@ -3136,6 +3436,49 @@ std::optional<std::uint64_t> Runtime::terminal_finish_ns(
   }
   if (!found->second.terminal) return std::nullopt;
   return found->second.finish_ns;
+}
+
+std::optional<RepeatObservation> Runtime::repeat_observation(
+    std::uint64_t handle) const {
+  const auto found = executions_.find(handle);
+  if (found == executions_.end()) return std::nullopt;
+  const Execution& execution = found->second;
+  return RepeatObservation{execution.round, execution.ready_ns};
+}
+
+std::optional<TerminalSummary> Runtime::terminal_summary(
+    std::uint64_t handle) const {
+  const auto found = executions_.find(handle);
+  if (found == executions_.end()) {
+    throw std::out_of_range("stale_handle: unknown execution handle");
+  }
+  const Execution& execution = found->second;
+  if (!execution.terminal) return std::nullopt;
+  TerminalSummary summary;
+  summary.terminal = true;
+  summary.cancelled = execution.cancelled;
+  summary.issue_ns = execution.issue_ns;
+  summary.finish_ns = execution.finish_ns;
+  summary.elapsed_ns = execution.finish_ns - execution.issue_ns;
+  summary.int4_served = static_cast<double>(execution.int4_served);
+  summary.vec_served = static_cast<double>(execution.vec_served);
+  long double read_bytes = 0.0L;
+  long double write_bytes = 0.0L;
+  for (std::size_t row = 0; row < 2; ++row) {
+    for (std::size_t kind = 0; kind < 2; ++kind) {
+      const long double served = execution.hbm_served[row][kind];
+      if (!std::isfinite(served) || served < 0.0L) {
+        throw std::runtime_error(
+            "coarse_die_v2 HBM served byte value is invalid");
+      }
+      summary.hbm_served[row][kind] = static_cast<double>(served);
+      if (kind == 0) read_bytes += served;
+      else write_bytes += served;
+    }
+  }
+  summary.hbm_read_bytes = static_cast<double>(read_bytes);
+  summary.hbm_write_bytes = static_cast<double>(write_bytes);
+  return summary;
 }
 
 nlohmann::json Runtime::counters() const {
@@ -4076,7 +4419,7 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
                         canonical_used, canonical_correction);
       }
       const long double canonical_total = canonical_used + canonical_correction;
-      const long double physical_tolerance = static_cast<long double>(kLpEpsilon) *
+      const long double physical_tolerance = static_cast<long double>(detail::kLpEpsilon) *
           std::max(std::abs(static_cast<long double>(runtime->capacities_[resource])),
                    std::abs(canonical_total));
       if (used + correction > canonical_total + physical_tolerance) {
@@ -4096,7 +4439,7 @@ std::unique_ptr<Runtime> Runtime::import_snapshot(const Hardware& hardware,
       const long double canonical_private =
           static_cast<long double>(live->definition.private_time_s) *
           saved->canonical_rate;
-      const long double private_tolerance = static_cast<long double>(kLpEpsilon) *
+      const long double private_tolerance = static_cast<long double>(detail::kLpEpsilon) *
           std::max(1.0L, std::abs(canonical_private));
       if (live->definition.private_time_s > 0.0 &&
           static_cast<long double>(live->definition.private_time_s) * live->rate >
@@ -4213,14 +4556,15 @@ struct StandaloneEstimateRun {
 // makes the per-round contribution unobservable and declines the form.
 bool repeat_closed_form_applicable(const Plan& plan) {
   if (!plan.repeat || plan.repeat->count < 8) return false;
-  const nlohmann::json payload = plan_to_json(plan);
-  const auto schema = payload.find("schema");
-  const auto repeat = payload.find("repeat");
-  if (schema == payload.end() || repeat == payload.end() ||
-      *schema != "coarse_die_plan_v5" || !repeat->is_object() ||
-      repeat->size() != 2 || !repeat->contains("count") ||
-      !repeat->contains("seam_delay_ns"))
-    return false;
+  // Typed eligibility (roofline stage 3, WP3.2): the previous implementation
+  // serialized the whole canonical payload via plan_to_json only to read back
+  // two facts that make_payload derives deterministically from the typed Plan.
+  // A declared repeat with count >= 2 always emits schema
+  // "coarse_die_plan_v5" and exactly the two-key repeat object
+  // {count, seam_delay_ns}; the guard above already implies both facts, so
+  // the payload round-trip (and its full-payload hash) decided nothing here.
+  // Structural validation and fingerprint-consistency checks stay on the
+  // public plan_to_json/plan_from_json path and on the sealed submit path.
   return true;
 }
 
@@ -4249,17 +4593,16 @@ std::optional<std::uint64_t> closed_form_repeat_finish_ns(
     if (++events > kMaxAdvanceEvents) {
       throw std::runtime_error("numerical_failure: estimate_alone exceeded event budget");
     }
-    const auto snapshot = runtime.export_snapshot();
-    const auto& executions = snapshot.at("executions");
-    if (!executions.is_array()) {
-      advanced_events = events;
-      return std::nullopt;
-    }
-    for (const auto& entry : executions) {
-      if (entry.value("handle", std::uint64_t{0}) != handle) continue;
-      record(entry.value("round", std::uint64_t{0}),
-             entry.value("ready_ns", std::uint64_t{0}));
-      break;
+    // Typed observation (roofline stage 2, WP1): the same two raw fields the
+    // old per-event export_snapshot() scan extracted, without building any
+    // JSON. The old scan's two structural outcomes stay equivalent: a live
+    // executions array always exists (export_snapshot builds it as an array,
+    // so its !is_array early return was unreachable), and a missing handle
+    // records nothing here exactly as the array scan skipped it — never a
+    // 0/0 record. record() and its call point are unchanged.
+    if (const auto observation = runtime.repeat_observation(handle)) {
+      record(static_cast<std::uint64_t>(observation->round),
+             observation->ready_ns);
     }
   }
   advanced_events = events;

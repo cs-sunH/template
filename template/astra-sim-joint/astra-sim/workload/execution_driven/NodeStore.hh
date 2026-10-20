@@ -452,6 +452,15 @@ class NodeStore {
     std::vector<uint64_t> gc_fifo_;
     size_t gc_fifo_head_ = 0;
     size_t gc_erased_count_ = 0;
+    // 2026-10-19 retired-identity index: the (request_id, stage, generation)
+    // of every node erased by collect_garbage(), keyed by the never-reused
+    // store id. meta_for falls back to it so the work-ledger identity
+    // enrichment still resolves a collected node that a later batch
+    // references as a commit parent (same survival the committer's affine
+    // map gives the store-id translation). Unbounded by design -- it is the
+    // permanent identity record for the run's ledger audit surface; growth
+    // is O(total committed nodes) with three small strings per entry.
+    std::unordered_map<uint64_t, NodeStoreMeta> retired_meta_;
 };
 
 /// Online-mode GraphSource over a NodeStore. Yields nodes only after a

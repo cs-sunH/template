@@ -6937,7 +6937,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             instances_view = {}
             for state in self.instances:
                 instances_view[state.index] = {
-                    # 式(19) 分量分明容量账：(C, W, O, Z) 逐 rank。
+                    # 式(19) 分量分明容量账：(C, W, O, Z, X) 逐 rank
+                    # （X = 外部 workspace，C++ 后端自留工作区）。
                     "capacity_ledger_by_rank": [
                         list(entry) for entry
                         in kv_manager.capacity_ledger_by_tp_rank(
@@ -9242,10 +9243,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         D11/D17 修复轮二（2026-09-27）：D 边界决策行补容量审计字段
         ``capacity_summary_view``（与 P 行 joint_admission 同构造
         ``_capacity_summary_audit_entry``——冻结桶结构逐位同构）与
-        ``capacity_ledger_by_tp_rank``（逐实例 C/W/O/Z 台账 + 派生
-        F = C−W−O−Z；P 行未携带台账，此处为 D 行新增键）——此前仅 P
-        行携带容量摘要，D 阶段容量判断仅凭日志不可重算。D 行在边界
-        提交后发射：两键取 emit 时点 kv_manager 快照（逐实例）。"""
+        ``capacity_ledger_by_tp_rank``（逐实例 C/W/O/Z/X 台账 + 派生
+        F = C−W−O−Z−X；X = 外部 workspace；P 行未携带台账，此处为
+        D 行新增键）——此前仅 P 行携带容量摘要，D 阶段容量判断仅凭
+        日志不可重算。D 行在边界提交后发射：两键取 emit 时点
+        kv_manager 快照（逐实例）。"""
         self._batch["assignments"].append({
             "request_id": runtime.request_id,
             "prefill_instance_index": runtime.prefill_instance_index,
@@ -9256,8 +9258,8 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # ---- D11/D17 修复轮二：D 边界时刻容量审计块（与 P 行
         # _joint_decision_audit_fields 的 capacity_summary_view 同一
         # 构造器/同一冻结桶 schema；台账键为 D 行新增——逐实例
-        # (C, W, O, Z) 分量 + F 派生，消费方与 _space_ready_ns_estimate
-        # 的式 19 交叉核账同口径）。----
+        # (C, W, O, Z, X) 分量 + F 派生（X = 外部 workspace），消费方
+        # 与 _space_ready_ns_estimate 的式 19 交叉核账同口径）。----
         from types import SimpleNamespace as _DRowNamespace
         _capacity_snapshot = self.kv_manager.capacity_summary_snapshot()
         capacity_summary_view = []
@@ -9276,11 +9278,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             capacity_ledger_by_tp_rank.append({
                 "instance_index": state.index,
                 "ledger_by_tp_rank": [
-                    [int(c), int(w), int(o), int(z)]
-                    for c, w, o, z in ledger],
+                    [int(c), int(w), int(o), int(z), int(x)]
+                    for c, w, o, z, x in ledger],
                 "free_by_tp_rank": [
-                    int(c) - int(w) - int(o) - int(z)
-                    for c, w, o, z in ledger],
+                    int(c) - int(w) - int(o) - int(z) - int(x)
+                    for c, w, o, z, x in ledger],
             })
         # 同状态 probe 强制钩子披露键（仅武装时在位；off 时行形态与
         # 既有钉测逐位一致——键缺席）。

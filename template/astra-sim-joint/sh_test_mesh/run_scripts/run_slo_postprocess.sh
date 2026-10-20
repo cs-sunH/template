@@ -78,10 +78,13 @@
 # 如 "16G"/"8G"/字节数），memory.swap.max=0 成对设置（本机有 swap：只限
 # max 会退化成换页而不杀进程）。语义：超限只 OOM-kill 本步（driver 非
 # 零退出 → 走既有 FAIL 标记+warn 路径，不拖垮整机/不推翻仿真结果）。
-# R1（2026-10-19 roofline 批次整改）：本脚本已处于外层 wscguard 受控作业内
-# （环境标记 WSCGUARD_JOB_NAME/WSCGUARD_SCOPE_PATH 在场，或 /proc/self/cgroup
-# 路径含 wscguard-）时不另建任何 scope/子 cgroup，driver 直接继承外层隔离
-# （限额/监控/终止同源）；下列自建护栏路径仅独立使用场景生效。
+# R1+§8.2A（2026-10-19 roofline 批次整改及审查收口）：本脚本已处于外层
+# wscguard 受控作业内时（以 /proc/self/cgroup 实际路径核验：属于目标
+# wscguard-<name>.scope 或其受控子树，且该 scope memory.max 为有限数值、
+# memory.swap.max=0；环境标记 WSCGUARD_JOB_NAME/WSCGUARD_SCOPE_PATH 仅用于
+# 推导目标 scope 并交叉核对，标记与实际状态冲突时拒绝发射 driver）不另建
+# 任何 scope/子 cgroup，driver 直接继承外层隔离（限额/监控/终止同源）；
+# 下列自建护栏路径仅独立使用场景生效。
 # 主路径 systemd-run --user --scope（无 polkit、任意 shell 位置可用、
 # scope 退出自动析构）；用户管理器不可达时降级为手工委派 cgroup
 # （user@<uid>.service 下建 slo-mem-guard.<pid>，需调用 shell 在用户
@@ -218,37 +221,105 @@ if [ -z "${XDG_RUNTIME_DIR:-}" ] && [ -S "/run/user/$(id -u)/bus" ]; then
   export XDG_RUNTIME_DIR
 fi
 
-# R1 整改（2026-10-19 roofline 批次，审查意见 §3）：外层 wscguard 作业内
-# 不再另建独立 user scope——user manager scope 不在外层 system.slice 作业
-# cgroup 之内，外层限额/主动终止/OOM 差值/清场确认均不覆盖（证据：
-# runs/guard/g2c-first2s-candidate 的 payload_stderr.log）。双条件检测，
-# 任一命中即视为已在受控 guard 内（行为分支，不是用户开关）：
-#   (a) 环境标记 WSCGUARD_JOB_NAME / WSCGUARD_SCOPE_PATH 在场（新版
-#       run_guard.py 向 payload 导出）；
-#   (b) /proc/self/cgroup 的 cgroup v2 路径含 wscguard-（兼容旧版 guard
-#       与任何 systemd scope 名）。
-# 命中后 GUARD_MODE=guard：不创建任何新 scope/子 cgroup，driver 直接在
-# 当前 cgroup 内运行，继承外层 guard 的限额、监控与终止；未命中时独立
-# 使用场景既有合同不变（原 systemd/cgroup/none 三模式照旧）。
+# R1+§8.2A 整改（2026-10-19 roofline 批次，审查意见 §3→§8.2A 收口）：外层
+# wscguard 作业内不再另建独立 user scope——user manager scope 不在外层
+# system.slice 作业 cgroup 之内，外层限额/主动终止/OOM 差值/清场确认均
+# 不覆盖（证据：runs/guard/g2c-first2s-candidate 的 payload_stderr.log）。
+# guard 身份判定实际状态优先，环境标记不能单独作为受保护证明：
+#   1. 读 /proc/self/cgroup 的 0:: 行取当前真实路径（规范化后比较）；
+#   2. WSCGUARD_JOB_NAME / WSCGUARD_SCOPE_PATH 只用于推导目标 scope 并
+#      交叉核对（SCOPE_PATH 优先；仅 JOB_NAME 在场时按
+#      system.slice/wscguard-<name>.scope 推导；双标记同给而不一致=冲突）；
+#      路径比对经 wscguard_norm_cg 统一规范化（前导 0::、重复/缺失前导
+#      斜杠、/sys/fs/cgroup 前缀 vs cgroup 相对路径）后再比；
+#   3. guard 模式成立的必要条件：真实路径与目标 scope 相等或属于其受控
+#      子树，且目标 scope 的 memory.max 存在且为有限数值（非 max）、
+#      memory.swap.max=0——wscguard 命名但无限额/不可读的 scope 不予采信；
+#   4. 冲突处置 fail-closed：标记声称 guard 而真实路径不属于该 scope、
+#      或目标 scope 无限额/不可读、或无标记但路径在 wscguard scope 内而
+#      其无限额 → 拒绝发射 driver（明确报错退出，不静默降级为无护栏
+#      运行，也不误入 guard 模式）；标记全无且真实路径不在 wscguard 内
+#      → 独立使用场景既有合同不变（原 systemd/cgroup/none 三模式照旧）。
+wscguard_norm_cg() {
+  # cgroup 路径规范化：剥 0:: 前导与 /sys/fs/cgroup 前缀、合并重复斜杠、
+  # 统一前导斜杠、去尾斜杠；根与空输入归一为空串。
+  local p="$1"
+  case "$p" in
+    0::*) p="${p#0::}" ;;
+  esac
+  case "$p" in
+    /sys/fs/cgroup) p="/" ;;
+    /sys/fs/cgroup/*) p="${p#/sys/fs/cgroup}" ;;
+  esac
+  p=$(printf '%s' "$p" | sed -e 's#//*#/#g')
+  p="/${p#/}"
+  p="${p%/}"
+  printf '%s' "$p"
+}
+wscguard_scope_prefix() {
+  # 从已规范化路径取第一个 wscguard-*.scope 组件及其前缀（受控子树根）；
+  # 不含 wscguard 组件 → 返回 1 且无输出。
+  local rest="${1#/}" out="" seg
+  while [ -n "$rest" ]; do
+    seg="${rest%%/*}"
+    if [ "$seg" = "$rest" ]; then rest=""; else rest="${rest#*/}"; fi
+    [ -z "$seg" ] && continue
+    out="${out}/${seg}"
+    case "$seg" in
+      wscguard-*.scope) printf '%s' "$out"; return 0 ;;
+    esac
+  done
+  return 1
+}
+wscguard_refuse() {
+  # §8.2A fail-closed：guard 身份冲突/目标 scope 不合格 → 拒绝发射
+  # driver（不静默降级为无护栏运行，也不误入 guard 模式）。退出码 2 与
+  # 入口值校验同为工具族 fail-closed 契约码。
+  warn "FAIL: guard identity conflict - $* - refusing to launch driver (fail-closed)"
+  exit 2
+}
 GUARD_OUTER_PATH=""
 GUARD_SELF_REL=$(grep '^0::' /proc/self/cgroup 2>/dev/null | head -1 | cut -d: -f3)
-if [ -n "${WSCGUARD_JOB_NAME:-}" ] || [ -n "${WSCGUARD_SCOPE_PATH:-}" ] \
-   || [[ "${GUARD_SELF_REL}" == *wscguard-* ]]; then
-  GUARD_MODE=guard
-  # 遥测路径：优先环境标记给的 scope 路径（须为 /sys/fs/cgroup/ 下且可读
-  # 才用），否则按 /proc/self/cgroup 推导；都取不到则留空——只影响本层
-  # [slo-sample] 采样与收尾回显，外层 run_guard.py 的监控与判决始终权威。
-  case "${WSCGUARD_SCOPE_PATH:-}" in
-    /sys/fs/cgroup/*)
-      [ -r "${WSCGUARD_SCOPE_PATH}/memory.current" ] \
-        && GUARD_OUTER_PATH="${WSCGUARD_SCOPE_PATH}" ;;
-  esac
-  if [ -z "${GUARD_OUTER_PATH}" ] && [ -n "${GUARD_SELF_REL}" ] \
-     && [ -r "/sys/fs/cgroup${GUARD_SELF_REL}/memory.current" ]; then
-    GUARD_OUTER_PATH="/sys/fs/cgroup${GUARD_SELF_REL}"
+GUARD_SELF_NORM=$(wscguard_norm_cg "${GUARD_SELF_REL}")
+GUARD_CLAIM_NORM=""
+if [ -n "${WSCGUARD_SCOPE_PATH:-}" ]; then
+  GUARD_CLAIM_NORM=$(wscguard_norm_cg "${WSCGUARD_SCOPE_PATH}")
+elif [ -n "${WSCGUARD_JOB_NAME:-}" ]; then
+  GUARD_CLAIM_NORM="/system.slice/wscguard-${WSCGUARD_JOB_NAME}.scope"
+fi
+GUARD_SELF_SCOPE=$(wscguard_scope_prefix "${GUARD_SELF_NORM}" || true)
+GUARD_TARGET_NORM=""
+if [ -n "${GUARD_CLAIM_NORM}" ]; then
+  GUARD_TARGET_NORM="${GUARD_CLAIM_NORM}"
+  if [ -n "${WSCGUARD_SCOPE_PATH:-}" ] && [ -n "${WSCGUARD_JOB_NAME:-}" ] \
+     && [ "${GUARD_CLAIM_NORM##*/}" != "wscguard-${WSCGUARD_JOB_NAME}.scope" ]; then
+    wscguard_refuse "双标记不一致：JOB_NAME=${WSCGUARD_JOB_NAME} 推导叶组件 wscguard-${WSCGUARD_JOB_NAME}.scope（父链按 SCOPE_PATH 实际值归一，兼容 system.slice 与 user-scope 两模式），而 SCOPE_PATH 归一为 ${GUARD_CLAIM_NORM}"
   fi
+  case "${GUARD_TARGET_NORM##*/}" in
+    wscguard-*.scope) ;;
+    *) wscguard_refuse "标记声称的目标 ${GUARD_TARGET_NORM} 不是 wscguard-<name>.scope 形状的 scope" ;;
+  esac
+  case "${GUARD_SELF_NORM}" in
+    "${GUARD_TARGET_NORM}"|"${GUARD_TARGET_NORM}"/*) ;;
+    *) wscguard_refuse "环境标记声称 guard scope ${GUARD_TARGET_NORM}，但本进程真实 cgroup 为 ${GUARD_SELF_NORM:-<unknown>}（不属于该 scope 或其受控子树）——环境标记不能单独作为受保护证明" ;;
+  esac
+elif [ -n "${GUARD_SELF_SCOPE}" ]; then
+  GUARD_TARGET_NORM="${GUARD_SELF_SCOPE}"
+fi
+if [ -n "${GUARD_TARGET_NORM}" ]; then
+  GUARD_TARGET_FS="/sys/fs/cgroup${GUARD_TARGET_NORM}"
+  GUARD_TG_MAX=$(cat "${GUARD_TARGET_FS}/memory.max" 2>/dev/null) || GUARD_TG_MAX=""
+  GUARD_TG_SWAP=$(cat "${GUARD_TARGET_FS}/memory.swap.max" 2>/dev/null) || GUARD_TG_SWAP=""
+  if ! [[ "${GUARD_TG_MAX}" =~ ^[0-9]+$ ]]; then
+    wscguard_refuse "目标 scope ${GUARD_TARGET_NORM} 的 memory.max='${GUARD_TG_MAX:-<不可读>}' 非有限数值——wscguard 命名但无限额的 scope 不予采信"
+  fi
+  if [ "${GUARD_TG_SWAP}" != "0" ]; then
+    wscguard_refuse "目标 scope ${GUARD_TARGET_NORM} 的 memory.swap.max='${GUARD_TG_SWAP:-<不可读>}' 非 0（超限只换页不终止，保护不成立）"
+  fi
+  GUARD_MODE=guard
+  GUARD_OUTER_PATH="${GUARD_TARGET_FS}"
   GUARD_TELE_PATH="${GUARD_OUTER_PATH}"
-  glog "running inside guard scope ${GUARD_OUTER_PATH:-${GUARD_SELF_REL:-unknown}}, inheriting outer isolation (no new scope)"
+  glog "guard identity verified against real cgroup ${GUARD_SELF_NORM}: within ${GUARD_TARGET_NORM} (memory.max=${GUARD_TG_MAX}, swap.max=0), inheriting outer isolation (no new scope)"
 elif command -v systemd-run >/dev/null 2>&1 \
    && systemd-run --user --scope --collect -p MemoryMax="${GUARD_MEM_LIMIT}" \
         -p MemorySwapMax=0 -- true >/dev/null 2>&1; then

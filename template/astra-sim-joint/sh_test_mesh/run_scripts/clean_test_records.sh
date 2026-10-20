@@ -1,9 +1,9 @@
 #!/bin/bash
 # clean_test_records.sh —— 一键清除本仓全部仿真测试记录，还原裸仓库状态
 # 用法: bash sh_test_mesh/run_scripts/clean_test_records.sh [--full]
-#   默认: 删除全部运行产物/物化数据/缓存，git 恢复 trace_config.csv 原始字节
+#   默认: 删除全部运行产物/物化数据/缓存，trace_config.csv 仅归一指针行（不整文件回滚）
 #   --full: 额外删除 build*/ 构建目录（下次需重新编译）
-# 边界: 绝不触碰 git 跟踪文件（除用 git checkout 恢复 trace_config.csv）；
+# 边界: 绝不触碰 git 跟踪文件（trace_config.csv 仅归一指针行第 3 列，不整文件回滚）；
 #       traces/ 仅保留 *.py 物化器脚本
 set -u
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -41,17 +41,79 @@ if [ -d "$WL/traces" ]; then
   find "$WL/traces" -mindepth 1 -type d -empty -delete 2>/dev/null
   echo "[clean] traces/ 数据件已清除（仅保留 *.py 物化器脚本）"
 fi
-# 4. trace_config.csv 恢复 git 原始字节（若被仿真流程改指物化输入）
+# 4. trace_config.csv 指针行归一（若被仿真流程改指物化输入）
 if git rev-parse --git-dir >/dev/null 2>&1; then
-  if ! git diff --quiet -- "$WL/trace_config.csv" 2>/dev/null; then
-    # L21(2026-09-29 审查修复):git checkout HEAD -- 从 HEAD 提交恢复;
-    # 裸 `git checkout --` 从 index 恢复——若 trace_config.csv 曾被 staged,
-    # staged 差异不会被还原,且 HEAD 与 index 不一致时恢复的字节本身即错。
-    git checkout HEAD -- "$WL/trace_config.csv" && echo "[clean] trace_config.csv 已恢复 git 原始字节"
-  echo "[clean] 提示: trace_config 已恢复占位态;重跑前需运行 traces/ 物化器脚本重新物化并将 request_queue_csv 指到物化产物（占位/缺失将 fail-closed）"
+  # S-1 语义对齐（2026-10-20，对齐 face 仓变体）：裸仓定义第 1 条只要求
+  # request_queue_csv 行指向占位串——本步只把该行第 3 列归一回 HEAD 版
+  # 指针行的占位文件名（该行其余列与文件其余字节一律不动），不再整文件
+  # git checkout HEAD：那会把作者未提交的非指针类修改（如容量默认档
+  # validation-coarse-144g 的出厂翻转值）一并静默回滚（2026-10-20 实录：
+  # 本脚本旧语义在 roofline 第三阶段收尾时误回滚三仓未提交默认档，经
+  # 9d1767cc 补齐）。归一后该文件相对 HEAD 若仍有其余内容 diff，大声
+  # WARN 列出并继续（由人提交或处置，绝不代为回滚、不以失败退出）；
+  # 指针行本身无法归一（HEAD 无指针行/文件缺失/改写失败）仍显式失败
+  # 退出——指针未还原时"裸仓还原"承诺已被破坏，静默继续会掩盖它。
+  # 已登记边界（真仓格式不可触发，接受不加固）：归一判定只读首个指针行
+  # （改写时 awk 会替换全部指针行；重复指针行的漂移可逃过判定、仅经
+  # WARN 可见）；awk 重写给末行无换行的文件补一个换行（经 WARN 如实
+  # 列出）。
+  TC="$WL/trace_config.csv"
+  HEAD_PTR=$(git show "HEAD:./$TC" 2>/dev/null | grep -m1 '^config,request_queue_csv,') || true
+  WORK_PTR=$(grep -m1 '^config,request_queue_csv,' "$TC" 2>/dev/null) || true
+  if [ ! -f "$TC" ] || [ -z "${WORK_PTR}" ]; then
+    echo "[clean] FAIL: $TC 缺失或无 request_queue_csv 行，指针无法归一，裸仓状态不完整（请手工 git 恢复该文件后重跑）" >&2
+    exit 1
+  fi
+  if [ -z "${HEAD_PTR}" ]; then
+    echo "[clean] FAIL: HEAD 版 $TC 无 request_queue_csv 行，无法归一指针，裸仓状态不完整" >&2
+    exit 1
+  fi
+  # 占位文件名 = HEAD 指针行第 3 列；含逗号/引号即超出"逐逗号定位第 3
+  # 列"的解析模型，fail-closed 交人工。
+  HEAD_VAL=$(printf '%s\n' "${HEAD_PTR}" | cut -d, -f3)
+  case "${HEAD_VAL}" in
+    ""|*","*|*'"'*)
+      echo "[clean] FAIL: HEAD 指针行第 3 列非普通文件名（'${HEAD_VAL}'），拒绝盲改，请人工核对" >&2
+      exit 1
+      ;;
+  esac
+  if [ "$(printf '%s\n' "${WORK_PTR}" | cut -d, -f3)" != "${HEAD_VAL}" ]; then
+    TMP="${TC}.normalize.$$.tmp"
+    if REPL="${HEAD_VAL}" FULLPTR="${HEAD_PTR}" awk '
+      { if ($0 ~ /^config,request_queue_csv,/) {
+          # 只替换第 3 个逗号字段（指针文件名），其余列原样保留。
+          n = 0; p2 = 0; p3 = 0
+          for (i = 1; i <= length($0); i++) {
+            if (substr($0, i, 1) == ",") {
+              n++
+              if (n == 2) p2 = i
+              if (n == 3) { p3 = i; break }
+            }
+          }
+          if (p3 == 0) print ENVIRON["FULLPTR"]   # 截断行（不足 3 列）整行回退 HEAD 指针行
+          else print substr($0, 1, p2) ENVIRON["REPL"] substr($0, p3)
+        } else print }
+    ' "$TC" > "$TMP" && chmod --reference="$TC" "$TMP" 2>/dev/null; then
+      if mv -f "$TMP" "$TC"; then
+        echo "[clean] trace_config.csv request_queue_csv 行已归一回占位指针（仅该行第 3 列，其余内容未触碰）"
+        echo "[clean] 提示: 重跑前需运行 traces/ 物化器脚本重新物化并将 request_queue_csv 指到物化产物（占位/缺失将 fail-closed）"
+      else
+        rm -f "$TMP"
+        echo "[clean] FAIL: 指针行归一结果无法落盘（mv 失败），裸仓状态不完整" >&2
+        exit 1
+      fi
+    else
+      rm -f "$TMP"
+      echo "[clean] FAIL: 指针行归一改写失败，裸仓状态不完整" >&2
+      exit 1
+    fi
+  fi
+  if ! git diff --quiet HEAD -- "$TC" 2>/dev/null; then
+    echo "[clean][WARN] trace_config.csv 相对 HEAD 仍有未提交差异（本脚本只归一了指针行、未回滚任何内容；差异可能为既有未提交修改，也可能含脚本无法安全归一的畸形指针行，请自行核对后提交或处置）：" >&2
+    git diff HEAD -- "$TC" >&2
   fi
 else
-  echo "[clean][warn] 非 git 环境，跳过 trace_config 恢复（请手动核对 trace_config.csv 的 request_queue_csv 指向 placeholder）"
+  echo "[clean][warn] 非 git 环境，跳过 trace_config 指针归一（请手动核对 trace_config.csv 的 request_queue_csv 指向 placeholder）"
 fi
 # 5. 缓存
 find . -path ./build -prune -o -type d \( -name "__pycache__" -o -name ".pytest_cache" \) -print 2>/dev/null | while read -r d; do rm -rf "$d"; done

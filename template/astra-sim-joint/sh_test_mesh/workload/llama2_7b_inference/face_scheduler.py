@@ -2916,12 +2916,25 @@ class KVCacheManager:
     def capacity_ledger_by_tp_rank(
         self,
         instance_index: int,
-    ) -> tuple[tuple[int, int, int, int], ...]:
-        """逐 rank 容量账 (C, W, O, Z)——分量分明（式 19）。
+    ) -> tuple[tuple[int, int, int, int, int], ...]:
+        """逐 rank 容量账 (C, W, O, Z, X)——分量分明（式 19）。
 
-        F = C − W − O − Z 由消费方（``_space_ready_ns_estimate``）对
-        ``hbm_remaining_bytes_by_tp_rank`` 交叉核账（Z→O 转账不变
-        C−W 总量的守恒锚随单测钉）。"""
+        F = C − W − O − Z − X 由消费方（``_space_ready_ns_estimate``）对
+        ``hbm_remaining_bytes_by_tp_rank`` 交叉核账（Z→O 转账不变 C−W 总
+        量的守恒锚随单测钉）。
+
+        X = 外部 workspace（C++ 后端自留工作区，
+        ``_external_workspace_bytes_by_rank``）：coarse_die_v2 die 批次
+        issue 时在 C++ ``WorkspaceAdmission`` 取 immutable-Plan workspace
+        租约、完成时释放，Python 侧经 graph-batch 提交随 workspace_state
+        视图同步（释放以下一次 delta 归零）。X≠0 出现在"另一会话的准入/
+        成本决策恰落在某在飞批次租约窗口内"——多会话负载的跨实例并发
+        即触发；单会话负载按 turn 串行（human/tool 间隔等待），每个决策
+        都落在自身批次完成后，恒 X=0。核账等式必须与决策侧
+        ``_effective_remaining_by_tp_rank`` 同口径（后者同样减 X），否则
+        X≠0 时按差值 X 误报 fail-closed（2026-10-19 修复前形态：
+        astra_compute_20 2s 窗多会话负载在 seq 9 确定性中止，差值精确
+        等于 rank 0 的 X）。"""
         instance = self.topology.instance(instance_index)
         reserved = self._reserved_bytes_by_tp_rank(instance_index)
         return tuple(
@@ -2930,6 +2943,7 @@ class KVCacheManager:
                 int(self._rank_states[rank].model_weight_bytes),
                 int(self._rank_states[rank].kv_cache_bytes),
                 int(reserved[relative]),
+                int(self._external_workspace_bytes_by_rank[rank]),
             )
             for relative, rank in enumerate(instance.ranks)
         )

@@ -254,8 +254,9 @@ D11（2026-09-27，v2.0 §14 式(19)/(20) 分阶段足迹 + 容量驱逐摘要�
 * **不将未来 victim 恢复费用加到当前请求**（§14.4）：只承担当前请
   求真实前驱上的写回与空间等待，无 victim 未来恢复计价项。
 * ``InstanceLoadView.capacity_ledger_by_tp_rank``：逐 rank 容量账
-  (C, W, O, Z)（式 19 分量分明）——在场时对 remaining 交叉核账
-  （F = C−W−O−Z，失配 fail-closed；Z→O 转账不变 C−W 总量）。
+  (C, W, O, Z, X)（式 19 分量分明；X = 外部 workspace，C++ 后端自留
+  工作区）——在场时对 remaining 交叉核账
+  （F = C−W−O−Z−X，失配 fail-closed；Z→O 转账不变 C−W 总量）。
 * ``_ensure_capacity`` 的真实 T/E/victim 决策保留原位、不挪进候选
   循环；摘要只是近似视图，实际提交仍按真实规则重新确认（§14.2）。
   摘要缺席（直接构造的测试夹具/离线视图）退化为
@@ -1516,8 +1517,10 @@ class InstanceLoadView:
     近似消费数据源；None（直接构造的测试夹具/离线视图）退化为
     ``reclaimable_bytes_by_tp_rank`` 单桶合成锚（同一 θ 公式、分桶信
     息退化，生产路径恒注入）。``capacity_ledger_by_tp_rank`` = 逐 rank
-    容量账 (C, W, O, Z)（式 19 分量分明）——在场时对
-    ``hbm_remaining_bytes_by_tp_rank`` 交叉核账（F = C−W−O−Z）。
+    容量账 (C, W, O, Z, X)（式 19 分量分明；X = 外部 workspace，C++
+    后端自留工作区，与 ``hbm_remaining_bytes_by_tp_rank`` 的减项同口径）
+    ——在场时对 ``hbm_remaining_bytes_by_tp_rank`` 交叉核账
+    （F = C−W−O−Z−X）。
     """
 
     instance_index: int
@@ -4359,31 +4362,37 @@ class JointCostModel:
         也不在此产生任何计价项。
 
         容量账核账（式 19）：``load.capacity_ledger_by_tp_rank`` 在场
-        时逐 rank 核对 F = C−W−O−Z == ``hbm_remaining_bytes_by_tp_rank``
+        时逐 rank 核对 F = C−W−O−Z−X == ``hbm_remaining_bytes_by_tp_rank``
         ——分量失配 fail-closed（``JointCostError``），分量分明不是
-        自由文本声明。缺省空 reclaimable/摘要（视图缺省构造/测试夹
-        具不供给）按"零可回收"处理（保守侧，K5 口径保留）。
+        自由文本声明。缺省空 reclaimable/摘要（视图缺省构造/测试夹具
+        不供给）按"零可回收"处理（保守侧，K5 口径保留）。
         """
         free = load.hbm_remaining_bytes_by_tp_rank
         # getattr 容错：鸭子类型视图（测试 SimpleNamespace）缺省无
         # D11 字段——按"未注入"处理（生产 InstanceLoadView 恒有字段）。
         capacity_ledger = getattr(load, "capacity_ledger_by_tp_rank", ())
         if capacity_ledger:
-            # 式(19) 分量分明核账：F = C−W−O−Z == 视图 remaining——
+            # 式(19) 分量分明核账：F = C−W−O−Z−X == 视图 remaining——
             # 分量失配 fail-closed（Z→O 转账不变 C−W，守恒随单测钉）。
+            # X = 外部 workspace（C++ 后端自留工作区），与
+            # _effective_remaining_by_tp_rank 的减项同口径——核账漏减 X
+            # 会在多会话并发（跨实例在飞批次租约窗口内的准入决策）时
+            # 按差值 X 误报 fail-closed（2026-10-19 修复）。
             for rank, ledger in enumerate(load.capacity_ledger_by_tp_rank):
-                if len(ledger) != 4:
+                if len(ledger) != 5:
                     raise JointCostError(
-                        f"capacity ledger entry must be (C, W, O, Z), got "
+                        f"capacity ledger entry must be (C, W, O, Z, X), got "
                         f"{ledger!r} at rank {rank}")
-                capacity, weights, materialized, reserved = (
+                capacity, weights, materialized, reserved, workspace = (
                     int(value) for value in ledger)
                 remaining = (
                     free[rank] if rank < len(free) else 0)
-                if capacity - weights - materialized - reserved != remaining:
+                if (capacity - weights - materialized - reserved - workspace
+                        != remaining):
                     raise JointCostError(
                         f"capacity ledger does not reconcile at rank {rank}: "
-                        f"C-W-O-Z={capacity - weights - materialized - reserved} "
+                        f"C-W-O-Z-X="
+                        f"{capacity - weights - materialized - reserved - workspace} "
                         f"!= hbm_remaining={remaining}")
         gaps = footprint.binding_gap_by_rank(free)
         worst_gap = max(gaps, default=0)

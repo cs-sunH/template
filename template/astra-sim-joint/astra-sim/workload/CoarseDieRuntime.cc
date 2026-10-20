@@ -1,6 +1,8 @@
 #include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "astra-sim/workload/CoarseDiePrediction.hh"
 
+#include "coarse_die/PlanCache.hh"
+
 #include <chrono>
 #include <cstdio>
 #include <stdexcept>
@@ -109,7 +111,19 @@ std::shared_ptr<const coarse_die::Plan> CoarseDieRuntime::compile(
     }
     ++plan_compile_misses_;
     const auto compile_started = std::chrono::steady_clock::now();
-    auto plan = coarse_die::compile(hardware_, task);
+    // Opt-in disk plan cache (roofline stage 3, WP4): consult the shared
+    // disk cache on a memory miss; a hit still goes through the same
+    // normalized-task collision guard and completeness check below as a
+    // freshly compiled plan. Disabled (env unset) = one getenv null check,
+    // no filesystem access, behavior identical to the plain compile.
+    auto plan = coarse_die::try_load_disk_plan(hardware_, task);
+    if (!plan) {
+        plan = coarse_die::compile(hardware_, task);
+        coarse_die::store_disk_plan_for(hardware_, task, *plan);
+    } else if (plan->task.dump() != canonical) {
+        throw std::runtime_error(
+            "numerical_failure: normalized compile cache key collision");
+    }
     plan_compile_ns_total_ +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - compile_started)
@@ -376,40 +390,32 @@ void CoarseDieRuntime::dispatch_terminal() {
     struct ReadyCompletion final {
         uint64_t handle;
         Completion completion;
-        nlohmann::json progress;
+        coarse_die::TerminalSummary summary;
     };
     std::exception_ptr first_exception;
     std::vector<ReadyCompletion> ready;
     ready.reserve(completion_.size());
     for (auto it = completion_.begin(); it != completion_.end();) {
-        // Cheap terminality gate first: while the execution is live the tick
-        // must not pay for a full query_progress JSON serialization. Stale
-        // handles still surface the same out_of_range as query_progress.
-        std::optional<uint64_t> finish_ns;
+        // Single typed terminal lookup (roofline stage 2 WP2): the
+        // terminality gate and the callback's data copy in one map query —
+        // no full progress JSON per completion. Live executions yield no
+        // value; stale handles still surface the same out_of_range as
+        // query_progress.
+        std::optional<coarse_die::TerminalSummary> summary;
         try {
-            finish_ns = runtime_.terminal_finish_ns(it->first);
+            summary = runtime_.terminal_summary(it->first);
         } catch (...) {
             if (!first_exception) first_exception = std::current_exception();
             ++it;
             continue;
         }
-        // A terminal timestamp of 0 is legal, so the optional's presence
-        // decides terminality, never the numeric truth of the timestamp.
-        if (!finish_ns.has_value()) {
-            ++it;
-            continue;
-        }
-        nlohmann::json progress;
-        try {
-            progress = runtime_.query_progress(it->first);
-        } catch (...) {
-            if (!first_exception) first_exception = std::current_exception();
+        if (!summary.has_value()) {
             ++it;
             continue;
         }
         ready.push_back(
             ReadyCompletion{it->first, std::move(it->second),
-                            std::move(progress)});
+                            std::move(*summary)});
         it = completion_.erase(it);
     }
     for (auto& entry : ready) {
@@ -420,7 +426,7 @@ void CoarseDieRuntime::dispatch_terminal() {
             continue;
         }
         try {
-            entry.completion(entry.handle, entry.progress);
+            entry.completion(entry.handle, entry.summary);
         } catch (...) {
             if (!first_exception) first_exception = std::current_exception();
         }

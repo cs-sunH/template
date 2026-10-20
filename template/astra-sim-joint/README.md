@@ -1829,7 +1829,7 @@ For our website and documentation, see [astra-sim.github.io](https://astra-sim.g
 |---|---|---|---|---|
 | 单 op 估计时延（estimate_latency_ns 等） | `sh_test_mesh/workload/llama2_7b_inference/online/die_model_adapter.py`（build_spec → C ABI） | emitter → libdie_model_cabi → `extern/die_model/coarse` | digest 见上 | digest 或 plan fingerprint 变更后全部数字失效重算；非整数时延 fail-closed |
 | lifecycle 合同（含 R4 重复 region） | `astra-sim/workload/execution_driven/tests/die_execution_lifecycle_test.cc` | 测试 → vendored SDK 编译链接 | digest 见上 | guard fail-closed：prediction_status=not_available 即失败；legacy ×R 聚合保持 not_available |
-| 生成式 repeat（R≥2 ffn_region）声明状态 | 同上 adapter（build_spec 条件声明） | emitter → die_op_spec repeat_seams → Plan v5 | digest 见上 | **是（2026-10-17 Wave 3 补声明，共识④）**——adapter 对 layer_count×weight_passes≥2 的 ffn_region 条件声明 `repeat_seams={mode:serial_on_drain}`（与四仓同款；test_die_model_adapter 的 R24 用例显式断言声明存在且其他 op 不携带） |
+| 生成式 repeat（R≥2 ffn_region）声明状态 | 同上 adapter（build_spec 条件声明） | emitter → die_op_spec repeat_seams → Plan v5 | digest 见上 | **是（2026-10-17 Wave 3 补声明，共识④）**——adapter 对 layer_count≥2 的 ffn_region 条件声明 `repeat_seams={mode:serial_on_drain}`（与四仓同款；test_die_model_adapter 的 R24 用例显式断言声明存在且其他 op 不携带） |
 | coarse 投影/adapter 合同测试 | sh_test_mesh/workload/llama2_7b_inference/online/test_coarse_die_adapter.py | adapter/投影单测 → vendored SDK | digest 见上 | 合同断言；die 侧 not_available 状态按 fail-closed 处理 |
 | 硬件标量（derive_coarse_die_hardware） | `sh_test_mesh/config_resolver.py` | manifest → C ABI derive → 本仓派生标量 | digest 见上 | manifest 或 SDK digest 变更后重验 |
 | et_def Python 绑定（et_def_pb2.py） | `extern/graph_frontend/chakra/schema/protobuf/et_def_pb2.py` | 跟踪的 et_def.proto + **钉版 protoc 3.21.12** 仓根调用再生成 | n/a（仓内跟踪） | `verify_et_def_pb2.py` + `sh_test_mesh/tests/test_et_def_pb2_consistency.py` 防漂移；drift 即失败，protoc 缺席显式 skip |
@@ -1847,7 +1847,7 @@ For our website and documentation, see [astra-sim.github.io](https://astra-sim.g
 本仓 workload 产出 R≥2 的 ffn_region（ffn 8 层 × 3 遍 = R24；`_spec_record` 默认链
 R96）。按 2026-10-17 共识决策④，Wave 3 已在 emitter `build_spec` 补条件声明
 `repeat_seams={mode:serial_on_drain}`（照四仓先例；仅 ffn_region 且
-layer_count×weight_passes≥2，其他 op/策略不变）；`test_die_model_adapter.py` 的 R24
+layer_count≥2，其他 op/策略不变）；`test_die_model_adapter.py` 的 R24
 用例新增显式断言（ffn 声明存在、其余 op 不携带），全套 30 passed。R≥2 预测今日走
 `repeat_seam_modeled`（不再是 not_available 能力缺口）。历史设计/验收见 die 仓
 `die/docs/analysis/repeat-generative-v1/`。
@@ -1857,7 +1857,7 @@ layer_count×weight_passes≥2，其他 op/策略不变）；`test_die_model_ada
 本仓出厂默认计算后端为 **coarse_die_v2 单 die 解析仿真器**：system 模板
 `die-model-profile: coarse_die_v2` + 硬件 `coarse-die` 节（完整 coarse_die_v2
 描述符）+ 容量档 `validation-coarse-144g`（恰等于 coarse 派生每-die HBM 容量
-144 GB，resolver fail-closed 对齐）。真实重复区域（layer_count×weight_passes≥2）
+144 GB，resolver fail-closed 对齐）。真实重复区域（layer_count≥2；2026-10-19 起 coarse spec 的 weight_passes 恒为 1——spans 已逐迭代枚举，repeat 计数只由 layer 实例数决定）
 以声明式 `repeat_seams={mode: serial_on_drain}` 发射，coarse 编译器按单实例
 模板建模、运行时逐实例串行推进并以逐实例区域开销为 seam（引擎 2026-10-18
 实例 repeat 通用化批，见 template/die/docs/HANDOFF.md）。旧 `mesh_die_v1` /

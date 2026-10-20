@@ -1,0 +1,1685 @@
+"""Session-scoped local-HBM KV cache management.
+
+This module deliberately models only the policy used by the three-minute
+TraceLab workload: a complete session KV is either resident in one TP
+instance or it has been deleted.  Deleted KV retains its logical context so a
+later turn can recompute it.  There is no remote-memory tier, partial-layer
+state, or capacity-driven remapping in this implementation.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from types import MappingProxyType
+import os
+from typing import Any, Iterable, Mapping, Optional, Sequence
+
+
+RESIDENT = "RESIDENT"
+EVICTED = "EVICTED"
+NO_HISTORY = "NO_HISTORY"
+LOCAL_HIT = "LOCAL_HIT"
+NOC_MIGRATE = "NOC_MIGRATE"
+RECOMPUTE = "RECOMPUTE"
+
+# B1 已消费前缀的摊销压缩水位(2026-08-28,风格对齐 graph_batch_builder
+# 的 M1 压缩):_events 已消费水位达到该值且不小于现存总量一半时才整段
+# 删除前缀,均摊 O(1)/事件。
+_EVENTS_COMPACT_THRESHOLD = 8192
+_UINT64_MAX = (1 << 64) - 1
+
+
+def _strict_kv_invariants_from_environment() -> bool:
+    """Return whether every mutation must also run the complete audit."""
+
+    return os.environ.get("SH_STRICT_KV_INVARIANTS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _require_nonnegative_int(value: int, name: str) -> None:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise ValueError(f"{name} must be a non-negative integer")
+
+
+def _require_uint64(value: int, name: str) -> None:
+    if (isinstance(value, bool) or not isinstance(value, int)
+            or value < 0 or value > _UINT64_MAX):
+        raise ValueError(f"{name} must be an exact uint64 integer")
+
+
+def _session_key(session_id) -> str:
+    """R4-P1 (2026-09-29): session_id 入口统一 str 化。
+
+    manifest 信任边界外可出现混合类型 session_id(int 与 str 混排):
+    _candidate_sessions 的 (last_completion_ns, session_id) 排序与
+    assert_final_state 的 sorted(active) 在 last_completion_ns 平局时
+    对混排元组比较即 TypeError(首次驱逐排序崩溃)。所有公有入口统一
+    str 后键集全 str,排序恒有全序;官方 CSV 路径(session_id 本就是
+    str)键与事件载荷逐字节不变。
+    """
+    return session_id if isinstance(session_id, str) else str(session_id)
+
+
+def partition_values_exact(total: int, partitions: int) -> tuple[int, ...]:
+    """Split an integer without padding, putting remainders on low ranks."""
+
+    _require_nonnegative_int(total, "total")
+    if isinstance(partitions, bool) or not isinstance(partitions, int) or partitions <= 0:
+        raise ValueError("partitions must be a positive integer")
+    quotient, remainder = divmod(total, partitions)
+    return tuple(quotient + (1 if index < remainder else 0) for index in range(partitions))
+
+
+def attention_heads_by_tp_rank(num_heads: int, tp_degree: int) -> tuple[int, ...]:
+    """Return the whole-head ownership of each relative TP rank."""
+
+    if (
+        isinstance(num_heads, bool)
+        or isinstance(tp_degree, bool)
+        or not isinstance(num_heads, int)
+        or not isinstance(tp_degree, int)
+        or num_heads <= 0
+        or tp_degree <= 0
+    ):
+        raise ValueError("num_heads and tp_degree must be positive integers")
+    return partition_values_exact(num_heads, tp_degree)
+
+
+def estimate_model_weight_bytes(model: Any) -> int:
+    """Match the existing LLaMA-family model-size estimate exactly.
+
+    Canonical implementation of this module's model-size estimate;
+    face_scheduler imports and re-exports this same function instead of
+    keeping a second copy (A1-15, 2026-09-26).
+    """
+
+    mlp_matrices = 3 if getattr(model, "mlp_variant", "gelu") == "swiglu" else 2
+    norm_elements = (
+        2 * model.hidden_size
+        if getattr(model, "mlp_variant", "gelu") == "swiglu"
+        else 4 * model.hidden_size
+    )
+    per_layer_elements = (
+        4 * model.hidden_size * model.hidden_size
+        + mlp_matrices * model.hidden_size * model.ffn_size
+        + norm_elements
+    )
+    embedding_elements = 2 * model.vocab_size * model.hidden_size
+    final_norm_elements = (
+        model.hidden_size if getattr(model, "mlp_variant", "gelu") == "swiglu" else 0
+    )
+    return (
+        model.layers * per_layer_elements + embedding_elements + final_norm_elements
+    ) * model.bytes_per_elem
+
+
+def model_weight_shard_bytes_by_tp_rank(model: Any, tp_degree: int) -> tuple[int, ...]:
+    """Return exact TP weight shards aligned with whole-head KV ownership."""
+
+    if model.hidden_size % model.num_heads:
+        raise ValueError("hidden_size must be divisible by num_heads")
+    heads = attention_heads_by_tp_rank(model.num_heads, tp_degree)
+    ffn_extents = partition_values_exact(model.ffn_size, tp_degree)
+    vocab_extents = partition_values_exact(model.vocab_size, tp_degree)
+    head_dim = model.hidden_size // model.num_heads
+    mlp_matrices = 3 if getattr(model, "mlp_variant", "gelu") == "swiglu" else 2
+    matrix_shards = tuple(
+        (
+            model.layers
+            * (
+                4 * model.hidden_size * head_count * head_dim
+                + mlp_matrices * model.hidden_size * ffn_extent
+            )
+            + 2 * model.hidden_size * vocab_extent
+        )
+        * model.bytes_per_elem
+        for head_count, ffn_extent, vocab_extent in zip(heads, ffn_extents, vocab_extents)
+    )
+    total = estimate_model_weight_bytes(model)
+    residual = total - sum(matrix_shards)
+    if residual < 0:
+        raise RuntimeError("TP weight matrix shards exceed the model total")
+    shards = tuple(
+        shard + remainder
+        for shard, remainder in zip(matrix_shards, partition_values_exact(residual, tp_degree))
+    )
+    if sum(shards) != total:
+        raise RuntimeError("TP weight shards do not preserve the model total")
+    return shards
+
+
+def kv_cache_shard_bytes_for_tokens(
+    model: Any,
+    tokens: int,
+    tp_degree: int,
+) -> tuple[int, ...]:
+    """Return exact whole-head KV shard bytes for a complete model cache."""
+
+    _require_nonnegative_int(tokens, "tokens")
+    if model.hidden_size % model.num_heads:
+        raise ValueError("hidden_size must be divisible by num_heads")
+    head_dim = model.hidden_size // model.num_heads
+    bytes_per_head = 2 * model.layers * tokens * head_dim * model.bytes_per_elem
+    shards = tuple(
+        bytes_per_head * head_count
+        for head_count in attention_heads_by_tp_rank(model.num_heads, tp_degree)
+    )
+    expected = 2 * model.layers * tokens * model.hidden_size * model.bytes_per_elem
+    if sum(shards) != expected:
+        raise RuntimeError("whole-head KV shards do not preserve total KV bytes")
+    return shards
+
+
+@dataclass(frozen=True)
+class NodeHBMSnapshot:
+    rank: int
+    instance_index: int
+    capacity_bytes: int
+    model_weight_bytes: int
+    resident_kv_bytes: int
+    used_bytes: int
+    remaining_bytes: int
+
+
+@dataclass
+class NodeHBMState:
+    rank: int
+    instance_index: int
+    capacity_bytes: int
+    model_weight_bytes: int
+    resident_kv_bytes: int = 0
+
+    @property
+    def used_bytes(self) -> int:
+        return self.model_weight_bytes + self.resident_kv_bytes
+
+    @property
+    def remaining_bytes(self) -> int:
+        return self.capacity_bytes - self.used_bytes
+
+    def snapshot(self) -> NodeHBMSnapshot:
+        return NodeHBMSnapshot(
+            rank=self.rank,
+            instance_index=self.instance_index,
+            capacity_bytes=self.capacity_bytes,
+            model_weight_bytes=self.model_weight_bytes,
+            resident_kv_bytes=self.resident_kv_bytes,
+            used_bytes=self.used_bytes,
+            remaining_bytes=self.remaining_bytes,
+        )
+
+
+@dataclass(frozen=True)
+class SessionKVSnapshot:
+    session_id: str
+    logical_context_tokens: int
+    state: str
+    instance_index: Optional[int]
+    shard_bytes: tuple[int, ...]
+    last_completion_ns: Optional[int]
+    active: bool
+    last_request_id: Optional[str]
+
+
+@dataclass
+class SessionKVState:
+    session_id: str
+    logical_context_tokens: int
+    state: str
+    instance_index: Optional[int]
+    shard_bytes: tuple[int, ...]
+    last_completion_ns: Optional[int] = None
+    active: bool = False
+    last_request_id: Optional[str] = None
+
+    def snapshot(self) -> SessionKVSnapshot:
+        return SessionKVSnapshot(
+            session_id=self.session_id,
+            logical_context_tokens=self.logical_context_tokens,
+            state=self.state,
+            instance_index=self.instance_index,
+            shard_bytes=self.shard_bytes,
+            last_completion_ns=self.last_completion_ns,
+            active=self.active,
+            last_request_id=self.last_request_id,
+        )
+
+
+@dataclass(frozen=True)
+class KVTransferShard:
+    relative_tp_rank: int
+    source_rank: Optional[int]
+    target_rank: Optional[int]
+    bytes: int
+
+
+@dataclass(frozen=True)
+class KVTransfer:
+    action: str
+    phase: str
+    reason: str
+    session_id: str
+    trigger_request_id: str
+    source_instance_index: Optional[int]
+    target_instance_index: Optional[int]
+    history_tokens: int
+    total_bytes: int
+    shards: tuple[KVTransferShard, ...]
+
+
+@dataclass(frozen=True)
+class EvictionRecord:
+    time_ns: int
+    phase: str
+    reason: str
+    trigger_request_id: str
+    victim_session_id: str
+    victim_instance_index: int
+    victim_last_completion_ns: int
+    context_tokens: int
+    shard_bytes: tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class CapacityResult:
+    evictions: tuple[EvictionRecord, ...]
+    admitted: bool
+    insufficient_ranks: tuple[int, ...]
+    blocked_by_workspace: bool = False
+
+
+@dataclass(frozen=True)
+class HistoryDecision:
+    action: str
+    source_instance_index: Optional[int]
+    target_instance_index: int
+    history_tokens: int
+    transfer_shards: tuple[KVTransferShard, ...]
+    recompute_tokens: int
+    evictions: tuple[EvictionRecord, ...]
+    admission_blocked: bool = False
+    insufficient_ranks: tuple[int, ...] = ()
+    blocked_by_workspace: bool = False
+
+    @property
+    def transfer_bytes(self) -> int:
+        return sum(shard.bytes for shard in self.transfer_shards)
+
+
+@dataclass(frozen=True)
+class MoveDecision:
+    action: str
+    source_instance_index: int
+    target_instance_index: int
+    transfer: KVTransfer
+    evictions: tuple[EvictionRecord, ...]
+    admission_blocked: bool = False
+    insufficient_ranks: tuple[int, ...] = ()
+    blocked_by_workspace: bool = False
+
+
+@dataclass(frozen=True)
+class KVCacheEvent:
+    event_index: int
+    planner_time_ns: int
+    phase: str
+    event_type: str
+    reason: str
+    trigger_request_id: str
+    session_id: Optional[str]
+    source_instance_index: Optional[int]
+    target_instance_index: Optional[int]
+    context_tokens: int
+    total_bytes: int
+    shard_bytes: tuple[int, ...]
+    last_completion_ns: Optional[int]
+    instance_remaining_before_bytes: tuple[int, ...]
+    instance_remaining_after_bytes: tuple[int, ...]
+    insufficient_ranks: tuple[int, ...]
+
+
+class SessionKVCacheManager:
+    """Exact TP-sharded local-HBM session KV state machine.
+
+    All mutating operations are planner-time operations.  The caller emits the
+    corresponding NoC or recompute ET nodes from the returned decisions; an
+    ``evict_delete`` intentionally has no ET representation.
+    """
+
+    def __init__(
+        self,
+        topology: Any,
+        model: Any,
+        *,
+        strict_invariants: Optional[bool] = None,
+        prospective_workspace_bytes_by_rank: Optional[Mapping[int, int]] = None,
+    ) -> None:
+        if strict_invariants is not None and not isinstance(strict_invariants, bool):
+            raise ValueError("strict_invariants must be a bool or None")
+        instances = tuple(topology.instances)
+        if not instances:
+            raise ValueError("at least one TP instance is required")
+        instance_sizes = {len(instance.ranks) for instance in instances}
+        if len(instance_sizes) != 1:
+            raise ValueError("SessionKVCacheManager requires equal-size TP instances")
+        self.topology = topology
+        self.model = model
+        self.tp_degree = next(iter(instance_sizes))
+        self.model_weight_bytes_by_tp_rank = model_weight_shard_bytes_by_tp_rank(
+            model, self.tp_degree
+        )
+        self._rank_states: dict[int, NodeHBMState] = {}
+        self._rank_relative_indexes: dict[int, int] = {}
+        for instance in instances:
+            if len(instance.ranks) != self.tp_degree:
+                raise ValueError("inconsistent TP degree in topology")
+            for relative_rank, rank in enumerate(instance.ranks):
+                state = NodeHBMState(
+                    rank=rank,
+                    instance_index=instance.index,
+                    capacity_bytes=topology.hardware.local_hbm_capacity_bytes,
+                    model_weight_bytes=self.model_weight_bytes_by_tp_rank[relative_rank],
+                )
+                self._rank_states[rank] = state
+                self._rank_relative_indexes[rank] = relative_rank
+        self._has_prospective_workspace = prospective_workspace_bytes_by_rank is not None
+        if prospective_workspace_bytes_by_rank is None:
+            prospective = {rank: 0 for rank in self._rank_states}
+        else:
+            if not isinstance(prospective_workspace_bytes_by_rank, Mapping):
+                raise ValueError("prospective workspace bytes must be a rank mapping")
+            for rank in prospective_workspace_bytes_by_rank:
+                _require_uint64(rank, "prospective workspace rank")
+            if set(prospective_workspace_bytes_by_rank) != set(self._rank_states):
+                raise ValueError("prospective workspace ranks must exactly match topology ranks")
+            prospective = {}
+            for rank, state in self._rank_states.items():
+                margin = prospective_workspace_bytes_by_rank[rank]
+                _require_uint64(margin, f"prospective workspace bytes for rank {rank}")
+                _require_uint64(state.capacity_bytes, f"capacity bytes for rank {rank}")
+                _require_uint64(state.model_weight_bytes, f"model weights for rank {rank}")
+                if margin > state.capacity_bytes - state.model_weight_bytes:
+                    raise ValueError(
+                        f"prospective workspace exceeds empty HBM capacity on rank {rank}")
+                prospective[rank] = margin
+        # Immutable fit policy, independent from actual leases and KV accounting.
+        self._prospective_workspace_bytes_by_rank = MappingProxyType(prospective)
+        # C++ owns the temporary Plan workspace.  Mirror only its absolute
+        # rank totals here, outside KV state, events, and accounting.
+        self._external_workspace_revision_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._external_workspace_bytes_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._sessions: dict[str, SessionKVState] = {}
+        self._events: list[KVCacheEvent] = []
+        # B1(2026-08-28):kv 事件流水号独立于列表位置——前缀压缩后
+        # len(self._events) 不再可用作 event_index(会与存活事件撞号),
+        # 改由单调计数器分配,流内 event_index 语义/取值与改前一致。
+        self._event_index_next = 0
+        # A blocked request can be reconsidered many times while unrelated
+        # active Decode work advances.  Keep the audit trail bounded: retain
+        # the first pressure observation and one explicit retry per request /
+        # phase / target rather than appending an identical event per token.
+        self._pressure_event_keys: set[tuple[str, str, str, int]] = set()
+        # Completion must retire the dedup keys of every turn, not merely the
+        # terminal turn.  Keep an ownership index so retirement is O(keys for
+        # this request) instead of rebuilding the process-wide set each time.
+        self._pressure_event_keys_by_request: dict[
+            str, set[tuple[str, str, str, int]]
+        ] = {}
+        # D4 (2026-09-05): 深缺口(逐无可逐/结构不可行)累计计数——
+        # ensure_physical_fit 两个失败出口前 +1 并落 deep_gap 事件;
+        # 实证负载预期恒 0,>0 即批次安全边界被触及的观测信号。
+        self._deep_gap_events: int = 0
+        self._strict_kv_invariants = (
+            _strict_kv_invariants_from_environment()
+            if strict_invariants is None
+            else strict_invariants
+        )
+        self._check_invariants()
+        self._initialize_incremental_invariants()
+
+    # B1 增量读取 + 水位压缩(2026-08-28):生产消费方(在线调度器的
+    # kv_actions 流)本就持有 _kv_events_emitted 游标,改走 events_since
+    # 增量切片,消除每决策批 events property 的全量 tuple() 拷贝(O(n²)
+    # CPU 残留);已消费前缀按水位整段删除(风格对齐 graph_batch_builder
+    # 的 M1 压缩:≥8192 且不小于一半才删,均摊 O(1)/事件)。event_index
+    # 由单调计数器分配,压缩不改变任何已发射事件的载荷。
+    def events_since(self, index: int) -> list[KVCacheEvent]:
+        """B1:列表位置 index 起的增量事件(消费方维护游标)。"""
+        return self._events[index:]
+
+    def compact_events(self, consumed: int) -> int:
+        """B1:已消费水位 ≥8192 且不小于现存一半时整段删除前缀,返回实际
+        删除条数(调用方游标同步减去该值;0 = 未压缩)。"""
+        if (consumed >= _EVENTS_COMPACT_THRESHOLD
+                and consumed * 2 >= len(self._events)):
+            del self._events[:consumed]
+            return consumed
+        return 0
+
+    @property
+    def deep_gap_events(self) -> int:
+        """D4 (2026-09-05): 深缺口累计计数(passive 观测口径,预期恒 0)。"""
+        return self._deep_gap_events
+
+    def session_snapshot(self, session_id: str) -> Optional[SessionKVSnapshot]:
+        session_id = _session_key(session_id)
+        state = self._sessions.get(session_id)
+        return None if state is None else state.snapshot()
+
+    def hbm_snapshots(self, instance_index: Optional[int] = None) -> tuple[NodeHBMSnapshot, ...]:
+        if instance_index is None:
+            ranks = tuple(sorted(self._rank_states))
+        else:
+            ranks = tuple(self.topology.instance(instance_index).ranks)
+        return tuple(self._rank_states[rank].snapshot() for rank in ranks)
+
+    @property
+    def rank_ids(self) -> tuple[int, ...]:
+        """Stable sorted rank set used by the explicit workspace bridge."""
+
+        return tuple(sorted(self._rank_states))
+
+    @property
+    def prospective_workspace_bytes_by_rank(self) -> Mapping[int, int]:
+        """Immutable future scratch floor for the serialized COMP gate."""
+        return self._prospective_workspace_bytes_by_rank
+
+    def _workspace_hold(self, rank: int) -> int:
+        return max(self._external_workspace_bytes_by_rank[rank],
+                   self._prospective_workspace_bytes_by_rank[rank])
+
+    def set_external_workspace_view(
+        self,
+        revision_by_rank: Mapping[int, int],
+        bytes_by_rank: Mapping[int, int],
+    ) -> tuple[int, ...]:
+        """Atomically install the C++ absolute workspace view for every rank.
+
+        All entries and capacity constraints are checked before either map is
+        changed. A released hold may decrease when its revision advances.
+        """
+
+        if not isinstance(revision_by_rank, Mapping):
+            raise ValueError("workspace revisions must be a rank mapping")
+        if not isinstance(bytes_by_rank, Mapping):
+            raise ValueError("workspace bytes must be a rank mapping")
+        expected_ranks = set(self._rank_states)
+        for name, values in (("workspace revision", revision_by_rank),
+                             ("workspace bytes", bytes_by_rank)):
+            for rank in values:
+                _require_uint64(rank, f"{name} rank")
+            if set(values) != expected_ranks:
+                raise ValueError(
+                    f"{name} ranks must exactly match topology ranks "
+                    f"{sorted(expected_ranks)}, got {sorted(values)}")
+
+        revisions: dict[int, int] = {}
+        workspace_bytes: dict[int, int] = {}
+        changed: list[int] = []
+        for rank in sorted(expected_ranks):
+            revision = revision_by_rank[rank]
+            active_bytes = bytes_by_rank[rank]
+            _require_uint64(revision, f"workspace revision for rank {rank}")
+            _require_uint64(active_bytes,
+                            f"active workspace bytes for rank {rank}")
+            previous_revision = self._external_workspace_revision_by_rank[rank]
+            previous_bytes = self._external_workspace_bytes_by_rank[rank]
+            if revision < previous_revision:
+                raise ValueError(
+                    f"stale workspace revision for rank {rank}: "
+                    f"{revision} < {previous_revision}")
+            if revision == previous_revision and active_bytes != previous_bytes:
+                raise ValueError(
+                    f"workspace bytes changed without revision advance on "
+                    f"rank {rank}")
+            state = self._rank_states[rank]
+            combined = state.used_bytes + max(
+                active_bytes, self._prospective_workspace_bytes_by_rank[rank])
+            if combined > _UINT64_MAX or combined > state.capacity_bytes:
+                raise ValueError(
+                    f"workspace hold exceeds Python HBM capacity on rank "
+                    f"{rank}: KV base={state.used_bytes}, workspace="
+                    f"{active_bytes}, capacity={state.capacity_bytes}")
+            revisions[rank] = revision
+            workspace_bytes[rank] = active_bytes
+            if revision != previous_revision or active_bytes != previous_bytes:
+                changed.append(rank)
+
+        self._external_workspace_revision_by_rank = revisions
+        self._external_workspace_bytes_by_rank = workspace_bytes
+        return tuple(changed)
+
+    def workspace_capacity_snapshot(self) -> dict:
+        """Return authoritative per-rank KV capacity for bridge v2."""
+
+        result = {
+            "protocol_version": 1,
+            "ranks": [
+                {
+                    "rank": rank,
+                    "workspace_revision":
+                        self._external_workspace_revision_by_rank[rank],
+                    "capacity_bytes": self._rank_states[rank].capacity_bytes,
+                    "model_weight_bytes":
+                        self._rank_states[rank].model_weight_bytes,
+                    "resident_kv_bytes":
+                        self._rank_states[rank].resident_kv_bytes,
+                    "reserved_request_bytes": 0,
+                }
+                for rank in self.rank_ids
+            ],
+        }
+
+        if self._has_prospective_workspace:
+            result["protocol_version"] = 2
+            for row in result["ranks"]:
+                row["prospective_workspace_bytes"] = (
+                    self._prospective_workspace_bytes_by_rank[row["rank"]])
+        return result
+
+    def _remaining(self, instance_index: int) -> tuple[int, ...]:
+        return tuple(
+            self._rank_states[rank].remaining_bytes
+            for rank in self.topology.instance(instance_index).ranks
+        )
+
+    def _fit_remaining(self, instance_index: int) -> tuple[int, ...]:
+        """KV headroom after max(actual and prospective workspace)."""
+
+        return tuple(
+            self._rank_states[rank].remaining_bytes
+            - self._workspace_hold(rank)
+            for rank in self.topology.instance(instance_index).ranks
+        )
+
+    def workspace_fit_remaining_bytes(self, rank: int) -> int:
+        """Read KV headroom after max(actual and prospective workspace)."""
+
+        return (
+            self._rank_states[rank].remaining_bytes
+            - self._workspace_hold(rank)
+        )
+
+    def _insufficient(
+        self,
+        instance_index: int,
+        required_shards: Sequence[int],
+    ) -> tuple[int, ...]:
+        instance = self.topology.instance(instance_index)
+        if len(required_shards) != len(instance.ranks):
+            raise ValueError("required KV shards must match the target TP degree")
+        return tuple(
+            rank
+            for rank, remaining, required in zip(
+                instance.ranks, self._remaining(instance_index), required_shards
+            )
+            if remaining < required
+        )
+
+    def _fit_insufficient(
+        self,
+        instance_index: int,
+        required_shards: Sequence[int],
+    ) -> tuple[int, ...]:
+        instance = self.topology.instance(instance_index)
+        if len(required_shards) != len(instance.ranks):
+            raise ValueError("required KV shards must match the target TP degree")
+        return tuple(
+            rank
+            for rank, remaining, required in zip(
+                instance.ranks, self._fit_remaining(instance_index), required_shards
+            )
+            if remaining < required
+        )
+
+    def _candidate_sessions(
+        self,
+        instance_index: int,
+        protected_sessions: Iterable[str],
+    ) -> list[SessionKVState]:
+        protected = set(protected_sessions)
+        candidates = [
+            state
+            for state in self._sessions.values()
+            if state.state == RESIDENT
+            and state.instance_index == instance_index
+            and not state.active
+            and state.last_completion_ns is not None
+            and state.session_id not in protected
+        ]
+        candidates.sort(key=lambda state: (int(state.last_completion_ns), state.session_id))
+        return candidates
+
+    def _event(
+        self,
+        *,
+        now_ns: int,
+        phase: str,
+        event_type: str,
+        reason: str,
+        trigger_request_id: str,
+        session_id: Optional[str] = None,
+        source_instance_index: Optional[int] = None,
+        target_instance_index: Optional[int] = None,
+        context_tokens: int = 0,
+        total_bytes: int = 0,
+        shard_bytes: Sequence[int] = (),
+        last_completion_ns: Optional[int] = None,
+        before: Sequence[int] = (),
+        after: Sequence[int] = (),
+        insufficient_ranks: Sequence[int] = (),
+    ) -> None:
+        self._events.append(
+            KVCacheEvent(
+                event_index=self._event_index_next,
+                planner_time_ns=now_ns,
+                phase=phase,
+                event_type=event_type,
+                reason=reason,
+                trigger_request_id=trigger_request_id,
+                session_id=session_id,
+                source_instance_index=source_instance_index,
+                target_instance_index=target_instance_index,
+                context_tokens=context_tokens,
+                total_bytes=total_bytes,
+                shard_bytes=tuple(int(value) for value in shard_bytes),
+                last_completion_ns=last_completion_ns,
+                instance_remaining_before_bytes=tuple(int(value) for value in before),
+                instance_remaining_after_bytes=tuple(int(value) for value in after),
+                insufficient_ranks=tuple(int(rank) for rank in insufficient_ranks),
+            )
+        )
+        self._event_index_next += 1
+
+    def _pressure_event(
+        self,
+        *,
+        now_ns: int,
+        phase: str,
+        event_type: str,
+        reason: str,
+        trigger_request_id: str,
+        target_instance_index: int,
+        before: Sequence[int],
+        after: Sequence[int],
+        insufficient_ranks: Sequence[int],
+    ) -> None:
+        """Write bounded audit events for a repeated admission pressure state."""
+
+        key = (event_type, phase, trigger_request_id, target_instance_index)
+        if key in self._pressure_event_keys:
+            retry_key = ("admission_retry", phase, trigger_request_id, target_instance_index)
+            if retry_key not in self._pressure_event_keys:
+                self._remember_pressure_event_key(retry_key)
+                self._event(
+                    now_ns=now_ns,
+                    phase=phase,
+                    event_type="admission_retry",
+                    reason="retry_after_previous_capacity_block",
+                    trigger_request_id=trigger_request_id,
+                    target_instance_index=target_instance_index,
+                    before=before,
+                    after=after,
+                    insufficient_ranks=insufficient_ranks,
+                )
+            return
+        self._remember_pressure_event_key(key)
+        self._event(
+            now_ns=now_ns,
+            phase=phase,
+            event_type=event_type,
+            reason=reason,
+            trigger_request_id=trigger_request_id,
+            target_instance_index=target_instance_index,
+            before=before,
+            after=after,
+            insufficient_ranks=insufficient_ranks,
+        )
+
+    def _remember_pressure_event_key(
+        self, key: tuple[str, str, str, int]
+    ) -> None:
+        self._pressure_event_keys.add(key)
+        self._pressure_event_keys_by_request.setdefault(key[2], set()).add(key)
+
+    def _forget_pressure_event_keys(self, request_id: str) -> None:
+        for key in self._pressure_event_keys_by_request.pop(request_id, ()):
+            self._pressure_event_keys.discard(key)
+
+    def _record_deep_gap(
+        self,
+        *,
+        instance_index: int,
+        now_ns: int,
+        phase: str,
+        reason: str,
+        trigger_request_id: str,
+        required: Sequence[int],
+        insufficient_ranks: Sequence[int],
+    ) -> None:
+        """D4 (2026-09-05): 深缺口台账——计数 +1 并发 deep_gap KVCacheEvent。
+
+        语义(§7.3):被动逐出的边界观测。候选耗尽分支 = admission_blocked
+        优雅推迟(reason=exhausted_completed_candidates,去重压力事件旁
+        无条件记录);结构不可行分支 = fail-closed raise 前
+        (reason=request_exceeds_empty_instance)。事件携带触发时点的
+        before/after remaining(两出口均无 KV 变更,故相等)与
+        insufficient_ranks,落 kv_actions 流供 campaign 复核。
+        """
+        self._deep_gap_events += 1
+        before = self._remaining(instance_index)
+        self._event(
+            now_ns=now_ns,
+            phase=phase,
+            event_type="deep_gap",
+            reason=reason,
+            trigger_request_id=trigger_request_id,
+            target_instance_index=instance_index,
+            total_bytes=sum(int(value) for value in required),
+            shard_bytes=tuple(int(value) for value in required),
+            before=before,
+            after=before,
+            insufficient_ranks=insufficient_ranks,
+        )
+
+    def _add_shards(self, instance_index: int, shards: Sequence[int]) -> None:
+        instance = self.topology.instance(instance_index)
+        if len(shards) != self.tp_degree or any(value < 0 for value in shards):
+            raise ValueError("invalid KV shard vector")
+        for rank, value in zip(instance.ranks, shards):
+            self._rank_states[rank].resident_kv_bytes += int(value)
+
+    def _remove_shards(self, instance_index: int, shards: Sequence[int]) -> None:
+        instance = self.topology.instance(instance_index)
+        if len(shards) != self.tp_degree or any(value < 0 for value in shards):
+            raise ValueError("invalid KV shard vector")
+        for rank, value in zip(instance.ranks, shards):
+            state = self._rank_states[rank]
+            if state.resident_kv_bytes < value:
+                raise RuntimeError("attempted to release more KV than the rank owns")
+            state.resident_kv_bytes -= int(value)
+
+    # ------------------------------------------------------------------
+    # Incremental invariant ledger.  The complete checker below remains the
+    # source of truth for construction, explicit strict mode, and the terminal
+    # audit.  Normal mutation paths update only the contribution(s) they
+    # changed, which avoids rebuilding process-wide session totals
+    # after every generated token.
+    # ------------------------------------------------------------------
+
+    def _initialize_incremental_invariants(self) -> None:
+        self._invariant_expected_resident_by_rank = {
+            rank: 0 for rank in self._rank_states
+        }
+        self._invariant_session_contributions: dict[
+            str, Optional[tuple[int, tuple[int, ...]]]
+        ] = {}
+        self._refresh_incremental_sessions(self._sessions)
+
+    def _incremental_session_contribution(
+        self, session: SessionKVState
+    ) -> Optional[tuple[int, tuple[int, ...]]]:
+        if (
+            session.state != RESIDENT
+            or session.instance_index is None
+            or len(session.shard_bytes) != self.tp_degree
+        ):
+            return None
+        return session.instance_index, tuple(int(value) for value in session.shard_bytes)
+
+    def _apply_incremental_contribution(
+        self,
+        expected_by_rank: dict[int, int],
+        contribution: Optional[tuple[int, tuple[int, ...]]],
+        multiplier: int,
+    ) -> set[int]:
+        if contribution is None:
+            return set()
+        instance_index, shards = contribution
+        instance = self.topology.instance(instance_index)
+        affected_ranks = set(instance.ranks)
+        for rank, value in zip(instance.ranks, shards):
+            expected_by_rank[rank] += multiplier * value
+        return affected_ranks
+
+    def _refresh_incremental_sessions(self, session_ids: Iterable[str]) -> set[int]:
+        affected_ranks: set[int] = set()
+        for session_id in dict.fromkeys(session_ids):
+            old = self._invariant_session_contributions.pop(session_id, None)
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_resident_by_rank, old, -1
+                )
+            )
+            session = self._sessions.get(session_id)
+            if session is None:
+                continue
+            new = self._incremental_session_contribution(session)
+            self._invariant_session_contributions[session_id] = new
+            affected_ranks.update(
+                self._apply_incremental_contribution(
+                    self._invariant_expected_resident_by_rank, new, 1
+                )
+            )
+        return affected_ranks
+
+    def _check_incremental_session_invariants(self, session: SessionKVState) -> None:
+        if session.state not in {RESIDENT, EVICTED}:
+            raise RuntimeError(f"unknown KV state: {session.state}")
+        if session.state == RESIDENT:
+            if session.instance_index is None:
+                raise RuntimeError("resident session has no instance")
+            if len(session.shard_bytes) != self.tp_degree:
+                raise RuntimeError("resident session has invalid TP shard vector")
+        elif session.instance_index is not None:
+            raise RuntimeError("evicted session retained an instance")
+
+    def _check_invariants_after_mutation(
+        self,
+        *,
+        session_ids: Iterable[str] = (),
+    ) -> None:
+        """Validate only the state touched by a completed manager mutation."""
+
+        changed_sessions = tuple(dict.fromkeys(session_ids))
+        affected_ranks = self._refresh_incremental_sessions(changed_sessions)
+
+        # Keep the first part of the complete checker local and fail closed
+        # before any caller can observe the mutated state.
+        for rank in sorted(affected_ranks):
+            state = self._rank_states[rank]
+            if state.resident_kv_bytes < 0:
+                raise RuntimeError("negative HBM accounting")
+            if state.used_bytes > state.capacity_bytes:
+                raise RuntimeError(
+                    f"HBM capacity exceeded on rank {state.rank}: "
+                    f"used={state.used_bytes}, capacity={state.capacity_bytes}"
+                )
+        for session_id in changed_sessions:
+            session = self._sessions.get(session_id)
+            if session is not None:
+                self._check_incremental_session_invariants(session)
+
+        affected_instances = {
+            self._rank_states[rank].instance_index for rank in affected_ranks
+        }
+        for instance_index in sorted(affected_instances):
+            instance = self.topology.instance(instance_index)
+            actual = tuple(
+                self._rank_states[rank].resident_kv_bytes for rank in instance.ranks
+            )
+            expected = tuple(
+                self._invariant_expected_resident_by_rank[rank]
+                for rank in instance.ranks
+            )
+            if actual != expected:
+                raise RuntimeError(
+                    f"session/rank KV accounting mismatch for instance {instance.index}: "
+                    f"states={actual}, sessions={expected}"
+                )
+
+        if self._strict_kv_invariants:
+            self._check_invariants()
+
+    def _delete(
+        self,
+        victim: SessionKVState,
+        *,
+        now_ns: int,
+        phase: str,
+        reason: str,
+        trigger_request_id: str,
+    ) -> EvictionRecord:
+        if (
+            victim.state != RESIDENT
+            or victim.instance_index is None
+            or victim.active
+            or victim.last_completion_ns is None
+        ):
+            raise RuntimeError("only completed inactive resident sessions may be deleted")
+        source_instance = victim.instance_index
+        before = self._remaining(source_instance)
+        self._remove_shards(source_instance, victim.shard_bytes)
+        victim.state = EVICTED
+        victim.instance_index = None
+        self._check_invariants_after_mutation(session_ids=(victim.session_id,))
+        after = self._remaining(source_instance)
+        record = EvictionRecord(
+            time_ns=now_ns,
+            phase=phase,
+            reason=reason,
+            trigger_request_id=trigger_request_id,
+            victim_session_id=victim.session_id,
+            victim_instance_index=source_instance,
+            victim_last_completion_ns=victim.last_completion_ns,
+            context_tokens=victim.logical_context_tokens,
+            shard_bytes=tuple(victim.shard_bytes),
+        )
+        self._event(
+            now_ns=now_ns,
+            phase=phase,
+            event_type="evict_delete",
+            reason=reason,
+            trigger_request_id=trigger_request_id,
+            session_id=victim.session_id,
+            source_instance_index=source_instance,
+            context_tokens=victim.logical_context_tokens,
+            total_bytes=sum(victim.shard_bytes),
+            shard_bytes=victim.shard_bytes,
+            last_completion_ns=victim.last_completion_ns,
+            before=before,
+            after=after,
+        )
+        return record
+
+    def ensure_physical_fit(
+        self,
+        instance_index: int,
+        required_shards: Sequence[int],
+        now_ns: int,
+        trigger_request_id: str,
+        protected_sessions: Iterable[str] = (),
+        *,
+        phase: str = "admission",
+        reason: str = "request_physical_fit",
+    ) -> CapacityResult:
+        required = tuple(int(value) for value in required_shards)
+        instance = self.topology.instance(instance_index)
+        if len(required) != self.tp_degree or any(value < 0 for value in required):
+            raise ValueError("required KV shard vector is invalid")
+        maximum = tuple(
+            self._rank_states[rank].capacity_bytes
+            - self._rank_states[rank].model_weight_bytes
+            - self._prospective_workspace_bytes_by_rank[rank]
+            for rank in instance.ranks
+        )
+        impossible = tuple(
+            rank for rank, needed, available in zip(instance.ranks, required, maximum)
+            if needed > available
+        )
+        if impossible:
+            # D4 (2026-09-05): 结构不可行出口——fail-closed raise 前记
+            # 深缺口(空实例都装不下,被动逐出无解)。
+            self._record_deep_gap(
+                instance_index=instance_index,
+                now_ns=now_ns,
+                phase=phase,
+                reason="request_exceeds_empty_instance",
+                trigger_request_id=trigger_request_id,
+                required=required,
+                insufficient_ranks=impossible,
+            )
+            details = ", ".join(
+                f"rank={rank}, required={needed}, empty_available={available}"
+                for rank, needed, available in zip(instance.ranks, required, maximum)
+                if rank in impossible
+            )
+            raise ValueError(f"request cannot fit an empty instance: {details}")
+        impossible_with_current_workspace = tuple(
+            rank
+            for rank, needed, available, workspace in zip(
+                instance.ranks,
+                required,
+                maximum,
+                (max(0, self._external_workspace_bytes_by_rank[rank]
+                     - self._prospective_workspace_bytes_by_rank[rank])
+                 for rank in instance.ranks),
+            )
+            if needed > available - workspace
+        )
+        if impossible_with_current_workspace:
+            # Reclaiming KV cannot help while this absolute workspace hold is
+            # live. Keep cold sessions intact and let the existing scheduler
+            # retry when a later workspace revision returns capacity.
+            return CapacityResult(
+                (), False, impossible_with_current_workspace,
+                blocked_by_workspace=True)
+        evictions: list[EvictionRecord] = []
+        insufficient = self._insufficient(instance_index, required)
+        fit_insufficient = self._fit_insufficient(instance_index, required)
+        # Eligibility and LRU order of the candidates are decided once here:
+        # this stage takes a single snapshot up front and never re-ranks the
+        # not-yet-evicted remainder between deletions.
+        candidates = (
+            self._candidate_sessions(instance_index, protected_sessions)
+            if fit_insufficient
+            else []
+        )
+        candidate_index = 0
+        while fit_insufficient:
+            if candidate_index >= len(candidates):
+                if not insufficient:
+                    return CapacityResult(
+                        tuple(evictions), False, fit_insufficient,
+                        blocked_by_workspace=True)
+                before = self._remaining(instance_index)
+                # D4 (2026-09-05): 候选耗尽出口——优雅推迟(admission_
+                # blocked)前记深缺口(逐光全部已完成会话仍不够)。
+                self._record_deep_gap(
+                    instance_index=instance_index,
+                    now_ns=now_ns,
+                    phase=phase,
+                    reason="exhausted_completed_candidates",
+                    trigger_request_id=trigger_request_id,
+                    required=required,
+                    insufficient_ranks=insufficient,
+                )
+                self._pressure_event(
+                    now_ns=now_ns,
+                    phase=phase,
+                    event_type="admission_blocked",
+                    reason=reason,
+                    trigger_request_id=trigger_request_id,
+                    target_instance_index=instance_index,
+                    before=before,
+                    after=before,
+                    insufficient_ranks=insufficient,
+                )
+                return CapacityResult(tuple(evictions), False, insufficient)
+            victim = candidates[candidate_index]
+            candidate_index += 1
+            # I1 (2026-09-05): 被动逐出受害者必须是已完成 inactive 的本
+            # 实例 RESIDENT 会话(镜像 _delete 守卫与 _candidate_sessions
+            # 过滤,捕获候选快照与删除执行间的状态漂移)。
+            if (
+                victim.state != RESIDENT
+                or victim.instance_index != instance_index
+                or victim.active
+                or victim.last_completion_ns is None
+            ):
+                raise RuntimeError(
+                    "passive eviction victim must be a completed inactive "
+                    f"resident of instance {instance_index}: {victim.session_id}"
+                )
+            # (2026-09-29) 原 I3 循环内"缺口必须仍在"防御分支已删:
+            # while insufficient 即循环不变式,循环体内 insufficient 在
+            # 本位置之前无任何再赋值点,`not insufficient` 恒假,该
+            # raise 不可达(缺口闭合检查由循环条件与循环后防御承担)。
+            evictions.append(
+                self._delete(
+                    victim,
+                    now_ns=now_ns,
+                    phase=phase,
+                    reason=reason,
+                    trigger_request_id=trigger_request_id,
+                )
+            )
+            insufficient = self._insufficient(instance_index, required)
+            fit_insufficient = self._fit_insufficient(instance_index, required)
+        # I3 (2026-09-05): 循环退出后缺口必须已闭合(发生过逐出才可能
+        # 仍在缺口的形态由耗尽分支兜底,此处防御提前退出)。
+        if evictions and insufficient:
+            raise RuntimeError(
+                "passive eviction loop exited with the shortfall still open"
+            )
+        return CapacityResult(tuple(evictions), True, ())
+
+    def _history_shards(self, tokens: int) -> tuple[int, ...]:
+        return kv_cache_shard_bytes_for_tokens(self.model, tokens, self.tp_degree)
+
+    def prepare_history(
+        self,
+        session_id: str,
+        target_instance_index: int,
+        history_tokens: int,
+        now_ns: int,
+        trigger_request_id: str,
+        *,
+        required_context_tokens: Optional[int] = None,
+        phase: str = "history",
+    ) -> HistoryDecision:
+        session_id = _session_key(session_id)
+        _require_nonnegative_int(history_tokens, "history_tokens")
+        if required_context_tokens is None:
+            required_context_tokens = history_tokens
+        _require_nonnegative_int(required_context_tokens, "required_context_tokens")
+        if required_context_tokens < history_tokens:
+            raise ValueError("required context cannot be smaller than history")
+        state = self._sessions.get(session_id)
+        if state is None and history_tokens != 0:
+            raise ValueError(f"new session {session_id} cannot have historical KV")
+        if state is not None and state.logical_context_tokens != history_tokens:
+            raise ValueError(
+                f"session {session_id} has logical context {state.logical_context_tokens}, "
+                f"not requested history {history_tokens}"
+            )
+        if state is not None and state.active:
+            raise RuntimeError(f"session {session_id} received an overlapping request")
+
+        desired = self._history_shards(required_context_tokens)
+        existing_target = (
+            state.shard_bytes
+            if state is not None
+            and state.state == RESIDENT
+            and state.instance_index == target_instance_index
+            else tuple(0 for _ in desired)
+        )
+        needed = tuple(want - current for want, current in zip(desired, existing_target))
+        if any(value < 0 for value in needed):
+            raise RuntimeError("session KV would shrink during history preparation")
+        protected = (session_id,) if state is not None else ()
+        fit = self.ensure_physical_fit(
+            target_instance_index,
+            needed,
+            now_ns,
+            trigger_request_id,
+            protected,
+            phase=phase,
+            reason="history_and_prefill_admission",
+        )
+        evictions = fit.evictions
+        if not fit.admitted:
+            # Blocked admission mirrors the success-path action taxonomy:
+            # a RESIDENT session whose KV sits on another instance is
+            # NOC_MIGRATE (pending migration), never LOCAL_HIT (M5-2 fix,
+            # 2026-09-26; no consumer reads the action on this path).
+            if state is None:
+                action = NO_HISTORY
+            elif state.state == EVICTED:
+                action = RECOMPUTE
+            elif state.instance_index == target_instance_index:
+                action = LOCAL_HIT
+            else:
+                action = NOC_MIGRATE
+            return HistoryDecision(
+                action=action,
+                source_instance_index=(None if state is None else state.instance_index),
+                target_instance_index=target_instance_index,
+                history_tokens=history_tokens,
+                transfer_shards=(),
+                recompute_tokens=history_tokens if state is not None and state.state == EVICTED else 0,
+                evictions=evictions,
+                admission_blocked=True,
+                insufficient_ranks=fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace,
+            )
+
+        history_shards = self._history_shards(history_tokens)
+        if state is None:
+            state = SessionKVState(
+                session_id=session_id,
+                logical_context_tokens=0,
+                state=RESIDENT,
+                instance_index=target_instance_index,
+                shard_bytes=tuple(0 for _ in history_shards),
+                active=True,
+                last_request_id=trigger_request_id,
+            )
+            self._sessions[session_id] = state
+            self._check_invariants_after_mutation(session_ids=(session_id,))
+            before = self._remaining(target_instance_index)
+            self._event(
+                now_ns=now_ns,
+                phase=phase,
+                event_type="no_history",
+                reason="window_first_request",
+                trigger_request_id=trigger_request_id,
+                session_id=session_id,
+                target_instance_index=target_instance_index,
+                before=before,
+                after=before,
+            )
+            return HistoryDecision(
+                action=NO_HISTORY,
+                source_instance_index=None,
+                target_instance_index=target_instance_index,
+                history_tokens=0,
+                transfer_shards=(),
+                recompute_tokens=0,
+                evictions=evictions,
+            )
+
+        if state.state == EVICTED:
+            before = self._remaining(target_instance_index)
+            self._add_shards(target_instance_index, history_shards)
+            state.state = RESIDENT
+            state.instance_index = target_instance_index
+            state.shard_bytes = history_shards
+            state.active = True
+            state.last_request_id = trigger_request_id
+            self._check_invariants_after_mutation(session_ids=(session_id,))
+            after = self._remaining(target_instance_index)
+            self._event(
+                now_ns=now_ns,
+                phase=phase,
+                event_type="recompute",
+                reason="deleted_history_recompute",
+                trigger_request_id=trigger_request_id,
+                session_id=session_id,
+                target_instance_index=target_instance_index,
+                context_tokens=history_tokens,
+                total_bytes=sum(history_shards),
+                shard_bytes=history_shards,
+                last_completion_ns=state.last_completion_ns,
+                before=before,
+                after=after,
+            )
+            return HistoryDecision(
+                action=RECOMPUTE,
+                source_instance_index=None,
+                target_instance_index=target_instance_index,
+                history_tokens=history_tokens,
+                transfer_shards=(),
+                recompute_tokens=history_tokens,
+                evictions=evictions,
+            )
+
+        if state.instance_index is None:
+            raise RuntimeError("resident session is missing its instance")
+        source_instance = state.instance_index
+        state.active = True
+        state.last_request_id = trigger_request_id
+        if source_instance == target_instance_index:
+            self._check_invariants_after_mutation(session_ids=(session_id,))
+            before = self._remaining(target_instance_index)
+            self._event(
+                now_ns=now_ns,
+                phase=phase,
+                event_type="local_hit",
+                reason="history_local_reuse",
+                trigger_request_id=trigger_request_id,
+                session_id=session_id,
+                source_instance_index=source_instance,
+                target_instance_index=target_instance_index,
+                context_tokens=history_tokens,
+                total_bytes=sum(history_shards),
+                shard_bytes=history_shards,
+                last_completion_ns=state.last_completion_ns,
+                before=before,
+                after=before,
+            )
+            return HistoryDecision(
+                action=LOCAL_HIT,
+                source_instance_index=source_instance,
+                target_instance_index=target_instance_index,
+                history_tokens=history_tokens,
+                transfer_shards=(),
+                recompute_tokens=0,
+                evictions=evictions,
+            )
+
+        source_ranks = self.topology.instance(source_instance).ranks
+        target_ranks = self.topology.instance(target_instance_index).ranks
+        transfer_shards = tuple(
+            KVTransferShard(relative_rank, source_rank, target_rank, byte_count)
+            for relative_rank, (source_rank, target_rank, byte_count) in enumerate(
+                zip(source_ranks, target_ranks, history_shards)
+            )
+        )
+        before = self._remaining(target_instance_index)
+        # The dynamic transfer contract admits target shards before releasing
+        # the source; planner state advances atomically after that admission.
+        self._add_shards(target_instance_index, history_shards)
+        self._remove_shards(source_instance, history_shards)
+        state.instance_index = target_instance_index
+        self._check_invariants_after_mutation(session_ids=(session_id,))
+        after = self._remaining(target_instance_index)
+        self._event(
+            now_ns=now_ns,
+            phase=phase,
+            event_type="noc_migrate",
+            reason="history_other_instance",
+            trigger_request_id=trigger_request_id,
+            session_id=session_id,
+            source_instance_index=source_instance,
+            target_instance_index=target_instance_index,
+            context_tokens=history_tokens,
+            total_bytes=sum(history_shards),
+            shard_bytes=history_shards,
+            last_completion_ns=state.last_completion_ns,
+            before=before,
+            after=after,
+        )
+        return HistoryDecision(
+            action=NOC_MIGRATE,
+            source_instance_index=source_instance,
+            target_instance_index=target_instance_index,
+            history_tokens=history_tokens,
+            transfer_shards=transfer_shards,
+            recompute_tokens=0,
+            evictions=evictions,
+        )
+
+    def _grow(
+        self,
+        *,
+        session_id: str,
+        instance_index: int,
+        context_tokens: int,
+        now_ns: int,
+        trigger_request_id: str,
+        phase: str,
+        reason: str,
+    ) -> CapacityResult:
+        state = self._sessions[session_id]
+        if state.state != RESIDENT or state.instance_index != instance_index or not state.active:
+            raise RuntimeError(f"session {session_id} is not active on target instance")
+        desired = self._history_shards(context_tokens)
+        delta = tuple(want - current for want, current in zip(desired, state.shard_bytes))
+        if any(value < 0 for value in delta):
+            raise ValueError("session KV context cannot shrink")
+        fit = self.ensure_physical_fit(
+            instance_index,
+            delta,
+            now_ns,
+            trigger_request_id,
+            (session_id,),
+            phase=phase,
+            reason=reason,
+        )
+        evictions = fit.evictions
+        if not fit.admitted:
+            return CapacityResult(
+                evictions, False, fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace)
+        self._add_shards(instance_index, delta)
+        state.shard_bytes = desired
+        state.logical_context_tokens = context_tokens
+        state.last_request_id = trigger_request_id
+        self._check_invariants_after_mutation(session_ids=(session_id,))
+        return CapacityResult(evictions, True, ())
+
+    def grow_prefill(
+        self,
+        session_id: str,
+        prefill_context_tokens: int,
+        now_ns: int,
+        trigger_request_id: str,
+    ) -> CapacityResult:
+        session_id = _session_key(session_id)
+        state = self._sessions[session_id]
+        if state.instance_index is None:
+            raise RuntimeError("active prefill session has no instance")
+        return self._grow(
+            session_id=session_id,
+            instance_index=state.instance_index,
+            context_tokens=prefill_context_tokens,
+            now_ns=now_ns,
+            trigger_request_id=trigger_request_id,
+            phase="prefill",
+            reason="prefill_growth_capacity",
+        )
+
+    def move_prefill_to_decode(
+        self,
+        session_id: str,
+        target_instance_index: int,
+        now_ns: int,
+        trigger_request_id: str,
+        *,
+        final_context_tokens: Optional[int] = None,
+    ) -> MoveDecision:
+        session_id = _session_key(session_id)
+        state = self._sessions[session_id]
+        if state.state != RESIDENT or state.instance_index is None or not state.active:
+            raise RuntimeError("Prefill KV must be active and resident before Decode")
+        source_instance = state.instance_index
+        desired_final = self._history_shards(
+            state.logical_context_tokens if final_context_tokens is None else final_context_tokens
+        )
+        existing_target = (
+            state.shard_bytes if source_instance == target_instance_index else tuple(0 for _ in desired_final)
+        )
+        required = tuple(want - current for want, current in zip(desired_final, existing_target))
+        fit = self.ensure_physical_fit(
+            target_instance_index,
+            required,
+            now_ns,
+            trigger_request_id,
+            (session_id,),
+            phase="decode",
+            reason="decode_target_capacity",
+        )
+        evictions = fit.evictions
+        empty_transfer = KVTransfer(
+            action=LOCAL_HIT,
+            phase="prefill_decode",
+            reason="prefill_decode_local_reuse",
+            session_id=session_id,
+            trigger_request_id=trigger_request_id,
+            source_instance_index=source_instance,
+            target_instance_index=target_instance_index,
+            history_tokens=state.logical_context_tokens,
+            total_bytes=0,
+            shards=(),
+        )
+        if not fit.admitted:
+            return MoveDecision(
+                action=LOCAL_HIT if source_instance == target_instance_index else NOC_MIGRATE,
+                source_instance_index=source_instance,
+                target_instance_index=target_instance_index,
+                transfer=empty_transfer,
+                evictions=evictions,
+                admission_blocked=True,
+                insufficient_ranks=fit.insufficient_ranks,
+                blocked_by_workspace=fit.blocked_by_workspace,
+            )
+        if source_instance == target_instance_index:
+            before = self._remaining(target_instance_index)
+            self._event(
+                now_ns=now_ns,
+                phase="prefill_decode",
+                event_type="local_hit",
+                reason="prefill_decode_local_reuse",
+                trigger_request_id=trigger_request_id,
+                session_id=session_id,
+                source_instance_index=source_instance,
+                target_instance_index=target_instance_index,
+                context_tokens=state.logical_context_tokens,
+                total_bytes=sum(state.shard_bytes),
+                shard_bytes=state.shard_bytes,
+                last_completion_ns=state.last_completion_ns,
+                before=before,
+                after=before,
+            )
+            return MoveDecision(LOCAL_HIT, source_instance, target_instance_index, empty_transfer, evictions)
+
+        source_ranks = self.topology.instance(source_instance).ranks
+        target_ranks = self.topology.instance(target_instance_index).ranks
+        shards = tuple(
+            KVTransferShard(relative_rank, source_rank, target_rank, byte_count)
+            for relative_rank, (source_rank, target_rank, byte_count) in enumerate(
+                zip(source_ranks, target_ranks, state.shard_bytes)
+            )
+        )
+        transfer = KVTransfer(
+            action=NOC_MIGRATE,
+            phase="prefill_decode",
+            reason="prefill_decode_instance_migrate",
+            session_id=session_id,
+            trigger_request_id=trigger_request_id,
+            source_instance_index=source_instance,
+            target_instance_index=target_instance_index,
+            history_tokens=state.logical_context_tokens,
+            total_bytes=sum(state.shard_bytes),
+            shards=shards,
+        )
+        before = self._remaining(target_instance_index)
+        self._add_shards(target_instance_index, state.shard_bytes)
+        self._remove_shards(source_instance, state.shard_bytes)
+        state.instance_index = target_instance_index
+        self._check_invariants_after_mutation(session_ids=(session_id,))
+        after = self._remaining(target_instance_index)
+        self._event(
+            now_ns=now_ns,
+            phase="prefill_decode",
+            event_type="noc_migrate",
+            reason="prefill_decode_instance_migrate",
+            trigger_request_id=trigger_request_id,
+            session_id=session_id,
+            source_instance_index=source_instance,
+            target_instance_index=target_instance_index,
+            context_tokens=state.logical_context_tokens,
+            total_bytes=transfer.total_bytes,
+            shard_bytes=state.shard_bytes,
+            last_completion_ns=state.last_completion_ns,
+            before=before,
+            after=after,
+        )
+        return MoveDecision(NOC_MIGRATE, source_instance, target_instance_index, transfer, evictions)
+
+    def grow_decode(
+        self,
+        session_id: str,
+        final_context_tokens: int,
+        now_ns: int,
+        trigger_request_id: str,
+    ) -> CapacityResult:
+        session_id = _session_key(session_id)
+        state = self._sessions[session_id]
+        if state.instance_index is None:
+            raise RuntimeError("active decode session has no instance")
+        return self._grow(
+            session_id=session_id,
+            instance_index=state.instance_index,
+            context_tokens=final_context_tokens,
+            now_ns=now_ns,
+            trigger_request_id=trigger_request_id,
+            phase="decode",
+            reason="decode_growth_capacity",
+        )
+
+    def mark_complete(
+        self,
+        session_id: str,
+        completion_ns: int,
+        request_id: str,
+    ) -> tuple[()]:
+        """Always returns the empty tuple.
+
+        The completion boundary retains KV (``retain_complete``) and never
+        evicts, so there are no records to return; the old
+        ``tuple[EvictionRecord, ...]`` annotation was a leftover contract
+        from the removed active-eviction path (A1-16, 2026-09-26).  The
+        empty tuple itself stays because the scheduler stores and iterates
+        it like the other eviction lists.
+        """
+
+        session_id = _session_key(session_id)
+        state = self._sessions[session_id]
+        if state.state != RESIDENT or state.instance_index is None or not state.active:
+            raise RuntimeError("only active resident sessions may complete")
+        state.active = False
+        state.last_completion_ns = completion_ns
+        state.last_request_id = request_id
+        self._check_invariants_after_mutation(session_ids=(session_id,))
+        before = self._remaining(state.instance_index)
+        self._event(
+            now_ns=completion_ns,
+            phase="completion",
+            event_type="retain_complete",
+            reason="request_completed_keep_kv",
+            trigger_request_id=request_id,
+            session_id=session_id,
+            target_instance_index=state.instance_index,
+            context_tokens=state.logical_context_tokens,
+            total_bytes=sum(state.shard_bytes),
+            shard_bytes=state.shard_bytes,
+            last_completion_ns=completion_ns,
+            before=before,
+            after=before,
+        )
+        # The request can never retry admission after completion.  Retire its
+        # bounded-dedup state even when the session has a later turn.
+        self._forget_pressure_event_keys(request_id)
+        return ()
+
+    def retire_terminal_session(
+        self,
+        session_id: str,
+        completion_ns: int,
+        request_id: Optional[str] = None,
+    ) -> Optional[int]:
+        """Drop a completed terminal session without synthesizing a KV action.
+
+        ``mark_complete`` deliberately retains KV for a possible following
+        turn.  The online scheduler calls this only after it has proved that
+        the completed request has no successor and has emitted every output
+        that reads the completion snapshot.
+        """
+
+        session_id = _session_key(session_id)
+        state = self._sessions.get(session_id)
+        if state is None:
+            raise KeyError(f"unknown KV session: {session_id}")
+        if state.active or state.last_completion_ns is None:
+            raise RuntimeError(
+                "only inactive completed sessions may be terminally retired"
+            )
+        if (
+            request_id is not None
+            and state.last_request_id is not None
+            and request_id != state.last_request_id
+        ):
+            raise RuntimeError(
+                "terminal retirement request does not own the completed session"
+            )
+        terminal_request_id = request_id or state.last_request_id
+        if terminal_request_id is None:
+            raise RuntimeError("completed session has no terminal request ID")
+        released_instance_index: Optional[int] = None
+        if state.state == RESIDENT:
+            if state.instance_index is None:
+                raise RuntimeError("resident completed session has no instance")
+            released_instance_index = state.instance_index
+            self._remove_shards(released_instance_index, state.shard_bytes)
+        elif state.state != EVICTED:
+            raise RuntimeError(f"unknown KV state: {state.state}")
+
+        self._forget_pressure_event_keys(terminal_request_id)
+        del self._sessions[session_id]
+        self._check_invariants_after_mutation(session_ids=(session_id,))
+        return released_instance_index
+
+    def assert_final_state(self) -> None:
+        self._check_invariants()
+        if self._pressure_event_keys or self._pressure_event_keys_by_request:
+            raise RuntimeError("planning ended with stale KV pressure dedup state")
+        active = [state.session_id for state in self._sessions.values() if state.active]
+        if active:
+            raise RuntimeError(f"planning ended with active KV sessions: {sorted(active)}")
+
+    def _check_invariants(self) -> None:
+        for state in self._rank_states.values():
+            if state.resident_kv_bytes < 0:
+                raise RuntimeError("negative HBM accounting")
+            if state.used_bytes > state.capacity_bytes:
+                raise RuntimeError(
+                    f"HBM capacity exceeded on rank {state.rank}: "
+                    f"used={state.used_bytes}, capacity={state.capacity_bytes}"
+                )
+        accumulated: dict[int, list[int]] = {
+            instance.index: [0] * self.tp_degree for instance in self.topology.instances
+        }
+        for session in self._sessions.values():
+            if session.state not in {RESIDENT, EVICTED}:
+                raise RuntimeError(f"unknown KV state: {session.state}")
+            if session.state == RESIDENT:
+                if session.instance_index is None:
+                    raise RuntimeError("resident session has no instance")
+                if len(session.shard_bytes) != self.tp_degree:
+                    raise RuntimeError("resident session has invalid TP shard vector")
+                accumulated[session.instance_index] = [
+                    total + value for total, value in zip(
+                        accumulated[session.instance_index], session.shard_bytes
+                    )
+                ]
+            elif session.instance_index is not None:
+                raise RuntimeError("evicted session retained an instance")
+        for instance in self.topology.instances:
+            actual = tuple(
+                self._rank_states[rank].resident_kv_bytes for rank in instance.ranks
+            )
+            if actual != tuple(accumulated[instance.index]):
+                raise RuntimeError(
+                    f"session/rank KV accounting mismatch for instance {instance.index}: "
+                    f"states={actual}, sessions={tuple(accumulated[instance.index])}"
+                )

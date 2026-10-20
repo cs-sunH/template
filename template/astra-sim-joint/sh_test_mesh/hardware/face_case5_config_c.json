@@ -55,7 +55,7 @@
     "The remote-memory pool is attached to every physical mesh-boundary NPU.",
     "The 512 GB/s remote-memory bandwidth and 100 ns latency are shared simulator assumptions.",
     "The capacity profile describes local HBM placement per NPU.",
-    "User-authorized engineering comparison point (2026-10-16): 10 x 10 Core grid on a 25 mm x 32 mm compute Die (800 mm2), 0.75 MiB SRAM/Core and 512-bit NoC. Architectural PE peak is 126.6 INT4 TOPS, numerically compared with the TX8 128 BF16 TFLOPS reference; precision and independent measurement are not equivalent. Vec FP32-equivalent peak is 12.65728 T eq-op/s, not the TX8 1 T reference. Legacy HBM remains the preserved 4 x 16 GB / 410 GB/s per-stack reference (64 GB and 1640 GB/s), not current DOCX HBM3E.",
+    "User-authorized engineering comparison point (2026-10-16), materialized in the architecture block since 2026-10-19 (key-for-key equal to die/configs/tx8_compute_matched_hardware.json in template_newdie): 10 x 10 Core grid on a 25 mm x 32 mm compute Die, 0.75 MiB SRAM/Core and 512-bit NoC. The derived architectural PE peak of this configuration is 126.6 INT4 TOPS, numerically compared with the TX8 128 BF16 TFLOPS reference; precision and independent measurement are not equivalent (calibration_status stays assumed; all eta/kappa/launch values are engineering priors). Derived Vec FP32-equivalent peak is 12.65728 T eq-op/s, not the TX8 1 T reference. HBM stays 2 rows x 2 stacks x 36 GB = 144 GB per die at 4710.4 GB/s aggregate (the legacy 4 x 16 GB / 410 GB/s per-stack reference of the top-level local-hbm bandwidth entry is the preserved non-die base, not this coarse block).",
     "Factory compute default (phase 2, 2026-10-18): the coarse-die node (coarse_die_v2 typed descriptor, materialized verbatim into resolved_die_model.json) replaces the legacy die node as the checked-in backend; die (mesh_die_v1) and compute.peak-perf-tflops remain supported as mutually exclusive alternatives and their aligned capacity profiles are kept for explicit fixtures."
   ],
   "coarse-die": {
@@ -95,10 +95,10 @@
       "sram_quarter_mib_long_side_mm": 0.40662
     },
     "architecture": {
-      "sram_mib_per_core": 0.25,
-      "noc_width_bits": 256,
-      "core_columns_nx": 8,
-      "core_rows_ny": 11,
+      "sram_mib_per_core": 0.75,
+      "noc_width_bits": 512,
+      "core_columns_nx": 10,
+      "core_rows_ny": 10,
       "core_pitch_x_mm": 0,
       "core_pitch_y_mm": 0,
       "die_extra_width_mm": 0.1,
@@ -106,10 +106,8 @@
       "die_geometry": "explicit",
       "hbm_stacks_per_row": 2,
       "hbm_placement_mode": "two_sides_one_row_each",
-      "system_region_width_mm": 215,
-      "system_region_height_mm": 215,
-      "die_width_mm": 21,
-      "die_height_mm": 29
+      "die_width_mm": 25,
+      "die_height_mm": 32
     },
     "performance_profile": {
       "execution_profile": "int4_matrix_vec_fp32_assumed_v1",

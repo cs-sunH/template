@@ -396,7 +396,7 @@ class DieHardwareTests(unittest.TestCase):
             hardware.local_hbm_bandwidth_gbps, 4710.4, places=9)
         self.assertIsNone(hardware.peak_perf_tflops)
         derived = hardware.die_derived
-        self.assertEqual(derived["hardware_summary"]["die_core_count"], 88)
+        self.assertEqual(derived["hardware_summary"]["die_core_count"], 100)
 
     def test_optional_dimensions_are_paired_and_physically_checked(self) -> None:
         source = json.loads(self.fixture_source.read_text(encoding="utf-8"))

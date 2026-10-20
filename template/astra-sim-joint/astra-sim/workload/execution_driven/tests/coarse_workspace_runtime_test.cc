@@ -493,7 +493,9 @@ void test_incomplete_coarse_prediction_boundaries(
         try {
             unexpected_handle = bridge.submit_plan(
                 unavailable, owner,
-                [&](uint64_t, const nlohmann::json&) { ++callbacks; });
+                [&](uint64_t, const coarse_die::TerminalSummary&) {
+                    ++callbacks;
+                });
         } catch (const std::exception& error) {
             submit_rejected = availability_error(error);
         }
@@ -996,7 +998,7 @@ void test_terminal_sample_keeps_live_callback_pending(
            "reference Runtime confirms the scheduled endpoint tick is terminal");
 
     uint64_t callback_count = 0;
-    json callback_progress;
+    std::optional<coarse_die::TerminalSummary> callback_progress;
     SampleProbe probe;
     probe.fixture = &fixture;
     probe.callback_count = &callback_count;
@@ -1005,7 +1007,7 @@ void test_terminal_sample_keeps_live_callback_pending(
     const uint64_t live_handle = runtime.submit_endpoint(
         tiny_endpoint, owner,
         [&callback_count, &callback_progress](
-            const uint64_t, const json& progress) {
+            const uint64_t, const coarse_die::TerminalSummary& progress) {
             ++callback_count;
             callback_progress = progress;
         });
@@ -1067,9 +1069,9 @@ void test_terminal_sample_keeps_live_callback_pending(
         fixture.event_queue->proceed();
         ++event_steps;
     }
-    expect(callback_count == 1 &&
-               callback_progress.at("terminal").get<bool>() &&
-               callback_progress.at("finish_ns") == *terminal_tick &&
+    expect(callback_count == 1 && callback_progress.has_value() &&
+               callback_progress->terminal &&
+               callback_progress->finish_ns == *terminal_tick &&
                !runtime.has_active_executions(),
            "the real queue dispatches exactly one terminal and retires its handle");
 }

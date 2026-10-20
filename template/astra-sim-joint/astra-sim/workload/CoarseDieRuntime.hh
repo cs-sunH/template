@@ -21,7 +21,12 @@ class Sys;
 // execution becomes terminal.
 class CoarseDieRuntime final : public Callable {
   public:
-    using Completion = std::function<void(uint64_t, const nlohmann::json&)>;
+    // Internal completion notification (roofline stage 2 WP2): typed
+    // execution-level summary from coarse_die::Runtime::terminal_summary(),
+    // not a full progress JSON. The public query_progress()/export_snapshot()
+    // contracts are unchanged and serve explicit detailed queries.
+    using Completion =
+        std::function<void(uint64_t, const coarse_die::TerminalSummary&)>;
 
     CoarseDieRuntime(Sys* sys, coarse_die::Hardware hardware);
     ~CoarseDieRuntime() override;

@@ -336,19 +336,24 @@ def test_die_emission_conserves_totals_vs_legacy():
 
 
 def test_die_spec_carries_weight_passes_and_full_layer_count():
-    """spec 的 layer_count=全模层数（全区间发射）、weight_passes 如实、
-    spans 绝对位置与平铺表一致。"""
+    """spec 的 layer_count=全模层数（全区间发射）、weight_passes 恒 1、
+    spans 绝对位置与平铺表一致。
+
+    2026-10-19 wp 语义修复（M1）：coarse 合同下 spec 的 weight_passes
+    恒为 1（repeat 计数 = layer_instances × weight_passes，spans 已逐
+    迭代枚举全部工作，整段模板只执行一遍）；上游传入的列车迭代数只
+    服务旧引擎的字节簿记（generate_trace.py 口径），不再进入 spec。"""
     spans = [(1, 33), (512, 900), (1, 901)]
     builder = _run_die(spans, weight_passes=3)
     layers, passes, span_count = _spec_layers_in_category(
         builder, "_mlp_residual_add")
     assert layers == 32
-    assert passes == 3
+    assert passes == 1
     assert span_count == 3
     tail_layers, tail_passes, tail_spans = _spec_layers_in_category(
         builder, "_all_passes_logits_projection")
     assert tail_layers == 1
-    assert tail_passes == 3
+    assert tail_passes == 1
     assert tail_spans == 3
     # 绝对位置恒等式（q_start = kv - tokens, kv_start = 0）。
     # v5 紧凑 run：spec.spans 为混合 [span|run]，先规范展开再逐项断言。

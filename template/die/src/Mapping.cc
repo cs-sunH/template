@@ -1929,7 +1929,8 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
                                                         const nlohmann::json& task,
                                                         const Topology& topo,
                                                         bool full,
-                                                        const std::string& mode = "both") {
+                                                        const std::string& mode = "both",
+                                                        bool seal_fingerprints = true) {
   const auto spans=spans_of(task);
   if (spans.empty()) fail("task.spans: attention requires at least one span");
   const u64 qh=shape_u(task,"q_heads",shape_u(task,"q_heads_local",1));
@@ -2472,7 +2473,12 @@ std::vector<std::shared_ptr<Plan>> enumerate_attention(const Hardware& hw,
     p->summary["executed_score_slots"]=as_u64(slots,"attention slots"); p->summary["valid_score_pairs"]=as_u64(valid,"attention pairs");
     p->summary["score_bytes"]=as_u64(m.score_bytes,"score bytes"); p->summary["probability_bytes"]=as_u64(m.probability_bytes,"probability bytes");
     p->summary["tm"]=tq; p->summary["tn"]=tk; p->summary["tk"]=tk;
-    p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>(); result.push_back(std::move(p));
+    // Compile-path candidates defer their hash to the ranking winner; the
+    // structural validation that plan_to_json performs there runs instead in
+    // the candidate's Runtime trial (validate_plan_structure).
+    if(seal_fingerprints)
+      p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
+    result.push_back(std::move(p));
   }
   return result;
 }
@@ -2556,7 +2562,7 @@ std::array<Activity, 3> gemm_os_single_core_resource_facts(
 
 static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
     const Hardware& hardware, const nlohmann::json& task,
-    bool defer_top_level_gemm_fingerprints) {
+    bool defer_fingerprints) {
   if (!task.is_object() || !task.contains("op_kind")) fail("task: normalized op_kind is required");
   const std::string op=gets(task,"op_kind");
   const u64 nx=du(hardware,"die","core_columns_nx"), ny=du(hardware,"die","core_rows_ny");
@@ -2584,7 +2590,7 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
     one["layer_instances"]=1u;
     one["weight_passes"]=1u;
     one.erase("repeat_seams");
-    auto plans=enumerate_mappings_impl(hardware,one,defer_top_level_gemm_fingerprints);
+    auto plans=enumerate_mappings_impl(hardware,one,defer_fingerprints);
     for(auto& p:plans) {
       p->task=task;
       p->repeat=PlanRepeat{instances,0};
@@ -2597,16 +2603,18 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
   }
   if (op=="gemm") return enumerate_gemm(
       hardware,task,topo,shape_u(task,"m"),shape_u(task,"n"),shape_u(task,"k"),
-      !defer_top_level_gemm_fingerprints,defer_top_level_gemm_fingerprints);
+      !defer_fingerprints,defer_fingerprints);
   if (op=="attention" || op=="attention_region") {
     const std::string fusion=gets(task,"fusion_policy","auto");
     std::vector<std::shared_ptr<Plan>> result;
     if (fusion!="materialized") {
-      auto fused=enumerate_attention(hardware,task,topo,false);
+      auto fused=enumerate_attention(hardware,task,topo,false,"both",
+          !defer_fingerprints);
       result.insert(result.end(),fused.begin(),fused.end());
     }
     if (fusion!="fused") {
-      auto materialized=enumerate_attention(hardware,task,topo,true);
+      auto materialized=enumerate_attention(hardware,task,topo,true,"both",
+          !defer_fingerprints);
       result.insert(result.end(),materialized.begin(),materialized.end());
     }
     return result;
@@ -2653,7 +2661,10 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
       const u64 nout=as_u64(add128(mul128(qh,hd,"QKV output"),mul128(2,mul128(kvh,hd,"QKV output"),"QKV output"),"QKV output"),"QKV output");
       p->task["tensor_shapes"]["m"]=M; p->task["tensor_shapes"]["n"]=nout; p->task["tensor_shapes"]["k"]=H;
       p->task["op_kind"]="gemm";
-      auto plans=enumerate_gemm(hardware,p->task,topo,M,nout,H);
+      // The child GEMM hash is always discarded: this loop mutates each child
+      // into the composed QKV/RoPE candidate and re-seals (or defers) below,
+      // so enumerate the children unsealed with their full summaries intact.
+      auto plans=enumerate_gemm(hardware,p->task,topo,M,nout,H,false,false);
       const auto& shape=task.at("tensor_shapes");
       const bool has_rope=gets(shape,"position_encoding","rope")!="none";
       const u128 executions=mul128(layers,passes,"QKV/RoPE executions");
@@ -2693,7 +2704,8 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
         q->summary["rope_eqops"]=as_u64(rope_ops,"RoPE eqops");
         q->summary["position_encoding"]=has_rope?"rope":"none";
         q->fingerprint.clear();
-        q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();
+        if(!defer_fingerprints)
+          q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();
       }
       plans.erase(std::remove_if(plans.begin(),plans.end(),[](const auto& q){return q->summary.value("kind",std::string())!="qkv_rope";}),plans.end());
       return plans;
@@ -2729,13 +2741,21 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
       add_gemm_epoch(*q,z,hardware,topo,M,N,K,ad,wd,od,layers,passes,GemmChoice{tm,tn,tk,wr},op+"_gemm_v2");
       if(static_cast<long double>(as_u64(z.sram_peak,"SRAM peak"))>perf(hardware,"rho_sram",0.9)*dd(hardware,"core","sram_bytes_per_core"))continue;
       finalize_summary(*q,z,hardware);q->summary["kind"]=op;q->summary["template_id"]=op+"_"+z.dataflow;q->summary["dataflow_id"]=z.dataflow;q->summary["tm"]=tm;q->summary["tn"]=tn;q->summary["tk"]=tk;
-      q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();result.push_back(std::move(q));
+      if(!defer_fingerprints)
+        q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();
+      result.push_back(std::move(q));
     }
     return result;
   } else if (op=="qk" || op=="av") {
     auto task2=task;task2["op_kind"]="attention_region";
-    auto att=enumerate_attention(hardware,task2,topo,true,op);
-    for(auto& q:att){q->task=task;q->summary["kind"]=op;q->summary["template_id"]=op+"_"+q->summary.value("template_id",std::string());q->fingerprint.clear();q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();}
+    auto att=enumerate_attention(hardware,task2,topo,true,op,!defer_fingerprints);
+    for(auto& q:att){
+      q->task=task;q->summary["kind"]=op;
+      q->summary["template_id"]=op+"_"+q->summary.value("template_id",std::string());
+      q->fingerprint.clear();
+      if(!defer_fingerprints)
+        q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();
+    }
     return att;
   } else if (op=="ffn_region") {
     const std::string policy=gets(task,"fusion_policy","auto");
@@ -2749,6 +2769,11 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
       auto q=new_plan(hardware,task);Metrics z;z.template_id="materialized_swiglu_v2";z.assumptions={"engineering_assumption","materialized_intermediate"};
       const std::string wdt=dtype(task,"weights"), xdt=dtype(task,"activations"), ydt=dtype(task,"output");
       const std::string middle_dtype=dtype(task,"activations");
+      // Child GEMM trials are pure ranking input: only the winning GemmChoice
+      // escapes, so the children are enumerated unsealed with ranking-only
+      // summaries (every key this selection reads is a ranking field) and
+      // share one immutable hardware copy across their Runtime trials.
+      const auto child_hardware=std::make_shared<const Hardware>(hardware);
       auto selected_gemm=[&](u64 n,u64 k,const std::string& input_dtype,const std::string& output_dtype) {
         auto child=task;
         child["op_kind"]="gemm";
@@ -2758,12 +2783,12 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
         child["tensor_shapes"]={{"m",M},{"n",n},{"k",k}};
         child["storage_dtype"]["activations"]=input_dtype;
         child["storage_dtype"]["output"]=output_dtype;
-        const auto choices=enumerate_gemm(hardware,child,topo,M,n,k);
+        const auto choices=enumerate_gemm(hardware,child,topo,M,n,k,false,true);
         if(choices.empty())fail("unsupported_workspace: materialized FFN GEMM has no feasible candidate");
         using Key=std::tuple<u64,u128,u64,u64,std::string,u64,u64,u64,u64>;
         Key best_key{}; GemmChoice best{}; bool first=true;
         for(const auto& choice:choices) {
-          const u64 latency=estimate_latency_ns(hardware,choice);
+          const u64 latency=estimate_candidate_latency_ns(child_hardware,choice);
           const auto& summary=choice->summary;
           Key key{latency,add128(getu(summary,"hbm_read_bytes_total"),getu(summary,"hbm_write_bytes_total"),"FFN child HBM"),getu(summary,"hbm_workspace_peak_bytes"),getu(summary,"sram_peak_bytes_per_core"),gets(summary,"template_id"),getu(summary,"tm"),getu(summary,"tn"),getu(summary,"tk"),getu(summary,"th")};
           if(first||key<best_key) {
@@ -2809,7 +2834,9 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
             {"credit_rule","reset"},{"activity_work_basis","one_declared_instance"},
             {"seam_delay_source","per_instance_region_overhead"}};
       }
-      q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();result.push_back(std::move(q));
+      if(!defer_fingerprints)
+        q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();
+      result.push_back(std::move(q));
     }
     if(!repeat_declared && policy!="materialized"&&policy!="none") {
       if(!swiglu) {
@@ -3243,7 +3270,8 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
           q->summary["fused_sram_peak_components_bytes_per_core"]=peak_components;
           q->summary["fused_activation_eqops"]=as_u64(activation_ops,
                                                        "FFN activation eqops");
-          q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();
+          if(!defer_fingerprints)
+            q->fingerprint=plan_to_json(*q).at("fingerprint").get<std::string>();
           result.push_back(std::move(q));
         }
       }
@@ -3252,7 +3280,10 @@ static std::vector<std::shared_ptr<Plan>> enumerate_mappings_impl(
   } else {
     fail("unsupported_op_kind: " + op);
   }
-  finalize_summary(*p,m,hardware);p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();return {p};
+  finalize_summary(*p,m,hardware);
+  if(!defer_fingerprints)
+    p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
+  return {p};
 }
 
 namespace {
@@ -3354,7 +3385,7 @@ nlohmann::json region_ready_overhead_audit(const RegionReadyOverheads& f) {
 // The supported first HBM visit is an independent Load-first epoch; the
 // existing Plan ready gate needs no new activity, resource, or state.
 void apply_region_ready_overheads(const Hardware& hw,
-    std::vector<std::shared_ptr<Plan>>& plans,bool defer_gemm_diagnostics) {
+    std::vector<std::shared_ptr<Plan>>& plans,bool defer_fingerprints) {
   for(auto& p:plans) {
     const auto facts=region_ready_overheads(hw,*p);
     if(!facts)continue;  // Preserve single-instance zero-overhead wire/hash.
@@ -3383,12 +3414,16 @@ void apply_region_ready_overheads(const Hardware& hw,
         break;
       }
     }
-    // Internal GEMM trials keep all timing, availability, and budget checks.
-    // Only the winner's diagnostic JSON and fingerprint need materializing.
-    const bool defer=defer_gemm_diagnostics && gets(p->task,"op_kind")=="gemm";
-    if(!defer)p->summary["fixed_region_overheads"]=region_ready_overhead_audit(f);
+    // Every candidate keeps its full timing, availability, budget checks and
+    // region audit; the compile path defers only the canonical hash, so a
+    // deferred candidate differs from its public counterpart by the
+    // fingerprint alone. Compact GEMM ranking trials additionally omit
+    // non-ranking report fields; their winner is rebuilt by
+    // materialize_gemm_compile_candidate before it escapes.
+    p->summary["fixed_region_overheads"]=region_ready_overhead_audit(f);
     p->fingerprint.clear();
-    if(!defer)p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
+    if(!defer_fingerprints)
+      p->fingerprint=plan_to_json(*p).at("fingerprint").get<std::string>();
   }
 }
 

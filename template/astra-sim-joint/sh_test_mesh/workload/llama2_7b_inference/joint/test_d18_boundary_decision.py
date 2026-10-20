@@ -658,13 +658,15 @@ class DBoundaryCapacityAuditTest(unittest.TestCase):
                 {"instance_index", "ledger_by_tp_rank", "free_by_tp_rank"})
             self.assertEqual(len(entry["ledger_by_tp_rank"]), tp)
             self.assertEqual(len(entry["free_by_tp_rank"]), tp)
-            for (c, w, o, z), free in zip(
+            for (c, w, o, z, x), free in zip(
                     entry["ledger_by_tp_rank"], entry["free_by_tp_rank"]):
-                # C/W/O/Z 分量分明（式 19）+ F = C−W−O−Z 派生一致。
-                self.assertEqual(free, c - w - o - z)
+                # C/W/O/Z/X 分量分明（式 19；X = 外部 workspace）+
+                # F = C−W−O−Z−X 派生一致。
+                self.assertEqual(free, c - w - o - z - x)
                 self.assertGreaterEqual(free, 0)
                 self.assertGreaterEqual(o, 0)
                 self.assertGreaterEqual(z, 0)
+                self.assertGreaterEqual(x, 0)
 
 
 if __name__ == "__main__":

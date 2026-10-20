@@ -570,12 +570,12 @@ int main() {
             {"route", {{"internal_route", false}}}};
         const uint64_t handle = bridge.submit_endpoint(
             zero_work_endpoint, owner,
-            [&](uint64_t, const nlohmann::json& progress) {
+            [&](uint64_t, const coarse_die::TerminalSummary& progress) {
                 ++notified;
                 notify_tick = Sys::boostedTick();
-                state_wire = progress.at("state") == "finished";
-                terminal_wire = progress.at("terminal").get<bool>();
-                finish_wire = progress.at("finish_ns").get<uint64_t>();
+                state_wire = progress.terminal && !progress.cancelled;
+                terminal_wire = progress.terminal;
+                finish_wire = progress.finish_ns;
             });
         expect_true(handle != 0 && notified == 0 &&
                         bridge.has_active_executions(),
@@ -625,12 +625,12 @@ int main() {
             };
         const uint64_t outer = bridge.submit_endpoint(
             one_ns_endpoint(3401, 3402), owner,
-            [&](uint64_t, const nlohmann::json&) {
+            [&](uint64_t, const coarse_die::TerminalSummary&) {
                 ++outer_notified;
                 outer_tick = Sys::boostedTick();
                 const uint64_t inner = bridge.submit_endpoint(
                     one_ns_endpoint(3403, 3404), owner,
-                    [&](uint64_t, const nlohmann::json&) {
+                    [&](uint64_t, const coarse_die::TerminalSummary&) {
                         ++inner_notified;
                         inner_tick = Sys::boostedTick();
                     });

@@ -613,7 +613,14 @@ std::shared_ptr<const Plan> compile_normalized_impl(
   }
   if (candidates.size() > 256) fail("compile", "candidate set exceeds fixed upper bound 256");
   const auto immutable_hardware = std::make_shared<const Hardware>(hardware);
-  const bool gemm_candidates_are_unsealed =
+  // Every compile-path candidate defers its fingerprint (roofline stage 3,
+  // WP3.2): losing candidates never leave this ranking pass, so only the
+  // winner pays the canonical payload hash. GEMM candidates additionally
+  // carry ranking-only summaries and are rebuilt through
+  // materialize_gemm_compile_candidate; all other candidates are complete
+  // builders that differ from their public counterparts by the fingerprint
+  // alone. Public enumerate_mappings() keeps returning fully sealed Plans.
+  const bool gemm_candidates =
       normalized.at("op_kind").get<std::string>() == "gemm";
 
   struct Ranked {
@@ -630,18 +637,13 @@ std::shared_ptr<const Plan> compile_normalized_impl(
   const std::string expected_hardware=hardware.fingerprint.empty()
       ? stable_hash(hardware.input.dump()) : hardware.fingerprint;
   for (auto& candidate : candidates) {
-    // The compile-only GEMM enumerator defers candidate fingerprints because
-    // losing candidates never leave this ranking pass. The dedicated Runtime
-    // estimate path still performs all plan, hardware, work, and credit checks
-    // while allowing only that internal trial to omit a not-yet-needed hash.
-    // Public enumerate_mappings() continues to return fully sealed Plans.
+    // The dedicated Runtime estimate path performs all plan structure,
+    // hardware, work, and credit checks on the unsealed candidate while
+    // allowing only that internal trial to omit a not-yet-needed hash.
     if(candidate->task != normalized || candidate->hardware_fingerprint != expected_hardware ||
-       (gemm_candidates_are_unsealed ? !candidate->fingerprint.empty()
-                                     : candidate->fingerprint.empty()))
+       !candidate->fingerprint.empty())
       fail("compile", "invalid_plan: mapping candidate identity is incomplete");
-    const u64 latency = gemm_candidates_are_unsealed
-        ? detail::estimate_candidate_latency_ns(immutable_hardware, candidate)
-        : detail::estimate_latency_ns(immutable_hardware, candidate);
+    const u64 latency = detail::estimate_candidate_latency_ns(immutable_hardware, candidate);
     // Preserve status type validation for every candidate. Losing builders
     // never escape, so only the winner needs these report fields inserted.
     (void)candidate->summary.value("prediction_status",std::string("ok_assumed"));
@@ -672,7 +674,7 @@ std::shared_ptr<const Plan> compile_normalized_impl(
     return key(a)<key(b);
   });
   std::shared_ptr<Plan> selected=winner->plan;
-  if(gemm_candidates_are_unsealed)
+  if(gemm_candidates)
     selected=detail::materialize_gemm_compile_candidate(hardware,*selected);
   selected->summary["estimated_latency_ns"]=winner->latency;
   selected->summary["alone_estimate_status"]=
@@ -686,7 +688,7 @@ std::shared_ptr<const Plan> compile_normalized_impl(
       : "activity work/bytes/ops are epoch total across repeat_count; repeat_count is audit metadata only; credit_delta is total signed credit change over progress 0..1";
   selected->summary["granularity_validation"] = "not_run";
   selected->summary["evidence_flags"] = {"engineering_assumption", "hardware_source_derived"};
-  if(gemm_candidates_are_unsealed)detail::finalize_region_overhead_audit(hardware,*selected);
+  detail::finalize_region_overhead_audit(hardware,*selected);
   selected->fingerprint.clear();
   selected->fingerprint = plan_to_json(*selected).at("fingerprint").get<std::string>();
   return selected;

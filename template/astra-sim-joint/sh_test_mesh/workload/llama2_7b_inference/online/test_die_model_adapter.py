@@ -344,7 +344,9 @@ class BuildSpecTests(unittest.TestCase):
         self.assertEqual(spec["tp_slice"]["q_heads_local"], 5)
         self.assertEqual(len(spec["spans"]), 2)
         self.assertEqual(spec["layer_count"], 8)
-        self.assertEqual(spec["weight_passes"], 3)
+        # coarse repeat 合同：spec 的 weight_passes 恒为 1（spans 已逐迭代
+        # 枚举全部工作；上层迭代数只留在旧引擎字节簿记）。
+        self.assertEqual(spec["weight_passes"], 1)
         self.assertEqual(spec["kv_access"], {"identity": "local"})
         self.assertEqual(spec["provenance"], "transformer_pass_aggregated")
         self.assertEqual(len(spec["config_hash"]), 64)

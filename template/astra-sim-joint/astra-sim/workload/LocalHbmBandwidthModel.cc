@@ -1167,12 +1167,15 @@ void LocalHbmBandwidthModel::issue_job(
             [this, wlhd, kind,
              completion = std::move(transfer_completion)](
                 const uint64_t completed_handle,
-                const nlohmann::json& progress) mutable {
+                const coarse_die::TerminalSummary& progress) mutable {
                 coarse_jobs_.erase(completed_handle);
-                const bool cancelled =
-                    progress.value("state", std::string()) == "cancelled";
-                const auto [read_bytes, write_bytes] =
-                    coarse_hbm_read_write_bytes(progress);
+                const bool cancelled = progress.cancelled;
+                // Typed direction sums replace the exact-string parse
+                // (identical values, see Runtime::terminal_summary); the
+                // joint order keeps marker accumulation ahead of the
+                // cancelled return, exactly as before.
+                const double read_bytes = progress.hbm_read_bytes;
+                const double write_bytes = progress.hbm_write_bytes;
                 if (kind == JobKind::CONTROL_MARKER) {
                     coarse_control_marker_bytes_served_ += read_bytes;
                 }

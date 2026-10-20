@@ -4,9 +4,38 @@
 #include <cstddef>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
 
 namespace coarse_die {
+namespace detail {
+// Arbitration scratch storage reused across Runtime::allocate() calls; the
+// definition lives with the solver in Execution.cc. Its capacity is bounded
+// by the fixed resource count and the 3x32 activity bound (never grows with
+// event count) and it never appears in counters, snapshots, or any public
+// output.
+struct ArbitrationScratch;
+
+// Copyable owner for the arbitration scratch. The pool is a pure work buffer
+// that allocate() refills from live state before every read, so a copy of a
+// Runtime (the read-only sampling paths, e.g. host query_progress_at) drops
+// the pool and lazily rebuilds it on the copy's next allocate -- identical
+// outputs either way. Declaring the copy operations keeps Runtime itself
+// implicitly copyable as before WP3.3.
+struct ArbitrationScratchHandle {
+    std::unique_ptr<ArbitrationScratch> pool;
+    // All special members live in Execution.cc (where ArbitrationScratch is
+    // complete) so no other TU instantiates unique_ptr deletion on the
+    // incomplete type.
+    ArbitrationScratchHandle();
+    ~ArbitrationScratchHandle();
+    ArbitrationScratchHandle(const ArbitrationScratchHandle&);
+    ArbitrationScratchHandle& operator=(const ArbitrationScratchHandle&);
+    ArbitrationScratchHandle(ArbitrationScratchHandle&&) noexcept;
+    ArbitrationScratchHandle& operator=(ArbitrationScratchHandle&&) noexcept;
+};
+}
+
 struct Owner {
     std::uint64_t request_id=0, node_id=0, execution_id=0, generation=1;
     std::string key() const;
@@ -154,10 +183,50 @@ class DyadicBusySum {
     void normalize();
 };
 
+// Typed per-event observation for the closed-form repeat estimator (roofline
+// stage 2, WP1): value copies of the two raw execution-level fields the
+// estimator reads after every advance. These are exactly the "round" and
+// "ready_ns" values export_snapshot() serializes for the same state (round
+// keeps Execution's size_t; the declared repeat-count bound keeps the u64
+// conversion at the estimator boundary lossless).
+struct RepeatObservation {
+    std::size_t round = 0;
+    std::uint64_t ready_ns = 0;
+};
+
+// Typed terminal summary for internal completion notifications (roofline
+// stage 2, WP2): value copies of the execution-level fields host completion
+// callbacks consume, replacing their full query_progress() JSON. Every field
+// equals what query_progress() serializes for the same terminal state,
+// conversions included: served values are the same static_cast<double> of the
+// execution-level long double accumulators; the matrix preserves the
+// row-major [row][read,write] layout COMP consumers sum in order; the
+// direction sums accumulate the raw long doubles per direction (row-major)
+// and cast once, which equals the endpoint consumers' parse of the exact
+// decimal strings (decimal_measure round-trips exactly). Activities history,
+// plan re-serialization, and decimal text formatting are never touched.
+// HBM service accumulators are rejected (fail-closed) if non-finite or
+// negative, the same rejection the JSON consumers applied to the exact
+// matrix entries.
+struct TerminalSummary {
+    bool terminal = false;  // always true when the summary is engaged
+    bool cancelled = false;
+    std::uint64_t issue_ns = 0;
+    std::uint64_t finish_ns = 0;  // terminal timestamp; zero is legal
+    std::uint64_t elapsed_ns = 0;  // finish_ns - issue_ns for terminal states
+    double int4_served = 0.0;
+    double vec_served = 0.0;
+    std::array<std::array<double, 2>, 2> hbm_served{};
+    double hbm_read_bytes = 0.0;
+    double hbm_write_bytes = 0.0;
+};
+
 class Runtime {
  public:
     explicit Runtime(Hardware hardware);
     explicit Runtime(std::shared_ptr<const Hardware> hardware);
+    // Out-of-line so the arbitration scratch can stay incomplete here.
+    ~Runtime();
     std::uint64_t submit(std::shared_ptr<const Plan>, Owner,
                          std::uint64_t now_ns);
     std::uint64_t submit_endpoint(const nlohmann::json&, Owner,
@@ -172,6 +241,26 @@ class Runtime {
     // after completion or cancellation. Unknown/destroyed handles throw the
     // same stale_handle error as query_progress.
     std::optional<std::uint64_t> terminal_finish_ns(std::uint64_t handle) const;
+    // Typed observation for the closed-form repeat estimator: {round,
+    // ready_ns} value copies of one execution, replacing the estimator's
+    // per-event full export_snapshot(). Same two values the public snapshot
+    // serializes for this handle and state, terminal states included.
+    // Returns nullopt for an unknown/destroyed handle; the estimator then
+    // records nothing for that event, exactly like the old snapshot-array
+    // scan that skipped missing handles (never a 0/0 record, never a runtime
+    // reset). Pure read: no advance, settle, or allocate; no JSON, plan, or
+    // activity-history copy; no generation, counter, or cache update — an
+    // execution-map lookup plus constant work.
+    std::optional<RepeatObservation> repeat_observation(
+        std::uint64_t handle) const;
+    // Read-only terminal summary for internal completion notifications
+    // (WP2): a value copy of the execution-level fields callbacks consume
+    // (see TerminalSummary). Returns nullopt while the execution is live;
+    // unknown/destroyed handles throw the same stale_handle error as
+    // query_progress. One map lookup builds the whole summary — no
+    // activities JSON, plan re-serialization, or decimal formatting.
+    std::optional<TerminalSummary> terminal_summary(
+        std::uint64_t handle) const;
     nlohmann::json counters() const;
     // §4.2 observation counters (roofline batch): pure uint64 diagnostics of
     // scheduler/query activity — next_event queries, advance_to calls,
@@ -236,6 +325,12 @@ class Runtime {
     // erase its fractional part and change the public ceil by one ns.
     std::uint64_t exact_origin_ns_=0;
     long double exact_ns_=0;  // fractional ns in [0,1)
+    // Arbitration scratch (roofline stage 3, WP3.3): pooled row/ref/solver
+    // storage reused across allocate() calls so repeated arbitration does not
+    // reallocate per restart, tier, or probe. Lazily built, bounded by the
+    // solver's structural limits, refilled before every read within a call,
+    // and never serialized anywhere.
+    detail::ArbitrationScratchHandle arbitration_scratch_;
     long double time_until(std::uint64_t absolute_ns) const;
     std::uint64_t ceil_exact_time() const;
     void set_exact_time(std::uint64_t absolute_ns);

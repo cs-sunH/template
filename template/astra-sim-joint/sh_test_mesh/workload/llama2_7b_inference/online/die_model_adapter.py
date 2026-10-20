@@ -557,7 +557,7 @@ class DieModelContext:
             fusion_policy=fusion_policy,
             kv_identity=kv_identity,
         )
-        if layer_count * weight_passes >= 2:
+        if layer_count >= 2:
             # Declared generative serial repeat (die coarse_die_plan_v5), added
             # 2026-10-17 per consensus decision 4 (Wave 3, mirroring the four
             # sibling repos): the repeated passes of every typed die region are
@@ -679,7 +679,16 @@ def build_die_spec(
         # historical per-category dict copies only churn memory.
         "spans": list(spans),
         "layer_count": layer_count,
-        "weight_passes": weight_passes,
+        # coarse repeat 合同(die/docs/analysis/repeat-generative-v1/
+        # DESIGN.md 与 die/src/Mapping.cc 的 repeat 物化):weight_passes
+        # 意为"对折叠后 span 集的完整串行重执行遍数"(repeat count =
+        # layer_instances × weight_passes,每遍执行整段模板)。本发射
+        # 链路的 spans 已逐迭代枚举全部工作(M = Σspans),整段模板只
+        # 执行一遍,故恒为 1;上层传入的列车迭代数只服务旧引擎的字节
+        # 簿记口径(generate_trace.py 的 weight_passes 字段文档串),不
+        # 再进入 coarse spec/task。权重按迭代重读的旧簿记流量随之不再
+        # 计入本后端(slo_hbm_* 字节类指标解读时需知此近似)。
+        "weight_passes": 1,
         "kv_access": {"identity": kv_identity},
         "fusion_policy": fusion_policy,
         "provenance": PROVENANCE,
@@ -813,7 +822,16 @@ def build_coarse_die_task(
         "storage_dtype": dtype,
         "execution_profile": ctx.execution_profile,
         "layer_instances": layer_count,
-        "weight_passes": weight_passes,
+        # coarse repeat 合同(die/docs/analysis/repeat-generative-v1/
+        # DESIGN.md 与 die/src/Mapping.cc 的 repeat 物化):weight_passes
+        # 意为"对折叠后 span 集的完整串行重执行遍数"(repeat count =
+        # layer_instances × weight_passes,每遍执行整段模板)。本发射
+        # 链路的 spans 已逐迭代枚举全部工作(M = Σspans),整段模板只
+        # 执行一遍,故恒为 1;上层传入的列车迭代数只服务旧引擎的字节
+        # 簿记口径(generate_trace.py 的 weight_passes 字段文档串),不
+        # 再进入 coarse spec/task。权重按迭代重读的旧簿记流量随之不再
+        # 计入本后端(slo_hbm_* 字节类指标解读时需知此近似)。
+        "weight_passes": 1,
         "fusion_policy": fusion_policy,
     }
     for key, value in (("graph_identity", graph_identity),

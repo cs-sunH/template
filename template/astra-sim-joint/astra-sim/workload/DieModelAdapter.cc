@@ -303,7 +303,7 @@ void DieModelAdapter::issue_prepared_coarse_plan(
     const uint64_t handle = sys_->coarse_die_runtime->submit_plan(
         prepared.plan, owner,
         [this](const uint64_t done_handle,
-               const nlohmann::json& progress) {
+               const coarse_die::TerminalSummary& progress) {
             auto found = coarse_active_.find(done_handle);
             if (found == coarse_active_.end()) {
                 throw std::runtime_error(
@@ -314,14 +314,19 @@ void DieModelAdapter::issue_prepared_coarse_plan(
             coarse_active_.erase(found);
             active.lease.release();
 
-            const auto state = progress.value("state", std::string());
-            if (state != "finished") {
+            // Typed completion (roofline stage 2 WP2): the summary carries
+            // exactly the execution-level fields this callback consumed from
+            // the old progress JSON. joint still requires a finished COMP:
+            // cancelled completions fail closed with the reconstructed state
+            // string the old error text carried.
+            const std::string state =
+                progress.cancelled ? "cancelled" : "finished";
+            if (!progress.terminal || state != "finished") {
                 throw std::runtime_error(
                     "coarse COMP completion has invalid terminal state " +
                     state);
             }
-            const uint64_t elapsed_ns =
-                progress.value("elapsed_ns", uint64_t{0});
+            const uint64_t elapsed_ns = progress.elapsed_ns;
             const double elapsed_s = static_cast<double>(elapsed_ns) / 1e9;
             const auto& derived =
                 sys_->coarse_die_runtime->hardware_summary();
@@ -333,21 +338,13 @@ void DieModelAdapter::issue_prepared_coarse_plan(
             const double hbm_peak =
                 hw_summary.at("hbm_row_peak_Bps")[0].get<double>() +
                 hw_summary.at("hbm_row_peak_Bps")[1].get<double>();
-            const double int4_ops =
-                progress.at("served").at("int4_ops").get<double>();
-            const double vec_ops =
-                progress.at("served").at("vec_eqops").get<double>();
-            const auto& matrix = progress.at("hbm_served_bytes");
-            if (!matrix.is_array() || matrix.size() != 2 ||
-                !matrix[0].is_array() || matrix[0].size() != 2 ||
-                !matrix[1].is_array() || matrix[1].size() != 2) {
-                throw std::runtime_error(
-                    "coarse_die_v2 completion is missing its 2x2 HBM "
-                    "served matrix");
-            }
+            const double int4_ops = progress.int4_served;
+            const double vec_ops = progress.vec_served;
+            // The typed summary always carries the fixed 2x2 matrix; the old
+            // JSON shape check collapses to the same fail-closed shape below.
             const double hbm_bytes =
-                matrix[0][0].get<double>() + matrix[0][1].get<double>() +
-                matrix[1][0].get<double>() + matrix[1][1].get<double>();
+                progress.hbm_served[0][0] + progress.hbm_served[0][1] +
+                progress.hbm_served[1][0] + progress.hbm_served[1][1];
             if (!(int4_peak > 0.0) || !std::isfinite(int4_peak) ||
                 !(vec_peak > 0.0) || !std::isfinite(vec_peak) ||
                 !(hbm_peak > 0.0) || !std::isfinite(hbm_peak) ||

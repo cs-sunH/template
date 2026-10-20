@@ -373,7 +373,18 @@ bool NodeStore::mark_terminal_observed(uint64_t node_id) {
 std::optional<NodeStoreMeta> NodeStore::meta_for(uint64_t node_id) const {
     const auto it = nodes_.find(node_id);
     if (it == nodes_.end()) {
-        return std::nullopt;
+        // Retired-identity fallback (2026-10-19): collect_garbage() moves the
+        // (request_id, stage, generation) of every erased node here, so the
+        // work-ledger identity enrichment still resolves a committed parent
+        // that finished and was collected before a later batch committed a
+        // child referencing it -- the same quiescent-GC survival the
+        // committer's affine map already guarantees for the store-id
+        // translation itself. Genuine unknown ids stay nullopt (fail-closed).
+        const auto retired = retired_meta_.find(node_id);
+        if (retired == retired_meta_.end()) {
+            return std::nullopt;
+        }
+        return retired->second;
     }
     return NodeStoreMeta{it->second.node.request_id, it->second.node.stage,
                          it->second.node.generation};
@@ -419,6 +430,17 @@ void NodeStore::collect_garbage() {
             // counter can never rise again.
             continue;
         }
+        // 2026-10-19: retain the erased node's identity (request/stage/
+        // generation) in retired_meta_ BEFORE erasing -- meta_for resolves
+        // work-ledger parent identities through it, and a later batch may
+        // legitimately reference this node as a parent after collection
+        // (affine map precedent; ids are never reused). Nodes carry no
+        // identity only when they never had one, which cannot happen for
+        // committed nodes (the parse fail-closes on empty request_id).
+        retired_meta_.emplace(
+            node_id,
+            NodeStoreMeta{it->second.node.request_id, it->second.node.stage,
+                          it->second.node.generation});
         nodes_.erase(it);
         ++gc_erased_count_;
     }

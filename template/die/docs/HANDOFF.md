@@ -1,5 +1,78 @@
 # Codex Cloud 开发交接状态
 
+## roofline 第三阶段：G1 归因门禁 + G2 诊断 + WP3.1/3.2/3.3 + WP4 + G5.3a（2026-10-20；canonical+五仓）
+
+- **范围与依据**：按 `experiment_1018_new/接近roofline速度_第三阶段详细执行方案_2026-10-20.md` 执行；全部证据 `experiment_1018_new/runs/roofline_stage3_20261020/manifest/`（identity_s0/baseline_s0g/g1_attribution/diagnostics_D1·D2·D5/m31·m32·m33·mb6_results/g53a_final_verdict/g53_startup_plan）。用户最小验证规模授权（单请求 1req 闭包，交错 A/B 3+3，不跑七请求/长负载）。**零 git 操作**；template/ 完整备份（18570 文件核验）于 /home/sunhao/roofline_stage3_backup_20261020/。
+- **S0/B2′ 冻结**：2026-10-19 晚用户正确性修复（未提交）法证落盘（mtime 窗口 65+5 文件，die 内核确认未触及）；一切基线用修复后树重测：B2′ 单请求 coarse lifecycle 中位 **1073 ms**、roofline 臂 361 ms（3+3 交错）；18 文件白名单 oracle 重新生成；回退包 213 文件（含五仓宿主 CoarseDieRuntime.cc 改前字节与新增文件删除清单）。
+- **G1 归因（总闸门，插桩纯度 PASS：env-OFF 18×3 逐字节一致、零输出）**：lifecycle CPU/wall=**0.642（混合带）**；分段中位：compile miss **46.0%**（507.9ms 纯 CPU）、启动连接段 **33.9%**（374.4ms CPU≈0）、die call 16.1%、bridge 2.1%、宿主余额 **1.6%**。
+- **G2 诊断**：D1 任务键 **rank 相关**（96 键全异；去 rank 字段→48；TP=6 非整除分片三类；G5.2 上限 96→48）；D2 callgrind（B2′ 干净二进制）：compile 域 83.2% Ir、plan_to_json 族 49.6%、sha256 20.4%、Owner::key/integrate/allocate 现场全在；D3 cancel 分支计数=0（撤回论断维持）；D4 安全合并链分布落盘（96/144 链>16 事件）；D5 启动段重建：**bash sleep 0.3 轮询单项≈300ms=roofline 参考的 83%**。
+- **G5 判决**：G5.1 事件合并**否决**（宿主余额 1.6%，收益上界≈3%）；G5.3 启动优化**立项**；G5.2/G5.4 挂起（待 WP3.2/WP4 后按残余段重评）。
+- **版本链（全部交错 A/B 同窗实测，白名单逐字节一致，canonical 68→72 全绿）**：B3=+WP3.1（integrate owner 三元组判重，−58ms/−5.1%，digest 2a446c5d/69）；B4=+WP3.2（候选指纹推迟+闭式资格类型化，**−291ms/−27.1%**，compile 507→218ms/−56%，公开产物 781KB 双构建逐字节一致，digest 0ea01ac3/70）；B5=+WP3.3（仲裁 scratch 池化复用，−21ms/−2.7%，合成 malloc −44.8%；**集成期补拷贝语义句柄修复**——宿主只读采样路径拷贝 Runtime 被 unique_ptr 删除，canonical 测试不覆盖、五仓门禁捕获，digest 28a964b8/71）；B6=+WP4（磁盘 plan 缓存 COARSE_DIE_PLAN_CACHE_DIR 缺省 OFF，digest 8790e9a9/**35 文件**含新 PlanCache.hh/cc）。五仓宿主每版全绿（38/20/47/7/37；wscllm-LRU 脚手架 enable_testing 用户在途缺失，ctest 从 frontend_build 子目录同口径 7/7，未覆盖该文件）。
+- **WP4 两次集成修复（如实）**：缓存层错位（原落 Capi 共享库，宿主静态库链不到、FACE 在线不经 C ABI）→ 磁盘缓存实现迁 src/PlanCache.cc 进静态库 + 五仓宿主接线；期间一次陈旧静态归档致 ctest 假绿，以全新构建目录排除。三口径：OFF 760ms（零回退）/磁盘命中 573ms（compile −89%）/内存命中含于基线；负例 8 种 fail-closed（canonical plan_disk_cache_test）。
+- **G5.3a（runner FIFO 轮询 0.3s→10ms，批次工具层）+ 终判（§12 新分母）**：coarse 缺省 **477ms**/含磁盘缓存 **292ms**；roofline 臂 **67ms**（−81%，启动段消除现出真实物理）；**比值 477/67=7.1×（含缓存 4.4×）：2×/1.25× 均 NOT_MET**——两臂受益不对称（参考臂 98.7% 本是启动开销），比值口径反而恶化而绝对速度大幅改善（B2′ 1073→477/292ms）。已同时披露两口径，目标判定按新分母。
+- **遗留/披露**：tiny-repeat 假拒绝未修（沿旧披露）；单请求结论不外推长负载（long NOT_RUN）；G5.2/G5.4 重评完成均不立项（g52_g54_reeval.md：冷 ~105ms/暖 ~12ms 上限与确定性风险不成立项；重开触发器=冷启动批量实验）；WP4 缺省取值已批准=未设 OFF（2026-10-20 用户审阅）；wscllm-LRU 脚手架 enable_testing 缺失为用户在途状态未触碰；旧批 rollback/baseline 仍是修复前字节禁用于恢复。
+- **Files to Continue**：canonical 6 改（Execution.cc/hh、Mapping.cc、Compiler.cc、Capi.cc、CMakeLists）+2 新（PlanCache.hh/cc）+4 新测试；五仓 vendored SDK（35 文件）+五仓 CoarseDieRuntime.cc；开关清单 §6 一行；全部未提交（零 git 操作）。
+- **Tests**：canonical 72/72；五仓 38/20/47/7/37；LRU pytest 6+5；全批 guard 零 OOM、账本收口、无残留；诊断构建五文件补丁用后即恢复（cmp 核验）。
+- **Blocking Issues**：无阻塞项；速度比值目标 NOT_MET（绝对 1073→477/292ms）。
+
+## roofline 第二阶段：WP1 类型化观测 + WP2 类型化完成摘要（2026-10-19；canonical+五仓）
+
+- **范围与依据**：按 `experiment_1018_new/接近roofline速度_第二阶段详细执行方案.md` 执行；
+  执行结果与证据见 `experiment_1018_new/runs/roofline_stage2_20261019/manifest/`（S0/WP1/M1/
+  WP2/G2/M2/C3 各文件）。用户最小验证规模授权延续（不重跑七请求/完整 trace/30×3 电池/
+  R=4096 压力）。
+- **Current Status**：canonical **68/68 全绿**（上批 66 + repeat_observation_test +
+  terminal_summary_test）；五仓 SDK 终态 digest
+  `796369684fb85a6a6eaf2c811cced36f02ef290c7dca675b62ad0d5656d84f37`
+  （33 文件，sync --check passed）；五仓宿主 ctest 全绿（face 5 / face-LRU 5 / wscllm 6 /
+  wscllm-LRU 7 / joint 8 含四 native）+ LRU 两仓逐出 pytest 6+5。全批 guard 零 OOM、无残留、
+  trace_config/generated 恢复核验通过；零 git 操作。
+- **Completed（实现要点）**：
+  - **WP1**：`closed_form_repeat_finish_ns()` 估计环的逐事件 `export_snapshot()` 全量 JSON×10 062
+    消除——新增只读 `Runtime::repeat_observation(handle)→{round,ready_ns}` 值拷贝（map 查找＋常数
+    工作，零副作用；missing→nullopt 与旧数组扫描的跳过语义逐点等价；不可达的 !is_array 早退分支
+    随快照消除，已在测试注释与 manifest 记录）。canonical 新测试 repeat_observation_test（快照
+    oracle 逐值对照/纯度/stale 语义/闭式==排水矩阵含 seam0、count=7、编译模板、零工作/公共 API
+    环复刻）。**M1 实测**：B0/B1 六样本交错，C++ lifecycle 中位 4333→**1724 ms（2.51×）**，
+    compile sum 2.78→0.25 s（≈11.3×），18 文件×6 样本逐字节一致；callgrind 证明 B1 全进程
+    export_snapshot **0 次**（原 10 062 次）、closed_form 单次 187.6→1.66 M Ir（≈113×）。
+  - **WP2**：完成回调用类型化摘要——canonical 新增 `TerminalSummary` +
+    `Runtime::terminal_summary()`（一次查找；live→nullopt；stale 同 query_progress 约定；HBM
+    累计非有限/负 fail-closed；**双口径分别承载**：COMP 式逐项 double 矩阵＋endpoint 式内部
+    long double 按行累加后一次 cast——decimal_measure 往返精确已核实，测试用 2^53+1 fixture
+    证明两序可分叉且各等于旧 JSON 消费）。五仓 `CoarseDieRuntime::Completion` 签名直接迁移
+    （无 C ABI/外部 JSON 回调合同，方案 §10.5 优先方案；消费者闭合表在
+    runs/roofline_stage2_20261019/manifest/identity_s0.md §5）；dispatch_terminal 单次
+    terminal_summary 查找；DieModelAdapter/LocalHbmBandwidthModel/lifecycle/joint workspace
+    测试逐仓迁移（joint "必须 finished"与 marker 先于 cancelled 累计的顺序保留；
+    query_progress_at 只读采样路径保持 JSON 不迁；NativeCoarseDieDomain/NativeProjection
+    不在范围未动）。**M2 实测**：B1/B2 交错，中位 1716→**1172 ms（WP2 独立 1.46×）**；
+    **B0/B2 累计 3.70×**（4333→1172 ms）；11 样本输出逐字节一致；callgrind 证明 B2 全进程
+    **query_progress 0 次**（原 144 次，全来自完成回调）＋export_snapshot 保持 0。
+  - **观察计数器教训**：WP1 曾在 export_snapshot/query_progress 加调用计数进
+    observation_counters()，被宿主 lifecycle G 用例的 counters 纯度契约证伪（自计数破坏
+    `counters_before==counters_after`）→ 全量撤销，M1/M2 路径证明改 callgrind 调用边。
+- **roofline 对照（B2 同宿主构建、同闭包、共同参数，3 样本）**：参考 **360 ms**（3×同值且输出
+  逐字节一致）；B2 中位 1172 ms ⇒ **3.26×（C++ lifecycle 同字段）**——较上一批 B0 的 11.7×
+  大幅推进，但 **≤2×（720 ms）与 ≤1.25×（450 ms）均 NOT_MET**，如实保留。
+- **C3 残差（单次 DIAGNOSTIC_PARTIAL）**：B2 全进程 7.31 G Ir（B0 65.28 G 的 1/8.9）；Top 为
+  sha256 10.2%、DenseSimplex 6.9%、malloc/free 族 ≈14.8%、nlohmann dump/destroy ≈7.6%、
+  integrate/recompute/ratio 各 2–4%——引擎 CPU ≈0.4 s 已无单一主导热点；墙钟其余 ≈0.75 s 为
+  桥/宿主等待段（Ir 不可见，与上批两段式模型一致）。方案 §15 候选（仲裁复用/JSON 记忆化/事件
+  复用）各自上限 ≤0.1 s 量级且不覆盖等待段 → 达 2× 需先取得等待段归因证据，不直接开工既有候选。
+- **Important Decisions**：无新开关（五仓 README 与开关清单已核对零矛盾零增删）；SDK digest
+  变化=源码变化正常；canonical 两新测试的 CMake 注册随 SDK 同步五仓（EXISTS 守卫无构建副作用，
+  沿上批先例）。
+- **Files to Continue**：canonical 3 改（Execution.{hh,cc}、CMakeLists）+2 新测试；五仓
+  CoarseDieRuntime.{cc,hh}/DieModelAdapter.cc/LocalHbmBandwidthModel.cc/lifecycle 测试/joint
+  workspace 测试＋SDK 33 文件；全部未提交（零 git 操作）。回退包
+  runs/roofline_stage2_20261019/manifest/rollback/（34 改前副本与当前树逐字节核验＋34 反向补丁
+  dry-run 演练通过＋新增文件删除清单＋包自校验 sha256）。
+- **Tests**：canonical 68/68；五仓 ctest 5/5/6/7/8；LRU pytest 6+5；真实负载 B0/B1/B2 计 14 次
+  1req 运行（含 callgrind 2 次与 roofline 3 次）全 guard PASS、零 OOM、无残留。
+- **Blocking Issues**：无。速度目标 2×/1.25× 未达（3.26×）；七请求/长 decode 未测（NOT_RUN）；
+  tiny-repeat 假拒绝旧缺陷未修（沿上批披露）。
+
 ## roofline 提速批：P1 活动视图 + P0 终态快检 + P2-C 语义键（2026-10-19；canonical+五仓）
 
 - **范围与依据**：按 `experiment_1018_new/接近roofline速度_详细执行改造方案.md` 完成执行；
@@ -7,14 +80,20 @@
   `experiment_1018_new/runs/roofline_batch/manifest/`。用户授权最小验证规模（可低于 1s
   窗口；合成测试标合成；标准 trace 冒烟仍用 astra_compute_20.csv 派生物；请求不截断）。
 - **Current Status**：canonical 65/65 全绿（62 基线 + plan_curved_cache /
-  runtime_view_window / semantic_task_key 三新测试）；五仓 SDK 终态 digest
-  `0585fd8d1e631bab44d56f175e227ac36bbf4dcb331d2c78c8d318e6aa0078c7`（33 文件，
-  sync --check passed）；五仓宿主 ctest 全绿（face 5 / face-LRU 5 / joint 8 含四 native /
+  runtime_view_window / semantic_task_key 三新测试；整改轮 runtime_tiny_repeat_test
+  增至 66 项全绿）；五仓 SDK 终态 digest
+  `4b5311268af47edca1eab524874e15c5242498e887227780042c828fd31abd6b`（33 文件，
+  sync --check passed；2026-10-19 §8.3 收尾：canonical `runtime_tiny_repeat_test`
+  注册行补同步五仓，恰为五仓 CMakeLists.txt 各一处差异，五仓 SDK 无 tests/ 目录、
+  foreach 有 EXISTS 守卫且 COARSE_DIE_BUILD_TESTS=OFF 无构建副作用，digest 由
+  `0585fd8d…` 更新）；五仓宿主 ctest 全绿（face 5 / face-LRU 5 / joint 8 含四 native /
   wscllm 6 / wscllm-LRU 7）+ LRU 两仓逐出 pytest 6+5。真实负载：单请求（583+3，
   validation-coarse-144g）C++ 墙钟 375.2 s → **4.2 s（88×；coarse 自身前后对比口径，
-  墙钟字段为外层 guard 生命周期墙钟，非与 Roofline 之比；输出与归档逐字节一致，等价
+  墙钟字段为 cpp.log 的 C++ online lifecycle（DRAINING→FINISHED）字段，88× 为
+  lifecycle 对 lifecycle 同字段相除，非与 Roofline 之比；输出与归档逐字节一致，等价
   范围为所覆盖输入）**；first2s 七请求 7/7 completed（旧二进制 28 min 未完成；整窗约
-  324 s，首请求 4.2 s 不代表整窗）。2026-10-19 审查后已完成 G0 整改与文书纠偏，分项
+  324 s，首请求 4.2 s 不代表整窗）。2026-10-19 审查后已完成 G0 整改与文书纠偏（§8
+  复审收尾：SDK 同步、时间字段/百分比口径纠偏与阶段性收口判定亦已落地），分项
   状态见执行结果报告 §1.8/§9。
 - **Completed（实现要点）**：
   - P1 当前 (round,epoch) 活动视图：Execution 派生 `view_begin/view_end`（活动向量布局
@@ -47,22 +126,34 @@
   语义键在真实负载**零新增命中**——"身份变、语义同"被证伪（span 几何随 chunk/decode
   位置演进），编译为冷编译主导；保留理由：键成本 ~50µs 可忽略、三方语义统一。仲裁占比
   推算口径 DIAGNOSTIC_PARTIAL，不作性能声明。
-- **Next Step（明确候选，未授权不做；2026-10-19 整改轮已补量化依据）**：callgrind 剖析
+- **Next Step（明确候选，未授权不做；2026-10-19 整改轮已补量化依据，口径已按 §8.4
+  纠正）**：callgrind 剖析
   （manifest/profile_compile_residual.md，单次 DIAGNOSTIC_PARTIAL）定位编译 95.2% 在
-  estimate 试算、其中 closed_form_repeat_finish_ns 占 74.1%——逐事件 export_snapshot
-  全量 JSON×10 062 次＝全进程 63% Ir，只为读 round/ready_ns 两标量，单次闭式试算
-  ≈10.2 ms 比真排水 0.04 ms 贵 ~260×；mapping 枚举仅 7.1%（假设被否定）。优化候选
-  （均不改任务语义，待新授权）：①类型化访问器替代逐事件快照（上界 compile 2.78→
-  ~0.18 s、1req 4.2→~1.6 s、first2s 324→~171 s）；②plan JSON/指纹记忆化；
-  ③query_progress 完成上报惰性化（残差 CPU −58%）。first2s 残差事实：总墙钟 324.253 s
+  estimate 试算、其中 closed_form_repeat_finish_ns 占**全进程 Ir 74.1%（占 compile
+  约 94.2%）**——逐事件 export_snapshot
+  全量 JSON×10 062 次＝**全进程 Ir 63%**（与 74.1% 嵌套不可相加），只为读
+  round/ready_ns 两标量，单次闭式试算
+  ≈10.2 ms 比真排水 0.04 ms 贵 ~260×（**不同候选集合的平均调用工作量比较，非同
+  Plan 开/关 A/B**）；mapping 枚举仅 7.1%（假设被否定）。优化候选
+  （均不改任务语义，待新授权）：①类型化访问器替代逐事件快照（compile 2.78→
+  ~0.18 s、1req 4.2→~1.6 s、first2s 324→~171 s，**均为诊断外推（Ir 折算），非实测
+  或严格上界；即使达 1.6 s，相对 0.360 s roofline 参考仍约 4.4–4.5×，该参考 2×
+  目标≈0.720 s，总体目标未完成**）；②plan JSON/指纹记忆化；
+  ③query_progress 完成上报惰性化（残差 CPU −58%）。原始剖析工件（$RB/profile/）
+  与 tools/callgrind_bucket.py 可独立复算。first2s 残差事实：总墙钟 324.253 s
   中 compile 164.5 s、残差 159.8 s——编译与非编译须共同评估的定调不变。
   速度目标：**可比速度参考 v1 已建立（2026-10-19，部分匹配）**——同 1req 闭包 roofline
-  后端参考 360 ms（C++ lifecycle），coarse 候选 4 215 ms ≈ **11.7×**（guard 口径 6.0×）；
+  后端参考 360 ms（C++ lifecycle），coarse 候选 4 215 ms ≈ **11.7×（C++ lifecycle
+  同字段比值，主口径；guard 口径 4.8002 s/0.8003 s=6.0× 仅辅注）**；
   参数除算力等效标量（peak-perf=7.04 TFLOPS，换算口径已披露）外逐项精确对齐（HBM
   4710.4 GB/s/容量 144g/时延/网络/队列 sha/二进制），manifest/speed_baseline_reference.md。
   旧 v1 die 同 profile 基线结构性不可复现（v1 mesh 方阵硬校验 vs coarse 8×11 核网，
   阻塞点 config_resolver._validate_die_node_structure，只能近似）；29.5s/7 请求归档
-  （64g 档）不构成配置匹配 A/B，首请求/平均每请求均不作验收依据。
+  （64g 档）不构成配置匹配 A/B，首请求/平均每请求均不作验收依据。**批次判定
+  （§8.5）**：完成 8.2 保护负例/硬死亡绑定（两项闭合见
+  manifest/remediation_closure_runs.md）、8.3 SDK 同步与时间字段纠偏后**阶段性
+  收口**；**下一批首项=类型化观测访问器**（保持 G0–G5/三轮观察/事件预算/overflow/
+  fallback 行为，不改任务语义）。
 - **Files to Continue**：canonical 6 文件改动 + 3 新测试；五仓 CoarseDieRuntime.{cc,hh}、
   lifecycle 测试、analytical CMakeLists、extern/die_model/coarse、
   coarse_semantic_key_cache_test.cc×5；全部未提交（零 git 操作），before/after sha 见
@@ -79,9 +170,11 @@
   （P2-C 零净收益、编译主导、FACE build/ 批前探测残留 155 件、root 权限事故已恢复——
   本轮 stat 复核 sunhao:644）；另 **tiny-repeat 组合边界已补做守卫用例并实证偏离**（preflight_tiny 全历史扫描
   且只按 epoch 过滤无 round 条件：repeat>0 时旧轮同 epoch done 项的 accumulated_credit
-  全额混入 predicted，仅影响 tiny 守卫的 fail-closed 拒绝判定、不产生静默错账，真实
-  负载不可达，修复待授权未实施；新增 tests/runtime_tiny_repeat_test.cc 钉住行为并
-  披露，canonical 增至 66 项全绿，runtime_view_window_test 补真 tiny 变体）——详见
+  全额混入 predicted，仅影响 tiny 守卫的 fail-closed 拒绝判定、不产生静默错账，**已测
+  负载未见触发、未证明不可达**（尚无事件最小间隔的数值下界证明），修复待授权未实施；
+  新增 tests/runtime_tiny_repeat_test.cc 钉住行为并
+  披露（**钉住当前拒绝行为≠认可该行为正确，缺陷仍未修复**），canonical 增至 66 项全绿，
+  runtime_view_window_test 补真 tiny 变体）——详见
   manifest/remediation_tiny_repeat.md；**完整回退包已补齐**（manifest/rollback/：
   26 个改前副本 sha 全等基线、不可恢复项=0、26 反向补丁、SDK 再生件 digest 复现批前
   值、演练通过），执行结果报告 §4 第 9 条与 §6 已回填。

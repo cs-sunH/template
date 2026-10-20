@@ -406,8 +406,8 @@ class CapacityLedgerConservationTest(unittest.TestCase):
         def _check(message):
             current = kv.capacity_ledger_by_tp_rank(0)
             effective = kv._effective_remaining_by_tp_rank(0)
-            for rank, (cap, weight, materialized, reserved) in enumerate(
-                    current):
+            for rank, (cap, weight, materialized, reserved, _workspace) in (
+                    enumerate(current)):
                 self.assertEqual(cap, capacity, message)
                 self.assertEqual(weight, weights[rank], message)
                 self.assertEqual(
@@ -419,7 +419,7 @@ class CapacityLedgerConservationTest(unittest.TestCase):
             request_id="r2", session_id="s", instance_index=0,
             final_context_tokens=20)
         ledger_reserved = kv.capacity_ledger_by_tp_rank(0)
-        self.assertTrue(any(reserved > 0 for _, _, _, reserved
+        self.assertTrue(any(reserved > 0 for _, _, _, reserved, _
                             in ledger_reserved))
         _check("after reserve (Z up)")
         kv.expand_prefill(session_id="s", instance_index=0,
@@ -428,12 +428,13 @@ class CapacityLedgerConservationTest(unittest.TestCase):
         kv.release_request_capacity_reservation("r2")
         ledger_final = kv.capacity_ledger_by_tp_rank(0)
         _check("after Z→O transfer")
-        # 转账守恒：O 增量 == Z 减量（C−W 总量不变）。
+        # 转账守恒：O 增量 == Z 减量（C−W 总量不变；X 不参与转账）。
         for before, after in zip(ledger_reserved, ledger_final):
             self.assertEqual(
                 (before[2] + before[3]), (after[2] + after[3]))
             self.assertGreater(after[2], before[2])
             self.assertLess(after[3], before[3])
+            self.assertEqual(before[4], after[4])
 
 
 # ==================================== 验收：rank 不均匀缺口正确落位 ==
@@ -641,7 +642,56 @@ class DeepGapAndExternalityTest(unittest.TestCase):
             hbm_remaining_bytes_by_tp_rank=(100, 100),
             reclaimable_bytes_by_tp_rank=(100, 100),
             capacity_summary=summary,
-            # 台账 (C, W, O, Z) 与 remaining 不守恒 → fail-closed。
+            # 台账 (C, W, O, Z, X) 与 remaining 不守恒 → fail-closed。
+            capacity_ledger_by_tp_rank=(
+                (300, 0, 0, 0, 0), (300, 0, 0, 0, 0)))
+        model = self._model(load)
+        with self.assertRaises(Exception):
+            model._space_ready_ns_estimate(
+                load, PhaseFootprint.single(PHASE_DECODE, (200, 200)),
+                [], instance_index=0)
+
+    def test_ledger_workspace_component_reconciles(self):
+        """X≠0 时式 19 核账通过（2026-10-19 缺口回归钉）。
+
+        触发条件（见 face_scheduler.capacity_ledger_by_tp_rank docstring）：
+        X = C++ coarse_die_v2 die 批次的 immutable-Plan workspace 租约，
+        经 graph-batch 提交的 workspace_state 视图同步进 Python；多会话
+        负载下，后到会话的准入/成本决策可落在另一实例在飞批次的租约
+        窗口内（实测 astra_compute_20 2s 窗多会话负载在 seq 9 确定性
+        触发，差值 = rank 0 的 X = 24,743,140 字节）；单会话按 turn 串行
+        （human/tool 间隔等待），决策恒落在自身批次完成后，X=0 不触发。
+        修复前核账只减 C−W−O−Z，把决策侧已减的 X 当成失配误报
+        fail-closed；本测试钉死：remaining 已含 −X 的同源口径下，
+        带 X 分量的台账必须核账通过。"""
+        summary = InstanceCapacitySummary(instance_index=0, buckets=(
+            _bucket(_key(), (100, 100)),))
+        load = InstanceLoadView(
+            instance_index=0, queued_task_load_ns=0,
+            running_task_load_ns=0, active_decode_task_load_ns=0,
+            # 决策侧口径：remaining = C−W−O−Z−X = 300−0−0−0−200。
+            hbm_remaining_bytes_by_tp_rank=(100, 100),
+            reclaimable_bytes_by_tp_rank=(100, 100),
+            capacity_summary=summary,
+            capacity_ledger_by_tp_rank=(
+                (300, 0, 0, 0, 200), (300, 0, 0, 0, 200)))
+        model = self._model(load)
+        # 不抛 JointCostError 即核账通过（修复前此处按差值 200 误报）。
+        model._space_ready_ns_estimate(
+            load, PhaseFootprint.single(PHASE_DECODE, (200, 200)),
+            [], instance_index=0)
+
+    def test_ledger_rejects_legacy_four_component_shape(self):
+        # 旧 4 分量形态 (C, W, O, Z) 缺 X 分量 → 形状 fail-closed
+        # （式 19 台账自 2026-10-19 起为 (C, W, O, Z, X) 五分量）。
+        summary = InstanceCapacitySummary(instance_index=0, buckets=(
+            _bucket(_key(), (100, 100)),))
+        load = InstanceLoadView(
+            instance_index=0, queued_task_load_ns=0,
+            running_task_load_ns=0, active_decode_task_load_ns=0,
+            hbm_remaining_bytes_by_tp_rank=(100, 100),
+            reclaimable_bytes_by_tp_rank=(100, 100),
+            capacity_summary=summary,
             capacity_ledger_by_tp_rank=((300, 0, 0, 0), (300, 0, 0, 0)))
         model = self._model(load)
         with self.assertRaises(Exception):
@@ -669,10 +719,55 @@ class ProductionWiringTest(unittest.TestCase):
                 tuple(b + t for b, t in zip(
                     base, summary.total_reclaimable_by_rank)))
             ledger = kv.capacity_ledger_by_tp_rank(instance_index)
-            for rank, (cap, weight, materialized, reserved) in enumerate(
-                    ledger):
+            for rank, (cap, weight, materialized, reserved, _workspace) in (
+                    enumerate(ledger)):
                 self.assertEqual(
                     cap - weight - materialized - reserved, base[rank])
+
+    def test_load_view_with_external_workspace_reconciles(self):
+        """真实管理器 + 非零外部 workspace 视图：台账 X 分量与
+        _effective_remaining 同口径，式 19 核账通过（生产接线级钉）。"""
+        kv = _manager()
+        _seed(kv, "a", 0, 10, 10, "human")
+        kv.set_external_workspace_view({
+            "protocol_version": 1,
+            "ranks": [
+                {"rank": rank, "workspace_revision": 1,
+                 "active_workspace_bytes": 200}
+                for rank in sorted(kv._rank_states)
+            ],
+        })
+        base = kv._effective_remaining_by_tp_rank(0)
+        ledger = kv.capacity_ledger_by_tp_rank(0)
+        for rank, entry in enumerate(ledger):
+            self.assertEqual(len(entry), 5)
+            cap, weight, materialized, reserved, workspace = entry
+            self.assertEqual(workspace, 200)
+            self.assertEqual(
+                cap - weight - materialized - reserved - workspace,
+                base[rank])
+        summary = kv.capacity_summary_snapshot().instance(0)
+        load = InstanceLoadView(
+            instance_index=0, queued_task_load_ns=0,
+            running_task_load_ns=0, active_decode_task_load_ns=0,
+            hbm_remaining_bytes_by_tp_rank=base,
+            reclaimable_bytes_by_tp_rank=summary.total_reclaimable_by_rank,
+            capacity_summary=summary,
+            capacity_ledger_by_tp_rank=ledger)
+        rates = JointHardwareRates.from_gbps(
+            noc_link_gbps=10.0, pool_port_gbps=5.0, local_hbm_gbps=100.0,
+            d2d_latency_ns=10, pool_latency_ns=100)
+        model = JointCostModel(
+            rates=rates, loads={0: load}, flow_registry=LinkFlowRegistry(),
+            service_factors=ServiceFactors(),
+            prefill_ns_per_token=1.0, decode_ns_per_token=2.0,
+            model_layers=4, instance_tp_size=2,
+            route_fn=lambda s, t: ((s, t), 1))
+        # X≠0 且 remaining 为决策侧同源值 → 核账通过、不抛 JointCostError
+        # （修复前此处按差值 200/rank 误报 fail-closed）。
+        model._space_ready_ns_estimate(
+            load, PhaseFootprint.single(PHASE_DECODE, (200, 200)),
+            [], instance_index=0)
 
     def test_estimate_consumes_real_summary_via_theta_note(self):
         # 制造真实缺口：容量 = 权重 + 大会话 + 50 B/rank 余量——候选

@@ -1,12 +1,18 @@
 #include "coarse_die/Capi.h"
+#include "coarse_die/PlanCache.hh"
 #include "coarse_die/Execution.hh"
 #include "coarse_die/Memory.hh"
 #include "CompilerInternal.hh"
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <iterator>
 #include <list>
 #include <limits>
@@ -274,6 +280,7 @@ void install_batch_memo(Model& model,const char* input,
     model.batch_memos[1]=std::move(model.batch_memos[0]);
     model.batch_memos[0]=std::move(memo);
 }
+
 CachedPlan cached(Model& m, const json& task) {
     const auto normalized=detail::normalize_task(m.hardware,task);
     const std::string hardware_identity=m.hardware.fingerprint.empty()
@@ -291,7 +298,19 @@ CachedPlan cached(Model& m, const json& task) {
         m.lru.splice(m.lru.begin(),m.lru,i->second.recency);
         return {i->second.plan,i->second.response,std::move(key)};
     }
-    auto p=detail::compile_normalized(m.hardware,normalized);
+    // Opt-in disk persistence (COARSE_DIE_PLAN_CACHE_DIR): consult and
+    // repair the on-disk plan cache only when the variable is set; with it
+    // unset this function stays byte-identical to the memory-only path and
+    // never touches the filesystem.
+    const char* plan_cache_dir=std::getenv("COARSE_DIE_PLAN_CACHE_DIR");
+    bool disk_enabled=plan_cache_dir && *plan_cache_dir;
+    std::shared_ptr<const Plan> p;
+    if(disk_enabled)
+        p=try_load_disk_plan(m.hardware,task);
+    if(!p) {
+        p=detail::compile_normalized(m.hardware,normalized);
+        if(disk_enabled) store_disk_plan_for(m.hardware,task,*p);
+    }
     auto response=make_response_template(*p);
     const std::size_t bytes=retained_cache_entry_bytes(*p,key,*response);
     if(bytes<=kCacheByteLimit) {
@@ -719,3 +738,4 @@ int die_coarse_destroy_model_v2(DieHandle h) {
         models.erase(h);});
 }
 }
+

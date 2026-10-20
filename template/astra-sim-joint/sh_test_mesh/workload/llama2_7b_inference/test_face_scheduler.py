@@ -1055,15 +1055,17 @@ class FaceSchedulerTests(unittest.TestCase):
 
     def test_default_config_uses_die_backend_and_one_million_reserve(self) -> None:
         # die 推广第一期（2026-10-03）：checked-in 硬件默认切换为 die 节
-        # （0.75/large/800/4x1/512 裁定点）+ validation-die-64g 容量档 +
-        # die 系统模板。加载链需要 libdie_model_cabi.so（resolver 经
-        # ctypes 取派生值，fail-closed）——库不可发现且 checked-in 硬件
-        # 带 die 节时 SkipTest（裸仓在集成构建出 .so 前是合法中间态）。
+        # + die 系统模板；2026-10-19 M2：coarse-die 节改为用户授权工程
+        # 对比点（10x10/0.75MiB SRAM/512-bit NoC/25x32mm，派生 100 核）
+        # + validation-coarse-144g 容量档（字节 == coarse 派生 HBM 容量）。
+        # 加载链需要 libdie_model_cabi.so（resolver 经 ctypes 取派生值，
+        # fail-closed）——库不可发现且 checked-in 硬件带 die 节时
+        # SkipTest（裸仓在集成构建出 .so 前是合法中间态）。
         _skip_without_die_cost_library()
         config = load_checked_in_fixture_config()
         self.assertEqual(
             config.hardware.local_hbm_capacity_bytes,
-            64_000_000_000,
+            144_000_000_000,
         )
         self.assertIn("die-derived", config.hardware.label)
         self.assertEqual(
@@ -1072,7 +1074,7 @@ class FaceSchedulerTests(unittest.TestCase):
         )
         self.assertEqual(
             config.hardware_capacity_profile,
-            "validation-die-64g",
+            "validation-coarse-144g",
         )
         self.assertEqual(
             config.system_template.name,
@@ -1117,16 +1119,17 @@ class FaceSchedulerTests(unittest.TestCase):
         # 来自 die 模板，die-model-config 是 resolver 注入的 managed 绝对
         # 路径（指向 resolved_die_model.json）。
         self.assertEqual(system_raw["compute-cost-model"], "die")
-        self.assertEqual(system_raw["die-model-profile"], "mesh_die_v1")
+        self.assertEqual(system_raw["die-model-profile"], "coarse_die_v2")
         self.assertIn("die-model-config", system_raw)
         self.assertTrue(
             Path(system_raw["die-model-config"]).is_absolute())
         self.assertTrue(Path(system_raw["die-model-config"]).is_file())
         self.assertNotIn("roofline-enabled", system_raw)
-        # §3.4 回流：local-mem-bw/peak-perf = die 派生值（1640.0 GB/s 与
-        # legacy 硬件严格连续；1492.05 TFLOPS = PE_peak_die）。
-        self.assertEqual(system_raw["local-mem-bw"], 1640.0)
-        self.assertEqual(system_raw["peak-perf"], 1492.05)
+        # §3.4 回流（2026-10-19 M2/coarse_die_v2 口径）：local-mem-bw =
+        # coarse 派生 HBM 带宽 4710.4 GB/s；peak 由 die model 派生承载，
+        # system.json 不再写标量 peak-perf（1492.05 为旧 die 节口径）。
+        self.assertEqual(system_raw["local-mem-bw"], 4710.4)
+        self.assertNotIn("peak-perf", system_raw)
         # P11 死键清除回归钉（2026-09-23）：local-mem-capacity-bytes
         # 写入链已退役（C++ 零读者），system.json 不再含该键。
         self.assertNotIn("local-mem-capacity-bytes", system_raw)

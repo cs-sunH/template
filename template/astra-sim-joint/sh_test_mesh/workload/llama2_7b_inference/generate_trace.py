@@ -1338,8 +1338,8 @@ def _emit_die_comp(
 ) -> None:
     """一个 die 融合组的 COMP 发射（v1 spec / coarse task 两态派发）。
 
-    coarse_die_task_v2（阶段2，2026-10-18）：SDK 完整预测只覆盖单实例
-    计划——``layer_instances × weight_passes >= 2`` 的计划为 body-only
+    coarse_die_task_v2（阶段2，2026-10-18；wp 口径 2026-10-19 修正）：SDK
+    完整预测只覆盖单实例计划——``layer_instances >= 2`` 的计划为 body-only
     计时（prediction_status=not_available），C++ 执行门
     ``require_complete_prediction`` 对其 fail-closed。发射侧因此：
 
@@ -1372,7 +1372,11 @@ def _emit_die_comp(
             ),
         )
         return
-    instances = max(1, int(layer_count)) * max(1, int(weight_passes))
+    # 2026-10-19 wp 语义修复：coarse 合同下 spec/task 的 weight_passes 恒为 1
+    # (spans 已逐迭代枚举)，实例拆分只按 layer_instances 计，不再乘列车
+    # 迭代数——否则 wp=iterations 会把每类节点拆成 32×iterations 个物理
+    # 节点（事件量按迭代数虚增）。
+    instances = max(1, int(layer_count))
     if instances == 1:
         builder.comp(
             name,

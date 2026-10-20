@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""profile_scan_audit.py -- 阶段 4 §7.3 事件索引队列 profile 审计。
+
+登记(py-verify-D2 2026-09-27):手动 CLI 审计门工具——本仓无自动流水线
+入口消费其退出码(非 0 = 审计失败),判定依赖人工运行并核对;不被 pytest
+收集,属有意保留的手动审计装置。
+
+输入:一次真实运行产出的 profile.jsonl(online_service.py 在运行结束写出,
+每决策批一行 {delivery_sequence, tick, scanned_entries})。
+
+full-scan 无仪表化:调度器不存在 full-scan 计数字段/计数器,本审计仅覆盖
+scanned_entries 上界(无 O(总规模) 全量扫描检测)。
+
+scanned_entries 计数点枚举当前全部候选访问入口(py-verify-C4 修复
+2026-09-27;2026-09-30 去行号化——行号随重构漂移,以函数名为准):基类
+_settle_completions 的 completed_groups 逐条(online_scheduler_base.py)
++ _process_arrivals 的 arrivals 逐条(online_scheduler_base.py)+ 变体
+到期事件堆弹出逐条(wsc_llm_online_scheduler.py)+ 变体准入 pass 的
+ready frontier 访问逐条(wsc_llm_online_scheduler.py;frontier 为增量
+维护的就绪实例集合,单批访问条目数 = 到期/受影响条目数,同样接计数
+——此前 docstring 称"准入 pass 仅触增量维护、无候选池遍历"而漏列该
+点,枚举自称不可信的根源即此)。在此前提下本审计等价覆盖全量扫描
+检测;维护约定:调度器新增遍历入口必须同步接 _profile_scan 计数,
+否则本审计对该入口失效(2026-09-25 审计收口注记)。
+
+断言(fail-closed,任一不满足即非 0 退出):
+  1. 每批 scanned_entries <= total_requests —— 单批复杂度与总 request 数
+     无关(20.csv 前 30s 全量 = 1177 请求;到期事件 + 受影响条目 + 就绪
+     frontier,任何单批都远小于总量;上限可经 --total-requests 覆盖)。
+
+输出:profile_report_20.md(与 profile.jsonl 同目录;逐批统计 + 结论)。
+"""
+
+import argparse
+import json
+import os
+import sys
+
+_REPORT_NAME = "profile_report_20.md"
+
+
+def _read_rows(path: str) -> list:
+    rows = []
+    with open(path, "r", encoding="utf-8") as source:
+        for line_number, line in enumerate(source, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            if not isinstance(row, dict) or not isinstance(
+                    row.get("scanned_entries"), int):
+                raise ValueError(
+                    "profile row {} is not a scan-count dict: {!r}".format(
+                        line_number, row))
+            rows.append(row)
+    return rows
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="wscllm phase-4 §7.3 profile scan audit")
+    parser.add_argument("--profile", required=True,
+                        help="profile.jsonl 路径(真实运行产出)")
+    parser.add_argument("--total-requests", type=int, default=1177,
+                        help="输入总 request 数(20.csv 前 30s = 1177)")
+    args = parser.parse_args(argv)
+
+    rows = _read_rows(args.profile)
+    if not rows:
+        raise RuntimeError("profile.jsonl is empty: {}".format(args.profile))
+    total = args.total_requests
+
+    failures = []
+    max_scanned = 0
+    max_row = None
+    for row in rows:
+        if row["scanned_entries"] > max_scanned:
+            max_scanned = row["scanned_entries"]
+            max_row = row
+        if row["scanned_entries"] > total:
+            failures.append(
+                "delivery {} scanned {} entries > total requests {}"
+                .format(row["delivery_sequence"], row["scanned_entries"],
+                        total))
+
+    scanned_values = [row["scanned_entries"] for row in rows]
+    scanned_values.sort()
+    mean = sum(scanned_values) / len(scanned_values)
+    # nearest-rank 标准式(1 基名次 = ceil(p*n),取该名次元素):旧式
+    # int(n*0.99)-1 在非整百 n 下系统性偏低一名次,n=1 时靠 -1 负索引侥幸。
+    p99_rank = -(-len(scanned_values) * 99 // 100)
+    p99 = scanned_values[p99_rank - 1]
+
+    report_dir = os.path.dirname(os.path.abspath(args.profile))
+    report_path = os.path.join(report_dir, _REPORT_NAME)
+    with open(report_path, "w", encoding="utf-8") as out:
+        out.write("# 阶段 4 §7.3 每决策批扫描条目数 profile 报告\n\n")
+        out.write("- 数据源: {}\n".format(args.profile))
+        out.write("- 决策批数: {}\n".format(len(rows)))
+        out.write("- 输入总 request 数: {}\n".format(total))
+        out.write("\n## 统计\n\n")
+        out.write("| 指标 | 值 |\n|---|---|\n")
+        out.write("| 单批最大扫描条目数 | {} |\n".format(max_scanned))
+        out.write("| 单批平均扫描条目数 | {:.1f} |\n".format(mean))
+        out.write("| 单批 p99 扫描条目数 | {} |\n".format(p99))
+        out.write("\n## 结论\n\n")
+        if failures:
+            out.write("- **FAIL**: {}\n".format("; ".join(failures)))
+        else:
+            out.write("- PASS: 每批扫描条目数上限 {} << 总 request 数 {}"
+                      "({:.1f}%),与总 request 规模无关(full-scan 无仪表化,"
+                      "本审计仅覆盖 scanned_entries 上界)。\n".format(
+                          max_scanned, total,
+                          100.0 * max_scanned / total))
+        if max_row is not None:
+            out.write("- 最大批次: delivery {} (tick {}, scanned {})\n"
+                      .format(max_row["delivery_sequence"], max_row["tick"],
+                              max_row["scanned_entries"]))
+        out.write("\n生成时间: phase-4 §7.3 profile audit\n")
+
+    if failures:
+        raise RuntimeError(
+            "profile scan audit FAILED: {}".format("; ".join(failures)))
+    print(
+        "profile scan audit PASS: {} batches, max {} scanned/batch "
+        "(< total {}), report {}"
+        .format(len(rows), max_scanned, total, report_path),
+        flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main())
+    except Exception as exc:  # noqa: BLE001 -- CLI 顶层 fail-closed
+        print("profile_scan_audit: fatal: {}: {}".format(
+            type(exc).__name__, exc),
+            file=sys.stderr)
+        sys.exit(1)

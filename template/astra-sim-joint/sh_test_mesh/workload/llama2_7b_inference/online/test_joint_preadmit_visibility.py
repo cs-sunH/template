@@ -117,10 +117,11 @@ def _scheduler(*, train_max_iter=8):
         _effective_remaining_by_tp_rank=lambda index: (10**9, 10**9),
         _instance_reclaimable_capacity_by_tp_rank=lambda index: (0, 0),
         # D11：容量驱逐摘要/容量账替身（零桶 = 快照时刻无合法 victim；
-        # 逐 rank 台账 (C, W, O, Z) 与 remaining=1e9 同源核对守恒）。
+        # 逐 rank 台账 (C, W, O, Z, X) 与 remaining=1e9 同源核对守恒；
+        # X=0 = 无外部 workspace 视图）。
         capacity_summary_snapshot=lambda: CapacitySummary(instances={}),
         capacity_ledger_by_tp_rank=lambda index: (
-            (2 * 10**9, 0, 0, 10**9), (2 * 10**9, 0, 0, 10**9)),
+            (2 * 10**9, 0, 0, 10**9, 0), (2 * 10**9, 0, 0, 10**9, 0)),
     )
     # log_decision 基类契约（__new__ 替身手工置初值）。
     scheduler.online_log_count = 0
