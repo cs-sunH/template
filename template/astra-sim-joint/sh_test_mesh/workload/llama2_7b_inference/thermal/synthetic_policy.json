@@ -1,0 +1,44 @@
+{
+  "note": "Synthetic thermal policy for engineering fixtures only. Thresholds and the frequency ladder are declared here (joint-owned) with an explicit synthetic source; they are NOT measured device limits and must not be quoted as target specifications.",
+  "policy_version": "synthetic-thermal-policy-v1",
+  "base_frequency_hz": 1000000000.0,
+  "minimum_fraction": 0.5,
+  "domains": [
+    {
+      "domain": "die0",
+      "threshold_k": 304.0,
+      "resume_k": 302.5,
+      "steps": [1.0, 0.5],
+      "min_dwell_ns": 10000000,
+      "sampling_ns": 10000000,
+      "source": "synthetic engineering fixture threshold (not a device spec)"
+    },
+    {
+      "domain": "die1",
+      "threshold_k": 304.0,
+      "resume_k": 302.5,
+      "steps": [1.0, 0.5],
+      "min_dwell_ns": 10000000,
+      "sampling_ns": 10000000,
+      "source": "synthetic engineering fixture threshold (not a device spec)"
+    },
+    {
+      "domain": "die2",
+      "threshold_k": 304.0,
+      "resume_k": 302.5,
+      "steps": [1.0, 0.5],
+      "min_dwell_ns": 10000000,
+      "sampling_ns": 10000000,
+      "source": "synthetic engineering fixture threshold (not a device spec)"
+    },
+    {
+      "domain": "die3",
+      "threshold_k": 304.0,
+      "resume_k": 302.5,
+      "steps": [1.0, 0.5],
+      "min_dwell_ns": 10000000,
+      "sampling_ns": 10000000,
+      "source": "synthetic engineering fixture threshold (not a device spec)"
+    }
+  ]
+}

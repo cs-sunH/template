@@ -33,7 +33,9 @@ RUN pip3 install --upgrade pip
 ENV PYTHONPATH="/app/astra-sim"
 
 # STG dependencies
-RUN pip3 install numpy sympy graphviz pandas
+# scipy: the embedded thermal/power core (extern/thermal_cosim) needs NumPy and
+# SciPy at run time; without scipy the thermal session cannot start.
+RUN pip3 install numpy scipy sympy graphviz pandas
 ### ======================================================
 
 
@@ -102,4 +104,11 @@ ENV PROTOBUF_FROM_SOURCE=True
 ### ================== Finalize ==========================
 ## Move to the application directory
 WORKDIR /app/astra-sim
+## Install the embedded thermal/power dependency once the tree is present
+## (the app directory is volume-mounted in this image; run the editable
+## install after the sources land).  Configs ship as package data, so no
+## sibling directory or absolute PYTHONPATH is required.
+RUN if [ -d /app/astra-sim/extern/thermal_cosim ]; then \
+        pip3 install -e /app/astra-sim/extern/thermal_cosim; \
+    fi
 ### ======================================================

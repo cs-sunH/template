@@ -1,0 +1,15 @@
+{
+  "note": "Synthetic engineering fixture for the thermal co-simulation closed loop. It binds the packaged 4x2 thermal *profile* to a synthetic hardware snapshot and the synthetic fixture mapping; the result stays target_calibrated=false and is NOT a target-device specification (the target-hardware energy domain does not match the reference table).",
+  "mode": "closed_loop",
+  "thermal_config": "package:thermal/3dice_8die_reference.json",
+  "energy_table": "configs/energy/research-v1.json",
+  "energy_strict": true,
+  "accept_assumed_energy": true,
+  "policy": "/home/sunhao/thermal/template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/thermal/synthetic_policy.json",
+  "mapping_epoch": "thermal-fixture-v1",
+  "thermal_step_ns": 100000000,
+  "base_frequency_hz": 1000000000.0,
+  "target_calibrated": false,
+  "hardware_facts": "/home/sunhao/thermal/template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/thermal/synthetic_resolved_hardware.json",
+  "mapping": "/home/sunhao/thermal/template/astra-sim-joint/sh_test_mesh/workload/llama2_7b_inference/thermal/synthetic_physical_mapping.json"
+}

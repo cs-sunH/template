@@ -92,6 +92,7 @@ Step 1-10 (runners + IDLE fixture):
 
 #include "astra-sim/common/Logging.hh"
 #include "astra-sim/system/Sys.hh"
+#include "astra-sim/workload/CoarseDieRuntime.hh"
 #include "astra-sim/workload/DieModelAdapter.hh"
 #include "astra-sim/workload/DiePlanPersistentCache.hh"
 #include "astra-sim/workload/LocalHbmBandwidthModel.hh"
@@ -165,6 +166,21 @@ namespace {
 
 // NOTE (phase 5): GraphBatchCommitter owns the persistent per-rank affine
 // json-id -> store-id translation and the in-flight request tracking.
+
+// Plan D (periodic thermal epoch): one rank's coarse served-counter sample, the
+// baseline the ThermalActivityProvider differences against. The four counters
+// mirror the Python reference (joint/thermal_bridge.py SamplerState): comp
+// int4_ops -> pe, comp vec_eqops -> vec, HBM served bytes (summed over the two
+// HBM rows) -> hbm_read/hbm_write. valid=false means "no baseline yet / the
+// runtime's accounting history is incomplete" and the rank contributes no
+// sources until a complete sample is available (never fabricated activity).
+struct ThermalCounterSample {
+    bool valid = false;
+    double comp_int4_ops = 0.0;
+    double comp_vec_eqops = 0.0;
+    double hbm_read_bytes = 0.0;
+    double hbm_write_bytes = 0.0;
+};
 
 struct OnlineDriverContext {
     DecisionMailbox* mailbox = nullptr;
@@ -247,6 +263,29 @@ struct OnlineDriverContext {
     // execution fixture installs the same component around the same runtime.
     std::unique_ptr<ExecutionDriven::WorkLedgerV2Publisher>
         work_ledger_publisher;
+    // ------------------------------------------------------------------
+    // Plan D (request-independent periodic thermal epoch; SH_THERMAL_EPOCH_NS,
+    // default 0 = off, so the default run is byte-identical to the thermal-off
+    // baseline). When on, the main loop registers ONE periodic cancellable
+    // queue event: every thermal_epoch_ns of simulated time it delivers a
+    // minimal THERMAL_EPOCH StateDelta and the installed ThermalCapConsumer
+    // applies the response's thermal_cap to the coarse die runtimes.
+    // ------------------------------------------------------------------
+    bool thermal_epoch_enabled = false;
+    uint64_t thermal_epoch_ns = 0;
+    // The currently pending periodic event (cancellable handle). Invalid once
+    // the periodic chain stops (service finished) or before the initial arm.
+    NetworkAnalytical::EventHandle thermal_event_handle;
+    // Differential baseline of the coarse served counters, per rank.
+    std::vector<ThermalCounterSample> thermal_prev_samples;
+    // Previous thermal-epoch instant (window_start_ns; 0 before the first).
+    uint64_t thermal_prev_epoch_ns = 0;
+    // Periodic epochs actually delivered (evidence / run-end report).
+    uint64_t thermal_epoch_count = 0;
+    // Caps applied to the runtimes (evidence / run-end report).
+    uint64_t thermal_cap_events_applied = 0;
+    // Proposed-but-not-installed cap events (shadow control arm; applied=false).
+    uint64_t thermal_cap_events_skipped = 0;
 };
 
 // The commit payload: the StateDelta + GraphBatch response of one delivery
@@ -560,6 +599,210 @@ WorkLedgerWirePayload compute_work_ledger_v4(OnlineDriverContext& driver,
     ++g_main_wall.work_ledger_publish.calls;
 #endif
     return WorkLedgerWirePayload{std::move(frame.bytes)};
+}
+
+// ---------------------------------------------------------------------------
+// Plan D (request-independent periodic thermal epoch): coarse served-counter
+// sampling and the response-cap consumer. See DecisionBridge.hh for the frozen
+// wire shapes (ThermalActivityProvider / ThermalCapConsumer).
+//
+// The cumulative served counters are lifetime totals (guarded by the runtime's
+// accounting_history_complete flag), so an incremental window is the difference
+// between two snapshots; completed work is never lost this way (mirrors the
+// Python reference CoarseActivitySampler). int4_ops -> pe, vec_eqops -> vec,
+// HBM served bytes summed over the two rows -> hbm_read / hbm_write.
+//
+// source_id PLACEHOLDER: the frozen contract names "die<N>.comp"/"die<N>.hbm"
+// where N is the THERMAL die number. C++ has no rank->thermal-die map (that
+// lives on the cooling side), so this build fills the RANK number as an
+// explicit placeholder; Python rewrites it through the physical mapping and
+// must never treat the placeholder as a thermal-die identity.
+// ---------------------------------------------------------------------------
+
+ThermalCounterSample sample_coarse_counters(Sys* sys, const uint64_t tick) {
+    ThermalCounterSample sample;
+    if (sys == nullptr || sys->coarse_die_runtime == nullptr) {
+        return sample;  // no coarse runtime on this rank
+    }
+    nlohmann::json counters;
+    try {
+        // Read the served totals AS OF the epoch instant on an isolated copy;
+        // this never advances the live runtime (which could reorder events).
+        counters = sys->coarse_die_runtime->counters_at(tick);
+    } catch (const std::exception&) {
+        try {
+            counters = sys->coarse_die_runtime->counters();  // read-only live
+        } catch (const std::exception&) {
+            return sample;
+        }
+    }
+    if (!counters.value("accounting_history_complete", false)) {
+        // Served totals are only a lower bound; differencing them would be
+        // wrong (the Python side refuses the same case).
+        return sample;
+    }
+    const auto categories = counters.find("served_by_category");
+    if (categories == counters.end() || !categories->is_object()) {
+        return sample;
+    }
+    const auto comp = categories->find("comp");
+    if (comp == categories->end() || !comp->is_object()) {
+        return sample;
+    }
+    const auto int4 = comp->find("int4_ops");
+    const auto vec = comp->find("vec_eqops");
+    if (int4 == comp->end() || !int4->is_number() || vec == comp->end() ||
+        !vec->is_number()) {
+        return sample;
+    }
+    double read_bytes = 0.0;
+    double write_bytes = 0.0;
+    // rows x [read, write]; the direction order is frozen by the runtime
+    // (hbm_direction_order: ["read", "write"]).
+    const auto rows = counters.find("hbm_served_bytes_by_row_direction");
+    if (rows != counters.end() && rows->is_array()) {
+        for (const auto& row : *rows) {
+            if (row.is_array() && row.size() == 2 && row[0].is_number() &&
+                row[1].is_number()) {
+                read_bytes += row[0].get<double>();
+                write_bytes += row[1].get<double>();
+            }
+        }
+    }
+    sample.valid = true;
+    sample.comp_int4_ops = int4->get<double>();
+    sample.comp_vec_eqops = vec->get<double>();
+    sample.hbm_read_bytes = read_bytes;
+    sample.hbm_write_bytes = write_bytes;
+    return sample;
+}
+
+nlohmann::json compute_thermal_activity(OnlineDriverContext& driver,
+                                        const StateDelta& delta) {
+    const uint64_t epoch_ns = delta.tick;
+    nlohmann::json sources = nlohmann::json::array();
+    if (driver.work_ledger_systems != nullptr) {
+        const size_t ranks = driver.work_ledger_systems->size();
+        if (driver.thermal_prev_samples.size() != ranks) {
+            driver.thermal_prev_samples.assign(ranks, ThermalCounterSample{});
+        }
+        for (size_t rank = 0; rank < ranks; ++rank) {
+            const ThermalCounterSample current = sample_coarse_counters(
+                (*driver.work_ledger_systems)[rank], epoch_ns);
+            ThermalCounterSample& previous = driver.thermal_prev_samples[rank];
+            if (!current.valid) {
+                continue;  // no measurable window for this rank this epoch
+            }
+            if (!previous.valid) {
+                // First complete sample: install the baseline, emit nothing
+                // (there is no earlier boundary to difference against).
+                previous = current;
+                continue;
+            }
+            const double pe = current.comp_int4_ops - previous.comp_int4_ops;
+            const double vec =
+                current.comp_vec_eqops - previous.comp_vec_eqops;
+            const double hbm_read =
+                current.hbm_read_bytes - previous.hbm_read_bytes;
+            const double hbm_write =
+                current.hbm_write_bytes - previous.hbm_write_bytes;
+            // Monotonic lifetime counters must never decrease; a violation
+            // would mean a non-differencable ledger. Rather than fabricate a
+            // negative count, emit nothing for this rank (the baseline still
+            // advances so the next window cannot double-count).
+            if (pe >= 0.0 && vec >= 0.0 && hbm_read >= 0.0 &&
+                hbm_write >= 0.0) {
+                const std::string comp_id =
+                    "die" + std::to_string(rank) + ".comp";
+                const std::string hbm_id =
+                    "die" + std::to_string(rank) + ".hbm";
+                if (pe > 0.0) {
+                    sources.push_back({{"source_id", comp_id},
+                                       {"action_kind", "pe"},
+                                       {"count", pe}});
+                }
+                if (vec > 0.0) {
+                    sources.push_back({{"source_id", comp_id},
+                                       {"action_kind", "vec"},
+                                       {"count", vec}});
+                }
+                if (hbm_read > 0.0) {
+                    sources.push_back({{"source_id", hbm_id},
+                                       {"action_kind", "hbm_read"},
+                                       {"count", hbm_read}});
+                }
+                if (hbm_write > 0.0) {
+                    sources.push_back({{"source_id", hbm_id},
+                                       {"action_kind", "hbm_write"},
+                                       {"count", hbm_write}});
+                }
+            }
+            previous = current;
+        }
+    }
+    nlohmann::json payload;
+    payload["schema_version"] = 1;
+    payload["epoch_ns"] = epoch_ns;
+    payload["window_start_ns"] = driver.thermal_prev_epoch_ns;
+    payload["window_end_ns"] = epoch_ns;
+    payload["coverage"] = "measured";
+    payload["provenance"] = "coarse_runtime_counters_delta";
+    payload["sources"] = std::move(sources);
+    driver.thermal_prev_epoch_ns = epoch_ns;
+    return payload;
+}
+
+// Plan D response consumer: apply one thermal_cap to the coarse die runtimes.
+// The cap is already structurally validated by parse_graph_batch (rule family
+// in ParsedGraphBatch.cc) and the runtime re-validates the rate domain. This
+// build has no thermal-die -> rank map in C++, so each event is applied to
+// EVERY rank that owns a coarse die runtime (documented placeholder: the
+// physically exact target set is the cooling side's mapping). update_capacity
+// is the production throttling entry: it integrates the old rate up to
+// effective_from_ns, installs the new absolute rate and re-arms the runtime's
+// completion event.
+void apply_thermal_cap(OnlineDriverContext& driver,
+                       const nlohmann::json& cap) {
+    if (driver.work_ledger_systems == nullptr) {
+        return;
+    }
+    const auto events = cap.find("events");
+    if (events == cap.end() || !events->is_array()) {
+        return;  // structurally validated upstream; defensive only
+    }
+    try {
+        // ``applied`` is a TOP-LEVEL cap flag. Shadow proposes the cap with
+        // applied=false: the physical state must stay identical to off, so the
+        // consumer records the proposal and skips the install entirely.
+        if (cap.contains("applied") && !cap.at("applied").get<bool>()) {
+            const auto events_skipped = cap.find("events");
+            if (events_skipped != cap.end() && events_skipped->is_array()) {
+                driver.thermal_cap_events_skipped += events_skipped->size();
+            }
+            return;
+        }
+        // ``effective_from_ns`` is a TOP-LEVEL cap field (the instant the whole
+        // cap takes effect); it is not repeated per event (parse_thermal_cap's
+        // event key set is exactly resource_index + absolute_physical_rate).
+        const uint64_t effective_from_ns =
+            cap.at("effective_from_ns").get<uint64_t>();
+        for (const auto& event : *events) {
+            const std::size_t resource = static_cast<std::size_t>(
+                event.at("resource_index").get<int64_t>());
+            const double rate =
+                event.at("absolute_physical_rate").get<double>();
+            for (Sys* sys : *driver.work_ledger_systems) {
+                if (sys != nullptr && sys->coarse_die_runtime != nullptr) {
+                    sys->coarse_die_runtime->update_capacity(
+                        resource, rate, effective_from_ns);
+                    ++driver.thermal_cap_events_applied;
+                }
+            }
+        }
+    } catch (const std::exception& error) {
+        online_fatal(std::string("thermal_cap apply failed: ") +
+                     error.what());
+    }
 }
 
 [[noreturn]] void online_fatal(const std::string& what) {
@@ -1120,6 +1363,101 @@ void ed_commit_cb(void* arg) {
 // tick-end gate, which records the T -> T+1 deferral in
 // StateDelta.deferred_from_tick (explicit, never silent).
 void ed_delivery_wakeup(void*) {}
+
+// ---------------------------------------------------------------------------
+// Plan D (request-independent periodic thermal epoch)
+// ---------------------------------------------------------------------------
+
+// No-op cancellation cleanup: the periodic thermal event's only payload is the
+// driver context pointer (owned by main), so cancelling it frees nothing. A
+// non-null cleanup marks the payload as cancellable without a heap allocation.
+void ed_thermal_event_cleanup(void*) {}
+
+// Plan D: the coarse_die_v2 workspace handshake must be present on EVERY delta
+// (the Python side fails closed if the extension appears or disappears
+// mid-run), so a thermal epoch carries the same complete per-rank workspace
+// view an ordinary delivery does. Mirrors the tick-end gate's collection
+// exactly (validate then copy). Only reached when workspace admission is on.
+std::vector<WorkspaceRankState> collect_thermal_workspace_state(
+    OnlineDriverContext* driver) {
+    if (driver->work_ledger_systems == nullptr ||
+        driver->work_ledger_systems->empty() ||
+        driver->graph_sources == nullptr ||
+        driver->work_ledger_systems->size() != driver->graph_sources->size()) {
+        online_fatal(
+            "coarse_die_v2 thermal epoch has no complete rank-local workspace "
+            "ledger table");
+    }
+    std::vector<WorkspaceRankState> workspace_state;
+    workspace_state.reserve(driver->work_ledger_systems->size());
+    for (size_t rank = 0; rank < driver->work_ledger_systems->size(); ++rank) {
+        Sys* const system = (*driver->work_ledger_systems)[rank];
+        if (system == nullptr || system->workspace_admission == nullptr ||
+            system->workspace_admission->rank() != static_cast<int>(rank)) {
+            online_fatal(
+                "coarse_die_v2 workspace ledger is missing or rank ordering "
+                "changed at rank " + std::to_string(rank));
+        }
+        workspace_state.push_back(system->workspace_admission->state());
+    }
+    return workspace_state;
+}
+
+// One periodic thermal epoch, fired every SH_THERMAL_EPOCH_NS of SIMULATED time
+// (registered only when that flag is > 0; independent of any request, mailbox
+// event or graph node):
+//   1. build the minimal StateDelta (a single empty THERMAL_EPOCH event, every
+//      other array empty) at the current simulated tick;
+//   2. deliver it through the bridge -- the installed ThermalActivityProvider
+//      splices the top-level thermal_activity sibling, and the
+//      ThermalCapConsumer applies any returned thermal_cap to the coarse die
+//      runtimes INSIDE deliver_and_receive;
+//   3. re-arm the next periodic event at tick + SH_THERMAL_EPOCH_NS.
+// Termination: the chain re-arms only while the service is NOT finished, so
+// once every request settled and the queue drained the run ends exactly like
+// the thermal-off baseline (no periodic event remains outstanding). The
+// returned batch is intentionally NOT committed: a thermal epoch carries no
+// graph nodes (the Python side answers with an empty batch) and needs no commit
+// ack (the provisional KV ledger only records non-empty kv_actions).
+void ed_thermal_epoch_cb(void* ctx) {
+    auto* driver = static_cast<OnlineDriverContext*>(ctx);
+    driver->thermal_event_handle.reset();  // this event has just been popped
+    const uint64_t tick = driver->event_queue->get_current_time();
+    const uint64_t delivery_sequence = driver->delivery_seq++;
+    DecisionEvent thermal_event;
+    thermal_event.reason = DecisionReason::THERMAL_EPOCH;
+    // The coarse_die_v2 workspace handshake must appear on every delta once it
+    // is on (the Python side fails closed if the extension changes mid-run), so
+    // a thermal epoch mirrors the tick-end gate's delta shape exactly.
+    StateDelta delta;
+    if (driver->workspace_admission_required) {
+        delta = build_state_delta_v2(
+            {thermal_event}, tick, delivery_sequence, 0, {}, {},
+            collect_thermal_workspace_state(driver), {});
+    } else {
+        delta = build_state_delta_v1(
+            {thermal_event}, tick, delivery_sequence, 0, {}, {}, {});
+    }
+    // The Python validator requires snapshot_handle.kind == "work_ledger_v4" on
+    // EVERY delivery (the work ledger is applied before the strategy), so the
+    // thermal epoch carries the same handle kind as an ordinary delivery.
+    delta.snapshot_handle.kind = "work_ledger_v4";
+    driver->thermal_epoch_count += 1;
+    GraphBatch batch = driver->bridge->deliver_and_receive(delta);
+    // The Python run-end audit asserts ack_count == delivery_count and an
+    // in-order ack watermark (verify_run_end), so every delivered thermal
+    // epoch MUST be acknowledged even though no graph batch is committed (the
+    // Python side answers a thermal epoch with an empty batch). The response
+    // has been fully consumed above, so the ack is legal now; batch_id echoes
+    // the Python-side batch identity (== delivery_sequence).
+    driver->bridge->send_commit_ack(batch.batch_id, delivery_sequence, true);
+    if (!driver->svc->finished()) {
+        driver->thermal_event_handle =
+            driver->event_queue->schedule_event_cancellable(
+                tick + driver->thermal_epoch_ns, ed_thermal_epoch_cb, driver,
+                ed_thermal_event_cleanup);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Tick-end activity gate (step 1-6/1-8)
@@ -2358,6 +2696,45 @@ int main(int argc, char* argv[]) {
                      "injected-unfinished ledger summary delivered per "
                      "epoch)" << std::endl;
     }
+    // Plan D (request-independent periodic thermal epoch): SH_THERMAL_EPOCH_NS
+    // selects the epoch in SIMULATED nanoseconds. Unset / "0" = OFF (no
+    // provider, no consumer, no periodic event) -- the frozen default, so the
+    // run is byte-identical to the thermal-off baseline. A non-integer or
+    // negative value fails closed.
+    {
+        const char* thermal_epoch_env = ::getenv("SH_THERMAL_EPOCH_NS");
+        if (thermal_epoch_env != nullptr && *thermal_epoch_env != '\0') {
+            errno = 0;
+            char* end = nullptr;
+            const unsigned long long parsed =
+                std::strtoull(thermal_epoch_env, &end, 10);
+            if (std::strchr(thermal_epoch_env, '-') != nullptr || errno != 0 ||
+                end == thermal_epoch_env || *end != '\0') {
+                online_fatal(
+                    "SH_THERMAL_EPOCH_NS must be a non-negative integer (got "
+                    "\"" + std::string(thermal_epoch_env) + "\")");
+            }
+            driver_ctx.thermal_epoch_ns = static_cast<uint64_t>(parsed);
+        }
+    }
+    if (driver_ctx.thermal_epoch_ns > 0) {
+        driver_ctx.thermal_epoch_enabled = true;
+        bridge.set_thermal_activity_provider(
+            [&driver_ctx](const StateDelta& delta) {
+                return compute_thermal_activity(driver_ctx, delta);
+            });
+        bridge.set_thermal_cap_consumer(
+            [&driver_ctx](const nlohmann::json& cap) {
+                apply_thermal_cap(driver_ctx, cap);
+            });
+        std::cout << "[online] thermal epoch: enabled (SH_THERMAL_EPOCH_NS="
+                  << driver_ctx.thermal_epoch_ns
+                  << "; request-independent periodic THERMAL_EPOCH delivery "
+                     "every N simulated ns; thermal_activity provider + "
+                     "thermal_cap consumer installed; source_id die<N> carries "
+                     "the RANK number as a placeholder)"
+                  << std::endl;
+    }
     // M2 node GC (2026-08-23; A1 2026-08-28): evidence line (cpp.log is an
     // allowed-diff log). Collection is always on since the B.3 cleanup
     // (2026-09-05) removed the --online-node-gc CLI arm.
@@ -2382,6 +2759,19 @@ int main(int argc, char* argv[]) {
     NetworkAnalytical::EventProfile::register_known(&ed_delivery_wakeup,
                                                     "driver_wakeup");
 #endif
+    // Plan D: arm the periodic thermal epoch (only when SH_THERMAL_EPOCH_NS > 0).
+    // Registered after the tick-end callback is wired and before the loop
+    // starts; the first epoch fires at T0 + SH_THERMAL_EPOCH_NS (T0 = the
+    // current queue time, normally 0). The pending event keeps the queue
+    // non-empty, so the simulation advances by SIMULATED time even while idle /
+    // between requests; the callback re-arms only while the service is
+    // unfinished (see ed_thermal_epoch_cb for the termination rule).
+    if (driver_ctx.thermal_epoch_enabled) {
+        driver_ctx.thermal_event_handle =
+            event_queue->schedule_event_cancellable(
+                event_queue->get_current_time() + driver_ctx.thermal_epoch_ns,
+                ed_thermal_epoch_cb, &driver_ctx, ed_thermal_event_cleanup);
+    }
 
     fluid_scheduler->flush_pending_starts();
     fluid_scheduler->mark_event_loop_started();
@@ -2720,6 +3110,20 @@ int main(int argc, char* argv[]) {
               << mailbox.tick_end_without_decision_count()
               << " no_decision_python_callback_count="
               << mailbox.no_decision_python_callback_count() << std::endl;
+    if (driver_ctx.thermal_epoch_enabled) {
+        // Plan D evidence line: how many periodic THERMAL_EPOCH deliveries went
+        // out (== the number of thermal_activity frames in the request journal)
+        // and how many cap events reached the coarse die runtimes.
+        std::cout << "[online] thermal epoch counters: epochs_delivered="
+                  << driver_ctx.thermal_epoch_count
+                  << " cap_events_applied="
+                  << driver_ctx.thermal_cap_events_applied
+                  << " cap_events_skipped="
+                  << driver_ctx.thermal_cap_events_skipped
+                  << " epoch_ns=" << driver_ctx.thermal_epoch_ns
+                  << " last_window_end_ns="
+                  << driver_ctx.thermal_prev_epoch_ns << std::endl;
+    }
     std::cout << "[online] service counters: accepted="
               << svc.accepted_request_count()
               << " completed=" << svc.completed_request_count()

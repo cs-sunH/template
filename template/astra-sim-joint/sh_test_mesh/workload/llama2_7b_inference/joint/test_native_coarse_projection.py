@@ -16,8 +16,8 @@ from joint.native_projection import (
 )
 from joint.prediction_config import PredictionParams
 from joint.resource_projection import (
-    BarrierSpec, CoarseCancelEvent, CoarseDieDomainSpec, GateLease,
-    GateSpec, ProjectionInput,
+    BarrierSpec, CoarseCancelEvent, CoarseCapacityEvent, CoarseDieDomainSpec,
+    GateLease, GateSpec, ProjectionInput,
     ResourceProjectionError, ResourceSpec, TaskSpec, WorkItem,
 )
 
@@ -308,6 +308,134 @@ class CoarseProjectionWireTest(unittest.TestCase):
         finally:
             source.close()
             target.close()
+
+
+class CoarseCapacityEventWireTest(unittest.TestCase):
+    """Frozen coarse capacity events (the thermal cap install path)."""
+
+    def _domain(self):
+        return CoarseDieDomainSpec("hbm:0", json.loads(CONFIG.read_text()))
+
+    def test_legacy_wire_omits_capacity_events(self):
+        legacy = ProjectionInput(
+            now_ns=0, resources=(), focus_work_id="legacy",
+            background_works=(WorkItem("legacy", (TaskSpec(
+                "legacy#0", kind="fixed", duration_ns=1),)),))
+        self.assertNotIn("coarse_capacity_events",
+                         projection_input_to_wire(legacy))
+
+    def test_capacity_event_wire_and_validation(self):
+        domain = self._domain()
+        event = CoarseCapacityEvent(
+            time_ns=40, resource_key="hbm:0", resource_index=0,
+            absolute_physical_rate=0.5)
+        data = ProjectionInput(
+            now_ns=0,
+            resources=(ResourceSpec("hbm:0", "hbm", 1.0),),
+            background_works=(WorkItem("comp", (TaskSpec(
+                "comp#0", kind="fixed", duration_ns=10),)),),
+            focus_work_id="comp",
+            coarse_die_domains=(domain,),
+            coarse_capacity_events=(event,))
+        wire = projection_input_to_wire(data)
+        self.assertEqual(wire["coarse_capacity_events"], [{
+            "time_ns": 40, "resource_key": "hbm:0", "resource_index": 0,
+            "absolute_physical_rate": 0.5}])
+        candidate = WorkItem("candidate", (TaskSpec(
+            "candidate#0", kind="fixed", duration_ns=1),),
+            is_candidate=True)
+        self.assertEqual(
+            data.with_candidate((candidate,)).coarse_capacity_events, (event,))
+
+        # rate/resource-index domain is enforced at construction
+        with self.assertRaises(ResourceProjectionError):
+            CoarseCapacityEvent(0, "hbm:0", 13, 0.5)
+        with self.assertRaises(ResourceProjectionError):
+            CoarseCapacityEvent(0, "hbm:0", 0, -0.5)
+        # unknown frozen domain / pre-now tick are enforced on the input
+        with self.assertRaises(ResourceProjectionError):
+            ProjectionInput(
+                now_ns=0, resources=(ResourceSpec("hbm:0", "hbm", 1.0),),
+                background_works=(WorkItem("comp", (TaskSpec(
+                    "comp#0", kind="fixed", duration_ns=10),)),),
+                focus_work_id="comp",
+                coarse_die_domains=(domain,),
+                coarse_capacity_events=(CoarseCapacityEvent(
+                    0, "pool:0", 0, 0.5),))
+        with self.assertRaises(ResourceProjectionError):
+            ProjectionInput(
+                now_ns=100, resources=(ResourceSpec("hbm:0", "hbm", 1.0),),
+                background_works=(WorkItem("comp", (TaskSpec(
+                    "comp#0", kind="fixed", duration_ns=10),)),),
+                focus_work_id="comp",
+                coarse_die_domains=(domain,),
+                coarse_capacity_events=(CoarseCapacityEvent(
+                    99, "hbm:0", 0, 0.5),))
+        with self.assertRaises(ResourceProjectionError):
+            ProjectionInput(
+                now_ns=0, resources=(),
+                background_works=(WorkItem("comp", (TaskSpec(
+                    "comp#0", kind="fixed", duration_ns=10),)),),
+                focus_work_id="comp",
+                coarse_capacity_events=[CoarseCapacityEvent(0, "hbm:0", 0, 0.5)])
+
+
+class CoarseCapacityProjectionTest(unittest.TestCase):
+    """Real native projection consumes the capacity events and defers finish."""
+
+    @unittest.skipUnless(
+        os.environ.get("NATIVE_COARSE_PROJECTION_LIBRARY")
+        and os.environ.get("DIE_COARSE_CABI_PATH"),
+        "requires explicit native and coarse build outputs")
+    def test_capacity_event_defers_the_focus_finish(self):
+        from online.die_model_oracle import DieModelOracle
+        config = json.loads(CONFIG.read_text())
+        # The HBM resource capacity must mirror the frozen coarse descriptor,
+        # which is only reachable through the sanctioned die-model ABI.
+        with DieModelOracle(config_json_path=str(CONFIG)) as oracle:
+            resources_summary = oracle.hardware_summary()["derived"]["resources"]
+            raw_bns = (resources_summary[4]["rate"] + resources_summary[5]["rate"]) / 1e9
+        descriptor = DiePlanDescriptor(
+            specs=(TASK,), route=("hbm:0",), hardware_config=config)
+        comp = WorkItem("comp", (TaskSpec(
+            "comp#0", kind="compute", route=("hbm:0",),
+            die_plan=descriptor),))
+        domain = CoarseDieDomainSpec("hbm:0", config)
+        resources = (ResourceSpec("hbm:0", "hbm", raw_bns),)
+
+        def predicted(events):
+            data = ProjectionInput(
+                now_ns=0, resources=resources, background_works=(comp,),
+                focus_work_id="comp", coarse_die_domains=(domain,),
+                coarse_capacity_events=events)
+            library = NativeProjectionLibrary(
+                os.environ["NATIVE_COARSE_PROJECTION_LIBRARY"])
+            world = NativeProjectionWorld(data, library=library)
+            try:
+                world.run()
+                inspect = world._operation({"operation": "inspect"})
+                snapshot = world.export_snapshot()
+                return inspect["work_done_at"]["comp"], snapshot
+            finally:
+                world.close()
+
+        baseline, _ = predicted(())
+        throttled, throttled_snapshot = predicted((
+            CoarseCapacityEvent(40, "hbm:0", 0, 0.5),))
+        self.assertEqual(throttled_snapshot["state"]["capacity_events_processed"], 1)
+        self.assertGreater(throttled, baseline,
+                           "a 0.5 COMPUTE_GATE cap must defer the finish")
+        # Recovery: re-installing the full rate restores the baseline finish.
+        # (The plan's V08 analytic integer expectation -- a pure 100 ns gate work
+        # split at 40 ns -- does NOT hold on this fixture; the coarse service
+        # curve is not a bare COMPUTE_GATE linear model, so the observable
+        # contract is monotonic defer-plus-recovery rather than exact ns math.)
+        recovered, recovered_snapshot = predicted((
+            CoarseCapacityEvent(40, "hbm:0", 0, 0.5),
+            CoarseCapacityEvent(80, "hbm:0", 0, 1.0)))
+        self.assertEqual(recovered_snapshot["state"]["capacity_events_processed"], 2)
+        self.assertEqual(recovered, baseline,
+                         "a full-rate recovery must restore the baseline finish")
 
 
 if __name__ == "__main__":

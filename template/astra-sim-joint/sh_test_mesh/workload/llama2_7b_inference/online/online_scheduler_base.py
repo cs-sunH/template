@@ -412,6 +412,13 @@ class OnlineSchedulerBase:
         self._work_ledger_event_sink = work_ledger_sink
         self._last_work_ledger_note = None
         self.work_ledger_absent_seen = False
+        # Phase D thermal epoch (Python side): the run-long thermal session
+        # service that turns a request's ``thermal_activity`` into a
+        # ``thermal_cap`` on the response.  None = off / bridge not wired; a
+        # request that carries activity then records the absence and continues
+        # (the C++ side is designed to proceed without a cap).
+        self.thermal_epoch_service = None
+        self.thermal_cap_absent_seen = False
 
     # ------------------------------------------------------------- 固定阶段 --
 
@@ -508,6 +515,10 @@ class OnlineSchedulerBase:
         batch = self.build_graph_batch()
         segments["build_graph_batch_ns"] = (
             time.perf_counter_ns() - _seg_t0)
+        # Phase D: attach ``thermal_cap`` iff this request carried
+        # ``thermal_activity`` (a no-op for every legacy request -- the frozen
+        # response field set and kernel_contract are unchanged when absent).
+        self._attach_thermal_cap(delta, batch)
         # §7.2:缓存本次已应用交付(幂等重放凭据)。B3(2026-08-23):生产
         # 路径引用缓存(批对象/下一批 begin_batch 重建累加器,旧引用不被
         # 改写;delta 桥读后即弃);defensive_reply_cache=True(幂等
@@ -564,6 +575,26 @@ class OnlineSchedulerBase:
             self.online_stats_sink(row)
         else:
             self.online_stats_rows.append(row)
+
+    def _attach_thermal_cap(self, delta: dict, batch: dict) -> None:
+        """Phase D response assembly: add ``thermal_cap`` iff the request had it.
+
+        The frozen response keeps its existing field set: a request without
+        ``thermal_activity`` never gets a ``thermal_cap`` key (early return).  A
+        request that carries activity but reaches an unwired / disabled thermal
+        service records the absence (``thermal_cap_absent_seen``) and continues
+        safely -- the C++ side is designed to proceed without a cap.  The actual
+        parse/ingest/envelope->wire translation lives in
+        ``joint.thermal_epoch`` so this hook stays a single, testable call site.
+        """
+        if "thermal_activity" not in delta:
+            return
+        service = getattr(self, "thermal_epoch_service", None)
+        if service is None:
+            self.thermal_cap_absent_seen = True
+            return
+        from joint.thermal_epoch import attach_thermal_cap
+        attach_thermal_cap(delta, batch, service)
 
     def delivery_segment_totals(self) -> dict:
         """墙时分段累计的只读副本(run 末汇总行消费;__new__ 壳替身/

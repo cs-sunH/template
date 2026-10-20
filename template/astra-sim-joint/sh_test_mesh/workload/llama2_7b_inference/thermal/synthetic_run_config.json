@@ -1,0 +1,12 @@
+{
+  "note": "Synthetic engineering fixture for the thermal co-simulation closed loop. It binds the packaged 4x2 thermal *profile* to a synthetic hardware snapshot; the result stays target_calibrated=false and is NOT a target-device specification.",
+  "mode": "shadow",
+  "thermal_config": "package:thermal/3dice_8die_reference.json",
+  "energy_table": "configs/energy/research-v1.json",
+  "energy_strict": true,
+  "policy": null,
+  "mapping_epoch": "thermal-fixture-v1",
+  "thermal_step_ns": 10000000,
+  "base_frequency_hz": 1000000000.0,
+  "target_calibrated": false
+}

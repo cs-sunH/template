@@ -176,6 +176,15 @@ QUOTA_MODES = ("off", "static", "aimd")
 BOUNDARY_POLICY_OFF = "off"
 BOUNDARY_POLICY_P_CONTINUATION = "p-continuation"
 BOUNDARY_POLICIES = (BOUNDARY_POLICY_OFF, BOUNDARY_POLICY_P_CONTINUATION)
+#: 热协同仿真开关（thermal_joint_integration_plan）：缺省 off 保持现有行为；
+#: shadow = 消费真实活动、生成温度与拟议 cap 但**不安装降额**（对照臂）；
+#: closed_loop = 温度→policy→cap 作用于真实执行与成本预测的闭环。与三机制/
+#: combo/quota/掩码正交，不参与预设互斥。thermal 物理配置不混入调度参数：
+#: policy 阈值/频率档/滞回属 joint 侧 run 配置（thermal_run_config 指向）。
+THERMAL_MODE_OFF = "off"
+THERMAL_MODE_SHADOW = "shadow"
+THERMAL_MODE_CLOSED_LOOP = "closed_loop"
+THERMAL_MODES = (THERMAL_MODE_OFF, THERMAL_MODE_SHADOW, THERMAL_MODE_CLOSED_LOOP)
 
 # 模式常量（调度器/策略模块引用；与上表同源）。
 CATEGORY_TYPED = "typed"
@@ -269,6 +278,8 @@ _RETIRED_ENV_KEYS = (
 _ENV_ALLOWED_ACTIONS = "JOINT_ALLOWED_ACTIONS"
 _ENV_QUOTA_MODE = "JOINT_QUOTA_MODE"
 _ENV_BOUNDARY_POLICY = "JOINT_BOUNDARY_POLICY"
+_ENV_THERMAL_MODE = "JOINT_THERMAL_MODE"
+_ENV_THERMAL_CONFIG = "JOINT_THERMAL_CONFIG"
 
 
 class JointConfigError(ValueError):
@@ -303,6 +314,11 @@ class JointMechanismConfig:
     # 纪律第 2 类"一次映射 vs 两阶段闭环对照"对照臂；语义/fail-closed
     # 裁决见模块 docstring boundary_policy 节。生产 run 不设）。
     boundary_policy: str = BOUNDARY_POLICY_OFF
+    # 热协同仿真开关（thermal_joint_integration_plan）：off | shadow |
+    # closed_loop，缺省 off。非 off 时必须给出 thermal_run_config（指向
+    # joint 侧热运行配置/policy 引用；thermal 物理配置不混入调度参数）。
+    thermal_mode: str = THERMAL_MODE_OFF
+    thermal_run_config: Optional[str] = None
     # 派生旗标（__post_init__ 重算，非构造参数语义）：True = 构造时的
     # quota_mode 为非 off 值、因 scheduler_mode=face_static 被强制覆盖
     # 为 off（F7；manifest 注记 "face_static forces quota-off"）。
@@ -341,6 +357,17 @@ class JointMechanismConfig:
             raise JointConfigError(
                 f"boundary_policy must be one of {BOUNDARY_POLICIES}, got "
                 f"{self.boundary_policy!r}")
+        # 热开关：取值域校验 + 非 off 必须有 run 配置引用（fail-closed；
+        # 无配置即拒绝启动，绝不静默退回 off 后仍报闭环成功）。
+        if self.thermal_mode not in THERMAL_MODES:
+            raise JointConfigError(
+                f"thermal_mode must be one of {THERMAL_MODES}, got "
+                f"{self.thermal_mode!r}")
+        if self.thermal_mode != THERMAL_MODE_OFF and not self.thermal_run_config:
+            raise JointConfigError(
+                f"thermal_mode={self.thermal_mode!r} requires a thermal run "
+                "configuration reference (JOINT_THERMAL_CONFIG); a thermal run "
+                "must not start without its profile/policy/energy inputs")
         if (self.boundary_policy == BOUNDARY_POLICY_P_CONTINUATION
                 and "stay" not in _parse_allowed_actions(
                     self.allowed_actions)):
@@ -393,6 +420,11 @@ class JointMechanismConfig:
         return self.layer_policy == "adaptive"
 
     @property
+    def thermal_enabled(self) -> bool:
+        """True when thermal feedback (shadow/closed_loop) is configured."""
+        return self.thermal_mode != THERMAL_MODE_OFF
+
+    @property
     def allowed_action_set(self) -> frozenset:
         """M2 掩码放行动作集（JCM ``allowed_actions`` 注入源；"all" 派
         生全集、子集派生解析集——``_parse_allowed_actions`` 单一裁决点
@@ -428,6 +460,16 @@ class JointMechanismConfig:
             # p-continuation = 一次映射对照臂——见模块 docstring
             # boundary_policy 节）。
             "boundary_policy": self.boundary_policy,
+            # 热协同仿真开关（thermal_joint_integration_plan）：off = 现有
+            # 行为；shadow/closed_loop 的替代语义与 run 配置引用一并披露
+            # （off 时 run 配置必须为空，不得残留无用引用）。
+            "thermal_mode": self.thermal_mode,
+            "thermal_run_config": self.thermal_run_config,
+            "thermal_enabled": self.thermal_mode != THERMAL_MODE_OFF,
+            "thermal_off_substitution": (
+                "no thermal feedback: fixed nominal resource rates and no "
+                "power/thermal ledger" if self.thermal_mode == THERMAL_MODE_OFF
+                else None),
             # face_static 对照臂注记（C17，仿 quota 键模式）：身份纪律
             # （设计文档 §5.3/§1.3）+ quota 强制覆盖事实（F7 唯一耦合
             # 例外——被覆盖时 source_env 仍保留 env 原值，差异即注记
@@ -638,6 +680,29 @@ def parse_joint_config(
     if boundary_policy_raw is not None:
         sources[_ENV_BOUNDARY_POLICY] = boundary_policy
 
+    # 热协同仿真开关（off|shadow|closed_loop，缺省 off——与三机制/combo/
+    # quota/掩码/边界策略正交，不参与预设互斥）。非 off 必须有 run 配置
+    # 引用（__post_init__ 单一裁决点校验）；off 时残留 run 配置即 fail-closed，
+    # 防止陈旧脚本静默携带热配置却按 off 运行。
+    thermal_mode_raw = _read_env(lookup, _ENV_THERMAL_MODE)
+    thermal_config_raw = _read_env(lookup, _ENV_THERMAL_CONFIG)
+    thermal_mode = thermal_mode_raw or THERMAL_MODE_OFF
+    if thermal_mode not in THERMAL_MODES:
+        raise JointConfigError(
+            f"{_ENV_THERMAL_MODE} must be one of {THERMAL_MODES}, got "
+            f"{thermal_mode!r}")
+    if thermal_mode == THERMAL_MODE_OFF and thermal_config_raw is not None:
+        raise JointConfigError(
+            f"{_ENV_THERMAL_CONFIG} must be absent when {_ENV_THERMAL_MODE}=off; "
+            "a leftover thermal run configuration must not silently persist")
+    if thermal_mode != THERMAL_MODE_OFF and thermal_config_raw is None:
+        raise JointConfigError(
+            f"{_ENV_THERMAL_MODE}={thermal_mode!r} requires {_ENV_THERMAL_CONFIG}")
+    if thermal_mode_raw is not None:
+        sources[_ENV_THERMAL_MODE] = thermal_mode
+    if thermal_config_raw is not None:
+        sources[_ENV_THERMAL_CONFIG] = thermal_config_raw
+
     if category_mode not in CATEGORY_MODES:
         raise JointConfigError(
             f"{_ENV_CATEGORY} must be one of {CATEGORY_MODES}, got "
@@ -659,6 +724,8 @@ def parse_joint_config(
         quota_mode=quota_mode,
         boundary_policy=boundary_policy,
         combo=combo,
+        thermal_mode=thermal_mode,
+        thermal_run_config=thermal_config_raw,
     ).with_sources(sources)
 
 

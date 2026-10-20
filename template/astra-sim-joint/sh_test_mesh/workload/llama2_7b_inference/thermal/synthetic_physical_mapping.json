@@ -1,0 +1,243 @@
+{
+ "block_ids": [
+  "d0_c0",
+  "d0_c1",
+  "d0_c2",
+  "d0_c3",
+  "d0_hbm",
+  "d0_router",
+  "d1_c0",
+  "d1_c1",
+  "d1_c2",
+  "d1_c3",
+  "d1_hbm",
+  "d1_router",
+  "d2_c0",
+  "d2_c1",
+  "d2_c2",
+  "d2_c3",
+  "d2_hbm",
+  "d2_router",
+  "d3_c0",
+  "d3_c1",
+  "d3_c2",
+  "d3_c3",
+  "d3_hbm",
+  "d3_router",
+  "d4_c0",
+  "d4_c1",
+  "d4_c2",
+  "d4_c3",
+  "d4_hbm",
+  "d4_router",
+  "d5_c0",
+  "d5_c1",
+  "d5_c2",
+  "d5_c3",
+  "d5_hbm",
+  "d5_router",
+  "d6_c0",
+  "d6_c1",
+  "d6_c2",
+  "d6_c3",
+  "d6_hbm",
+  "d6_router",
+  "d7_c0",
+  "d7_c1",
+  "d7_c2",
+  "d7_c3",
+  "d7_hbm",
+  "d7_router"
+ ],
+ "content_hash": "7ef19b84aae33f1c1e3f9528b7e52ef075610c47771ae96924ec756dd5533c78",
+ "external_sinks": [
+  "external.dram"
+ ],
+ "hardware_hash": "64ea7d5fb0193c9c628e390ea4ac1f260218b9f9290b22525f79785b2093180c",
+ "mapping_epoch": "fixture-mapping-v1",
+ "notes": [
+  "synthetic fixture mapping"
+ ],
+ "rank_to_die": {
+  "0": 0,
+  "1": 1,
+  "10": 2,
+  "11": 3,
+  "12": 4,
+  "13": 5,
+  "14": 6,
+  "15": 7,
+  "16": 0,
+  "17": 1,
+  "18": 2,
+  "19": 3,
+  "2": 2,
+  "20": 4,
+  "21": 5,
+  "22": 6,
+  "23": 7,
+  "24": 0,
+  "25": 1,
+  "26": 2,
+  "27": 3,
+  "28": 4,
+  "29": 5,
+  "3": 3,
+  "30": 6,
+  "31": 7,
+  "32": 0,
+  "33": 1,
+  "34": 2,
+  "35": 3,
+  "36": 4,
+  "37": 5,
+  "38": 6,
+  "39": 7,
+  "4": 4,
+  "40": 0,
+  "41": 1,
+  "42": 2,
+  "43": 3,
+  "44": 4,
+  "45": 5,
+  "46": 6,
+  "47": 7,
+  "48": 0,
+  "49": 1,
+  "5": 5,
+  "50": 2,
+  "51": 3,
+  "52": 4,
+  "53": 5,
+  "6": 6,
+  "7": 7,
+  "8": 0,
+  "9": 1
+ },
+ "schema_version": 1,
+ "source_block_weights": {
+  "die0.compute": {
+   "d0_c0": 0.25,
+   "d0_c1": 0.25,
+   "d0_c2": 0.25,
+   "d0_c3": 0.25
+  },
+  "die0.hbm": {
+   "d0_hbm": 1.0
+  },
+  "die0.router": {
+   "d0_router": 1.0
+  },
+  "die1.compute": {
+   "d1_c0": 0.25,
+   "d1_c1": 0.25,
+   "d1_c2": 0.25,
+   "d1_c3": 0.25
+  },
+  "die1.hbm": {
+   "d1_hbm": 1.0
+  },
+  "die1.router": {
+   "d1_router": 1.0
+  },
+  "die2.compute": {
+   "d2_c0": 0.25,
+   "d2_c1": 0.25,
+   "d2_c2": 0.25,
+   "d2_c3": 0.25
+  },
+  "die2.hbm": {
+   "d2_hbm": 1.0
+  },
+  "die2.router": {
+   "d2_router": 1.0
+  },
+  "die3.compute": {
+   "d3_c0": 0.25,
+   "d3_c1": 0.25,
+   "d3_c2": 0.25,
+   "d3_c3": 0.25
+  },
+  "die3.hbm": {
+   "d3_hbm": 1.0
+  },
+  "die3.router": {
+   "d3_router": 1.0
+  },
+  "die4.compute": {
+   "d4_c0": 0.25,
+   "d4_c1": 0.25,
+   "d4_c2": 0.25,
+   "d4_c3": 0.25
+  },
+  "die4.hbm": {
+   "d4_hbm": 1.0
+  },
+  "die4.router": {
+   "d4_router": 1.0
+  },
+  "die5.compute": {
+   "d5_c0": 0.25,
+   "d5_c1": 0.25,
+   "d5_c2": 0.25,
+   "d5_c3": 0.25
+  },
+  "die5.hbm": {
+   "d5_hbm": 1.0
+  },
+  "die5.router": {
+   "d5_router": 1.0
+  },
+  "die6.compute": {
+   "d6_c0": 0.25,
+   "d6_c1": 0.25,
+   "d6_c2": 0.25,
+   "d6_c3": 0.25
+  },
+  "die6.hbm": {
+   "d6_hbm": 1.0
+  },
+  "die6.router": {
+   "d6_router": 1.0
+  },
+  "die7.compute": {
+   "d7_c0": 0.25,
+   "d7_c1": 0.25,
+   "d7_c2": 0.25,
+   "d7_c3": 0.25
+  },
+  "die7.hbm": {
+   "d7_hbm": 1.0
+  },
+  "die7.router": {
+   "d7_router": 1.0
+  }
+ },
+ "source_to_destination": {
+  "die0.compute": "on_wafer",
+  "die0.hbm": "on_wafer",
+  "die0.router": "on_wafer",
+  "die1.compute": "on_wafer",
+  "die1.hbm": "on_wafer",
+  "die1.router": "on_wafer",
+  "die2.compute": "on_wafer",
+  "die2.hbm": "on_wafer",
+  "die2.router": "on_wafer",
+  "die3.compute": "on_wafer",
+  "die3.hbm": "on_wafer",
+  "die3.router": "on_wafer",
+  "die4.compute": "on_wafer",
+  "die4.hbm": "on_wafer",
+  "die4.router": "on_wafer",
+  "die5.compute": "on_wafer",
+  "die5.hbm": "on_wafer",
+  "die5.router": "on_wafer",
+  "die6.compute": "on_wafer",
+  "die6.hbm": "on_wafer",
+  "die6.router": "on_wafer",
+  "die7.compute": "on_wafer",
+  "die7.hbm": "on_wafer",
+  "die7.router": "on_wafer",
+  "external.dram": "external"
+ }
+}

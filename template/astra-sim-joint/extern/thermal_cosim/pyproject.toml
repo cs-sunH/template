@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wafer-thermal-cosim"
+version = "0.2.0"
+description = "Embedded solid/coolant thermal + power core for astra-sim-joint co-simulation"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.scripts]
+wafercosim = "wafercosim.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["wafercosim*"]
+
+[tool.setuptools.package-data]
+wafercosim = [
+  "configs/**/*.json",
+  "configs/**/*.yaml",
+]

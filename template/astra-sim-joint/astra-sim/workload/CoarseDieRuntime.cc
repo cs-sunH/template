@@ -4,6 +4,7 @@
 #include "coarse_die/PlanCache.hh"
 
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 #include <utility>
@@ -229,6 +230,41 @@ void CoarseDieRuntime::cancel(const uint64_t handle,
         }
     } else {
         retire(handle);
+    }
+    try {
+        schedule_next();
+    } catch (...) {
+        if (!first_exception) first_exception = std::current_exception();
+    }
+    if (first_exception) std::rethrow_exception(first_exception);
+}
+
+void CoarseDieRuntime::update_capacity(const std::size_t resource,
+                                      const double rate,
+                                      const uint64_t now_ns) {
+    // 先拒绝调用方可控的错误，任何已生效状态都不动：非有限或负速率一律
+    // 失败关闭，绝不在包装层猜测或夹取；资源下标/硬件峰值/硬件禁用资源
+    // 等约束仍由底层 Runtime 按同一规则校验（其抛出的 invalid_argument
+    // 原样传播）。
+    if (!std::isfinite(rate) || rate < 0.0) {
+        throw std::invalid_argument(
+            "invalid_capacity: rate must be finite and nonnegative");
+    }
+    if (dispatching_) {
+        throw std::runtime_error(
+            "coarse_die_v2 capacity cannot be updated during terminal callback dispatch");
+    }
+    // 因果：先把旧速率积分到 now_ns，使已服务的工作保持精确计量，只有
+    // now_ns 之后才按新绝对物理速率推进；换率本身会重算未来完成时刻，
+    // 因此先前调度的完成事件已失效，交给 schedule_next() 按 generation
+    // 失效并重排。
+    runtime_.advance_to(now_ns);
+    runtime_.update_capacity(resource, rate, now_ns);
+    std::exception_ptr first_exception;
+    try {
+        dispatch_terminal();
+    } catch (...) {
+        first_exception = std::current_exception();
     }
     try {
         schedule_next();

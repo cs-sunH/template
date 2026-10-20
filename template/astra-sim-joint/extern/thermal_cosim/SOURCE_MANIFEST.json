@@ -1,0 +1,245 @@
+{
+ "component": "wafer-thermal-cosim",
+ "embedded_into": "template/astra-sim-joint/extern/thermal_cosim",
+ "files": [
+  {
+   "bytes": 1090,
+   "path": "LICENSE",
+   "sha256": "5205db7c0b67cb284afd1c31d81f951692a00b5218c41694fb4dda90bf344677"
+  },
+  {
+   "bytes": 883,
+   "path": "THIRD_PARTY.md",
+   "sha256": "9f01f4d59489adf271e61ed3a3f4db933dd57e5941928a15c9b28523bf617b52"
+  },
+  {
+   "bytes": 549,
+   "path": "pyproject.toml",
+   "sha256": "83b4c53b2e88677f03461abbf57277b727184700cf5bbf17450713334e9e92d0"
+  },
+  {
+   "bytes": 7699,
+   "path": "repos.lock.json",
+   "sha256": "b1b7fb5eeef92561b2d90a9fcb15672e6a1c3648a5c9f6f4cff17e07e591c253"
+  },
+  {
+   "bytes": 6444,
+   "path": "docs/input_contract.md",
+   "sha256": "c3cf5b7dcbf6cc919e020695a6e459d4dfa86b6eb676416210f8237717208d4b"
+  },
+  {
+   "bytes": 1462,
+   "path": "docs/liquid_reference.md",
+   "sha256": "e857c706fd9cbe31d2f01cdc8255bf3114375a9747c3a7e415b88cc74e063d6a"
+  },
+  {
+   "bytes": 2006,
+   "path": "docs/research_platform.md",
+   "sha256": "d474f7f755882657cdb7e81c0d370d5bb5e88932d7b376a454cfd0c4c9f9d62f"
+  },
+  {
+   "bytes": 12064,
+   "path": "docs/rethermal_basis.md",
+   "sha256": "7c15eb26ac3dde19b73002ea93ef47711dd96ea9ab5e671ade2ee3c6c5b02af4"
+  },
+  {
+   "bytes": 7221,
+   "path": "tests/test_energy_core.py",
+   "sha256": "203bc017809028f7fc1b070e640fa02e9d0f12fc015cfd28eb8c9e5910954b4a"
+  },
+  {
+   "bytes": 4560,
+   "path": "tests/test_ice.py",
+   "sha256": "65c729d83cf334ee51731f1fa3060896c62e2c6f32f6e508512f9ce42810dba6"
+  },
+  {
+   "bytes": 4618,
+   "path": "tests/test_thermal_core.py",
+   "sha256": "58e59f6273aab2577e1a44cd8030bf961dbc3af32af75e066c65a29a4761b608"
+  },
+  {
+   "bytes": 1235,
+   "path": "wafercosim/__init__.py",
+   "sha256": "46d2d80d1e6df542f9160bff1d3efc09241b3783138ad87dc595a09542d614d1"
+  },
+  {
+   "bytes": 79,
+   "path": "wafercosim/__main__.py",
+   "sha256": "307299fda7b77d22c64cb51430ec75e5f59d78e9c948786afb3b2544fe45e4b7"
+  },
+  {
+   "bytes": 43449,
+   "path": "wafercosim/action_energy.py",
+   "sha256": "718f3e789e214b871d96ef7111c16ad6e2032f30944de48bbe6922b820027f10"
+  },
+  {
+   "bytes": 836,
+   "path": "wafercosim/backends.py",
+   "sha256": "e0039cc5ebc8fee77cfbd81c954e6292a700abdbc59bccd48fc93800cd3d9492"
+  },
+  {
+   "bytes": 3528,
+   "path": "wafercosim/cli.py",
+   "sha256": "fb071bff14d94f1ef3c35a995a50b33647fa1c42a680fd1a135377e7265f62ca"
+  },
+  {
+   "bytes": 3801,
+   "path": "wafercosim/config.py",
+   "sha256": "0e6f0705fcb269ebf965e20c62bdb4a03b718339894674f49e13bd9d25c727b8"
+  },
+  {
+   "bytes": 26816,
+   "path": "wafercosim/contracts.py",
+   "sha256": "821a61661ad746c76edf0af12da57e8a18c5d3d94df7bd08d54467261f469d8e"
+  },
+  {
+   "bytes": 16481,
+   "path": "wafercosim/ice.py",
+   "sha256": "a92be54616f4d00410a239dabd70d58adbb56b39236514f50657694c4b368698"
+  },
+  {
+   "bytes": 2776,
+   "path": "wafercosim/native.py",
+   "sha256": "127b232a07c18f1136424e014be59f3700d8bfb8076d601519a6288e3337653b"
+  },
+  {
+   "bytes": 888,
+   "path": "wafercosim/paths.py",
+   "sha256": "0a4549ef9eb1ae80311cde33cc9be1fa67f47b3920d92236ce8d21c014d64aee"
+  },
+  {
+   "bytes": 11312,
+   "path": "wafercosim/power.py",
+   "sha256": "ea4139265eb95f14c7e121e6570e9880879cae5178dcc62a490ec34eb2399ff1"
+  },
+  {
+   "bytes": 13180,
+   "path": "wafercosim/session.py",
+   "sha256": "a995b75a9a611a8a988205740e0ebafa80bc4d96ecbe7d326684ec1de2369245"
+  },
+  {
+   "bytes": 11731,
+   "path": "wafercosim/thermal.py",
+   "sha256": "3ed626b3349df5367331cae4bf4b2fec1615d7571338931882ee7823e35975c4"
+  },
+  {
+   "bytes": 1488,
+   "path": "wafercosim/traceability.py",
+   "sha256": "344616c965302827a78abf369700bd110baaa1c07c2d0a136a25ef26ff60434c"
+  },
+  {
+   "bytes": 1663,
+   "path": "wafercosim/configs/thermal/3dice_8die_reference.json",
+   "sha256": "3956188df49ef0dc2f0f981a285f5ef18d2d52d36b43e4bb33f134339a6439c4"
+  },
+  {
+   "bytes": 3715,
+   "path": "wafercosim/configs/thermal/rc_reference_candidate-capacity-bound-1p5.json",
+   "sha256": "f1604be5d109b8265495f612cbd43b1aefafe2c3141d4cbd50d951179683037d"
+  },
+  {
+   "bytes": 3717,
+   "path": "wafercosim/configs/thermal/rc_reference_candidate-capacity-bound-3.json",
+   "sha256": "816f213e8dbfdcaabda8dfcb2a8104b59fe05150bbf388c39ec4b698800022d2"
+  },
+  {
+   "bytes": 4507,
+   "path": "wafercosim/configs/thermal/rc_reference_candidate.json",
+   "sha256": "d95a395fd7afae09aee53199aa527491ea2eea695b98009556671077fc20edef"
+  },
+  {
+   "bytes": 38224,
+   "path": "wafercosim/configs/energy/research-fp16-v1-pe2x.json",
+   "sha256": "4bd7a4501cb2fd092f0cf4c3d64e2ea85936d92d33336f5cc448e441d9db1eb2"
+  },
+  {
+   "bytes": 38224,
+   "path": "wafercosim/configs/energy/research-fp16-v1.json",
+   "sha256": "1d2d8a0ee93c0f80e4a6fd335fd101e7c1a755665ad182d576d5785434c5d3ef"
+  },
+  {
+   "bytes": 38301,
+   "path": "wafercosim/configs/energy/research-platform-v1-pe2x.json",
+   "sha256": "01837170d3b35d9c855f6f350f372931c43eacf6d372db08e0a6e94e38c577a8"
+  },
+  {
+   "bytes": 38301,
+   "path": "wafercosim/configs/energy/research-platform-v1.json",
+   "sha256": "1de884b7eb5c85e914469135d8db84834bb1d6b205dafce6fecc22e5aaef79b0"
+  },
+  {
+   "bytes": 234,
+   "path": "wafercosim/configs/energy/research-tiny-v1-calibration.json",
+   "sha256": "c8e398e3461301be88c1a1807bb485df6a3ec2283884554484e385c19e43e166"
+  },
+  {
+   "bytes": 38202,
+   "path": "wafercosim/configs/energy/research-tiny-v1-pe2x.json",
+   "sha256": "2d86d45d45bc03d0107636904259118f6ed5010b91e0cf4434dd913a9a49bfc8"
+  },
+  {
+   "bytes": 38202,
+   "path": "wafercosim/configs/energy/research-tiny-v1.json",
+   "sha256": "5a4fa024d4ac3e6eaa3f7b2617b412656fe82b4e5e909c359b8ef1624671dd2b"
+  },
+  {
+   "bytes": 38124,
+   "path": "wafercosim/configs/energy/research-v1-pe2x.json",
+   "sha256": "e23b2def721b7c14d8efada82acc99a8d77735d0ec6effe73df8c8237ca66969"
+  },
+  {
+   "bytes": 38124,
+   "path": "wafercosim/configs/energy/research-v1.json",
+   "sha256": "e4fb2d1d7302812ff482f982c27c1abf5d9ca7bafc84022ffa3a9508d67e5b12"
+  },
+  {
+   "bytes": 133,
+   "path": "wafercosim/configs/energy/wafer_action.lib.yaml",
+   "sha256": "bbb0a0cc34e4ebe8a291769715bae33f797c66f3ddda87835a957e64ef267c0c"
+  },
+  {
+   "bytes": 1497,
+   "path": "wafercosim/configs/fixtures/tiny-analytical.json",
+   "sha256": "455587e29c4fe4c9bee958cb5190822a36443ac77a45d419a8821ab9b7c64067"
+  },
+  {
+   "bytes": 4620,
+   "path": "reference/build_3dice_bridge.sh",
+   "sha256": "6579970a5a7615a17ef775f01974521857aeac0de5ee3bd2798393fac31b10cf"
+  },
+  {
+   "bytes": 1064,
+   "path": "reference/build_hotspot_bridge.sh",
+   "sha256": "710f16d14103bfe06e6c5a6ea0eecb80c085550887da9c7feeff2ef27ec60a84"
+  },
+  {
+   "bytes": 1345,
+   "path": "reference/examples/hotspot/README.md",
+   "sha256": "0c8c111d3fa33e8b4defba7eea1ffb8679df54abb7d4cbd0ad75bacc4ebc31ec"
+  },
+  {
+   "bytes": 157,
+   "path": "reference/examples/hotspot/wafer_minimal.config",
+   "sha256": "d38a59ae35eb77614fb0e8814eb4fde565f670a5d734ab9f8f36671745adbc82"
+  },
+  {
+   "bytes": 308,
+   "path": "reference/examples/hotspot/wafer_minimal.flp",
+   "sha256": "264a57c8cbf827c9caa68d03adcdfce38f9e722fad0b2e619e8a489d0eff2901"
+  },
+  {
+   "bytes": 137,
+   "path": "reference/examples/hotspot/wafer_minimal.steps",
+   "sha256": "8d5a03576cbc7769890bc1709b2aa041eb4a698630d956916cc98e8cc6ca4541"
+  }
+ ],
+ "license": "MIT",
+ "license_file": "LICENSE",
+ "schema_version": 1,
+ "snapshot_date": "2026-10-20",
+ "source_commit": "788e1abf8496d86d07821c9d1eac197141c631a1",
+ "source_repository": "https://github.com/cs-sunH/template (wafer-thermal-cosim)",
+ "third_party": "THIRD_PARTY.md",
+ "upstream_lock": "repos.lock.json",
+ "vendoring_note": "Version-controlled vendored internal dependency; upstream offline tool checkouts (upstream/) are intentionally not embedded and remain available via repos.lock.json."
+}

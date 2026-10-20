@@ -230,6 +230,17 @@ def projection_input_to_wire(input_data: ProjectionInput) -> dict:
             "time_ns": event.time_ns,
             "leg_id": event.leg_id,
         } for event in input_data.coarse_cancel_events]
+    if input_data.coarse_capacity_events:
+        # Absolute coarse resource-rate changes (thermal cap install). The C++
+        # projection consumes exactly these four keys and applies them in
+        # (time, input order) order; the caller scales the thermal envelope's
+        # throughput fraction by the resource peak before building these.
+        wire["coarse_capacity_events"] = [{
+            "time_ns": event.time_ns,
+            "resource_key": event.resource_key,
+            "resource_index": event.resource_index,
+            "absolute_physical_rate": float(event.absolute_physical_rate),
+        } for event in input_data.coarse_capacity_events]
     return wire
 
 

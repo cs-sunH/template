@@ -1,0 +1,195 @@
+{
+ "clock_hz": 1000000000.0,
+ "content_hash": "64ea7d5fb0193c9c628e390ea4ac1f260218b9f9290b22525f79785b2093180c",
+ "d2d_bandwidth_bytes_s": 0.0,
+ "dies": [
+  {
+   "clock_hz": 1000000000.0,
+   "core_count": 88,
+   "cores_x": 8,
+   "cores_y": 11,
+   "die": 0,
+   "die_height_m": 0.032,
+   "die_width_m": 0.025,
+   "precision": "int4"
+  },
+  {
+   "clock_hz": 1000000000.0,
+   "core_count": 88,
+   "cores_x": 8,
+   "cores_y": 11,
+   "die": 1,
+   "die_height_m": 0.032,
+   "die_width_m": 0.025,
+   "precision": "int4"
+  },
+  {
+   "clock_hz": 1000000000.0,
+   "core_count": 88,
+   "cores_x": 8,
+   "cores_y": 11,
+   "die": 2,
+   "die_height_m": 0.032,
+   "die_width_m": 0.025,
+   "precision": "int4"
+  },
+  {
+   "clock_hz": 1000000000.0,
+   "core_count": 88,
+   "cores_x": 8,
+   "cores_y": 11,
+   "die": 3,
+   "die_height_m": 0.032,
+   "die_width_m": 0.025,
+   "precision": "int4"
+  },
+  {
+   "clock_hz": 1000000000.0,
+   "core_count": 88,
+   "cores_x": 8,
+   "cores_y": 11,
+   "die": 4,
+   "die_height_m": 0.032,
+   "die_width_m": 0.025,
+   "precision": "int4"
+  },
+  {
+   "clock_hz": 1000000000.0,
+   "core_count": 88,
+   "cores_x": 8,
+   "cores_y": 11,
+   "die": 5,
+   "die_height_m": 0.032,
+   "die_width_m": 0.025,
+   "precision": "int4"
+  },
+  {
+   "clock_hz": 1000000000.0,
+   "core_count": 88,
+   "cores_x": 8,
+   "cores_y": 11,
+   "die": 6,
+   "die_height_m": 0.032,
+   "die_width_m": 0.025,
+   "precision": "int4"
+  },
+  {
+   "clock_hz": 1000000000.0,
+   "core_count": 88,
+   "cores_x": 8,
+   "cores_y": 11,
+   "die": 7,
+   "die_height_m": 0.032,
+   "die_width_m": 0.025,
+   "precision": "int4"
+  }
+ ],
+ "dram": {
+  "config": "DDR4_8Gb_x8_3200.ini",
+  "protocol": "DDR4"
+ },
+ "energy_hardware_facts": {
+  "compute": {
+   "activation_bytes": 2,
+   "weight_bytes": 0.5
+  },
+  "dram": {
+   "config": "DDR4_8Gb_x8_3200.ini",
+   "protocol": "DDR4"
+  },
+  "dram_capacity_bytes": 128000000000,
+  "hbm": {
+   "config": "HBM2_4Gb_x128.ini",
+   "protocol": "HBM"
+  },
+  "hbm_capacity_bytes_per_die": 32000000000,
+  "noc": {
+   "flit_width_bits": 128,
+   "num_vcs": 4,
+   "nx": 4,
+   "ny": 2,
+   "packet_size_flits": 4,
+   "router": "iq",
+   "routing": "minimum_hop_anynet"
+  },
+  "pe_ops_s_per_die": 50000000000000.0,
+  "sram": {
+   "access_bytes": 128,
+   "macro_capacity_bytes": 65536,
+   "macro_count_per_die": 1024,
+   "word_width_bits": 1024
+  },
+  "sram_capacity_bytes_per_die": 67108864,
+  "vec_ops_s_per_die": 5000000000000.0
+ },
+ "hbm": {
+  "config": "HBM2_4Gb_x128.ini",
+  "protocol": "HBM"
+ },
+ "mesh_cols": 6,
+ "mesh_rows": 9,
+ "noc": {
+  "flit_width_bits": 128,
+  "num_vcs": 4,
+  "nx": 4,
+  "ny": 2,
+  "packet_size_flits": 4,
+  "router": "iq",
+  "routing": "minimum_hop_anynet"
+ },
+ "notes": [
+  "synthetic fixture; not a target hardware export"
+ ],
+ "physical_sources": [
+  "die0.compute",
+  "die0.hbm",
+  "die0.router",
+  "die1.compute",
+  "die1.hbm",
+  "die1.router",
+  "die2.compute",
+  "die2.hbm",
+  "die2.router",
+  "die3.compute",
+  "die3.hbm",
+  "die3.router",
+  "die4.compute",
+  "die4.hbm",
+  "die4.router",
+  "die5.compute",
+  "die5.hbm",
+  "die5.router",
+  "die6.compute",
+  "die6.hbm",
+  "die6.router",
+  "die7.compute",
+  "die7.hbm",
+  "die7.router"
+ ],
+ "precision": "int4",
+ "resource_peaks": {
+  "dram_capacity_bytes": 128000000000.0,
+  "hbm_capacity_bytes_per_die": 32000000000.0,
+  "pe_ops_s_per_die": 50000000000000.0,
+  "sram_capacity_bytes_per_die": 67108864.0,
+  "vec_ops_s_per_die": 5000000000000.0
+ },
+ "schema_version": 1,
+ "source_path": "<synthetic-fixture>",
+ "sram": {
+  "access_bytes": 128,
+  "macro_capacity_bytes": 65536,
+  "macro_count_per_die": 1024,
+  "word_width_bits": 1024
+ },
+ "target_calibrated": false,
+ "units": {
+  "energy": "J",
+  "frequency": "Hz",
+  "geometry": "m",
+  "power": "W",
+  "sim_time": "ns",
+  "temperature": "K",
+  "thermal_time": "s"
+ }
+}

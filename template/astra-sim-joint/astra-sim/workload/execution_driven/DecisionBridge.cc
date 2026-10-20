@@ -60,6 +60,8 @@ std::string reason_name(const DecisionReason reason) {
             return "DECODE_COMPLETION";
         case DecisionReason::REQUEST_COMPLETE:
             return "REQUEST_COMPLETE";
+        case DecisionReason::THERMAL_EPOCH:
+            return "THERMAL_EPOCH";
     }
     // Dead-code cleanup (2026-09-29): the switch is exhaustive over
     // DecisionReason; the old trailing `return "UNKNOWN";` was unreachable
@@ -295,6 +297,14 @@ nlohmann::json build_request_json(const StateDelta& delta) {
                 req["completed_groups"].push_back(std::move(g));
                 break;
             }
+            case DecisionReason::THERMAL_EPOCH:
+                // Plan D: the request-independent periodic thermal epoch. It
+                // carries no request/group payload -- the reason name alone is
+                // the wire fact (arrivals[]/completed_groups[] stay empty). The
+                // thermal facts travel as the additive top-level
+                // thermal_activity sibling (ThermalActivityProvider), not
+                // inside this per-event loop.
+                break;
         }
     }
     // Phase 4 (schema v1): the frozen queue order -- arrivals[] is sorted by
@@ -729,6 +739,29 @@ void ShmDecisionBridge::set_work_ledger_provider(
     work_ledger_provider_ = std::move(provider);
 }
 
+void ShmDecisionBridge::set_thermal_activity_provider(
+    ThermalActivityProvider provider) {
+    // Plan D: same startup-only contract as the telemetry/ledger providers.
+    // The feature flag (SH_THERMAL_EPOCH_NS > 0) is read once at startup, so a
+    // mid-run swap would silently change the request schema between epochs of
+    // one run. Fail closed instead of accepting the swap.
+    if (stats_.roundtrip_count > 0) {
+        bridge_fatal("set_thermal_activity_provider after the first delivery "
+                     "(the request schema cannot change mid-run)");
+    }
+    thermal_activity_provider_ = std::move(provider);
+}
+
+void ShmDecisionBridge::set_thermal_cap_consumer(
+    ThermalCapConsumer consumer) {
+    // Plan D: startup-only wiring (the consumer owns the coarse runtimes).
+    if (stats_.roundtrip_count > 0) {
+        bridge_fatal("set_thermal_cap_consumer after the first delivery "
+                     "(the response consumer cannot change mid-run)");
+    }
+    thermal_cap_consumer_ = std::move(consumer);
+}
+
 // ------------------------------------------------- W1 work-ledger diff --
 
 namespace {
@@ -1060,6 +1093,19 @@ GraphBatch ShmDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     if (link_telemetry_provider_) {
         request["link_telemetry"] = link_telemetry_provider_(delta);
     }
+    // Plan D (periodic thermal epoch): attach the optional top-level
+    // thermal_activity sibling (additive; absent when the feature is off, so
+    // the request bytes stay byte-identical to the pre-D wire format). The
+    // provider samples the coarse die runtime's cumulative served counters
+    // exactly once per delivery epoch (1:1 backpressure above). The flag is
+    // captured once: it is EXACTLY the condition under which the response may
+    // legally carry thermal_cap (rule T6 conditional allow, see
+    // ParsedGraphBatch), so the request and the parse must agree on it.
+    const bool request_has_thermal_activity =
+        static_cast<bool>(thermal_activity_provider_);
+    if (request_has_thermal_activity) {
+        request["thermal_activity"] = thermal_activity_provider_(delta);
+    }
     // W1/v6 (joint work ledger): splice the compact work_ledger frame into
     // the request when the provider is installed (sibling of link_telemetry
     // and ledger_summary; never occupies the v0 snapshot reserved slot).
@@ -1187,11 +1233,23 @@ GraphBatch ShmDecisionBridge::deliver_and_receive(const StateDelta& delta) {
     // abort below leaves zero state side effects anywhere.
     GraphBatch batch;
     try {
-        batch = parse_graph_batch(resp, num_ranks_, delta.workspace_state);
+        batch = parse_graph_batch(resp, num_ranks_, delta.workspace_state,
+                                  request_has_thermal_activity);
     } catch (const ParseError& exc) {
         bridge_fatal(std::string("malformed GraphBatch response for "
                                  "delivery_sequence=") +
                      std::to_string(seq) + ": " + exc.what());
+    }
+    // Plan D (periodic thermal epoch): hand the response's optional thermal_cap
+    // to the installed consumer (the online main applies it to the coarse die
+    // runtimes). Absent cap = the Python peer produced no throttling decision
+    // this epoch (feature not yet wired, or the policy chose not to change the
+    // cap): the bridge delivers nothing and continues -- absence is NEVER a
+    // protocol violation (fail-open on absence is the frozen rule for an
+    // additive response field). The consumer is optional; an uninstalled one
+    // simply drops a delivered cap.
+    if (batch.has_thermal_cap && thermal_cap_consumer_) {
+        thermal_cap_consumer_(batch.thermal_cap);
     }
     // Phase 6 (方案 §9.1): round-trip accounting.
     stats_.roundtrip_count += 1;

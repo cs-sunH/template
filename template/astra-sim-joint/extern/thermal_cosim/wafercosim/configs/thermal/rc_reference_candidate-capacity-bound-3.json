@@ -1,0 +1,101 @@
+{
+  "schema_version": 2,
+  "geometry": {
+    "die_columns": 4,
+    "die_rows": 2,
+    "module_width_m": 0.025,
+    "module_height_m": 0.032,
+    "compute_side_m": 0.01732,
+    "compute_groups_per_side": 2,
+    "hbm": {
+      "x_m": 0.0,
+      "y_m": 0.01747,
+      "width_m": 0.01626,
+      "height_m": 0.00492
+    },
+    "router": {
+      "x_m": 0.01747,
+      "y_m": 0.0,
+      "width_m": 0.001,
+      "height_m": 0.01732
+    }
+  },
+  "thermal": {
+    "backend": "rc_liquid",
+    "window_s": 0.01,
+    "initial_k": 300.0,
+    "inlet_k": 300.0,
+    "silicon_thickness_m": 5e-05,
+    "silicon_volumetric_heat_capacity_j_m3k": 3794634.2656051307,
+    "silicon_k_w_mk": 130.0,
+    "htc_w_m2k": 23164.53139446842,
+    "tim_areal_resistance_m2k_w": 0.0,
+    "hbm_capacity_j_k_per_die": 0.0151783852770499,
+    "router_capacity_j_k_per_die": 0.0032861532740140432,
+    "hbm_cooling_g_w_k": 1.8531439799323581,
+    "router_cooling_g_w_k": 0.40120968375219307,
+    "substrate_die_lateral_g_w_k": 0.01465885416666666,
+    "coolant_mass_flow_kg_s_per_row": 0.0031904000000000004,
+    "coolant_cp_j_kgk": 4185.193580742227,
+    "coolant_segment_volume_m3": 4.000000000000001e-08,
+    "coolant_density_kg_m3": 997.0,
+    "three_dice": {
+      "step_s": 0.01,
+      "channel_height_um": 100.0,
+      "channel_length_um": 500.0,
+      "wall_length_um": 500.0,
+      "first_wall_length_um": 250.0,
+      "last_wall_length_um": 250.0,
+      "grid_cell_width_um": 4000.0,
+      "active_layer_um": 50.0,
+      "passive_die_um": 50.0,
+      "flow_rate_ml_min": 384.0,
+      "htc_side_w_m2k": 27132.0,
+      "htc_top_w_m2k": 47132.0,
+      "htc_bottom_w_m2k": 57132.0,
+      "coolant_vhc_j_um3k": 4.172638e-12
+    }
+  },
+  "thermal_calibration": {
+    "status": "exploratory_candidate_fit_to_pinned_3d_ice_reference",
+    "empirical_silicon_calibration": false,
+    "reference_commit": "4953952a1ef6d38807ff307212a6f15e5b2ef935",
+    "training_profile": "hotspots on dies 0/1/4/5, then 2/3/6/7, then checkerboard; phase edges at 40/80 ms",
+    "held_out_profile": "hotspots on dies 2/3/4/7, then 0/3/4/7, then 1/2/5/6; phase edges at 30/70 ms",
+    "fit_method": "bounded scipy.optimize.least_squares over all training block/time residuals; no additive offset or temperature scaling",
+    "initial_parameters": {
+      "htc_w_m2k": 52132.0,
+      "tim_areal_resistance_m2k_w": 0.0,
+      "rc_effective_silicon_capacity_scale": 1.0
+    },
+    "fitted_parameters": {
+      "htc_w_m2k": 23164.53139446842,
+      "tim_areal_resistance_m2k_w": 0.0,
+      "rc_effective_silicon_capacity_scale": 2.319940736831084
+    },
+    "parameter_bounds": {
+      "htc_w_m2k": [
+        15000.0,
+        100000.0
+      ],
+      "rc_effective_silicon_capacity_scale": [
+        0.5,
+        3.0
+      ],
+      "tim_areal_resistance_m2k_w": "fixed to the source assumption; HTC and TIM are series-equivalent in this RC topology"
+    },
+    "acceptance_gate": {
+      "held_out_rmse_k_max": 0.05,
+      "held_out_peak_abs_delta_k_max": 0.1,
+      "held_out_rmse_must_improve": true
+    },
+    "parameter_provenance": {
+      "reference_htc_and_material": "pinned 3D-ICE official 4RM stack plus configs/thermal/3dice_8die_reference.json",
+      "fit_bounds": "engineering bounds around source-derived fast-RC defaults, not measured-property intervals",
+      "tim_resistance": "fixed at zero source assumption because TIM and HTC are not separately identifiable in this RC topology",
+      "capacity_scale": "effective fast-RC capacity parameter; 3D-ICE physical material values remain unchanged"
+    },
+    "scientific_accuracy_gate": "failed",
+    "configuration_role": "superseded RC-only exploratory candidate; do not use as validated calibration"
+  }
+}

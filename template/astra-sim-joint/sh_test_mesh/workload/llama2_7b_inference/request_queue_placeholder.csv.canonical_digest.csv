@@ -1,0 +1,2 @@
+request_id,raw_prefix_tokens,raw_new_prefill_tokens,effective_prompt_tokens,digest,prefix_mode
+session_0_request_0,13045,2614,15659,7674ad99a14baf208f1423a86d0ad57bb277f481cde71b9da44fdaa9a8a9dbb7,recompute
