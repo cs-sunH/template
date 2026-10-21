@@ -55,7 +55,10 @@ json capacity_attention_task(std::uint64_t q, std::uint64_t kv,
 Hardware low_sram_hardware() {
   auto config = read_json(std::string(COARSE_DIE_SOURCE_DIR) +
                           "/configs/example_hardware.json");
-  config["performance_profile"]["rho_sram"] = 0.25;
+  // example SRAM grew 0.25 -> 1.5 MiB/core (2026-10-21 die redesign); 1/24
+  // keeps the usable SRAM at the historical 65536 B so this suite still
+  // exercises the low-SRAM filtering boundary it was written for.
+  config["performance_profile"]["rho_sram"] = 1.0 / 24.0;
   return resolve_hardware(config);
 }
 

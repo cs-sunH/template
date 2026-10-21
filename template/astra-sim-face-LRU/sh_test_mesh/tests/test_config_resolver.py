@@ -502,11 +502,12 @@ class DieHardwareTests(unittest.TestCase):
         self.assertEqual(hardware.coarse_die_config, coarse_node)
         self.assertEqual(hardware.local_hbm_capacity_bytes, 144_000_000_000)
         summary = hardware.die_derived["hardware_summary"]
-        self.assertEqual(summary["die_core_count"], 100)
-        # 2026-10-19 M2 授权工程对照点(10x10/0.75MiB SRAM/512-bit NoC)
-        # 的派生 INT4 峰值;7.04e12 为旧 coarse 示例点口径。
+        self.assertEqual(summary["die_core_count"], 117)
+        # 2026-10-21 wafer-fit 默认(13x9/1.5MiB SRAM/256-bit NoC)的派生
+        # INT4 峰值 = 117x3560 PE x 2 GOPS;2026-10-19 的 10x10 工程点
+        # (126.6 TOPS)仍完整保留在 die/configs/tx8_compute_matched_hardware.json。
         self.assertEqual(
-            summary["peak_int4_ops_per_s"], 126_600_000_000_000.0)
+            summary["peak_int4_ops_per_s"], 833_040_000_000_000.0)
         # 两排 HBM:每排峰值带宽 2355.2 GB/s,合计即 local-mem-bw 回流值。
         self.assertEqual(
             summary["hbm_row_peak_Bps"], [2_355_200_000_000.0, 2_355_200_000_000.0])

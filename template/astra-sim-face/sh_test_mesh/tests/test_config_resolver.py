@@ -489,8 +489,10 @@ class DieHardwareTests(unittest.TestCase):
         self.assertIsNone(hardware.peak_perf_tflops)
         self.assertAlmostEqual(hardware.local_hbm_bandwidth_gbps, 4710.4)
         summary = hardware.die_derived["hardware_summary"]
-        self.assertEqual(summary["die_core_count"], 88)
-        self.assertEqual(summary["peak_int4_ops_per_s"], 7_040_000_000_000.0)
+        # 2026-10-21 wafer-fit default: 13x9 Core grid, 1.5 MiB SRAM/512->256-bit
+        # NoC redesign of the checked-in coarse-die block (see hardware notes).
+        self.assertEqual(summary["die_core_count"], 117)
+        self.assertEqual(summary["peak_int4_ops_per_s"], 833_040_000_000_000.0)
 
     def test_coarse_die_capacity_profile_must_match_derived_hbm(self) -> None:
         """契约 §3.4 的 coarse 口径:profile bytes 必须等于 coarse 派生

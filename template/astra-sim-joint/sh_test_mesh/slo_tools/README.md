@@ -79,7 +79,7 @@ P11 死键清除起本仓删除 10 个零消费者 campaign 档案键——五�
 | `restore_decomposition.py` | WP5 | cpp.log（**full 档**：type=memory_anchor + type=request） | slo_restore_decomposition.csv：restore_start=min(锚点)/restore_complete=max(锚点)（按 subject_id=queue_index 逐请求归属）→ §3.2 固定公式三段+hidden_ratio；无锚点请求四推导字段全 NA+计数 |
 | `kv_cache_adapter.py` | WP4 | results/online_decision_log.jsonl + per-request manifest | cache_events.csv（action_id,request_id,start_ns,end_ns,bytes,source,target,cause）+ kv_hit_states.csv（full/partial/miss/no_history/not_supported + 证据列）+ 命中率双分母；`--reconcile` 与 native 逐项对账（以 native 为准，不一致 exit≠0） |
 | `hopbytes.py` | — | results/online_decision_log.jsonl | slo_hopbytes_total.csv + slo_hopbytes_per_request.csv：Hop-Bytes=Σ bytes×noc_hops（只聚合产物中真实携带 hops 字段的记录；无覆盖仓输出 coverage=0 并标注 TODO_*） |
-| `domain_metrics.py`（C16，joint 专属条件步） | WP6b | results/online_decision_log.jsonl（joint_admission/completion 行，C5 schema）+ per-request/plan manifest + trace_config.csv + hardware json + manifest(domain_delta_adm_ns/domain_delta_sensitivity_multipliers) | slo_domain_requests.csv（三口径逐请求：D_feed/D_econ(δ=0)/实际选择 + 边界对拍 + H/I 逐请求 KV 字节组件）+ slo_domain_instances.csv（逐 (请求,实例)：双域同图数据/内外等值线差值/方向/瓶颈段/配额域派生 0/1 列与 port_* port_snapshot 实测值）+ slo_domain_summary.json（二动作计数 `two_action_counts`（2026-10-15 recompute 退役后口径——原 `three_action_counts` 与 recompute elected/forced 分列删除）、|D|/hop 分位/方向半径方差/约束不满足原因、预测/实测差、δ∈{σ̂,2σ̂,4σ̂} 离线敏感性重定价（A3'：δ_adm=0 空转对拍臂已撤销）、home 迁移轨迹（completion 披露 + kv_delta_journal 结算权威层——sidecar 第四键已序列化并由本工具四层分级消费，F3 2026-09-22）、ε/δ 口径登记与叙事纪律注释）；**无 joint_admission 行的 run 完全静默跳过**（四仓共链零扰动） |
+| `domain_metrics.py`（C16，joint 专属条件步） | WP6b | results/online_decision_log.jsonl（joint_admission/completion 行，C5 schema）+ per-request/plan manifest + trace_config.csv + hardware json + manifest(domain_delta_adm_ns/domain_delta_sensitivity_multipliers) | slo_domain_requests.csv（三口径逐请求：D_feed/D_econ(δ=0)/实际选择 + 边界对拍 + H/I 逐请求 KV 字节组件）+ slo_domain_instances.csv（逐 (请求,实例)：双域同图数据/内外等值线差值/方向/瓶颈段/配额域派生 0/1 列与 port_* port_snapshot 实测值）+ slo_domain_summary.json（二动作计数 `two_action_counts`、|D|/hop 分位/方向半径方差/约束不满足原因、预测/实测差、δ∈{σ̂,2σ̂,4σ̂} 离线敏感性重定价（A3'：δ_adm=0 空转对拍臂已撤销）、home 迁移轨迹（completion 披露 + kv_delta_journal 结算权威层——sidecar 第四键已序列化并由本工具四层分级消费，F3 2026-09-22）、ε/δ 口径登记与叙事纪律注释）；**无 joint_admission 行的 run 完全静默跳过**（四仓共链零扰动） |
 
 `slo_common.py` 为共享框架（manifest 装载、request_metrics.csv 冻结列序
 校验、NA 语义、nearest-rank 分位、repo_variant 自动识别），不含逐仓语义。
@@ -91,23 +91,14 @@ checkout 的配置，以免历史结果随仓内配置变动而漂移。
 
 ## domain_metrics.py —— 局部统一内存域三口径（C16/WP6b，2026-09-22；joint）
 
-**2026-10-14 远读动作退役重收缩**：挑战者动作由远读候选重指派为 copy，
-替代族 = stay/recompute——三口径框架保留、逐口径动作分族重收缩。
-**2026-10-15 recompute 退役再收缩（现行口径）**：动作宇宙 = stay/copy
-二动作——替代族缩为 stay-only（`ALT_ACTIONS = ("stay",)`，C_alt* 的
-alt_star min 退化为 stay-only min，`no_alt_applicable` 降级分支兜底）；
-CSV 列 `recompute_tier`/`forced_reason`/`recompute_cost_ns` 删除、
-summary 键 `three_action_counts` → `two_action_counts`、
-`recompute_elected`/`recompute_forced_by_reason`/`recompute_rows_total`/
-`elected_plus_forced_equals_rows` 键删除、`recompute_selection` 解析段删
-（旧 joint 日志缺键行按 NA，与列删除同批——旧 run 含 `joint_recompute`
-行的重放按失效口径处理，如需历史对账用基线快照 tar 中旧版工具）。
+**动作分族（现行口径）**：动作宇宙 = stay/copy
+二动作——替代族 stay-only（`ALT_ACTIONS = ("stay",)`，C_alt* 的
+alt_star min 即 stay-only min，`no_alt_applicable` 降级分支兜底）。
 
 设计文档《joint机制改造方案_局部统一内存域》§5.1-§5.3 的测量工具化：
 三类观测**必须分开**（F13）——D_feed（预测供给，copy 挑战者候选
 applicable 的实例集，逐成员标注本地参考与性能容忍度）/ D_econ（预测经济，
-C_alt* = min 遍历**全部实例的适用替代动作（2026-10-15 recompute 退役后
-= stay 单族 alt min；原 stay/recompute 双族口径随退役收缩）**，
+C_alt* = min 遍历**全部实例的适用替代动作（stay 单族 alt min）**，
 D_econ = {e: C_copy(e) ≤ C_alt*+δ}；同位置动作比较另报、口径单列）/
 实际选择与 measured（在线只有最终 (e,a)；二动作计数
 `two_action_counts` 分列，§19.2 两口径不得混报；独立同

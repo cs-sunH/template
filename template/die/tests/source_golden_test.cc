@@ -79,8 +79,8 @@ void test_source_table_and_resource_formulas() {
   try { (void)resolve_hardware(bad_constant); }
   catch (const std::invalid_argument&) { constant_rejected = true; }
   require(constant_rejected, "resolver must reject changed source constants");
-  require(baseline.derived.at("core").at("N_core").get<int>() == 88,
-          "documented 8x11 rectangular grid must have 88 cores");
+  require(baseline.derived.at("core").at("N_core").get<int>() == 117,
+          "documented 13x9 rectangular grid must have 117 cores");
   require(baseline.derived.at("hbm").at("total_stacks").get<int>() == 4,
           "two stacks per row must yield four HBM stacks");
   require(baseline.derived.at("hbm").at("capacity_bytes").get<double>() ==
@@ -91,9 +91,9 @@ void test_source_table_and_resource_formulas() {
           "four HBM stacks must provide 4710.4 GB/s raw peak");
   const auto& die = baseline.derived.at("die");
   const double l0 = baseline.derived.at("core").at("L0_mm").get<double>();
-  require_close(die.at("minimum_width_mm").get<double>(), 8 * l0 + 0.10,
+  require_close(die.at("minimum_width_mm").get<double>(), 13 * l0 + 0.10,
                 1.0e-10, "x-axis must reserve 0.10 mm total peripheral width");
-  require_close(die.at("minimum_height_mm").get<double>(), 11 * l0 + 0.10,
+  require_close(die.at("minimum_height_mm").get<double>(), 9 * l0 + 0.10,
                 1.0e-10, "y-axis must reserve 0.10 mm total peripheral height");
   const double bump = die.at("area_mm2").get<double>() /
                       (0.055 * 0.055) * 0.40 * 2.5e9 / 8.0;
@@ -110,9 +110,9 @@ void test_source_table_and_resource_formulas() {
                 std::max(die.at("width_mm").get<double>(), hbmRowWidth) + 0.30,
                 1.0e-12, "module outline must use max(Core Die, HBM row) plus margins");
   const auto& system = baseline.derived.at("system");
-  require(system.at("module_columns").get<int>() == 9 &&
-              system.at("module_rows").get<int>() == 3,
-          "the explicit 21x29 mm example fits a 9x3 module grid");
+  require(system.at("module_columns").get<int>() == 5 &&
+              system.at("module_rows").get<int>() == 4,
+          "the explicit 33.99448x22.66298 mm example fits a 5x4 module grid");
   require_close(system.at("effective_module_width_mm").get<double>(),
                 baseline.derived.at("hbm").at("module_width_mm").get<double>() /
                     std::sqrt(0.90),
@@ -157,7 +157,7 @@ void test_source_table_and_resource_formulas() {
   }
   std::cout << "source DOCX rows=32, source hash="
             << baseline.derived.at("core_resource_table").at("rows_sha256")
-            << ", baseline cores=88, HBM stacks=4, capacity=144000000000 B, "
+            << ", baseline cores=117, HBM stacks=4, capacity=144000000000 B, "
                "peak=4710400000000 B/s\n";
 }
 }  // namespace

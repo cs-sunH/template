@@ -1,6 +1,6 @@
 {
   "schema": "coarse_die_release_v2",
-  "source_digest": "8790e9a4356efebf26b763058af2985f83e09a2447d9cf69965c3547bbd92b58",
+  "source_digest": "1121412d007840276297152cf58f5140973745352e4ae17e53eed54411cfd49c",
   "files": {
     "CMakeLists.txt": "62109443793566153388ac0b26f1e8b447e383b67ed8175a9bd8ab65e8549eb5",
     "include/coarse_die/Capi.h": "8fa8be05f57599cbc0485da601b88f4a2fbf368c0af4086d5929cac98d7a2f89",
@@ -33,8 +33,8 @@
     "configs/calibration_tx8.json": "3d4e6a58f77e46498aef182d4546e9427946c8a6a8fbd10466b3e29d5290b698",
     "configs/core32.json": "e89d353e29ffec23c50590d81344f44dd5b0d424c8361521ddf79fbe32c70986",
     "configs/engineering_prior.json": "bcf15b80d1d580bfbfdaaa63682ced5300611809b33224e791626014517fce8f",
-    "configs/example_hardware.json": "5f450225d9c73889a66f1ebb70de7d8cbf2c7131a7ad5192f3d977c086a98c0a",
-    "configs/example_hardware_explicit.json": "b275a326cceec297073a291ba230a9f0c8aeee21fbeb61454cebff8679ca4b3e",
+    "configs/example_hardware.json": "14dfc75d431fc842e2602acef05588f2968eb2ee24d34c46adc603c8b097e49a",
+    "configs/example_hardware_explicit.json": "8df18137137e93252f676d95751d0c473f609106e6a9d16353c417cd004a5c7c",
     "configs/example_tasks.json": "17cd7ddb64c632c0e5c275deb4e02b5cd98dc6c82202e9b3419199f4f1fff279",
     "configs/tx8_compute_matched_hardware.json": "90941cc259673d144c2d17c1ee44d08837270de802d99a9307d426afee81bb5c"
   }

@@ -1,8 +1,6 @@
 # request 映射策略与历史 KV 管理机制
 
-> 以下所有路径均相对仓库根 `astra-sim-joint/`；位置引用精确到文件级（2026-10-15
-> recompute 退役二动作化后同步改写，动作宇宙 = stay/copy；此前 2026-10-14
-> 远读退役三动作化）。
+> 以下所有路径均相对仓库根 `astra-sim-joint/`；位置引用精确到文件级（动作宇宙 = stay/copy）。
 
 ## 一、体系结构总览
 
@@ -24,18 +22,17 @@
 | `JOINT_CATEGORY_MODE`（T） | typed / lru | `joint_config.py` |
 | `JOINT_SCHEDULER_MODE`（J） | joint / load-first / affinity-first / face_static | `joint_config.py` |
 | `JOINT_LAYER_POLICY`（E） | adaptive / legacy_half / minimal_layer_groups | `joint_config.py` |
-| `JOINT_ALLOWED_ACTIONS`（M2 掩码） | all / 逗号分隔二动作子集（候选集上限非强制；旧值 `recompute`/`copy,recompute` 属未知动作名，已随 2026-10-15 recompute 退役解析即拒） | `_parse_allowed_actions`，`joint_config.py` |
-| 退役键 `JOINT_REMOTE_ACTIONS` / `JOINT_REMOTE_READ_TILE_BYTES` / `JOINT_REMOTE_READ_PARTIAL` | 任何显式值即拒绝（2026-10-14 远读退役，随 `JOINT_REMOTE_CREDIT_ITERS` 并入 `_RETIRED_ENV_KEYS` fail-closed） | `joint_config.py` |
+| `JOINT_ALLOWED_ACTIONS`（M2 掩码） | all / 逗号分隔二动作子集（候选集上限非强制） | `_parse_allowed_actions`，`joint_config.py` |
 | `JOINT_QUOTA_MODE` | off / static / aimd | `joint_config.py` |
 | `JOINT_BOUNDARY_POLICY` | off / p-continuation（一次映射对照臂；要求掩码放行 stay，否则启动即拒） | `joint_config.py`、裁决 `joint_config.py` |
 | `SH_TRAIN_MAX_ITER` | 缺省 8；显式 ≤0 fail-closed（有界性） | `parse_train_max_iter`，`joint_config.py` |
 | face_static ⇒ quota-off 强制覆盖 | 非 off 显式覆盖为 off 并注记，不拒启动 | `joint_config.py`（F7 唯一耦合例外） |
 
-预测配置 `JOINT_PREDICTION_CONFIG`（`joint/prediction_config.py`，W0 冻结单入口）正交五轴：`projection_mode`（known_work 正式 / frozen_diagnostic A 对照臂）、`future_demand_mode`（none / recent / reverting）、`history_use`（shadow / validated）、`stage_policy`（two_stage / once_mapping，与 `JOINT_BOUNDARY_POLICY` 同机制两入口，矛盾 fail-closed）、`settlement_policy`（consolidate / distributed）。（原 `action_space`（pure_four / source_subset_hybrid）与 `multi_source_protocol` 两轴已随 2026-10-14 远读退役删除，预设同步升版 predcfg-v4。）预设文件见 `sh_test_mesh/run_scripts/prediction_presets/{default,distributed,arm_a_frozen,arm_c_recent,arm_d_reverting}.json`（原 hybrid.json 已删除）。
+预测配置 `JOINT_PREDICTION_CONFIG`（`joint/prediction_config.py`，W0 冻结单入口）正交五轴：`projection_mode`（known_work 正式 / frozen_diagnostic A 对照臂）、`future_demand_mode`（none / recent / reverting）、`history_use`（shadow / validated）、`stage_policy`（two_stage / once_mapping，与 `JOINT_BOUNDARY_POLICY` 同机制两入口，矛盾 fail-closed）、`settlement_policy`（consolidate / distributed）。预设文件见 `sh_test_mesh/run_scripts/prediction_presets/{default,distributed,arm_a_frozen,arm_c_recent,arm_d_reverting}.json`。
 
 ### 2.1 P 入口动作适用性（二动作 × 会话 KV 状态的谓词面）
 
-单点：`JointCostModel.applicable_actions`，`joint/joint_cost_model.py`。"某动作不适用不等于删除该实例"——实例候选集恒为全集，只剔除动作。（原 recompute 恒 True 兜底行已随 2026-10-15 recompute 退役删除。）
+单点：`JointCostModel.applicable_actions`，`joint/joint_cost_model.py`。"某动作不适用不等于删除该实例"——实例候选集恒为全集，只剔除动作。
 
 | 分支 | 触发条件 | 行为 | 位置 |
 |---|---|---|---|
@@ -47,7 +44,7 @@
 
 ### 2.2 P 入口实例选择（select_instance_and_action，四模式）
 
-位置：`joint/joint_scheduler.py`。枚举阶段对全部实例 × `ACTION_ORDER(stay, copy)`（2026-10-15 recompute 退役后二动作）调 `estimate_P_with_continuation`（只读，W3 事件前推；不适用候选 cost=None，`joint_cost_model.py`）。
+位置：`joint/joint_scheduler.py`。枚举阶段对全部实例 × `ACTION_ORDER(stay, copy)` 调 `estimate_P_with_continuation`（只读，W3 事件前推；不适用候选 cost=None，`joint_cost_model.py`）。
 
 | 分支 | 触发条件 | 行为 | 位置 |
 |---|---|---|---|
@@ -73,13 +70,13 @@
 | 到达前置违约 | `estimated_arrival_ns is None` | raise | `sh30_online_scheduler.py` |
 | **distributed 结算依赖门** | `settlement_policy == distributed ∧ 会话上一轮结算账本在册` | 不消费：真实到达/排队照常，准入留队，落 `joint_admission` 行 `reason="settlement_open_dependency_gate"`，清失败键，return False | `sh30_online_scheduler.py` |
 | 候选计价 | — | 构造 `SessionKVView` + `RequestView`（无 oracle：decode_length 结构性排除；n̂_D 来自条件剩余估计器 `estimate_conditional`）+ `select_instance_and_action` | `sh30_online_scheduler.py` |
-| **配额判据分支** | `_quota_tracker` 在场 | `_quota_filter_candidates` 逐候选判：stay 恒适用（原 stay/recompute 恒 admitted 臂中 recompute 已随 2026-10-15 recompute 退役删除）；copy 链路门 + merge bulk 名额（`_quota_candidate_verdict`；realtime/elastic 流类与双端点平价门已随 2026-10-14 远读退役删除，在册流恒 oneshot） | `sh30_online_scheduler.py` |
+| **配额判据分支** | `_quota_tracker` 在场 | `_quota_filter_candidates` 逐候选判：stay 恒适用；copy 链路门 + merge bulk 名额（`_quota_candidate_verdict`；在册流恒 oneshot） | `sh30_online_scheduler.py` |
 | **quota_deferred 回队** | 全部动作不可行 | 落失败日志（`quota_deferred_{wait_reason}`），计 wait_reason ∈ {quota_link, quota_port}，记 `quota_deferred_since_ns`，失败键 = KV 纪元⊕候选集实例纪元⊕配额代数，return False（严禁零候选 fail-closed） | `sh30_online_scheduler.py`；回队语义 `joint/link_quota.py`（`quota_deferred_requeue`，永不 raise） |
 | 配额可行集重选 | 有可行候选 | joint = argmin 同序；顺序模式 = 可行集上重跑选点规则（`_quota_reselect_feasible`，`sh30_online_scheduler.py`）；δ_adm=0 与既有比较恒等 | `sh30_online_scheduler.py` |
 | **P 入口强制钩子** | `JOINT_FORCE_ENTRY_ACTION/_TARGET` 命中本请求 | 选择器产出后强制最终选择；per-action 形态按 `(cost, order_key)` 取最优实例，TARGET 形态精确匹配 (instance, action)，不适用/缺位 → fail-closed raise；与 boundary 钩子互斥武装 | `_apply_forced_entry_choice`，`sh30_online_scheduler.py` |
 | **容量失败回退** | reserve/prepare 抛 `KVCapacityError` | 已提交逐出 bump 纪元 + 图同步 + 旁路支链发射 → `_release_orphan_reservation` → 失败日志 `capacity_deferred` → 失败键冻结（applicable 候选 ∪ selected 实例的纪元）→ return False（三态分类：存在任一组合物理可行 = 暂时不可行；全部不可行 = 结构性 fail-closed，`_classify_physical_feasibility`） | `sh30_online_scheduler.py` |
-| 事务成功 | — | 纪元 bump + 图同步；runtime 落账（`prefill_instance_index / joint_action / joint_stage=P_COMMITTED / origin_home_instance / history_transfers / history_evictions`）（原 recompute 时改写工作描述的 `_apply_joint_recompute_work_description` 分句已随 2026-10-15 recompute 退役删除） | `sh30_online_scheduler.py` |
-| 流登记 | — | 主链 owner=rid、逐出支链 owner=rid#evict（merge 预留 owner=rid#merge-reserve；原前缀读流 owner=rid#prefill_read 与 est 承诺账本已随 2026-10-14 远读退役删除） | `sh30_online_scheduler.py` |
+| 事务成功 | — | 纪元 bump + 图同步；runtime 落账（`prefill_instance_index / joint_action / joint_stage=P_COMMITTED / origin_home_instance / history_transfers / history_evictions`） | `sh30_online_scheduler.py` |
+| 流登记 | — | 主链 owner=rid、逐出支链 owner=rid#evict（merge 预留 owner=rid#merge-reserve） | `sh30_online_scheduler.py` |
 | **配额入册失败防御分支** | 主流程入册 False（判据与入册间 tracker 外变） | 回滚全部在途流承诺 + `_release_reserved_admission_or_fail`（未物化释放+回队，已物化 fail-closed——无 un-prepare 逆路径），failure_class="quota_deferred_quota_link"，return False | `sh30_online_scheduler.py` |
 | deferred 驻留结算 | `quota_deferred_since_ns` 在场 | 记录首等待→准入 dwell 样本 | `sh30_online_scheduler.py` |
 | 成功收尾 | — | 决策日志（逐候选 breakdown/hops/notes/measured=None）→ θ 预测暂存 → P 预测里程碑登记 → 入实例 qp → bump 实例纪元 → `_emit_admission` → return True | `sh30_online_scheduler.py` |
@@ -97,7 +94,7 @@
 
 ### 2.5 D 边界动作适用性（applicable_D_remaining_actions）
 
-位置：`joint/joint_cost_model.py`。判据源 = `BoundaryKVLayout.missing_intervals_for`（`joint/boundary_layout.py`：目标已持有权威副本的区间不算缺失；继承义务中已在向目标传输的区间不重复发送）。边界布局恒完整型单族（2026-10-14 远读退役起完整型、2026-10-15 recompute 退役起 P ∈ stay/copy，H_B 全量在 i_P；原增量型族（P = remote-read，基础区间在源端）随远读动作消亡，`is_increment_layout` 判别已删除）。
+位置：`joint/joint_cost_model.py`。判据源 = `BoundaryKVLayout.missing_intervals_for`（`joint/boundary_layout.py`：目标已持有权威副本的区间不算缺失；继承义务中已在向目标传输的区间不重复发送）。边界布局恒完整型单族（P ∈ stay/copy，H_B 全量在 i_P）。
 
 | 分支 | 触发条件 | 行为 | 位置 |
 |---|---|---|---|
@@ -107,7 +104,7 @@
 
 ### 2.6 D 边界选择（select_decode_target_and_action，式 1b/1c）
 
-位置：`joint/joint_scheduler.py`。协议级边界规则，不随调度模式变体；原地继续 x0 归并在对应 `(i_P, 延续动作)` 记录上（恒 stay@i_P——2026-10-14 远读退役后完整型单族），不作第五动作。
+位置：`joint/joint_scheduler.py`。协议级边界规则，不随调度模式变体；原地继续 x0 归并在对应 `(i_P, 延续动作)` 记录上（恒 stay@i_P），不作第五动作。
 
 | 分支 | 触发条件 | 行为 | 位置 |
 |---|---|---|---|
@@ -125,17 +122,16 @@
 | 分支 | 触发条件 | 行为/数据流向 | 位置 |
 |---|---|---|---|
 | 幂等门 | `prefill_complete_ns` 已写（重复 P_COMPUTE_DONE） | 落 `boundary_duplicate_ignored` 行，return（D20 阶段 epoch） | `sh30_online_scheduler.py` |
-| 边界前置清理 | — | 释放入态流（主链）、配额准入相 settle、expand_prefill 推进工作副本（原 #prefill_read 流与暂存 lease 注销已随 2026-10-14 远读退役删除） | `sh30_online_scheduler.py` |
+| 边界前置清理 | — | 释放入态流（主链）、配额准入相 settle、expand_prefill 推进工作副本 | `sh30_online_scheduler.py` |
 | **已知终止直结** | `_joint_boundary_terminal`（decode_length==0 等） | `_settle_terminal_at_boundary` 直接结算，不做 D 选点 | `sh30_online_scheduler.py` |
-| **一次映射对照臂** | `boundary_policy == p-continuation` | 不做二次全候选重估：decode_instance=state.index、decode_action = 默认延续动作（恒 stay——2026-10-14 远读退役后完整型单族），candidates 恒空、cost NA | `sh30_online_scheduler.py` |
+| **一次映射对照臂** | `boundary_policy == p-continuation` | 不做二次全候选重估：decode_instance=state.index、decode_action = 默认延续动作（恒 stay），candidates 恒空、cost NA | `sh30_online_scheduler.py` |
 | 两阶段闭环（缺省） | off | `_joint_boundary_cost_model` + `select_decode_target_and_action` + `_apply_forced_boundary_choice`（D 入口强制钩子，同 2.3 的 entry 钩子语义，`sh30_online_scheduler.py`） | `sh30_online_scheduler.py` |
 | **提交点版本复查** | 决策→提交间 KV 纪元漂移 | `_VersionDrift` → 与容量失败同款回退结构 | `sh30_online_scheduler.py` |
 | **跨阶段预约事务** | — | `commit_stage_reservation_transaction`（幂等 epoch；换址/resize/释放单事务）+ `commit_boundary_decode_transition`（工作副本迁移） | `sh30_online_scheduler.py` |
 | **容量/版本回退** | 提交抛 KVCapacityError / KVStageVersionConflict / _VersionDrift | `selected == state.index`（继续态自身失败）→ 上抛 fail-closed；否则 abort 事务（足迹恢复提交前快照）→ 已提交逐出照常入账 → `selected = state.index` 重提交延续方案 → 落 `boundary_commit_fallback` 行（`fallback_rule` 分列 kv_capacity_error / stage_version_conflict） | `sh30_online_scheduler.py` |
 | 回退后落账 | boundary_fallback | `joint_decode_is_continuation=True`，动作 = 延续动作；不暂存失败方案 θ 预测 | `sh30_online_scheduler.py` |
-| （已退役） | — | D 边界 recompute 元数据段（`joint_decode_rebuild_pending=True` 前置重建 span、suppress_sampling/output、stage_work 切 `context_rebuild` 模板）已随 2026-10-15 recompute 退役删除 | — |
 | D_COMMITTED | 第一笔不可撤销新阶段操作（预约换址） | 此后本轮无第三次位置决策；获取全部来源目录引用（exec pin 源保护） | `sh30_online_scheduler.py` |
-| 阶段引用闭合 | — | 释放 stage reference；预约注销（原"暂存转执行期 lease"已随 2026-10-14 远读退役删除） | `sh30_online_scheduler.py` |
+| 阶段引用闭合 | — | 释放 stage reference；预约注销 | `sh30_online_scheduler.py` |
 | 异常安全（except Exception） | 边界窗口内任何异常 | 幂等注销 lease → 未到 D_COMMITTED 且事务在窗 → abort → 移出 pending_decode_ready → 释放 stage reference → 重抛 | `sh30_online_scheduler.py` |
 
 ### 2.8 D 边界工作副本事务（commit_boundary_decode_transition 的物理分支）
@@ -147,7 +143,6 @@
 | stay / copy | `action==stay` 或 copy | 复用 `move_prefill_to_decode`：stay=local_hit 零字节；copy=H_B 整份迁移（kind="stay_local_hit"/"complete_copy_migration"） | `face_scheduler.py` |
 | **copy 落到 base 驻留实例折叠** | copy ∧ target == base_instance ∧ base 有片上前缀 | 退化为"就地并基"：迁移腿照发，落点即 base 侧；journal 闭合或重复基础副本就地释放；kind="complete_copy_base_fold" | `face_scheduler.py` |
 | copy@第三目标 | 目标非 base 驻留实例 | U 迁移 + H 复制两腿（multi-leg copy-in，元组形态平铺入册）；执行面 `move_prefill_to_decode` 族 | `face_scheduler.py` |
-| （已退役） | — | remote-read 折叠/原地继续与 W10 hybrid 分支已随 2026-10-14 远读退役删除；recompute（j≠i_P 转记录/j==i_P 原地重建）两行与 boundary_source 重复事务防御分支（`boundary_source_instance_index` 字段族）已随 2026-10-15 recompute 退役整删 | — |
 
 ### 2.9 P 相物化分支（prepare_prefill：动作 × 基础历史形态的真值表）
 
@@ -164,9 +159,8 @@
 | stay × 其他 | 无驻留 | raise（stay 要求驻留历史） | `face_scheduler.py` |
 | **copy@home × LOCAL**（退化防御） | copy 且 base 在执行实例且 LOCAL | 等价 stay local_hit（不建第二份工作副本） | `face_scheduler.py` |
 | **copy@home × PARTIAL** | copy 且 base 在执行实例且 PARTIAL | 镜像 stay-partial：只恢复缺失后缀，working_kind 保持 None | `face_scheduler.py` |
-| **REMOTE 基 / 前缀 0** | `base_location == REMOTE_MEMORY or base_prefix == 0` | copy：整份池恢复为工作副本，home := exec，working_kind ∈ {copy}（原 recompute 工作副本零化起步分支已随 2026-10-15 recompute 退役删除） | `face_scheduler.py` |
+| **REMOTE 基 / 前缀 0** | `base_location == REMOTE_MEMORY or base_prefix == 0` | copy：整份池恢复为工作副本，home := exec，working_kind ∈ {copy} | `face_scheduler.py` |
 | **copy（home 侧驻留）** | 基础驻留 home，目标异侧 | 前缀 [0,p) 逐 chunk 交接流（`plan_copy_handoff_layer_chunks` + `CopyHandoffJournal`：块 0 走准入主链 readiness barrier，块 ≥1 构图器旁挂支链）+ PARTIAL 后缀池恢复 + 工作副本物化入账 | `face_scheduler.py` |
-| （已退役） | — | recompute@home 本地事务（驻留空间复用、与 stay 同构本地提交）与 recompute（home 侧驻留）工作副本零化两行已随 2026-10-15 recompute 退役删除 | — |
 
 ### 2.10 decode 增长与停滞（R14：写入前才准备资源）
 
@@ -183,7 +177,7 @@
 
 模块：`joint/link_quota.py`。配额是**动作级准入机制而非实例掩码**：任一判据不满足只把动作标记不适用（inapplicable_reason 注明资源种类与余量），实例候选集不动；资源集合 = 有向链路 ∪ 实例 HBM 端口。
 
-**流类别（C9 冻结；2026-10-14 远读退役后单类，`link_quota.py`）**：原 realtime（decode 远读读流，链路门 + 端口平价门）与 elastic（prefill 首遍读流，端口并发上限）两类已随远读机制删除，在册流恒 oneshot。
+**流类别（C9 冻结，单类，`link_quota.py`）**：在册流恒 oneshot。
 
 | 分支 | 触发条件 | 行为 | 位置 |
 |---|---|---|---|
@@ -217,17 +211,17 @@
 | 分支 | 触发条件 | 输出视图 | 位置 |
 |---|---|---|---|
 | 无会话 | turn-0 | `location="none"`、全零向量 | `sh30_online_scheduler.py` |
-| **distributed 目录并集视图** | `distributed_layout` | 目录条目并集：锚 = token_start==0 的最大覆盖片上条目；锚完整覆盖并集 → local_hbm@锚；锚层残缺且残缺段池 backing → partial_hbm_remote@锚；残缺段在其他实例（跨轮留存）→ local_hbm 且 `resident=None`（stay 不适用，copy 按锚差计——原 "stay/remote 不适用，copy/recompute 按锚差计" 已分别随 2026-10-14 远读退役与 2026-10-15 recompute 退役收缩） | `sh30_online_scheduler.py` |
+| **distributed 目录并集视图** | `distributed_layout` | 目录条目并集：锚 = token_start==0 的最大覆盖片上条目；锚完整覆盖并集 → local_hbm@锚；锚层残缺且残缺段池 backing → partial_hbm_remote@锚；残缺段在其他实例（跨轮留存）→ local_hbm 且 `resident=None`（stay 不适用，copy 按锚差计） | `sh30_online_scheduler.py` |
 | 跨实例执行期（working_kind 非 None） | — | 视图描述**基础历史**（base_* 快照；空串 base_location = 元数据腐坏 raise，None 落 REMOTE） | `sh30_online_scheduler.py` |
 | 稳态 | — | 快照直通（local/partial 字节按层区间派生，missing = full − local） | `sh30_online_scheduler.py` |
 
-观测侧（离线）：`sh_test_mesh/slo_tools/kv_cache_adapter.py`（`_hit_state_joint`）按 R12 披露字段映射：`history_tokens_before == 0 → no_history`；`joint_stay/joint_copy → full`（迁移非重算，命中语义看结果驻留）；原 `joint_recompute → miss` 映射行已随 2026-10-15 recompute 退役删除（旧 run 的该值走 `not_supported`）；字段缺席/越出词表 → `not_supported`（不猜测）；类型异常 fail-closed。
+观测侧（离线）：`sh_test_mesh/slo_tools/kv_cache_adapter.py`（`_hit_state_joint`）按 R12 披露字段映射：`history_tokens_before == 0 → no_history`；`joint_stay/joint_copy → full`（迁移即命中，语义看结果驻留）；字段缺席/越出词表 → `not_supported`（不猜测）；类型异常 fail-closed。
 
 ### 3.2 准入（预约足迹与可行性）
 
 | 分支 | 触发条件 | 行为 | 位置 |
 |---|---|---|---|
-| **动作感知预约足迹** | 二动作恒 history+input 整份（2026-10-14 远读退役删增量口径、2026-10-15 recompute 退役后动作空间恒 stay/copy；原 `joint_reservation_context_tokens` 单一裁决点与 remote-read/hybrid 的 input 增量口径已随增量族删除） | stay/copy = history+input 整份（decode 因果增长不预约；PARTIAL 跨实例后缀另按字节预约）——防 F1 幻影预约 | `face_scheduler.py` |
+| **动作感知预约足迹** | 二动作恒 history+input 整份 | stay/copy = history+input 整份（decode 因果增长不预约；PARTIAL 跨实例后缀另按字节预约）——防 F1 幻影预约 | `face_scheduler.py` |
 | 不可行实例 | `request_hbm_feasible_instances[target] == False` | KVCapacityError（容量类，可转延迟） | `face_scheduler.py` |
 | PARTIAL 去钉扎 | joint R1' | PARTIAL 驻留不构成实例亲和掩码——容量只影响所需字节（final − resident），不做候选集过滤 | `face_scheduler.py` |
 
@@ -302,11 +296,9 @@ RELEASED → （终态墓碑，不进活跃表）
 
 **池恢复通路**（`_plan_suffix_restore_transfers` → `_remote_load_transfer`，`face_scheduler.py`；RestoreGroupJournal 同文件）：后缀/整份经池边缘端口物化为热 KV，逐组发射 + ack 义务 + drain/prefill_drain/merge 三边界兜底结算（`_settle_restore_groups`，`face_scheduler.py`）。
 
-**remote-read 读流通路（已退役）**：原"有限字节双缓冲 tile 流"（D09）整链——tile 裁决、每 rank 双缓冲暂存预约、prefill 前缀读流扫描次数闭式、多源 credit plan、来源目录化与 est 账本对账——已随 2026-10-14 远读退役整体删除（无开关保留档），登记见仓根 `PROVENANCE.md` 退役批登记节。
-
 ### 3.6 结算（compute_done 之后的归并）
 
-策略分派点：`_complete_requests`，`sh30_online_scheduler.py`——`settlement_policy == distributed` → `settle_distributed`；否则（consolidate）→ `merge_back`。new_tokens 口径：恒 input + decode（2026-10-14 远读退役后；原 D 动作 remote-read（增量族）的 `_joint_working_context` 口径已随增量族删除）。
+策略分派点：`_complete_requests`，`sh30_online_scheduler.py`——`settlement_policy == distributed` → `settle_distributed`；否则（consolidate）→ `merge_back`。new_tokens 口径：恒 input + decode。
 
 **merge_back（consolidate：少并多物理归并）**，`face_scheduler.py`：
 
@@ -314,13 +306,11 @@ RELEASED → （终态墓碑，不进活跃表）
 |---|---|---|---|
 | 重复结算 | `last_merged_request_id == trigger` | raise（版本键：stay 空 merge 也恰一次） | `face_scheduler.py` |
 | **stay 本地提交** | `working_kind is None` | 零流量，direction="stay"，落 kv_delta 行 | `face_scheduler.py` |
-| N9 防御（base==exec） | 基础驻留于执行端的 working 组合 | REMOTE 基/前缀 0 豁免（K5 就地转正）；空串 base_location 腐坏 raise；其余 raise（R13 已消除合法来源；原 boundary_source+recompute 豁免（D12 重复副本）已随 2026-10-15 recompute 退役删除） | `face_scheduler.py` |
+| N9 防御（base==exec） | 基础驻留于执行端的 working 组合 | REMOTE 基/前缀 0 豁免（K5 就地转正）；空串 base_location 腐坏 raise；其余 raise（R13 已消除合法来源） | `face_scheduler.py` |
 | 轮末兜底结算 | — | `_settle_copy_handoffs`（C13 逐块交接）+ `_settle_restore_groups`（C15）在 merge 边界兜底 | `face_scheduler.py` |
-| **三位置合并（已退役 2026-10-15）** | — | `_merge_back_three_position` 三位置物化合并整删（`boundary_source_instance_index` 字段族随之消亡）：三位置物理形态仅 D 边界 recompute 的 i_P 旧副本产生，随 recompute 退役无生产者；计价侧 `merge_from_layout`/`project_end_state` 的 ≤3 位置投影保留服务 copy 候选计价 | `face_scheduler.py`（历史登记，见仓根 `PROVENANCE.md` 退役批登记节） |
 | **方向裁决** | home_shards 空（REMOTE 基/前缀 0，无片上基础保留量） | direction="in_place"（裁定③：无主就地保留，零传输零池写，工作副本转正，home := exec） | `face_scheduler.py` |
-| 零字节翻转 | `working_kind ∈ {copy}`（exec 恒持并集 ⊇ home；未知 kind fail-closed；原 {copy, recompute} 值域已随 2026-10-15 recompute 退役缩 {copy}） | direction="reverse"，零传输，home 侧基础释放 | `face_scheduler.py` |
-| **空间准备失败回退** | 合并胜者侧 `_ensure_capacity` 抛容量错（历史上仅三位置分支可触发——已随 2026-10-15 recompute 退役删除，两位置 reverse/in_place 均零传输零准备不可能失败） | 按保留量降序回退（至多两次，`fallback_sequence` 披露）；双侧深缺口 → 落账 + fail-closed（热 KV 裁定封死"执行完再踢出去"，R4 自降级已删） | `face_scheduler.py` |
-| （已退役）方向二选一兜底 | — | 原 remote-read 双向比大小（forward/reverse 二选一）与 forward 迁移腿已随 2026-10-14 远读退役删除——两位置合并恒 ∈ {in_place, reverse}；真实搬移原只在三位置分支发射（`_shard_vector_noc_transfer`），该分支已随 2026-10-15 recompute 退役删除，现 merge_back 恒零传输（物理搬运发生在准入/边界 prepare 相） | `face_scheduler.py` |
+| 零字节翻转 | `working_kind ∈ {copy}`（exec 恒持并集 ⊇ home；未知 kind fail-closed） | direction="reverse"，零传输，home 侧基础释放 | `face_scheduler.py` |
+| **空间准备失败回退** | 合并胜者侧 `_ensure_capacity` 抛容量错（两位置 reverse/in_place 均零传输零准备不可能失败） | 按保留量降序回退（至多两次，`fallback_sequence` 披露）；双侧深缺口 → 落账 + fail-closed（热 KV 裁定封死"执行完再踢出去"，R4 自降级已删） | `face_scheduler.py` |
 | in_place 落账 | — | 无释放无入账无传输 | `face_scheduler.py` |
 | 守恒断言 | 胜者侧字节 ≠ 全量 | raise（账本破损） | `face_scheduler.py` |
 | 终态 | — | 全层 LOCAL@胜者、`home_instance = winner`（全仓第二个赋值点，I7）、base_* 清空、kv_delta journal 行、`last_merge_outcome` 披露 | `face_scheduler.py` |
@@ -332,10 +322,9 @@ RELEASED → （终态墓碑，不进活跃表）
 | 重复结算 | 版本键 | raise | `face_scheduler.py` |
 | 旧义务闭合 | — | copy 交接 journal / restore group 兜底结算 | `face_scheduler.py` |
 | 基础段留存 | working 且 base 有片上前缀 | 旧基础段移入跨轮留存通道 E（`RetainedSegment` role=base，owner 记录保留，无字节移动） | `face_scheduler.py` |
-| （已退役）边界来源段留存 | — | boundary_source 有片上字节的边界来源段留存分支（role=boundary-source）已随 2026-10-15 recompute 退役整删（boundary_source 字段族消亡，留存通道 E 现收 base 段与迁移后旧 primary） | — |
-| **家族判定** | working_kind | None → `stay_local`（final=context）；copy → `zero_byte_flip`（守恒断言 exec==full union）；原 `remote_increment` 家族已随 2026-10-14 远读退役删除、recompute 同族形态已随 2026-10-15 recompute 退役删除（未知 kind fail-closed） | `face_scheduler.py` |
+| **家族判定** | working_kind | None → `stay_local`（final=context）；copy → `zero_byte_flip`（守恒断言 exec==full union）；未知 kind fail-closed | `face_scheduler.py` |
 | journal 残量防御 | settle 头部闭合后仍有 home 残量 | fail-closed（原 fail-open 已修） | `face_scheduler.py` |
-| 会话收敛 | — | working_kind=None、base_* 清空（boundary_source_* 字段族已随 2026-10-15 recompute 退役整删）、`distributed_layout=True`、home 不迁移（粘性 §2.1） | `face_scheduler.py` |
+| 会话收敛 | — | working_kind=None、base_* 清空、`distributed_layout=True`、home 不迁移（粘性 §2.1） | `face_scheduler.py` |
 | 目录提交 + 披露 | — | 来源面枚举（source_count/interval_count + 跨轮增长断言 `assert_round_growth_within_budget`，`joint/distributed_settlement.py`）；`same_round_merge_saved_bytes` = 留存段片上字节（本轮省下的归并载荷） | `face_scheduler.py` |
 
 结算闭合（两策略共用）：`_joint_close_settlement`，`sh30_online_scheduler.py`——释放来源引用（源保护解除）→ 未闭合继承义务 raise（settle 门）→ SETTLE_DONE + KV 纪元 bump（重开 distributed 依赖门）→ merge 载荷在途而 merge_done 缺席 raise → settle_done 行 → 预测成熟配对 → 账本弹出。
@@ -354,10 +343,10 @@ RELEASED → （终态墓碑，不进活跃表）
 | 摘要与实际对账 | — | 决策半面 `capacity_theta_prediction` 暂存（`_stash_capacity_theta_prediction`）；实际半面由 kv_eviction 决策行按 trigger_request_id 对账 | `sh30_online_scheduler.py` |
 | victim 未来恢复不计价 | — | 只承担当前请求真实前驱上的写回与空间等待（§14.4） | `joint_cost_model.py` |
 
-**离线水位重放**：`sh_test_mesh/slo_tools/hbm_watermark.py`——从决策日志逐事件重建逐 rank KV 水位（evict/restore/decode move/base fold 审计行——staging lease 行已随 2026-10-14 远读退役删除），水位目标 `kv_reserve_context_tokens`（1M/rank）扣减后同式，"非任意时刻上限，仅报告不作判决"（`hbm_watermark.py`）；行预算 R 约束（`hbm_watermark.py`）。`restore_decomposition.py` 把 memory_anchor 对（restore_start/complete）与 prefill 窗口做三段分解（pre_prefill / hidden / exposed_restore_stall + hidden_ratio，§3.2 固定公式；无锚点请求四字段全 NA 并计数）。
+**离线水位重放**：`sh_test_mesh/slo_tools/hbm_watermark.py`——从决策日志逐事件重建逐 rank KV 水位（evict/restore/decode move/base fold 审计行），水位目标 `kv_reserve_context_tokens`（1M/rank）扣减后同式，"非任意时刻上限，仅报告不作判决"（`hbm_watermark.py`）；行预算 R 约束（`hbm_watermark.py`）。`restore_decomposition.py` 把 memory_anchor 对（restore_start/complete）与 prefill 窗口做三段分解（pre_prefill / hidden / exposed_restore_stall + hidden_ratio，§3.2 固定公式；无锚点请求四字段全 NA 并计数）。
 
 ---
 
 ## 四、两条机制在体系结构中的交汇
 
-映射决策与 KV 状态在三个控制点互为因果。其一，**候选面由 KV 谓词裁剪**：`SessionKVView`/`PDBoundaryView` 的 location 四态、resident/home 锚、prefix 层数与目录区间并集直接决定二动作的适用支路（2.1/2.5）——映射组件读到的不是队列，而是 KV 账本投射出的"数据引力场"。其二，**代价由 KV 水位塑形**：HBM 剩余、容量摘要 θ 消费、在途流除数与配额信用共同进入每个候选的 merge_done 终点预测，空间缺口不改 argmin 的比较结构，但通过驱逐等待与配额 wait_reason 改变每个支路的成本与可行性，deferred/停滞请求在纪元键上等待 KV 状态迁移来重开重试门。其三，**映射提交反向改写 KV 状态**：`prepare_prefill` 的工作副本建档、D 边界的事务化迁移与来源转记录、`merge_back`/`settle_distributed` 的方向裁决与 home 迁移（全仓仅两个 home 赋值点：首建与 merge 胜者），每一次选择都推进目录状态机并留下 generation 痕迹；而准入期逐出（写侧）占用的水位，使"为下一个请求腾出的空间"本身成为下一个映射决策的输入（原"读写两侧 lease 互斥"已随 2026-10-14 远读退役收敛为单写侧）。两机制由此构成一个以目录为单一事实源、以两个决策点为控制点、以纪元键为反馈信号的闭环调节结构。
+映射决策与 KV 状态在三个控制点互为因果。其一，**候选面由 KV 谓词裁剪**：`SessionKVView`/`PDBoundaryView` 的 location 四态、resident/home 锚、prefix 层数与目录区间并集直接决定二动作的适用支路（2.1/2.5）——映射组件读到的不是队列，而是 KV 账本投射出的"数据引力场"。其二，**代价由 KV 水位塑形**：HBM 剩余、容量摘要 θ 消费、在途流除数与配额信用共同进入每个候选的 merge_done 终点预测，空间缺口不改 argmin 的比较结构，但通过驱逐等待与配额 wait_reason 改变每个支路的成本与可行性，deferred/停滞请求在纪元键上等待 KV 状态迁移来重开重试门。其三，**映射提交反向改写 KV 状态**：`prepare_prefill` 的工作副本建档、D 边界的事务化迁移与来源转记录、`merge_back`/`settle_distributed` 的方向裁决与 home 迁移（全仓仅两个 home 赋值点：首建与 merge 胜者），每一次选择都推进目录状态机并留下 generation 痕迹；而准入期逐出（写侧）占用的水位，使"为下一个请求腾出的空间"本身成为下一个映射决策的输入。两机制由此构成一个以目录为单一事实源、以两个决策点为控制点、以纪元键为反馈信号的闭环调节结构。

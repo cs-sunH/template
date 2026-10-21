@@ -66,7 +66,10 @@ void independent_rows() {
 void exact_cache_boundary() {
   const auto hw=hardware();
   for(bool layer:{false,true}) {
-    const u64 last_fitting=layer ? 14676 : 19568;
+    // example SRAM 0.25 -> 1.5 MiB/core (2026-10-21 die redesign): usable
+    // 0.9*1.5 MiB = 1415577.6 B; rmsnorm 12h+1104 <= cap at h=117872,
+    // layernorm 16h+1104 <= cap at h=88404.
+    const u64 last_fitting=layer ? 88404 : 117872;
     for(u64 h:{last_fitting,last_fitting+1}) {
       const auto plan=compile(hw,task(8,h,layer));const auto& s=plan->summary;
       const bool cached=h==last_fitting;
@@ -85,7 +88,8 @@ void exact_cache_boundary() {
     }
   }
   bool rejected=false;
-  try {(void)compile(hw,task(8,131073));}
+  // streamed peak = 8h+2128; 0.9*1.5 MiB usable rejects from h>=176682 (262144 stays far past the boundary).
+  try {(void)compile(hw,task(8,262144));}
   catch(const std::invalid_argument& e) {rejected=std::string(e.what()).find("unsupported_workspace")!=std::string::npos;}
   require(rejected,"long rows must not silently receive one-pass timing without a fitting row buffer");
 }
@@ -126,7 +130,8 @@ void complete_row_readiness_and_restore() {
 void streamed_parameters_and_odd_routes() {
   for(bool layer:{false,true})for(u64 cores:{1,3,4})for(u64 rows:{2*cores,3*cores-1,3*cores+1})
       for(const std::string pd:{"int4","bf16","fp32"}) {
-    const u64 hidden=layer ? 15001 : 20001,parameters=layer ? 2 : 1;
+    // past the 2026-10-21 cache boundaries (rmsnorm 117872, layernorm 88404)
+    const u64 hidden=layer ? 88501 : 118001,parameters=layer ? 2 : 1;
     const auto hw=hardware(cores);const auto plan=compile(hw,task(rows,hidden,layer,"bf16",pd,"bf16"));
     const auto& summary=plan->summary;
     require(summary.at("norm_row_ledger").at("parameter_cache")=="streamed_each_row",

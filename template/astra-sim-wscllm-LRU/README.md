@@ -319,6 +319,7 @@ restore/pool/远端 KV 计费照旧。
    要求用户明确 `mesh-nx`/`mesh-ny` 方阵，矩形网格使用 `coarse_die_v2`。
    本次用户授权制定工程对照输入：10×10 Core、25×32 mm Die（800 mm²）、
    0.75 MiB/Core/512 bit/legacy HBM4×1。126.6 INT4 TOPS只在数值上接近TX8参考
+   【2026-10-21 wafer-fit 默认更新】checked-in `coarse-die` 架构块已换为能容纳 wafer 9×6 die 阵列的最大 die：33.99448×22.66298 mm（770.416 mm²）、13×9 Core（117 核）、1.5 MiB/Core、256 bit（派生 833.04 INT4 TOPS；行方向旧 25×32 点 9×32=288>215 放不下）。上段 10×10/25×32 legacy 工程点指 `mesh_die_v1` die 节 fixture 与 die/configs/tx8_compute_matched_hardware.json，保持不变。HBM 仍 4×36 GB=144 GB/4710.4 GB/s（validation-coarse-144g 档不变）。
    128 BF16 TFLOPS（差1.09375%），不代表精度等价或实测校准；Vec12.65728 T与
    TX8参考1 T未匹配。可选die-width-mm/die-height-mm必须成对、乘积等于面积且
    分别容纳Core网格；无宽高旧输入只保留面积正方形兼容检查。legacy HBM仍为每stack16 GB/

@@ -2,7 +2,52 @@
 
 
 
-## 2026-10-20 joint 主臂平局裁决轮转批（v9-tie-roundrobin，当前最新）
+## 2026-10-21 wafer-fit 默认硬件批（五仓同步，非本仓代码变更）
+
+用户指令：检查 wafer 9×6（mesh rows=9/columns=6，54 die）对当下 die 面积
+（25×32 mm=800 mm²）的可容性；若不容则设计能容纳 9×6 的最大 die 并按
+《架构建模_单Core版_严格复核修订》设计 die 内参数组合，更新 template 默认配置。
+
+**判定：不容纳。** 215×215 mm 系统区域（example_hardware.json 保留的
+system_region 口径）下行方向三口径全败：纯 die 零预留 9×32=288>215；
+die 库 legacy 10% 互连预留（每 die 外扩 1/√0.9）floor(215/33.73)=6 行<9；
+含两排 HBM 共面模块（moduleH=54.56 mm）仅 3 行。宽度方向 6 列三口径均富余。
+
+**新默认（最大 die）**：dieW=215√0.9/6=33.99448、dieH=215√0.9/9=22.66298 mm
+（5 位小数向下安全截断，floor 计数余量 ~1e-6 mm >> 1e-12 容差；恰 6 列×9 行
+贴满），A=770.416 mm²。32 行 Core 表×最大整数网格全枚举，≥256 bit 档最大
+INT4 峰值 = **1.50 MiB SRAM @ 256 bit NoC，13×9=117 Core**（每 Core 180 Vec/
+3560 PE，10.000:1）：die 峰值 833.04 INT4 TOPS、83.300724 Vec FP32-eq TFLOPS、
+SRAM 175.5 MiB/die。64/128 bit 档虽可至 944/916 TOPS 但 die 内互连带仅
+5.6/11.2 GB/s/core 过窄不取；512 bit 档最大 721.89 更低。HBM 保持 2 排×2 栈
+=144 GB/4710.4 GB/s（validation-coarse-144g 档与容量对齐不变）；bump 预算
+41.322314×770.416≈31,835 GB/s ≥ HBM+D2D。曝光场 26×33 参考：dieW 超 33
+长边 0.99 mm（若严格单场可退 33 mm，Core 阵列不变）；两排 HBM 共面模块外廓
+34.29×45.22 mm 为封装层诊断，不作为 wafer 阵列门（文档 2.1 die/模块分别
+统计）。
+
+**变更面**：template/die/configs/example_hardware{,_explicit}.json 架构块；
+五仓（含本仓）face_case5_config_c.json 及 C18 三 D2D 孪生 coarse-die 块；
+die 库四测试重钉（hardware_input/source_golden 88→117 与 21×29→新尺寸、
+norm_row 临界 19568/14676→117872/88404 与拒绝阈值 131073→262144、
+workspace_envelope rho_sram 0.25→1/24 保持 usable 65536 B 历史水位）；
+五仓 test_config_resolver 出厂默认断言 100/88→117、126.6e12/7.04e12→
+833.04e12（含 wscllm 两仓被裸仓 skip 掩盖的 stale 88 钉子一并按现势重钉）；
+tx8_compute_matched_hardware.json 原样不动（2026-10-16 授权参考）。
+SDK sync_repositories 同步五仓 vendored coarse（digest 1121412d…，35 文件，
+--check passed）。
+
+**验证**：die 库 ctest 72/72 绿（改前基线同为 72/72）；五仓三目录 pytest
+（构建态 cabi 库）：face 69+197+129(1 预存孤儿参数败)/wscllm 92+236(2 预存
+schema_version 败)+181/wscllm-LRU 113+295(1 预存 envelope 同败)+194/
+face-LRU 79+204+135/joint 83+1654(8 预存)+213。残留 12 败逐一归因预存
+（joint die_plan_projection 新旧 die 参数同败 not_available 对照、
+wscllm-LRU envelope 新旧 example 同败 16384==16384 对照、wscllm ack 为
+OnlineSchedulerBase.schema_version 属性缺失、face slo 为 scan_* 孤儿参数——
+均与本批无因果；此前被裸仓缺库 skip 掩盖）。die 库 estimate CLI 新配置
+冒烟 ok_assumed。
+
+## 2026-10-20 joint 主臂平局裁决轮转批（v9-tie-roundrobin）
 
 J 主臂（`scheduler_mode=joint`）P 发射点选择的**跨实例平局裁决**由旧固定序
 `(cost, (instance_index, ACTION_ORDER))`——跨实例平局恒坍缩编号最小实例——

@@ -1,6 +1,6 @@
 # request 映射和历史 KV 管理（大白话版）
 
-> 下面写的路径都相对 `sh_test_mesh/workload/llama2_7b_inference/`，位置只精确到文件。姊妹篇《request映射策略与历史kv管理机制介绍.md》是同一套分支的详细版，那份偏全偏细，这份讲人话。（2026-10-14 远读退役：动作宇宙三个；2026-10-15 recompute 退役：动作宇宙已是 stay/copy **两个**，本文同步改写。）
+> 下面写的路径都相对 `sh_test_mesh/workload/llama2_7b_inference/`，位置只精确到文件。姊妹篇《request映射策略与历史kv管理机制介绍.md》是同一套分支的详细版，那份偏全偏细，这份讲人话。
 
 ## 一、系统怎么搭起来的
 
@@ -19,9 +19,9 @@
 ## 二、几个先说清的词
 
 - **实例（instance）**：一组卡。请求被派到一个实例上算。
-- **会话的历史 KV**：这个会话以前几轮算出来的上下文缓存。下一轮来了能接着用就不用重算。
+- **会话的历史 KV**：这个会话以前几轮算出来的上下文缓存。下一轮来了能接着用。
 - **KV 的位置四态**：`local_hbm`（全在某个实例显存）、`partial_hbm_remote`（前若干层在显存、后面的层被赶到片外池）、`remote_memory`（全在池里）、`none`（新会话，啥都没有）。
-- **两个动作**：stay（历史就在这，原地用）、copy（把历史搬过来）。第三个动作 recompute（不搬，直接重算）已于 2026-10-15 随 recompute 退役整体删除，第四个动作 remote-read（历史留在那边、算的时候通过网络一块块读）已于 2026-10-14 随远读机制整体退役——动作宇宙沿革四→三→二。
+- **两个动作**：stay（历史就在这，原地用）、copy（把历史搬过来）。
 - **两个决策点**：P（请求进来准入时选一次）、D（prefill 做完换 decode 前再选一次）。D 提交后不再选第三次。
 - **版本号（epoch）**：一堆计数器。KV 每变一次加一，实例队列每变一次加一，配额每动一次加一。调度器拿"上次失败时的版本号"跟现在的比，没变就不浪费时间重试。
 - **报错停掉**：代码里叫 fail-closed。意思是发现状态不对劲就直接抛异常终止整个 run，不猜、不硬跑。区别于"暂时进不去、排队等下次"。
@@ -40,18 +40,17 @@
 | `JOINT_CATEGORY_MODE`（T） | typed / lru | 赶人时先赶哪类会话（见 4.4） | `joint_config.py` |
 | `JOINT_SCHEDULER_MODE`（J） | joint / load-first / affinity-first / face_static | 选实例的规则（见 3.3） | `joint_config.py` |
 | `JOINT_LAYER_POLICY`（E） | adaptive / legacy_half / minimal_layer_groups | 一次赶多少层（见 4.4） | `joint_config.py` |
-| `JOINT_ALLOWED_ACTIONS` | all / 逗号分隔的二动作子集 | 动作白名单，是个上限不是强制要求（旧值 recompute / copy,recompute 现在属于不认识的动作名，设了就拒跑——2026-10-15 recompute 退役） | `_parse_allowed_actions`，`joint_config.py` |
-| 退役键 `JOINT_REMOTE_ACTIONS` / `JOINT_REMOTE_READ_TILE_BYTES` / `JOINT_REMOTE_READ_PARTIAL` | — | 2026-10-14 远读退役后只要显式设了就拒跑（和 `JOINT_REMOTE_CREDIT_ITERS` 一起进退役键名单） | `joint_config.py` |
+| `JOINT_ALLOWED_ACTIONS` | all / 逗号分隔的二动作子集 | 动作白名单，是个上限不是强制要求 | `_parse_allowed_actions`，`joint_config.py` |
 | `JOINT_QUOTA_MODE` | off / static / aimd | 链路配额开关和调法（见 3.12） | `joint_config.py` |
 | `JOINT_BOUNDARY_POLICY` | off / p-continuation | off 是正常两阶段；p-continuation 是"只选一次"的对照组（见 3.8） | `joint_config.py`、检查 `:402` |
 | `SH_TRAIN_MAX_ITER` | 缺省 8 | 训练类会话的迭代上限；显式给 ≤0 直接报错 | `parse_train_max_iter`，`joint_config.py` |
 | face_static 强制配额关 | — | 选了 face_static 就把配额覆盖成 off（这是唯一的强制覆盖，会记一笔） | `joint_config.py` |
 
-预测侧还有一组独立起作用的配置 `JOINT_PREDICTION_CONFIG`（`joint/prediction_config.py`），五个轴：projection_mode（正式 / 冻结诊断对照组）、future_demand_mode（none / recent / reverting）、history_use（shadow / validated）、stage_policy（two_stage / once_mapping，跟 `JOINT_BOUNDARY_POLICY` 是同一个东西的两个入口，互相矛盾就报错）、settlement_policy（consolidate / distributed）。原来的 action_space（纯四动作 / 混合子集）和 multi_source_protocol 两轴随 2026-10-14 远读退役删掉了。预设文件在 `sh_test_mesh/run_scripts/prediction_presets/` 下。
+预测侧还有一组独立起作用的配置 `JOINT_PREDICTION_CONFIG`（`joint/prediction_config.py`），五个轴：projection_mode（正式 / 冻结诊断对照组）、future_demand_mode（none / recent / reverting）、history_use（shadow / validated）、stage_policy（two_stage / once_mapping，跟 `JOINT_BOUNDARY_POLICY` 是同一个东西的两个入口，互相矛盾就报错）、settlement_policy（consolidate / distributed）。预设文件在 `sh_test_mesh/run_scripts/prediction_presets/` 下。
 
 ### 3.2 P 入口：两个动作各自能不能用
 
-判断全在 `JointCostModel.applicable_actions`（`joint/joint_cost_model.py`）。注意：某个动作不能用，不等于这个实例被踢出局——实例永远全量参与，只是个别动作被划掉。（原来"recompute 任何时候、任何实例都行"那一行已随 2026-10-15 recompute 退役删除。）
+判断全在 `JointCostModel.applicable_actions`（`joint/joint_cost_model.py`）。注意：某个动作不能用，不等于这个实例被踢出局——实例永远全量参与，只是个别动作被划掉。
 
 | 分支 | 条件 | 结果 | 位置 |
 |---|---|---|---|
@@ -90,13 +89,13 @@
 | 到达时间缺失 | estimated_arrival_ns 是 None | 直接报错 | `sh30_online_scheduler.py` |
 | **distributed 上一轮没收完尾** | 结算策略是 distributed，且这个会话上一轮的结算记录还在 | 请求照常到达照常排队，但不消费：留队等结算闭合（闭合时会加 KV 版本号，重开准入）。记日志 reason="settlement_open_dependency_gate"，清掉旧失败键，返回 False | `sh30_online_scheduler.py` |
 | 算候选的价 | — | 拼会话 KV 只读视图 + 请求视图（不含任何"未卜先知"字段；decode 还要几步用条件剩余估计器估），跑 `select_instance_and_action` | `sh30_online_scheduler.py` |
-| **配额过滤** | 配额开了（`_quota_filter_candidates`） | 逐候选过一遍：stay 永远行（原来 "stay/recompute 永远行" 里的 recompute 那条已随 2026-10-15 recompute 退役删除）；copy 查链路 + merge 大块写名额（判在一个候选一个候选地做，`_quota_candidate_verdict`；远程读那套链路门和端口平价已随 2026-10-14 远读退役删除） | `sh30_online_scheduler.py` |
+| **配额过滤** | 配额开了（`_quota_filter_candidates`） | 逐候选过一遍：stay 永远行；copy 查链路 + merge 大块写名额（判在一个候选一个候选地做，`_quota_candidate_verdict`） | `sh30_online_scheduler.py` |
 | **配额全不过、排队** | 所有动作都被配额卡住 | 记失败日志（quota_deferred，wait_reason 分链路/端口两种），记下开始等的时间，失败键 = KV 版本 ⊕ 候选实例版本 ⊕ 配额代数，返回 False。注意这里**不许**报错——就是排队 | `sh30_online_scheduler.py`；排队语义 `joint/link_quota.py`（永不抛异常） |
 | 配额过了、重新挑 | 有活下来的候选 | joint 模式按原顺序挑最小；顺序模式在活下来的集合里重跑选点规则（`_quota_reselect_feasible`，`sh30_online_scheduler.py`） | `sh30_online_scheduler.py` |
 | **强制探针** | `JOINT_FORCE_ENTRY_ACTION/_TARGET` 命中这个请求 | 选择器算完后强制指定最终选择；强制出来的动作不在可用面里就直接报错；和边界探针互斥 | `_apply_forced_entry_choice`，`sh30_online_scheduler.py` |
 | **空间不够、回退** | reserve/prepare 抛容量错 | 已赶的人照常入账 → 释放孤儿预约 → 记 capacity_deferred → 冻结失败键（候选 ∪ 选中实例的版本号）→ 返回 False。另做三态判断（`_classify_physical_feasibility`）：还有组合物理上放得下 = 暂时不行；全都放不下 = 结构性问题，报错 | `sh30_online_scheduler.py` |
-| 事务成功 | — | 加版本号、同步图；runtime 记下 prefill 实例/动作/阶段/出发地/传输/赶人清单（原来"选了 recompute 就把工作量描述改成整份重算"那半句已随 2026-10-15 recompute 退役删除） | `sh30_online_scheduler.py` |
-| 登记传输流 | — | 主链 owner=请求号，赶人支链 owner=请求号#evict，merge 预留 owner=请求号#merge-reserve（前缀读流和预估承诺记录已随远读退役删除） | `sh30_online_scheduler.py` |
+| 事务成功 | — | 加版本号、同步图；runtime 记下 prefill 实例/动作/阶段/出发地/传输/赶人清单 | `sh30_online_scheduler.py` |
+| 登记传输流 | — | 主链 owner=请求号，赶人支链 owner=请求号#evict，merge 预留 owner=请求号#merge-reserve | `sh30_online_scheduler.py` |
 | **配额登记失败的防御** | 主流程登记配额返回 False（判断和登记之间外部变了） | 回滚所有在途流承诺 + 释放预约（还没物化就释放并回队；已物化直接报错——没有反向 prepare）→ 返回 False | `sh30_online_scheduler.py` |
 | 排队时间采样 | 这个请求之前排过队 | 记一条"从开始等到进来的时间"样本 | `sh30_online_scheduler.py` |
 | 成功收尾 | — | 落决策日志（逐候选明细）→ 存水位预测 → 入实例队列 → 加实例版本号 → 发准入事件 → 返回 True | `sh30_online_scheduler.py` |
@@ -114,7 +113,7 @@
 
 ### 3.6 D 边界：两个动作各自能不能用
 
-入口 `applicable_D_remaining_actions`（`joint/joint_cost_model.py`）。判断的依据是"目标实例还缺哪些区间"，单一来源 `BoundaryKVLayout.missing_intervals_for`（`joint/boundary_layout.py`：目标已经有的不算缺；正在往目标搬的不重复算）。边界布局恒是完整型这一族（2026-10-14 远读退役起）：完整历史全在 P 实例上；原来"P 是 remote-read 时基础区间还在源端"的增量型族随远读动作一起删了。（原来"recompute 任何目标都行"那一行已随 2026-10-15 recompute 退役删除。）
+入口 `applicable_D_remaining_actions`（`joint/joint_cost_model.py`）。判断的依据是"目标实例还缺哪些区间"，单一来源 `BoundaryKVLayout.missing_intervals_for`（`joint/boundary_layout.py`：目标已经有的不算缺；正在往目标搬的不重复算）。边界布局恒是完整型这一族：完整历史全在 P 实例上。
 
 | 分支 | 条件 | 结果 | 位置 |
 |---|---|---|---|
@@ -124,7 +123,7 @@
 
 ### 3.7 D 边界：怎么选（`select_decode_target_and_action`）
 
-位置 `joint/joint_scheduler.py`。这一步的规则是协议级的，四种调度模式都一样。"原地继续"不是第四个动作，它就记在 (P 实例, 默认延续动作) 那条候选上——延续动作恒是 stay（2026-10-14 远读退役后只剩完整型一族）。
+位置 `joint/joint_scheduler.py`。这一步的规则是协议级的，四种调度模式都一样。"原地继续"不是第四个动作，它就记在 (P 实例, 默认延续动作) 那条候选上——延续动作恒是 stay。
 
 | 分支 | 条件 | 干什么 | 位置 |
 |---|---|---|---|
@@ -142,7 +141,7 @@
 | 分支 | 条件 | 干什么 | 位置 |
 |---|---|---|---|
 | 重复完成通知 | prefill_complete_ns 已经写过（重复的 P_COMPUTE_DONE） | 落一行 boundary_duplicate_ignored 直接返回，什么账都不动 | `sh30_online_scheduler.py` |
-| 边界前清理 | — | 释放入态的流（主链）、配额结算准入段、把 prefill 工作副本推进（#prefill_read 流和暂存注销已随远读退役删除） | `sh30_online_scheduler.py` |
+| 边界前清理 | — | 释放入态的流（主链）、配额结算准入段、把 prefill 工作副本推进 | `sh30_online_scheduler.py` |
 | **已知要终止** | decode_length==0 之类 | 不做 D 选点，直接结算走人 | `sh30_online_scheduler.py` |
 | **一次映射对照组** | boundary_policy=p-continuation | 不做第二次全候选重估：decode 实例 = prefill 实例，动作 = 默认延续动作，候选列表空、成本记 NA | `sh30_online_scheduler.py` |
 | 两阶段（缺省） | boundary_policy=off | 边界成本模型 + `select_decode_target_and_action` + 强制探针（`_apply_forced_boundary_choice`，`sh30_online_scheduler.py`，语义同 P 入口的探针） | `sh30_online_scheduler.py` |
@@ -150,9 +149,8 @@
 | 跨阶段预约事务 | — | `commit_stage_reservation_transaction`（换地址/改大小/释放，一个事务办完）+ `commit_boundary_decode_transition`（搬工作副本，见 3.9） | `sh30_online_scheduler.py` |
 | **提交失败回退** | 抛容量错 / 阶段版本冲突 / 漂移 | 要是选的就是原地继续（继续方案自己失败），直接上抛报错；否则撤掉换址那半边 → 已提交的赶人照常入账 → 改成"原地继续"重新提交 → 落 boundary_commit_fallback 行（failure_class 分 kv_capacity_error / stage_version_conflict） | `sh30_online_scheduler.py` |
 | 回退后的记账 | boundary_fallback | 动作记成延续动作，is_continuation=True；失败方案的水位预测不存（不参与对账） | `sh30_online_scheduler.py` |
-| （已退役） | — | 原来"recompute 的元数据"那行（首个 decode 列车前先重建历史、采样输出先关、模板切重建模式）已随 2026-10-15 recompute 退役删除 | — |
 | **D_COMMITTED** | 第一笔不可撤销的新阶段操作（预约换址）发生 | 从这以后本轮不再选点；把所有来源在目录里加引用（执行期钉住来源不许动） | `sh30_online_scheduler.py` |
-| 阶段引用闭合 | — | 释放阶段引用；预约注销（"暂存转执行期"已随远读退役删除） | `sh30_online_scheduler.py` |
+| 阶段引用闭合 | — | 释放阶段引用；预约注销 | `sh30_online_scheduler.py` |
 | 异常兜底 | 边界窗口内任何异常 | 还没到 D_COMMITTED 且事务在窗口内就撤销 → 从就绪队列移出 → 释放阶段引用 → 把原异常抛出去 | `sh30_online_scheduler.py` |
 
 ### 3.9 D 边界上数据怎么搬（`commit_boundary_decode_transition`）
@@ -164,7 +162,6 @@
 | stay / copy | 动作是 stay 或 copy | 走 `move_prefill_to_decode`：stay 零字节（kind="stay_local_hit"）；copy 把整份基础搬过去（kind="complete_copy_migration"） | `face_scheduler.py` |
 | **copy 落到基所在实例、就地并基** | copy 且目标 == 基实例且基有片上前缀 | 退化成就地合并：迁移照发但落点就是基那侧；恢复账已清或重复的基础副本就地释放（kind="complete_copy_base_fold"） | `face_scheduler.py` |
 | copy 去第三目标 | 目标不是基所在实例 | 增量搬过去 + 基础再复制一份，几条腿都记进账 | `face_scheduler.py` |
-| （已退役） | — | 远读换目标/原地继续、增量型多腿 copy 与 W10 混合分支已随 2026-10-14 远读退役删除；recompute 换目标/原地两行（旧副本转来源记录、新目标从零起步）与 boundary_source 重复事务防御那行，已随 2026-10-15 recompute 退役整删 | — |
 
 ### 3.10 P 阶段准备历史（`prepare_prefill`）
 
@@ -181,9 +178,8 @@
 | stay × 没驻留 | 位置是 remote 或 none | 报错（stay 要求历史驻留） | `face_scheduler.py` |
 | **copy@home × LOCAL**（防退化） | copy 但基就在执行实例且是 LOCAL | 等价 stay 本地命中，不建第二份副本 | `face_scheduler.py` |
 | **copy@home × PARTIAL** | copy 但基就在执行实例且是 PARTIAL | 照 stay-PARTIAL 办：只恢复缺的后缀，working_kind 保持空 | `face_scheduler.py` |
-| **REMOTE 基 / 前缀为 0** | 基全在池里或前缀层是 0 | copy：整份从池恢复成工作副本，home 改成执行实例，working_kind=copy（recompute 工作副本清零起步那半句已随 2026-10-15 recompute 退役删除） | `face_scheduler.py` |
+| **REMOTE 基 / 前缀为 0** | 基全在池里或前缀层是 0 | copy：整份从池恢复成工作副本，home 改成执行实例，working_kind=copy | `face_scheduler.py` |
 | **copy（基在 home 侧）** | 基驻留在 home，目标在另一边 | 前缀 [0,p) 切成层块逐块交接（块 0 走准入主链、后面的块挂在旁路上流水发）+ PARTIAL 缺的后缀从池恢复 + 工作副本入账 | `face_scheduler.py` |
-| （已退役） | — | recompute@home（驻留不清、跟 stay 一样的本地提交）和 recompute 基在 home 侧（不搬历史、清零重算物化）两行已随 2026-10-15 recompute 退役删除 | — |
 
 ### 3.11 decode 期间长个子（`_joint_grow_decode`）
 
@@ -200,7 +196,7 @@
 
 配额管的是动作，不是实例：哪个动作差资源就把它标成不可用（写明缺什么、差多少），实例本身不出局。资源就两样：有向链路、实例的 HBM 端口。
 
-现在流只有一类（`link_quota.py`）：原来还有 realtime（decode 远程读流，带端口平价判断）和 elastic（prefill 第一遍读流，带端口并发上限）两类，2026-10-14 远读退役后这两类没了，在册流全是 oneshot。
+流只有一类（`link_quota.py`）：在册流全是 oneshot。
 
 | 类 | 是什么流 | 怎么管 | 位置 |
 |---|---|---|---|
@@ -234,17 +230,17 @@ AIMD（只在 mode=aimd 下动链路 Q；static 下 Q 永远等于 Q_init）：�
 | 分支 | 条件 | 看到什么 | 位置 |
 |---|---|---|---|
 | 没这个会话 | 新会话 | 位置 none，字节数全零 | `sh30_online_scheduler.py` |
-| **distributed 布局：看目录的并集** | distributed_layout | 锚 = 从 0 开始覆盖最大的片上条目。锚把并集全盖住了 → local@锚；锚缺的层在池里 → partial@锚；锚缺的部分在其他实例上（跨轮留存）→ 位置记 local 但 resident=None（stay 不可用，copy 按锚的差值算——原来 "copy/recompute 按锚的差值算" 已随 2026-10-15 recompute 退役缩成 copy） | `sh30_online_scheduler.py` |
+| **distributed 布局：看目录的并集** | distributed_layout | 锚 = 从 0 开始覆盖最大的片上条目。锚把并集全盖住了 → local@锚；锚缺的层在池里 → partial@锚；锚缺的部分在其他实例上（跨轮留存）→ 位置记 local 但 resident=None（stay 不可用，copy 按锚的差值算） | `sh30_online_scheduler.py` |
 | 正在跨实例执行中 | working_kind 不是空 | 视图描述的是**基础历史**（base_* 那组快照；base 位置是空字符串 = 记录坏了，报错；None 按池处理） | `sh30_online_scheduler.py` |
 | 平常状态 | — | 快照直接用：local/partial 字节按层区间推，缺的 = 总量 − 本地 | `sh30_online_scheduler.py` |
 
-离线观测口径（`sh_test_mesh/slo_tools/kv_cache_adapter.py` 的 `_hit_state_joint`）：上一轮 history=0 → no_history；stay/copy → full（搬过去了就算命中）；原来 "recompute → miss" 那条已随 2026-10-15 recompute 退役删除（旧 run 里的该值按 not_supported 处理）；字段缺失或值不认识 → not_supported（不瞎猜）；类型不对直接报错。
+离线观测口径（`sh_test_mesh/slo_tools/kv_cache_adapter.py` 的 `_hit_state_joint`）：上一轮 history=0 → no_history；stay/copy → full（搬过去了就算命中）；字段缺失或值不认识 → not_supported（不瞎猜）；类型不对直接报错。
 
 ### 4.2 留空间（预约）
 
 | 分支 | 条件 | 干什么 | 位置 |
 |---|---|---|---|
-| **按动作定预约量** | — | 两个动作都按"历史+输入"整份留（decode 的增长是写到才要，不预约；PARTIAL 跨实例的后缀另按字节留）。免得留出根本用不上的"幻影空间"（remote-read/混合只留输入增量的口径已随 2026-10-14 远读退役删除；原来"三个动作"的说法已随 2026-10-15 recompute 退役缩成两个） | `face_scheduler.py` |
+| **按动作定预约量** | — | 两个动作都按"历史+输入"整份留（decode 的增长是写到才要，不预约；PARTIAL 跨实例的后缀另按字节留）。免得留出根本用不上的"幻影空间" | `face_scheduler.py` |
 | 目标放不下 | 该实例被判定不可行 | 抛容量错（这种可以转成"排队等下次"） | `face_scheduler.py` |
 | PARTIAL 不构成偏袒 | joint 规则 | PARTIAL 驻留不影响实例能不能进候选，只影响要多少字节（要的 = 总量 − 已驻留） | `face_scheduler.py` |
 
@@ -319,11 +315,9 @@ RELEASED → 终态，不再出现在活跃表里
 
 **从池往回搬**：`_plan_suffix_restore_transfers` → `_remote_load_transfer`（`face_scheduler.py`），按组从池的边缘口搬成显存热数据，每组要等确认；drain / prefill_drain / merge 三个边界兜底结账（`_settle_restore_groups`，`face_scheduler.py`）。
 
-**远程读流（已退役）**：原来"固定字节的双缓冲块流"那一整套——块大小裁决、每 rank 两块暂存、prefill 扫描遍数、多源读计划、预估对账——已随 2026-10-14 远读退役整体删掉，没有开关留着。
-
 ### 4.6 算完之后：两种收尾
 
-分派点 `_complete_requests`（`sh30_online_scheduler.py`）：结算策略是 distributed → `settle_distributed`；否则（consolidate）→ `merge_back`。新增 token 怎么数：一律按 输入+decode 数（remote-read 增量族按工作副本上下文数的口径已随 2026-10-14 远读退役删除）。
+分派点 `_complete_requests`（`sh30_online_scheduler.py`）：结算策略是 distributed → `settle_distributed`；否则（consolidate）→ `merge_back`。新增 token 怎么数：一律按 输入+decode 数。
 
 **merge_back（consolidate：把小的合到大的那边）**，`face_scheduler.py`：
 
@@ -331,13 +325,10 @@ RELEASED → 终态，不再出现在活跃表里
 |---|---|---|---|
 | 重复结算 | 同一请求来第二次 | 直接报错（stay 的空结算也只能有一次） | `face_scheduler.py` |
 | **stay 本地提交** | working_kind 是空 | 零流量，direction="stay"，落一行 kv_delta | `face_scheduler.py` |
-| base 在执行端的防御 | 基础驻留在执行端的 working 组合 | REMOTE 基/前缀 0 豁免（就地转正）；base 位置是空字符串 = 记录坏了，报错；其他一律报错（原来 "boundary_source+recompute 豁免（重复副本）" 已随 2026-10-15 recompute 退役删除） | `face_scheduler.py` |
+| base 在执行端的防御 | 基础驻留在执行端的 working 组合 | REMOTE 基/前缀 0 豁免（就地转正）；base 位置是空字符串 = 记录坏了，报错；其他一律报错 | `face_scheduler.py` |
 | 轮末兜底结账 | — | 逐块交接和逐组恢复有没有没收完的，在这补收 | `face_scheduler.py` |
-| **三个位置一起合（已退役 2026-10-15）** | — | `_merge_back_three_position`（boundary_source 在——D 边界 recompute 留在 P 实例的旧副本）整删：三位置形态只有 recompute 会产生，随 2026-10-15 recompute 退役再无生产者；计价那边的 ≤3 位置投影留着给 copy 候选用 | 历史登记见仓根 `PROVENANCE.md` 退役批登记节 |
 | **没家可回** | home 侧啥都没有（REMOTE 基 / 前缀 0） | direction="in_place"：就地转正，零传输零池写，home := 执行实例 | `face_scheduler.py` |
-| 零字节翻转 | working 是 copy（原 "copy/recompute" 的说法已随 2026-10-15 recompute 退役缩成 copy） | 执行端永远持有并集（≥ home 侧），direction="reverse"：不搬一个字节，home 侧基直接释放 | `face_scheduler.py` |
-| **赢的那边放不下（已随上退役不可达）** | 三个位置合的时候首选目标腾地方失败——该分支已随 2026-10-15 recompute 退役删除，两位置的 reverse/in_place 都是零传输零准备、不可能失败 | 历史口径：按留量降序换下一个目标（至多两次，fallback_sequence 全记）；两边都腾不出来 = 深缺口，落账后直接报错。"算完再踢出去"这条路被封死 | `face_scheduler.py` |
-| （已退役）比大小两方向 | — | remote-read 两侧比大小选 forward/reverse、以及 forward 迁移腿，已随 2026-10-14 远读退役删除——两位置合并只可能是 in_place 或 reverse；真实搬运原来只发生在三个位置合的分支，该分支已随 2026-10-15 recompute 退役删除，现在 merge_back 恒零搬运（真搬数据都在准入/边界的准备阶段干完了） | `face_scheduler.py` |
+| 零字节翻转 | working 是 copy | 执行端永远持有并集（≥ home 侧），direction="reverse"：不搬一个字节，home 侧基直接释放 | `face_scheduler.py` |
 | in_place 落账 | — | 不释放不搬不写 | `face_scheduler.py` |
 | 守恒检查 | 赢家字节 ≠ 总量 | 报错（记录破了） | `face_scheduler.py` |
 | 终态 | — | 全层 LOCAL@赢家，home = 赢家（全代码第二个给 home 赋值的地方，第一个是新会话建档），base 快照清空，落 kv_delta 行和 last_merge_outcome | `face_scheduler.py` |
@@ -349,10 +340,9 @@ RELEASED → 终态，不再出现在活跃表里
 | 重复结算 | 同一请求来第二次 | 直接报错 | `face_scheduler.py` |
 | 旧账先清 | — | 交接账 / 恢复组兜底结清 | `face_scheduler.py` |
 | 基础段留存 | working 存在且基有片上前缀 | 旧基础段转成"跨轮留存段"（role=base，原主人记录留着，一个字节不动） | `face_scheduler.py` |
-| （已退役） | — | 原来"边界来源段留存"那行（boundary_source 有片上字节，role=boundary-source）已随 2026-10-15 recompute 退役整删——那组字段没了 | — |
-| **家族判定** | working_kind | 空 → stay_local（总量=上下文）；copy → zero_byte_flip（断言执行端=完整并集）；remote_increment 家族已随 2026-10-14 远读退役删除、recompute 同族形态已随 2026-10-15 recompute 退役删除 | `face_scheduler.py` |
+| **家族判定** | working_kind | 空 → stay_local（总量=上下文）；copy → zero_byte_flip（断言执行端=完整并集） | `face_scheduler.py` |
 | 交接账有残留 | 结算头部清完后 home 侧还有残量 | 直接报错（以前是放过去，修了） | `face_scheduler.py` |
-| 会话收拢 | — | working_kind 清空、base 快照清空（boundary_source 那组快照已随 2026-10-15 recompute 退役删掉）、distributed_layout=True、home 不动 | `face_scheduler.py` |
+| 会话收拢 | — | working_kind 清空、base 快照清空、distributed_layout=True、home 不动 | `face_scheduler.py` |
 | 目录提交 + 披露 | — | 枚举来源面（几个位置几段区间 + 跨轮增长断言 `assert_round_growth_within_budget`，`joint/distributed_settlement.py`）；same_round_merge_saved_bytes = 留存段省下的搬运量 | `face_scheduler.py` |
 
 **结算闭合（两种策略共用）**：`_joint_close_settlement`（`sh30_online_scheduler.py`）——放掉来源引用（解除钉住）→ 还有没收完的继承义务就报错 → 标 SETTLE_DONE、KV 版本加一（distributed 的等待队列靠这个重开）→ merge 载荷在途但没收到完成事件就报错 → 落 settle_done 行 → 预测成熟配对 → 弹出记录。
@@ -379,4 +369,4 @@ RELEASED → 终态，不再出现在活跃表里
 
 request 映射和历史 KV 是一对一咬合的。调度器每次选实例和动作，输入就是 KV 的现状：位置四态、resident/home、前缀层数、目录里的区间并集，直接决定两个动作哪些能用（3.2/3.6）。KV 的水位和配额余量进每个候选的成本，空间不够不改"挑最小"的比较规则，但通过排队和等待改变每个方案的真实价钱；进不去的请求拿着版本号等，KV 一变（有人释放、有人被赶、结算闭合）版本号就变，重试的门重新打开。
 
-反过来，每次映射提交都在改写 KV：`prepare_prefill` 建工作副本、D 边界搬副本或转来源记录、结算时定 home（全代码只有新会话建档和 merge 赢家两处给 home 赋值）、目录状态机往前走一格。准入时为了腾地方赶人占的显存（原"写侧赶人与读侧暂存互挤"已随 2026-10-14 远读退役收敛成单写侧），"给下一个请求腾出来的空间"本身就是下一个请求映射决策的输入。两个机制围着"目录记的每段 KV 的唯一位置"转，以 P、D 两个决策点为把手，以版本号为反馈信号，一圈一圈转下去。
+反过来，每次映射提交都在改写 KV：`prepare_prefill` 建工作副本、D 边界搬副本或转来源记录、结算时定 home（全代码只有新会话建档和 merge 赢家两处给 home 赋值）、目录状态机往前走一格。准入时为了腾地方赶人占的显存，"给下一个请求腾出来的空间"本身就是下一个请求映射决策的输入。两个机制围着"目录记的每段 KV 的唯一位置"转，以 P、D 两个决策点为把手，以版本号为反馈信号，一圈一圈转下去。

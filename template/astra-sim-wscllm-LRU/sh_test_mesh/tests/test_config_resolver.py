@@ -503,7 +503,7 @@ class DieHardwareTests(unittest.TestCase):
         self.assertAlmostEqual(hardware.local_hbm_bandwidth_gbps, 4710.4)
         self.assertIsNone(hardware.peak_perf_tflops)
         summary = hardware.die_derived["hardware_summary"]
-        self.assertEqual(summary["die_core_count"], 88)  # 8 列 x 11 行
+        self.assertEqual(summary["die_core_count"], 117)  # 13 列 x 9 行(2026-10-21 wafer-fit 默认)
         self.assertEqual(int(summary["hbm_capacity_bytes"]), 144000000000)
         self.assertEqual(
             [float(rate) for rate in summary["hbm_row_peak_Bps"]],

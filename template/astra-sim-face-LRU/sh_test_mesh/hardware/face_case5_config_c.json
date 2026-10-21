@@ -54,8 +54,9 @@
     "The remote-memory pool is attached to every physical mesh-boundary NPU.",
     "The 512 GB/s remote-memory bandwidth and 100 ns latency are shared simulator assumptions.",
     "The capacity profile describes local HBM placement per NPU.",
-    "User-authorized engineering comparison point (2026-10-16), materialized in the architecture block since 2026-10-19 (key-for-key equal to die/configs/tx8_compute_matched_hardware.json in template_newdie): 10 x 10 Core grid on a 25 mm x 32 mm compute Die, 0.75 MiB SRAM/Core and 512-bit NoC. The derived architectural PE peak of this configuration is 126.6 INT4 TOPS, numerically compared with the TX8 128 BF16 TFLOPS reference; precision and independent measurement are not equivalent (calibration_status stays assumed; all eta/kappa/launch values are engineering priors). Derived Vec FP32-equivalent peak is 12.65728 T eq-op/s, not the TX8 1 T reference. HBM stays 2 rows x 2 stacks x 36 GB = 144 GB per die at 4710.4 GB/s aggregate (the legacy 4 x 16 GB / 410 GB/s per-stack reference of the top-level local-hbm bandwidth entry is the preserved non-die base, not this coarse block).",
-    "Default die backend is coarse_die_v2: the coarse-die descriptor above is resolved by the coarse library; the 144 GB validation capacity profile matches its derived per-die HBM capacity exactly."
+    "User-authorized engineering comparison point (2026-10-16), materialized in the architecture block 2026-10-19 through 2026-10-20 (while active it was key-for-key equal to die/configs/tx8_compute_matched_hardware.json in template_newdie; since 2026-10-21 that file alone carries it): 10 x 10 Core grid on a 25 mm x 32 mm compute Die, 0.75 MiB SRAM/Core and 512-bit NoC. The derived architectural PE peak of this configuration is 126.6 INT4 TOPS, numerically compared with the TX8 128 BF16 TFLOPS reference; precision and independent measurement are not equivalent (calibration_status stays assumed; all eta/kappa/launch values are engineering priors). Derived Vec FP32-equivalent peak is 12.65728 T eq-op/s, not the TX8 1 T reference. HBM stays 2 rows x 2 stacks x 36 GB = 144 GB per die at 4710.4 GB/s aggregate (the legacy 4 x 16 GB / 410 GB/s per-stack reference of the top-level local-hbm bandwidth entry is the preserved non-die base, not this coarse block).",
+    "Default die backend is coarse_die_v2: the coarse-die descriptor above is resolved by the coarse library; the 144 GB validation capacity profile matches its derived per-die HBM capacity exactly.",
+    "2026-10-21 wafer-fit default redesign (user-directed): the checked-in coarse-die architecture block is now the maximum compute Die that still fits the 9x6 die mesh inside the 215x215 mm system region under the legacy 10% interconnect reserve (effective extent = outline/sqrt(0.9)): die 33.99448 x 22.66298 mm = 770.416 mm2 (215*sqrt(0.9)/6 by 215*sqrt(0.9)/9, five-decimal truncation inward), 13x9 Core grid (117 Cores), 1.5 MiB SRAM/Core, 256-bit NoC; architectural peaks 833.04 INT4 TOPS and 83.300724 Vec FP32-eq TFLOPS per die (best >=256-bit row of the 32-row table at this outline). The prior 25x32 mm / 10x10 / 0.75 MiB / 512-bit block could not host the 9-row direction of the mesh (9x32=288>215 even at zero reserve; only 6 rows at the 10% reserve) and remains verbatim in die/configs/tx8_compute_matched_hardware.json, which keeps its 2026-10-16 authorization and numbers. HBM stays 2 rows x 2 stacks x 36 GB = 144 GB per die at 4710.4 GB/s (validation-coarse-144g unchanged); the bump budget at 770.416 mm2 (~31,835 GB/s) still covers HBM plus the 4050 GB/s D2D links. The wafer array counts the compute Die outline; the two-row co-planar HBM module outline (34.29 x 45.22 mm) is a packaging-layer diagnostic and does not gate the wafer mesh."
   ],
   "coarse-die": {
     "schema": "coarse_die_v2",
@@ -94,10 +95,10 @@
       "sram_quarter_mib_long_side_mm": 0.40662
     },
     "architecture": {
-      "sram_mib_per_core": 0.75,
-      "noc_width_bits": 512,
-      "core_columns_nx": 10,
-      "core_rows_ny": 10,
+      "sram_mib_per_core": 1.5,
+      "noc_width_bits": 256,
+      "core_columns_nx": 13,
+      "core_rows_ny": 9,
       "core_pitch_x_mm": 0,
       "core_pitch_y_mm": 0,
       "die_extra_width_mm": 0.1,
@@ -105,8 +106,8 @@
       "die_geometry": "explicit",
       "hbm_stacks_per_row": 2,
       "hbm_placement_mode": "two_sides_one_row_each",
-      "die_width_mm": 25,
-      "die_height_mm": 32
+      "die_width_mm": 33.99448,
+      "die_height_mm": 22.66298
     },
     "performance_profile": {
       "execution_profile": "int4_matrix_vec_fp32_assumed_v1",

@@ -246,6 +246,7 @@ coarse_die_v2 下由同一 canonical Runtime 计入一字节 `die` endpoint 并�
    用户本次已授权按TX8参考算力匹配原则制定一套工程对照输入：默认采用
    10×10 Core、25×32 mm Die（800 mm²）、0.75 MiB/Core、512 bit、legacy HBM4×1。
    其126.6 INT4 TOPS仅在数值上接近TX8的128 BF16 TFLOPS（相差1.09375%），
+   【2026-10-21 wafer-fit 默认更新】checked-in `coarse-die` 架构块已换为能容纳 wafer 9×6 die 阵列的最大 die：33.99448×22.66298 mm（770.416 mm²）、13×9 Core（117 核）、1.5 MiB/Core、256 bit（派生 833.04 INT4 TOPS；行方向旧 25×32 点 9×32=288>215 放不下）。上段 10×10/25×32 legacy 工程点指 `mesh_die_v1` die 节 fixture 与 die/configs/tx8_compute_matched_hardware.json，保持不变。HBM 仍 4×36 GB=144 GB/4710.4 GB/s（validation-coarse-144g 档不变）。
    不表示不同精度的性能等价或硬件实测校准；Vec12.65728 T与TX8参考1 T未匹配。
    可选 `die-width-mm`/`die-height-mm`必须成对、乘积等于面积且分别容纳Core网格；
    未给宽高的旧输入仅保留面积正方形兼容检查，summary明确标识范围。

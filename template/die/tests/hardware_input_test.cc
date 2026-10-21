@@ -14,8 +14,8 @@ json explicit_input(const json& legacy) {
   input.erase("validation_constraints");
   auto& architecture = input["architecture"];
   architecture["die_geometry"] = "explicit";
-  architecture["die_width_mm"] = 21.0;
-  architecture["die_height_mm"] = 29.0;
+  architecture["die_width_mm"] = 33.99448;
+  architecture["die_height_mm"] = 22.66298;
   architecture.erase("system_region_width_mm");
   architecture.erase("system_region_height_mm");
   input.erase("derived");
@@ -42,20 +42,20 @@ void test_explicit_single_die_inputs_and_legacy_compatibility() {
   require(input == inputBeforeResolve,
           "repeated resolution must not modify the caller's raw JSON");
 
-  require(hardware.derived.at("core").at("N_core") == 88,
-          "an explicit 8x11 grid must retain exactly 88 Cores");
-  require(hardware.derived.at("die").at("core_columns_nx") == 8 &&
-              hardware.derived.at("die").at("core_rows_ny") == 11,
+  require(hardware.derived.at("core").at("N_core") == 117,
+          "an explicit 13x9 grid must retain exactly 117 Cores");
+  require(hardware.derived.at("die").at("core_columns_nx") == 13 &&
+              hardware.derived.at("die").at("core_rows_ny") == 9,
           "the resolver must retain the user-specified rectangular grid");
-  require(hardware.derived.at("die").at("width_mm") == 21.0 &&
-              hardware.derived.at("die").at("height_mm") == 29.0 &&
-              hardware.derived.at("die").at("area_mm2") == 609.0,
+  require(hardware.derived.at("die").at("width_mm") == 33.99448 &&
+              hardware.derived.at("die").at("height_mm") == 22.66298 &&
+              hardware.derived.at("die").at("area_mm2") == 33.99448 * 22.66298,
           "Die width, height, and area must come directly from explicit input");
   require(hardware.derived.at("hbm").at("total_stacks") == 4 &&
               hardware.derived.at("hbm").at("capacity_bytes") == 144.0e9,
           "explicit single-Die resolution must still derive the two HBM rows");
-  require(hardware.derived.at("hbm").at("row_overhang") == true,
-          "a legal HBM row overhang must be recorded rather than changing Die width");
+  require(hardware.derived.at("hbm").at("row_overhang") == false,
+          "an HBM row contained within the explicit Die width must be recorded as no overhang");
   require(hardware.derived.at("system").at("status") == "not_requested",
           "omitting system-region fields must not require or invent Wafer placement");
 
@@ -75,18 +75,18 @@ void test_explicit_single_die_inputs_and_legacy_compatibility() {
           "a system-layout diagnostic must not change single-Die service rates");
 
   auto consistentScalarMirrors = input;
-  consistentScalarMirrors["architecture"]["die_area_mm2"] = 609.0;
-  consistentScalarMirrors["architecture"]["core_count"] = 88;
+  consistentScalarMirrors["architecture"]["die_area_mm2"] = 33.99448 * 22.66298;
+  consistentScalarMirrors["architecture"]["core_count"] = 117;
   const auto mirroredScalars = resolve_hardware(consistentScalarMirrors);
   require(mirroredScalars.derived.at("die") == hardware.derived.at("die") &&
               mirroredScalars.derived.at("core") == hardware.derived.at("core"),
           "consistent area/Core-count mirrors must be checked without overriding the inputs");
   auto mismatchedAreaMirror = consistentScalarMirrors;
-  mismatchedAreaMirror["architecture"]["die_area_mm2"] = 610.0;
+  mismatchedAreaMirror["architecture"]["die_area_mm2"] = 33.99448 * 22.66298 + 1.0;
   require_invalid(mismatchedAreaMirror,
                   "a supplied Die area mirror must match width times height");
   auto mismatchedCoreMirror = consistentScalarMirrors;
-  mismatchedCoreMirror["architecture"]["core_count"] = 89;
+  mismatchedCoreMirror["architecture"]["core_count"] = 118;
   require_invalid(mismatchedCoreMirror,
                   "a supplied Core-count mirror must match Nx times Ny");
 
@@ -99,23 +99,23 @@ void test_explicit_single_die_inputs_and_legacy_compatibility() {
   require(roomy.derived.at("die").at("width_mm") == minWidth + 3.125 &&
               roomy.derived.at("die").at("height_mm") == minHeight + 4.75,
           "arbitrary legal Die clearances must be preserved exactly");
-  require(roomy.derived.at("core").at("N_core") == 88 &&
-              roomy.derived.at("die").at("core_count") == 88,
+  require(roomy.derived.at("core").at("N_core") == 117 &&
+              roomy.derived.at("die").at("core_count") == 117,
           "extra Die area must not add or rearrange Cores");
 
   auto inferredExplicit = input;
   inferredExplicit["architecture"].erase("die_geometry");
   const auto inferred = resolve_hardware(inferredExplicit);
-  require(inferred.derived.at("die").at("width_mm") == 21.0 &&
-              inferred.derived.at("die").at("height_mm") == 29.0,
+  require(inferred.derived.at("die").at("width_mm") == 33.99448 &&
+              inferred.derived.at("die").at("height_mm") == 22.66298,
           "W/H without a legacy geometry marker must be treated as explicit input");
 
   auto resolvedLegacyMarker = input;
   resolvedLegacyMarker["architecture"]["die_geometry"] = "resolved_source_boundary";
   resolvedLegacyMarker["architecture"]["geometry_candidate"] = "isotropic";
   const auto resolvedLegacy = resolve_hardware(resolvedLegacyMarker);
-  require(resolvedLegacy.derived.at("die").at("width_mm") == 21.0 &&
-              resolvedLegacy.derived.at("die").at("height_mm") == 29.0,
+  require(resolvedLegacy.derived.at("die").at("width_mm") == 33.99448 &&
+              resolvedLegacy.derived.at("die").at("height_mm") == 22.66298,
           "an explicit W/H must remain authoritative with a legacy resolved-geometry marker");
 
   auto legacySearchMetadata = input;
@@ -140,7 +140,7 @@ void test_explicit_single_die_inputs_and_legacy_compatibility() {
   namedGeometry["architecture"]["die_geometry"] = "minimum_grid";
   const auto legacyHardware = resolve_hardware(namedGeometry);
   require(legacyHardware.derived.at("die").at("geometry_candidate") == "minimum_grid" &&
-              legacyHardware.derived.at("core").at("N_core") == 88,
+              legacyHardware.derived.at("core").at("N_core") == 117,
           "a named geometry decodes exactly one specified grid");
   require(legacyHardware.derived.at("system").at("module_count").get<long long>() > 0,
           "an optional system region retains its compatibility diagnostic");
@@ -154,12 +154,12 @@ void test_optional_validation_and_invalid_hardware_inputs() {
 
   auto validated = valid;
   validated["validation_constraints"] = {
-      {"die_area_min_mm2", 608.0},
-      {"die_area_max_mm2", 610.0},
-      {"reticle_width_mm", 22.0},
-      {"reticle_height_mm", 30.0},
+      {"die_area_min_mm2", 770.0},
+      {"die_area_max_mm2", 771.0},
+      {"reticle_width_mm", 34.0},
+      {"reticle_height_mm", 23.0},
       {"allow_reticle_rotation", false},
-      {"die_max_aspect_ratio", 1.5},
+      {"die_max_aspect_ratio", 1.6},
       {"require_nonnegative_d2d_budget", true},
       {"require_hbm_row_within_die", false},
   };
@@ -173,7 +173,7 @@ void test_optional_validation_and_invalid_hardware_inputs() {
           "passing validation constraints must not change the supplied instance or its identity");
 
   auto tooSmallByConstraint = valid;
-  tooSmallByConstraint["validation_constraints"] = {{"die_area_min_mm2", 610.0}};
+  tooSmallByConstraint["validation_constraints"] = {{"die_area_min_mm2", 771.0}};
   const auto rejectedConstraintOriginal = tooSmallByConstraint;
   require_invalid(tooSmallByConstraint,
                   "validation_constraints must reject a failing current instance");
