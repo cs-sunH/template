@@ -358,6 +358,30 @@ def _eviction_source_instances(evictions) -> tuple:
     )
 
 
+def read_train_max_iter() -> int:
+    """Read the producer cap once for both emission and its certificate.
+
+    生产 certificate 与实际列车生产共用同一上限读数。本仓 2026-09-26
+    low 修复语义保留:空串/全空白串不得静默解释为 0=不设限,与其余非法
+    词法同通道构造期 fail-fast;负值同样拒绝(0 = 不设限)。"""
+    _train_max_iter_raw = os.environ.get("SH_TRAIN_MAX_ITER", "8")
+    if not _train_max_iter_raw.strip():
+        raise ValueError(
+            "SH_TRAIN_MAX_ITER must be a non-negative integer "
+            "(0 = unlimited), got {!r}".format(_train_max_iter_raw))
+    try:
+        value = int(_train_max_iter_raw)
+    except ValueError:
+        raise ValueError(
+            "SH_TRAIN_MAX_ITER must be a non-negative integer "
+            "(0 = unlimited), got {!r}".format(_train_max_iter_raw)) from None
+    if value < 0:
+        raise ValueError(
+            "SH_TRAIN_MAX_ITER must be a non-negative integer "
+            "(0 = unlimited), got {!r}".format(_train_max_iter_raw))
+    return value
+
+
 class WscLlmOnlineScheduler(OnlineSchedulerBase):
     """strategy 变体:真实策略(关感知)在在线骨架中运行。
 
@@ -374,7 +398,9 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                  sensing: bool = False,
                  defensive_reply_cache: bool = False,
                  sensing_query_sink=None, online_stats_sink=None,
-                 ledger_sink=None, workspace_admission: str = "off"):
+                 ledger_sink=None, workspace_admission: str = "off",
+                 train_max_iter=None,
+                 prospective_workspace_certificate=None):
         super().__init__(
             manifest=manifest,
             config=config,
@@ -433,20 +459,43 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
 
         # 蓝图（离线蓝本，按阶段/函数名对应）:KV 账本。
         # offline: wsc_llm_scheduler.py
-        self.workspace_envelope_certificate = None
-        prospective_workspace = None
-        if (workspace_admission == "required" and
-                self.die_model_context is not None and
-                self.die_model_context.profile == "coarse_die_v2"):
-            from online.manifest_workspace_envelope import derive_manifest_workspace_envelope
-            self.workspace_envelope_certificate = derive_manifest_workspace_envelope(
-                manifest, config)
-            prospective_workspace = self.workspace_envelope_certificate.bytes_by_rank
+        # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
+        # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代;0 = 不设限。
+        # 交付默认 = 8(sh_1.0 母本 2026-08-22 §7.4 A2 对拍裁决:无上限
+        # TTFT -67.3%,16 仍 -19.1%,8 全指标 ≤1.3%——"固定 T_max 为使
+        # 位移 ≤5% 的最大值";原则 1 优先于节点数)。
+        # 2026-10-20(方案二直接替换):certificate 推导已从本构造器迁至
+        # online_service(FL 结构),生产 certificate 与实际列车生产共用
+        # 同一上限——构造参数显式注入,缺省走 read_train_max_iter() 的
+        # 单一读数(空串/负值/非整数 fail-fast 语义见该函数 docstring)。
+        if train_max_iter is None:
+            train_max_iter = read_train_max_iter()
+        if type(train_max_iter) is not int or train_max_iter < 0:
+            raise ValueError("train_max_iter must be a non-negative integer")
+        self._train_max_iter = train_max_iter
+        certificate = prospective_workspace_certificate
+        if certificate is not None:
+            from online.manifest_workspace_envelope import validate_manifest_workspace_certificate
+            if workspace_admission != "required":
+                raise ValueError("workspace certificate requires workspace admission")
+            validate_manifest_workspace_certificate(
+                certificate, manifest, config, self._train_max_iter,
+                self.die_model_context)
+            self.workspace_envelope_certificate = certificate.without_proof()
+        else:
+            self.workspace_envelope_certificate = None
         self.kv_manager = SessionKVCacheManager(
             self.topology,
             config.model,
-            prospective_workspace_bytes_by_rank=prospective_workspace,
+            prospective_workspace_bytes_by_rank=(
+                certificate.bytes_by_rank if certificate is not None else None),
         )
+        # 观察簿记(2026-10-20 方案二):required 模式下逐 rank 记录实际
+        # external workspace 的运行峰值(交付流取 max),结束审计对
+        # certificate 地板做 slack 对账(见 verify_run_end);非 required
+        # 恒为空 map / None。
+        self._workspace_peak_bytes_by_rank = {}
+        self.workspace_floor_reconciliation = None
 
         # 蓝图（离线蓝本，按阶段/函数名对应）:实例账本。
         # offline: wsc_llm_scheduler.py
@@ -529,29 +578,8 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
         # train_ledger_sink 时行即写即弃;缺省 None(嵌入/测试)行即弃,
         # 无驻留缓冲。
         self.train_ledger_sink = train_ledger_sink
-        # T_max 列车长度上限(§3.2.8/§7.4 治理旋钮 + A2 逐迭代 oracle):
-        # SH_TRAIN_MAX_ITER 正整数 = 每列车至多 N 个迭代;0 = 不设限。
-        # 交付默认 = 8(sh_1.0 母本 2026-08-22 §7.4 A2 对拍裁决:无上限
-        # TTFT -67.3%,16 仍 -19.1%,8 全指标 ≤1.3%——"固定 T_max 为使
-        # 位移 ≤5% 的最大值";原则 1 优先于节点数)。
-        train_max_iter_env = os.environ.get("SH_TRAIN_MAX_ITER", "8")
-        # low 修复(2026-09-26):空串此前经 `or 0` 静默解释为 0=不设限——
-        # 即上文 A2 裁决否决的无上限形态;对空串与其余非法词法同通道
-        # 构造期 fail-fast(全空白串 int() 本就会抛,此处一并覆盖)。
-        if not train_max_iter_env.strip():
-            raise ValueError(
-                "SH_TRAIN_MAX_ITER must be a non-negative integer "
-                "(0 = unlimited), got {!r}".format(train_max_iter_env))
-        self._train_max_iter = int(train_max_iter_env)
-        # low 修复(2026-09-24):负值此前无构造期校验,进入 _plan_train 后
-        # `iterations > 负数` 恒真、iterations 被截为负值,要到发射期才以
-        # 难懂错误暴露——改 fail-fast。非整数字面值在 int() 已抛
-        # ValueError;0 = 不设限(值域见上注释)。
-        if self._train_max_iter < 0:
-            raise ValueError(
-                "SH_TRAIN_MAX_ITER must be a non-negative integer "
-                "(0 = unlimited), got {!r}".format(
-                    os.environ.get("SH_TRAIN_MAX_ITER")))
+        # T_max 解析已随 2026-10-20 方案二上移至 KV 账本段(certificate
+        # 与实际列车生产共用同一上限读数;注释与 A2 对拍裁决背景见该段)。
         # train_id -> instance_index(哨兵事件路由)。
         self._train_instance_index = {}
         # WP9 首 token 首步批拆分(2026-08-26):batch_train_<id>_first_step
@@ -566,6 +594,12 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
             return
         revision_by_rank, bytes_by_rank = self._workspace_state_maps(
             delta["workspace_state"])
+        # 观察簿记(2026-10-20 方案二):逐 rank 维护交付流的运行最大值,
+        # 供 verify_run_end 对 certificate 地板做 slack 对账(纯观测,
+        # 不改准入判据)。
+        for rank, value in bytes_by_rank.items():
+            if value > self._workspace_peak_bytes_by_rank.get(rank, 0):
+                self._workspace_peak_bytes_by_rank[rank] = value
         changed_ranks = self.kv_manager.set_external_workspace_view(
             revision_by_rank, bytes_by_rank)
         if changed_ranks:
@@ -2163,6 +2197,43 @@ class WscLlmOnlineScheduler(OnlineSchedulerBase):
                     "{}".format(leftover_sessions),
                     file=sys.stderr,
                 )
+        # workspace 地板 slack 对账:见 _reconcile_workspace_floor(挂在
+        # 本校验链末尾,仅 required 且地板非全零时产出对账行/拦截越界)。
+        self._reconcile_workspace_floor()
+
+    def _reconcile_workspace_floor(self) -> None:
+        """结束审计的 workspace 地板 slack 对账(2026-10-20 方案二)。
+
+        仅 required 且 certificate 地板非全零时执行——实际交付流逐 rank
+        峰值不得超过 certificate 地板(越界即 fail-closed,证明口径失真);
+        合法时写 slack 对账行(online_service summary 转录进 online_stats),
+        键 str(rank) 升序。非 required/地板全零时保持 None。"""
+        floors = self.kv_manager.prospective_workspace_bytes_by_rank
+        if (self.workspace_admission != "required" or
+                not any(floors.values())):
+            return
+        peaks = self._workspace_peak_bytes_by_rank
+        excess = {
+            rank: peak for rank, floor in floors.items()
+            if (peak := peaks.get(rank, 0)) > floor}
+        if excess:
+            raise RuntimeError(
+                "workspace peak exceeded prospective certificate floor: "
+                + ", ".join(
+                    "rank {} peak {} > floor {}".format(
+                        rank, peaks.get(rank, 0), floors[rank])
+                    for rank in sorted(excess))
+                + " (certificate coverage is unsound for this run)")
+        self.workspace_floor_reconciliation = {
+            "peak_bytes_by_rank": {
+                str(rank): max(peaks.get(rank, 0), 0)
+                for rank in sorted(floors)},
+            "floor_bytes_by_rank": {
+                str(rank): floors[rank] for rank in sorted(floors)},
+            "slack_bytes_by_rank": {
+                str(rank): floors[rank] - max(peaks.get(rank, 0), 0)
+                for rank in sorted(floors)},
+        }
 
     def _inactive_session_resident(self, session_id: str) -> bool:
         """journal-off 旁路态终态审计:非活跃会话是否仍占留本地 HBM。"""

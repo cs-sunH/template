@@ -122,7 +122,25 @@ ALT_ACTIONS = ("stay",)
 # _selection_under_delta）补同款全键序——"平局裁决镜像在线 argmin
 # 全键序"自此对族内（_min_cost）与族间均属实，跨族同价平局不再
 # 假翻挑战者（replay_mismatch/quota_counterfactual_flips 假阳性消除）。
+# O8① v9 续注（2026-10-20，轮转感知基准）：在线 joint 主臂跨实例平局
+# 自 v9 起按实例编号环序轮转分摊（语义单一源 = joint/
+# joint_scheduler.joint_tie_rotation_pick）——固定全键序不再是选择
+# 预测，"与在线实际选择比对"的各指标（replay_mismatch_at_delta0 /
+# δ 分档 flips_vs_actual / quota_counterfactual_flips /
+# displacement_hop）比较基准自 actual 改为 actual_ref：带轮转三键且
+# rotated 的 P 行 actual_ref = 由本行候选表现算的轮转公式期望选择
+# （_joint_tie_rotation_pick_mirror——单一源的本地镜像 + 对账钉测，
+# slo_tools 不 import joint 模块的既有纪律），纯轮转位移不计翻转/
+# 不污染位移分位，actual != expected 计 replay_mismatch（真发散）；
+# 键缺席（旧 run）⇒ actual_ref = actual，输出与旧口径逐位一致。
 ACTION_ORDER = ("stay", "copy")
+
+# v9（2026-10-20）在线 P 准入决策行的轮转披露三键（joint_admission 行
+# decision 级；joint_admission_wait 折叠行与旧 run 无这三键——解析缺省
+# 即旧行为。joint_admission_failed 首行在线也披露，但失败行不进本工具
+# 的 P 样本（DomainScan 只消费 joint_admission 行），此处不解析）。
+_TIE_DISCLOSURE_KEYS = (
+    "joint_tie_cursor", "joint_tie_instances", "joint_tie_rotated")
 _ACTION_RANK = {action: rank for rank, action in enumerate(ACTION_ORDER)}
 
 # breakdown 五段时间段（瓶颈资源 argmax 的候选集）。字段序 =
@@ -572,6 +590,19 @@ class DomainScan:
                  f"断言位）")
         # 2026-10-15 recompute 退役：recompute_selection 决策行键随 D5
         # 删除；旧日志行含该键不解析（该面按缺失口径 NA）。
+        # v9（2026-10-20）轮转三键（decision 级 _TIE_DISCLOSURE_KEYS；
+        # wait 折叠行与旧 run 无这三键）：缺省 None/None/False——
+        # joint_tie_instances 解析值仅披露对照，重放裁决以候选表现算值
+        # 为准（derive_entries 的轮转感知重放不消费解析值）。
+        tie_keys_present = any(
+            key in decision for key in _TIE_DISCLOSURE_KEYS)
+        tie_instances_raw = decision.get("joint_tie_instances")
+        tie_instances: Optional[tuple] = None
+        if isinstance(tie_instances_raw, list):
+            parsed_instances = [
+                _int_or_none(item) for item in tie_instances_raw]
+            if all(item is not None for item in parsed_instances):
+                tie_instances = tuple(parsed_instances)
         return {
             "request_id": str(request_id),
             "tick": _tick_or_none(record.get("tick")),
@@ -586,6 +617,10 @@ class DomainScan:
             "origin_home_instance": _int_or_none(
                 decision.get("origin_home_instance")),
             "cost_ns": _int_or_none(decision.get("joint_cost_ns")),
+            "tie_keys_present": tie_keys_present,
+            "tie_cursor": _int_or_none(decision.get("joint_tie_cursor")),
+            "tie_instances": tie_instances,
+            "tie_rotated": decision.get("joint_tie_rotated") is True,
         }
 
     @staticmethod
@@ -660,7 +695,9 @@ def _min_cost(candidates: dict[int, dict[str, dict]], actions: tuple[str, ...],
     quota_ 前缀拒（配额拒候选保留的配额前成本入经济域——quota-on run
     的 D_econ 不被配额自身裁掉）。N6：include_quota_deferred=False =
     实际可行集口径（在线选择的真实约束——replay 一致性重放用，与
-    配额前口径分开）。"""
+    配额前口径分开）。v9 注（2026-10-20）：本函数返回值是经济域参考
+    锚（等价并列内取哪个成员不影响集合口径），非选择预测——选择预测
+    面在轮转感知重放（_rotation_aware_selection / actual_ref）。"""
     best: Optional[tuple[int, int, int, str]] = None
     for instance in sorted(candidates):
         for action in actions:
@@ -712,6 +749,106 @@ def _selection_under_delta(delta: int,
         if challenger_key <= alt_key:
             return (CHALLENGER_ACTION, challenger_min[1])
     return (alt_star[2], alt_star[1])
+
+
+def _joint_tie_rotation_pick_mirror(
+        applicable_triples: list[tuple[int, str, int]],
+        tie_cursor: int,
+        instance_universe: list[int],
+) -> tuple[Optional[str], Optional[int], tuple[int, ...]]:
+    """v9（2026-10-20）joint 主臂跨实例平局轮转裁决的离线镜像。
+
+    **语义单一源 = joint/joint_scheduler.py 的模块级纯函数
+    ``joint_tie_rotation_pick``**——slo_tools 沿"不 import joint 模块"
+    的既有独立常量纪律（运行上下文 sys.path 无 workload 侧包；对账钉测
+    ast 锁字面值的既有机制），此处按单一源算法逐句镜像，不得另立漂移
+    公式；**镜像义务**：在线函数任何改动必须同步本镜像，跨包对账钉测
+    （tests/test_domain_metrics.py::TieRotationMirrorParityTests——ast
+    提取在线源函数直接执行对拍）单侧漂移即测试红。输入形态适配：在线
+    吃 ActionCandidate 对象序列（调用方已滤 applicable 且 cost_ns 非
+    None），本镜像吃等价投影 (instance, action, cost_ns) 三元组；
+    order_key 投影 = ACTION_ORDER 秩（joint_cost_model.order_key 的
+    (instance, action_priority) 在实例锁定后退化为动作秩）。
+
+    返回 ``(action, instance, tie_instances)``：tie_instances = 适用候选
+    中最优 cost_ns（整数 ns 完全相等，无容差）并列实例的去重升序元组；
+    |T| >= 2 时自 tie_cursor 起沿 instance_universe 升序环序（越最大值
+    回绕；游标不在全集内自首个大于游标的元素起）取首个在集实例，返回
+    该实例上最优价并列候选中 ACTION_ORDER 秩最小者的 (action,
+    instance)；|T| < 2 返回 (None, None, tie_instances)——单实例平局/
+    唯一最优不轮转（与旧确定序恒等）。并列集与全集无交的防御分支取
+    T 首元素（本仓调用形态下不可达，如实镜像在线防御分支）。
+    """
+    best_cost = min(triple[2] for triple in applicable_triples)
+    tie_instances = tuple(sorted({
+        triple[0] for triple in applicable_triples
+        if triple[2] == best_cost}))
+    if len(tie_instances) < 2:
+        return None, None, tie_instances
+    tie_set = set(tie_instances)
+    universe = sorted(set(instance_universe))
+    start = 0
+    for position, instance_index in enumerate(universe):
+        if instance_index >= tie_cursor:
+            start = position
+            break
+    # 游标大于全集最大值：环序回绕到首元素（start 保持 0）。
+    picked_instance = tie_instances[0]  # 防御默认（并列集 ⊆ 全集时不可达）
+    for offset in range(len(universe)):
+        candidate_instance = universe[(start + offset) % len(universe)]
+        if candidate_instance in tie_set:
+            picked_instance = candidate_instance
+            break
+    action = min(
+        (triple[1] for triple in applicable_triples
+         if triple[0] == picked_instance and triple[2] == best_cost),
+        key=lambda action: _ACTION_RANK.get(action, len(ACTION_ORDER)))
+    return action, picked_instance, tie_instances
+
+
+def _rotation_aware_selection(candidates: dict[int, dict[str, dict]],
+                              delta: int, tie_cursor: int, *,
+                              include_quota_deferred: bool,
+                              ) -> tuple[str, Optional[int]]:
+    """v9（2026-10-20）轮转感知重放选择（rotated 行专用；无跨行状态
+    ——游标 = 本行 joint_tie_cursor 披露值，不重建调度器游标推进序列）。
+
+    在线 joint 主臂选择规则在 δ 重定价下的镜像：适用候选（M2/N6 双
+    口径——include_quota_deferred 选实际可行集/配额前集，与
+    _selection_under_delta 的 challenger_min[_actual]/alt_star[_actual]
+    同判据）中挑战者（copy）计 cost+δ（C10 A3' 离线诊断口径），取最优
+    重定价成本；跨实例并列 |T|>=2 按编号环序轮转裁决（游标 = 本行披露
+    值，_joint_tie_rotation_pick_mirror），实例内并列由 ACTION_ORDER
+    终裁；|T|<2 走旧确定序全键序 argmin（(cost, instance, ACTION_ORDER
+    秩)——与在线单实例平局/唯一最优分支恒等）。无适用候选返回
+    ("NA", None)。键缺席行不走本函数（_selection_under_delta 旧路径
+    ——输出与旧行为逐位一致的硬性兼容判据；本函数仅在三键在场且
+    rotated 且游标非 None 的行进入）。"""
+    triples: list[tuple[int, str, int]] = []
+    for instance, per_instance in candidates.items():
+        for action, cand in per_instance.items():
+            if not cand["applicable"] and (
+                    not include_quota_deferred
+                    or not _quota_deferred(cand)):
+                continue
+            cost = cand["cost_ns"]
+            if cost is None:
+                continue
+            triples.append((
+                instance, action,
+                cost + (delta if action == CHALLENGER_ACTION else 0)))
+    if not triples:
+        return ("NA", None)
+    action, instance, _tie_instances = _joint_tie_rotation_pick_mirror(
+        triples, int(tie_cursor), sorted(candidates))
+    if instance is None:
+        best = min(
+            triples,
+            key=lambda triple: (
+                triple[2], triple[0],
+                _ACTION_RANK.get(triple[1], len(ACTION_ORDER))))
+        return (best[1], best[0])
+    return (action, instance)
 
 
 def _variance(values: list[int]) -> Optional[float]:
@@ -1834,6 +1971,42 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
                     .get(decision["selected_action"] or ""))
             if cand and cand["hops"] is not None:
                 selected_hop = cand["hops"]
+        # v9（2026-10-20）轮转感知重放（逐行、无跨行状态）：三键在场且
+        # rotated 且游标非 None 时 actual_ref = 由本行候选表现算的轮转
+        # 公式期望选择（适用候选口径——U = 候选表实例全集升序、T = 适用
+        # 候选中最优价并列实例升序），actual != expected 即真发散
+        # （build_summary 计 replay_mismatch）；否则 actual_ref = actual
+        # ——键缺席（旧 run）/未轮转行与旧口径逐位一致（硬性兼容判据）。
+        rotation_active = bool(
+            decision.get("tie_keys_present")
+            and decision.get("tie_rotated")
+            and decision.get("tie_cursor") is not None)
+        actual_ref_action = decision["selected_action"]
+        actual_ref_instance = decision["selected_instance"]
+        rotation_consistency_mismatch = False
+        cursor_anomaly = False
+        if rotation_active:
+            if decision["tie_cursor"] not in candidates:
+                # 防御：游标不在本行候选表实例全集（U）内——轮转公式全
+                # 定义不崩（自首个大于游标的元素起/回绕），计数告警
+                # （summary 的 rotation_aware_replay 披露）。
+                cursor_anomaly = True
+            expected_action, expected_instance = _rotation_aware_selection(
+                candidates, 0, decision["tie_cursor"],
+                include_quota_deferred=False)
+            actual_ref_action = expected_action
+            actual_ref_instance = expected_instance
+            rotation_consistency_mismatch = (
+                expected_action != decision["selected_action"]
+                or expected_instance != decision["selected_instance"])
+        # 比较基准的位移锚点（build_summary 的 displacement_hop 消费）：
+        # actual_ref 候选的 hops——键缺席行与 selected_hop 同值同查表。
+        selected_hop_ref = None
+        if actual_ref_instance is not None:
+            ref_cand = (candidates.get(actual_ref_instance, {})
+                        .get(actual_ref_action or ""))
+            if ref_cand and ref_cand["hops"] is not None:
+                selected_hop_ref = ref_cand["hops"]
         completion = scan.completions.get(decision["request_id"])
         # M3（2026-09-23 验收审计）：双终点分列——pred（joint_cost_ns）
         # 是 merge_done 终点预测（F11 冻结），completion 行 tick 是
@@ -1911,6 +2084,15 @@ def derive_entries(scan: DomainScan, topology: dict, sigma_hat_ns,
                 "inner_boundary_hop": inner_boundary_hop,
                 "feed_boundary_hop": max(feed_hops) if feed_hops else None,
                 "selected_hop": selected_hop,
+                # v9 轮转感知重放的逐行承载面（build_summary 消费）。
+                "tie_keys_present": bool(decision.get("tie_keys_present")),
+                "rotation_active": rotation_active,
+                "actual_ref_action": actual_ref_action,
+                "actual_ref_instance": actual_ref_instance,
+                "selected_hop_ref": selected_hop_ref,
+                "rotation_consistency_mismatch":
+                    rotation_consistency_mismatch,
+                "cursor_anomaly": cursor_anomaly,
             },
         })
     return entries
@@ -2006,6 +2188,11 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
 
     # -- δ 敏感性重定价（A3'：C10 终冻=0 后撤销 δ=0 空转对拍臂） --
     sigma_hat_ns = sigma["sigma_hat_ns"]
+    # v9（2026-10-20）轮转感知基准：rotated 行的 δ 分档重放走轮转镜像
+    # （配额前集口径——镜像旧路径 challenger_min/alt_star 的 caliber），
+    # 比较基准/位移锚点一律 actual_ref/selected_hop_ref——纯轮转位移
+    # 不计翻转/不污染位移分位，真成本驱动翻转照计；键缺席行
+    # actual_ref = actual（与旧口径逐位一致）。
     flip_tiers: dict[str, dict] = {}
     if sigma_hat_ns is not None:
         for index, multiplier in enumerate(multipliers):
@@ -2015,14 +2202,21 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
             for entry in entries:
                 decision = entry["decision"]
                 derived = entry["derived"]
-                pick_action, pick_instance = _selection_under_delta(
-                    delta, derived["challenger_min"], derived["alt_star"])
-                if pick_action == decision["selected_action"] \
-                        and pick_instance == decision["selected_instance"]:
+                if derived["rotation_active"]:
+                    pick_action, pick_instance = _rotation_aware_selection(
+                        decision["candidates"], delta,
+                        decision["tie_cursor"],
+                        include_quota_deferred=True)
+                else:
+                    pick_action, pick_instance = _selection_under_delta(
+                        delta, derived["challenger_min"],
+                        derived["alt_star"])
+                if pick_action == derived["actual_ref_action"] \
+                        and pick_instance == derived["actual_ref_instance"]:
                     continue
                 flips += 1
                 if pick_instance is not None \
-                        and derived["selected_hop"] is not None:
+                        and derived["selected_hop_ref"] is not None:
                     hop = None
                     cand = (decision["candidates"]
                             .get(pick_instance, {}).get(pick_action))
@@ -2030,7 +2224,7 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                         hop = cand["hops"]
                     if hop is not None:
                         displacements.append(
-                            hop - derived["selected_hop"])
+                            hop - derived["selected_hop_ref"])
             flip_tiers[str(multiplier)] = {
                 "delta_ns": delta,
                 "flips_vs_actual": flips,
@@ -2044,18 +2238,42 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
     # 挑战者更便宜时配额效应被计入 replay_mismatch。
     replay_mismatch = 0
     quota_counterfactual_flips = 0
+    # v9（2026-10-20）轮转披露计数（sensitivity_scan.flip_repricing.
+    # rotation_aware_replay 披露；键缺席 run 四计数恒 0）。
+    rows_with_tie_keys = 0
+    rotated_rows = 0
+    rotation_consistency_mismatches = 0
+    cursor_anomalies = 0
     for entry in entries:
         decision = entry["decision"]
         derived = entry["derived"]
-        pick_action, pick_instance = _selection_under_delta(
-            0, derived["challenger_min_actual"], derived["alt_star_actual"])
-        if pick_action != decision["selected_action"] \
-                or pick_instance != decision["selected_instance"]:
-            replay_mismatch += 1
-        cf_action, cf_instance = _selection_under_delta(
-            0, derived["challenger_min"], derived["alt_star"])
-        if cf_action != decision["selected_action"] \
-                or cf_instance != decision["selected_instance"]:
+        if derived["tie_keys_present"]:
+            rows_with_tie_keys += 1
+        if derived["rotation_active"]:
+            rotated_rows += 1
+            if derived["cursor_anomaly"]:
+                cursor_anomalies += 1
+            if derived["rotation_consistency_mismatch"]:
+                rotation_consistency_mismatches += 1
+            # 轮转路径：δ=0 实际可行集重放与轮转公式期望是同一计算
+            #（actual_ref 本身）——谓词侧恒自洽，replay_mismatch 的唯一
+            # 来源 = 一致性校验（在线 actual != expected，真发散）。
+            if derived["rotation_consistency_mismatch"]:
+                replay_mismatch += 1
+            cf_action, cf_instance = _rotation_aware_selection(
+                decision["candidates"], 0, decision["tie_cursor"],
+                include_quota_deferred=True)
+        else:
+            pick_action, pick_instance = _selection_under_delta(
+                0, derived["challenger_min_actual"],
+                derived["alt_star_actual"])
+            if pick_action != derived["actual_ref_action"] \
+                    or pick_instance != derived["actual_ref_instance"]:
+                replay_mismatch += 1
+            cf_action, cf_instance = _selection_under_delta(
+                0, derived["challenger_min"], derived["alt_star"])
+        if cf_action != derived["actual_ref_action"] \
+                or cf_instance != derived["actual_ref_instance"]:
             quota_counterfactual_flips += 1
 
     # -- 边界对拍 --
@@ -2217,6 +2435,28 @@ def build_summary(scan: DomainScan, entries: list[dict], topology: dict,
                     "per_tier": flip_tiers,
                     "replay_mismatch_at_delta0": replay_mismatch,
                     "quota_counterfactual_flips": quota_counterfactual_flips,
+                    "rotation_aware_replay": {
+                        "caliber": "v9（2026-10-20）起 δ=0/δ 分档的比较"
+                                   "基准 = 轮转感知 actual_ref：三键"
+                                   "（joint_tie_cursor/joint_tie_"
+                                   "instances/joint_tie_rotated）在场且"
+                                   " rotated 的 P 行，actual_ref = 由本"
+                                   "行候选表现算的轮转公式期望选择（语义"
+                                   "单一源 joint_scheduler.joint_tie_"
+                                   "rotation_pick 的本地镜像 _joint_tie_"
+                                   "rotation_pick_mirror + 对账钉测；"
+                                   "joint_tie_instances 解析值仅披露对照、"
+                                   "裁决以现算值为准）；纯轮转位移不计"
+                                   "翻转/不污染位移分位，actual != "
+                                   "expected 计 replay_mismatch（真发"
+                                   "散）。键缺席（旧 run）⇒ actual_ref = "
+                                   "actual，输出与旧口径逐位一致",
+                        "rows_with_tie_keys": rows_with_tie_keys,
+                        "rotated_rows": rotated_rows,
+                        "rotation_consistency_mismatches":
+                            rotation_consistency_mismatches,
+                        "cursor_anomalies": cursor_anomalies,
+                    },
                     "replay_calibers_note": (
                         "N6 双口径：replay_mismatch 重放集=实际可行集"
                         "（applicable-only，与在线选择同约束——纯谓词一"

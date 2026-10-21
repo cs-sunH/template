@@ -91,6 +91,10 @@ BIN=${PROJECT}/build/astra_analytical/build_congestion_aware/bin/AstraSim_Analyt
 BRIDGE_TIMEOUT_MS="${BRIDGE_TIMEOUT_MS:-120000}"
 BRIDGE_TIMEOUT_ARGS=(--bridge-timeout-ms "${BRIDGE_TIMEOUT_MS}")
 POSTPROCESS=${SCRIPT_DIR}/run_metrics_postprocess.sh
+# 方案一(2026-10-20)风险一离线活性审计器:run 结束后对决策日志做
+# "空闲足够却持续阻塞"的死端复核(fail-closed;自动定位 bridge/ 或
+# results/ 下的 online_decision_log.jsonl,旧构建无增富字段时明确跳过)。
+LIVENESS_AUDIT="${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/admission_liveness_audit.py"
 
 # --metrics-detail 解析（B1/WP0）：优先级 env SH_METRICS_DETAIL > 本仓
 # sh_test_mesh/workload/llama2_7b_inference/metrics_config.json 的
@@ -290,6 +294,14 @@ if grep -q '^\[METRIC\] ' "${RUN_DIR}/cpp.log"; then
   fi
 else
   echo "[run_online_strategy] WARNING: no [METRIC] lines in cpp.log; postprocess skipped" >&2
+fi
+# 方案一(2026-10-20)风险一:metrics 后处理之后、产物归档之前,离线
+# 活性审计器复核决策日志——同一请求连续多个决策批 admission_blocked 且
+# 阻塞行观测字段显示逐 rank 空闲字节均 >= 需求字节时 FAIL(容量释放
+# 路径漏发重试信号的可判定形态),fail-closed 拒绝交付本 run。
+if ! python3 "${LIVENESS_AUDIT}" "${RUN_DIR}"; then
+  echo "[run_online_strategy] FAIL: admission liveness audit rejected ${RUN_DIR} (see audit output above)" >&2
+  exit 1
 fi
 # 阶段 7 §10.5 中间产物生命周期: 最终结果 / 检查点 / 临时产物分目录。
 #  - results/    : 最终结果(审计 jsonl,Python 决策侧写出)。保留规则:每

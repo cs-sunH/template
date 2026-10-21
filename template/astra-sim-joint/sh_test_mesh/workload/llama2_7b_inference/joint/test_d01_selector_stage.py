@@ -4,9 +4,12 @@
 对应 joint修改文档.md D01 / v2.0 §21.1 D01、§22 D01、C07。本条目对
 选择器与估价器是**保留＋显式化**要求（不重写成新优化器），钉测五面：
 
-  1. 保留全实例×二动作 argmin 与初始平局序 —— joint 主臂 argmin 键
-     ``(cost, (instance_index, ACTION_ORDER))`` 不变（C07 现状）；D
-     边界式(1c) 平局键不回流初始时刻（P 候选恒非 continuation）。
+  1. 保留全实例×二动作 argmin 与初始平局裁决锚 —— joint 主臂先按
+     ``(cost, (instance_index, ACTION_ORDER))`` 定最优价（C07 现状），
+     跨实例平局自 v9（2026-10-20）起按实例编号环序轮转分摊
+     （``tie_cursor`` 注入，``joint_tie_rotation_pick`` 裁决；单实例
+     平局/唯一最优仍走旧固定确定序）；D 边界式(1c) 平局键不回流初始
+     时刻（P 候选恒非 continuation）。
   2. 阶段参数 —— 两阶段入口（``estimate_P_with_continuation`` /
      ``estimate_D_remaining``）的候选 notes 以同键
      ``decision_stage=P``/``decision_stage=D`` 自描述决策阶段（D18
@@ -134,13 +137,16 @@ class _CountingModel:
 
 
 class D01InitialArgminTieOrderTest(unittest.TestCase):
-    """保留全实例×二动作 argmin 与初始平局序（v2.0 §22 D01"初始 tie
-    不变"；等价瘦身时初始选择保持）。"""
+    """保留全实例×二动作 argmin 与最优价锚；初始跨实例平局自 v9
+    （2026-10-20）起按实例编号环序轮转裁决（v2.0 §22 D01 阶段收口的
+    v9 修订：游标缺省 0 = 环起点；单实例平局/唯一最优仍走旧固定
+    ``(instance_index, ACTION_ORDER)`` 确定序）。"""
 
-    def test_initial_tie_resolves_by_instance_then_action_order(self):
+    def test_initial_tie_rotates_from_cursor(self):
         # turn-0 双实例等负载：stay × 两实例两候选真平局（本地建立
-        # 同工作量）。初始平局序
-        # = (instance_index, ACTION_ORDER)：最低实例的 stay 胜出。
+        # 同工作量）。v9 轮转语义：自 tie_cursor 起沿实例全集环序取
+        # 首个在集实例——缺省游标 0 = 环起点，结论落在实例 0 的 stay
+        # 上（与旧固定序数值重合，但语义是轮转自游标起，不是保留旧序）。
         record = select_instance_and_action(
             mode="joint", cost_model=_cost_model(
                 {0: _load(0), 1: _load(1)}),
@@ -156,16 +162,36 @@ class D01InitialArgminTieOrderTest(unittest.TestCase):
         self.assertEqual(
             record.chosen.order_key(),
             (0, ACTION_ORDER.index(ACTION_STAY)))
+        self.assertEqual(record.diagnostics["joint_tie_cursor"], 0)
+        self.assertEqual(
+            record.diagnostics["joint_tie_instances"], (0, 1))
+        self.assertIs(record.diagnostics["joint_tie_rotated"], True)
+        # 对偶断言：同场景游标 1 → 环序自 1 起取在集实例 1（轮转语义
+        # 的可分辨面——若仍是旧固定序，此处应仍选实例 0）。
+        rotated = select_instance_and_action(
+            mode="joint", cost_model=_cost_model(
+                {0: _load(0), 1: _load(1)}),
+            session=_fresh_session(), request=_request(),
+            tie_cursor=1)
+        self.assertEqual(
+            (rotated.chosen.instance_index, rotated.chosen.action),
+            (1, ACTION_STAY))
+        self.assertEqual(
+            rotated.diagnostics["joint_tie_instances"], (0, 1))
+        self.assertIs(rotated.diagnostics["joint_tie_rotated"], True)
 
-    def test_initial_tie_note_discloses_initial_order(self):
-        # 平局披露键 = 初始序，不是 D 边界的继续优先键。
+    def test_initial_tie_note_discloses_rotation(self):
+        # 平局披露 = 轮转语义（并列实例清单 + round-robin from cursor），
+        # 不是 D 边界的继续优先键。
         record = select_instance_and_action(
             mode="joint", cost_model=_cost_model(
                 {0: _load(0), 1: _load(1)}),
             session=_fresh_session(), request=_request(),
+            tie_cursor=1,
             )
         self.assertIn("tie among 2", record.tie_break_note)
-        self.assertIn("(instance_index, action order)",
+        self.assertIn("[0, 1]", record.tie_break_note)
+        self.assertIn("round-robin from cursor 1",
                       record.tie_break_note)
         self.assertNotIn("continuation", record.tie_break_note)
 

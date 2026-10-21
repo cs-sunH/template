@@ -184,7 +184,7 @@ nlohmann::json kernel_contract_wire() {
         {"projection_abi_version", 1u},
         {"descriptor_version", 1u},
         {"pipeline_protocol_version", 1u},
-        {"model_version", "v8-two-actions-20261015"},
+        {"model_version", "v9-tie-roundrobin-20261020"},
         {"timer_whitelist_version", "timer-whitelist-v1-20261005"},
         {"prediction_config_sha256",
          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}};

@@ -19,6 +19,12 @@
 * 跨包对账钉测：离线 §10.3 预测距离档/分母规则常量与在线 joint 预测
   距离桶界/成熟账本分母字串逐字锁等（ast 提在线源字面值比对，不
   import joint——任一侧单改即报错，堵静默漂移）；
+* v9（2026-10-20）轮转感知重放：P 行三键（joint_tie_cursor/
+  joint_tie_instances/joint_tie_rotated）在场且 rotated 时比较基准
+  actual → actual_ref（轮转公式期望选择）——纯轮转位移不计翻转、
+  actual != expected 计 replay_mismatch、键缺席旧行为逐位一致、
+  游标异常计数；镜像函数与在线 joint_tie_rotation_pick 的对账钉测
+  （ast 提在线源函数直接执行对拍，不 import joint）；
 * 纪律位：非 joint run（0 决策行）完全静默；manifest B 参数 fail-closed；
   selected_action 枚举/冗余断言位 fail-closed。
 
@@ -89,10 +95,17 @@ def _port_snapshot():
         for index in (0, 1)]}
 
 
+def _tie_disclosure(cursor, instances, rotated=True):
+    """v9（2026-10-20）在线 P 准入决策行 decision 级的轮转披露三键。"""
+    return {"joint_tie_cursor": cursor,
+            "joint_tie_instances": list(instances),
+            "joint_tie_rotated": rotated}
+
+
 def _admission(request_id, tick, candidates, selected_action,
                selected_instance, applicable_actions,
-               origin_home=None, cost_ns=None):
-    return {
+               origin_home=None, cost_ns=None, tie=None):
+    row = {
         "kind": "joint_admission", "request_id": request_id,
         "tick": tick, "priority": 0, "seq": tick,
         "decision": {
@@ -115,6 +128,9 @@ def _admission(request_id, tick, candidates, selected_action,
             "candidates": candidates,
         },
     }
+    if tie is not None:
+        row["decision"].update(tie)
+    return row
 
 
 def _completion(request_id, tick, merge_direction="stay",
@@ -1647,6 +1663,379 @@ class OnlineOfflineLedgerReconciliationTests(unittest.TestCase):
         self.assertEqual(len(dm.PREDICTION_DISTANCE_BANDS_NS), 3)
         self.assertEqual(dm.PREDICTION_DISTANCE_BAND_LABELS,
                          ("near", "mid", "far", "beyond"))
+
+
+class TieRotationAwareReplayTests(unittest.TestCase):
+    """v9（2026-10-20）轮转感知重放：平局裁决轮转语义的解析/重放/披露。
+
+    在线 joint 主臂跨实例平局自 v9 起按实例编号环序轮转分摊（P 准入
+    决策行披露 joint_tie_cursor/joint_tie_instances/joint_tie_rotated
+    三键，语义单一源 joint_scheduler.joint_tie_rotation_pick）；离线
+    重放的比较基准自 actual 改为 actual_ref（轮转公式期望选择）——纯
+    轮转位移不计翻转/不污染位移分位，actual != expected 计
+    replay_mismatch（真发散），键缺席（旧 run）与旧口径逐位一致。
+    """
+
+    def setUp(self):
+        self.run_dir = None
+
+    def tearDown(self):
+        # 删除纪律：解析绝对路径并断言位于本测试自建的临时目录内
+        # （INCIDENT-C16 教训条款——绝不 rmtree 父目录）。
+        if self.run_dir is not None:
+            resolved = Path(self.run_dir).resolve()
+            assert str(resolved).startswith(tempfile.gettempdir())
+            import shutil
+            shutil.rmtree(resolved)
+            self.run_dir = None
+
+    def _run_admissions(self, tag, rows):
+        """单夹具 run：重写决策日志为给定行并跑 CLI 全链。"""
+        self.run_dir = build_run_dir(tag)
+        for name in ("slo_domain_requests.csv",
+                     "slo_domain_instances.csv",
+                     "slo_domain_summary.json"):
+            path = self.run_dir / name
+            if path.exists():
+                path.unlink()
+        with (self.run_dir / "results" / "online_decision_log.jsonl").open(
+                "w", encoding="utf-8") as handle:
+            for row in rows:
+                handle.write(json.dumps(row) + "\n")
+        return run_tool(self.run_dir)
+
+    @staticmethod
+    def _tie_rows(request_id, selected_action, selected_instance, tie,
+                  completion_tick=700, cost=500):
+        """双实例 stay 同价平局行（T={0,1}）+ completion（err=+100 → σ̂）。"""
+        rows = [_admission(
+            request_id, 100,
+            [_cand("stay", 0, True, cost, 0, breakdown=_seg(compute=cost)),
+             _cand("copy", 0, False, hops=0, reason="no history to copy"),
+             _cand("stay", 1, True, cost, 1, breakdown=_seg(compute=cost)),
+             _cand("copy", 1, False, hops=1, reason="no history to copy")],
+            selected_action, selected_instance, ["stay"], cost_ns=cost,
+            tie=tie)]
+        if completion_tick is not None:
+            rows.append(_completion(request_id, completion_tick, "stay",
+                                    kv_instance_after=selected_instance))
+        return rows
+
+    def test_rotated_row_pure_displacement_not_counted(self):
+        """rotated 行 actual==expected（游标 1 → stay@1）：replay_
+        mismatch_at_delta0=0、δ 分档 flips=0/displacement n=0——纯轮转
+        位移不计（修前旧全键序重放取 stay@0，对 stay@1 各计假翻转）。"""
+        rc, summary, _req, _inst = self._run_admissions(
+            "domain_rot_ok",
+            self._tie_rows("session_rot_request_0", "stay", 1,
+                           _tie_disclosure(1, [0, 1])))
+        self.assertEqual(rc, 0)
+        scan = summary["delta_epsilon_registry"]["sensitivity_scan"]
+        flip = scan["flip_repricing"]
+        self.assertEqual(scan["sigma_hat_ns"], 100)  # 唯一样本 err=+100
+        self.assertEqual(flip["replay_mismatch_at_delta0"], 0)
+        self.assertEqual(flip["quota_counterfactual_flips"], 0)
+        for tier in ("1.0", "2.0", "4.0"):
+            self.assertEqual(flip["per_tier"][tier]["flips_vs_actual"], 0)
+            self.assertEqual(
+                flip["per_tier"][tier]["displacement_hop"]["n"], 0)
+        rotation = flip["rotation_aware_replay"]
+        self.assertEqual(rotation["rows_with_tie_keys"], 1)
+        self.assertEqual(rotation["rotated_rows"], 1)
+        self.assertEqual(rotation["rotation_consistency_mismatches"], 0)
+        self.assertEqual(rotation["cursor_anomalies"], 0)
+        self.assertIn("轮转感知 actual_ref", rotation["caliber"])
+
+    def test_rotated_row_consistency_mismatch_counts(self):
+        """rotated 行 actual!=expected（游标 1 应取 stay@1，在线记
+        stay@0）——真发散计 replay_mismatch；δ 分档基准 = actual_ref
+        （期望 stay@1）⇒ 不另计翻转/反事实。"""
+        rc, summary, _req, _inst = self._run_admissions(
+            "domain_rot_bad",
+            self._tie_rows("session_rot_request_1", "stay", 0,
+                           _tie_disclosure(1, [0, 1])))
+        self.assertEqual(rc, 0)
+        flip = summary["delta_epsilon_registry"]["sensitivity_scan"][
+            "flip_repricing"]
+        self.assertEqual(flip["replay_mismatch_at_delta0"], 1)
+        self.assertEqual(flip["quota_counterfactual_flips"], 0)
+        for tier in ("1.0", "2.0", "4.0"):
+            self.assertEqual(flip["per_tier"][tier]["flips_vs_actual"], 0)
+        rotation = flip["rotation_aware_replay"]
+        self.assertEqual(rotation["rows_with_tie_keys"], 1)
+        self.assertEqual(rotation["rotated_rows"], 1)
+        self.assertEqual(rotation["rotation_consistency_mismatches"], 1)
+        self.assertEqual(rotation["cursor_anomalies"], 0)
+
+    def test_keys_absent_legacy_behavior_and_zero_counts(self):
+        """键缺席（旧 run）：actual_ref=actual——基线夹具 R3 真翻转照计
+        replay_mismatch=1、轮转四计数恒 0（"现有测试不改断言全过"硬性
+        兼容判据的显式钉）。"""
+        rc, summary, _req, _inst = self._run_admissions(
+            "domain_rot_legacy", _decision_rows())
+        self.assertEqual(rc, 0)
+        flip = summary["delta_epsilon_registry"]["sensitivity_scan"][
+            "flip_repricing"]
+        self.assertEqual(flip["replay_mismatch_at_delta0"], 1)
+        self.assertEqual(flip["quota_counterfactual_flips"], 1)
+        rotation = flip["rotation_aware_replay"]
+        self.assertEqual(rotation["rows_with_tie_keys"], 0)
+        self.assertEqual(rotation["rotated_rows"], 0)
+        self.assertEqual(rotation["rotation_consistency_mismatches"], 0)
+        self.assertEqual(rotation["cursor_anomalies"], 0)
+
+    def test_cursor_outside_universe_counts_anomaly_no_crash(self):
+        """游标 7 不在候选表实例全集 {0,1}：轮转公式全定义（回绕取
+        stay@0）不崩，cursor_anomalies=1；actual==expected ⇒ 无 mismatch、
+        δ 分档照常产出。"""
+        rc, summary, _req, _inst = self._run_admissions(
+            "domain_rot_cursor",
+            self._tie_rows("session_rot_request_2", "stay", 0,
+                           _tie_disclosure(7, [0, 1])))
+        self.assertEqual(rc, 0)
+        flip = summary["delta_epsilon_registry"]["sensitivity_scan"][
+            "flip_repricing"]
+        self.assertEqual(flip["replay_mismatch_at_delta0"], 0)
+        for tier in ("1.0", "2.0", "4.0"):
+            self.assertEqual(flip["per_tier"][tier]["flips_vs_actual"], 0)
+        rotation = flip["rotation_aware_replay"]
+        self.assertEqual(rotation["rotated_rows"], 1)
+        self.assertEqual(rotation["rotation_consistency_mismatches"], 0)
+        self.assertEqual(rotation["cursor_anomalies"], 1)
+
+    def test_parsed_tie_instances_disclosure_only(self):
+        """joint_tie_instances 解析值与候选表现算值不一致（披露 [0]、
+        现算 T={0,1}）：裁决以现算为准（游标 1 → stay@1），解析值仅披露
+        对照——actual=stay@1 ⇒ 无 mismatch（若误信解析值则 |T|<1 走旧
+        全键序路径取 stay@0，会计假 mismatch）。"""
+        rc, summary, _req, _inst = self._run_admissions(
+            "domain_rot_parsed",
+            self._tie_rows("session_rot_request_3", "stay", 1,
+                           _tie_disclosure(1, [0])))
+        self.assertEqual(rc, 0)
+        flip = summary["delta_epsilon_registry"]["sensitivity_scan"][
+            "flip_repricing"]
+        self.assertEqual(flip["replay_mismatch_at_delta0"], 0)
+        rotation = flip["rotation_aware_replay"]
+        self.assertEqual(rotation["rotated_rows"], 1)
+        self.assertEqual(rotation["rotation_consistency_mismatches"], 0)
+
+    def test_keys_present_not_rotated_uses_legacy_path(self):
+        """三键在场但 rotated=False（单实例平局/唯一最优——在线与旧序
+        恒等）：不走轮转路径（rotated_rows=0），行计入 rows_with_tie_
+        keys=1；actual_ref=actual（唯一最优 stay@0=500 < stay@1=900，
+        任意 δ 档无翻转）。"""
+        rows = [
+            _admission(
+                "session_rot_request_4", 100,
+                [_cand("stay", 0, True, 500, 0,
+                       breakdown=_seg(compute=500)),
+                 _cand("copy", 0, False, hops=0,
+                       reason="no history to copy"),
+                 _cand("stay", 1, True, 900, 1,
+                       breakdown=_seg(compute=900)),
+                 _cand("copy", 1, False, hops=1,
+                       reason="no history to copy")],
+                "stay", 0, ["stay"], cost_ns=500,
+                tie=_tie_disclosure(0, [0], rotated=False)),
+            _completion("session_rot_request_4", 700, "stay",
+                        kv_instance_after=0),
+        ]
+        rc, summary, _req, _inst = self._run_admissions(
+            "domain_rot_unrotated", rows)
+        self.assertEqual(rc, 0)
+        flip = summary["delta_epsilon_registry"]["sensitivity_scan"][
+            "flip_repricing"]
+        self.assertEqual(flip["replay_mismatch_at_delta0"], 0)
+        for tier in ("1.0", "2.0", "4.0"):
+            self.assertEqual(flip["per_tier"][tier]["flips_vs_actual"], 0)
+        rotation = flip["rotation_aware_replay"]
+        self.assertEqual(rotation["rows_with_tie_keys"], 1)
+        self.assertEqual(rotation["rotated_rows"], 0)
+
+
+class TieRotationMirrorTests(unittest.TestCase):
+    """轮转镜像纯函数 / 三键解析纯单元（无 run_dir 全链）。"""
+
+    def test_mirror_matches_rotation_contract(self):
+        # |T|<2：不轮转（单实例平局/唯一最优——返回 (None, None, T)）。
+        self.assertEqual(
+            dm._joint_tie_rotation_pick_mirror(
+                [(0, "stay", 90), (1, "stay", 100)], 1, [0, 1]),
+            (None, None, (0,)))
+        triples = [(0, "stay", 100), (0, "copy", 100),
+                   (1, "stay", 100), (1, "copy", 100)]
+        # 游标 0 → 实例 0；实例内并列由 ACTION_ORDER 终裁 stay。
+        self.assertEqual(
+            dm._joint_tie_rotation_pick_mirror(triples, 0, [0, 1]),
+            ("stay", 0, (0, 1)))
+        # 游标 1 → 实例 1。
+        self.assertEqual(
+            dm._joint_tie_rotation_pick_mirror(triples, 1, [0, 1]),
+            ("stay", 1, (0, 1)))
+        # 游标大于全集最大值 → 回绕首元素。
+        self.assertEqual(
+            dm._joint_tie_rotation_pick_mirror(triples, 7, [0, 1]),
+            ("stay", 0, (0, 1)))
+        # 游标落在全集间隙：自首个大于游标的元素起。
+        sparse = [(0, "stay", 100), (2, "copy", 100), (5, "stay", 100)]
+        self.assertEqual(
+            dm._joint_tie_rotation_pick_mirror(sparse, 3, [0, 2, 5]),
+            ("stay", 5, (0, 2, 5)))
+        self.assertEqual(
+            dm._joint_tie_rotation_pick_mirror(sparse, 1, [0, 2, 5]),
+            ("copy", 2, (0, 2, 5)))
+
+    def test_rotation_aware_selection_calibers_and_delta(self):
+        candidates = {
+            0: {"stay": {"applicable": True, "cost_ns": 500}},
+            1: {"copy": {"applicable": False, "cost_ns": 450,
+                         "reason": "quota_link_budget_exhausted"}},
+        }
+        # M2/N6 双口径：实际可行集（copy 配额拒）→ stay@0；配额前集
+        # （copy@1=450 唯一最优 → |T|<2 旧确定序 argmin）→ copy@1。
+        self.assertEqual(
+            dm._rotation_aware_selection(
+                candidates, 0, 0, include_quota_deferred=False),
+            ("stay", 0))
+        self.assertEqual(
+            dm._rotation_aware_selection(
+                candidates, 0, 0, include_quota_deferred=True),
+            ("copy", 1))
+        # δ 重定价下跨族并列走轮转（O8① 全键序的轮转感知推广）：
+        # stay@0=500 vs copy@1=450、δ=50 → 双双 500 并列 T={0,1}——
+        # 游标 0 取 stay@0、游标 1 取 copy@1。
+        cands = {
+            0: {"stay": {"applicable": True, "cost_ns": 500}},
+            1: {"copy": {"applicable": True, "cost_ns": 450}},
+        }
+        self.assertEqual(
+            dm._rotation_aware_selection(
+                cands, 50, 0, include_quota_deferred=True),
+            ("stay", 0))
+        self.assertEqual(
+            dm._rotation_aware_selection(
+                cands, 50, 1, include_quota_deferred=True),
+            ("copy", 1))
+        # 零适用 → ("NA", None)。
+        self.assertEqual(
+            dm._rotation_aware_selection(
+                {0: {"stay": {"applicable": False, "cost_ns": None}}},
+                0, 0, include_quota_deferred=False),
+            ("NA", None))
+
+    def test_scan_decision_parses_tie_disclosure(self):
+        record = _admission(
+            "session_p_request_0", 10,
+            [_cand("stay", 0, True, 100, 0, breakdown=_seg(compute=100)),
+             _cand("copy", 0, False, hops=0, reason="no history to copy")],
+            "stay", 0, ["stay"], cost_ns=100,
+            tie=_tie_disclosure(3, [0, 2]))
+        scanned = dm.DomainScan._scan_decision(
+            record, record["request_id"], record["decision"])
+        self.assertTrue(scanned["tie_keys_present"])
+        self.assertEqual(scanned["tie_cursor"], 3)
+        self.assertEqual(scanned["tie_instances"], (0, 2))
+        self.assertTrue(scanned["tie_rotated"])
+        # 键缺席（旧 run）→ None/None/False。
+        legacy = _admission(
+            "session_p_request_1", 20,
+            [_cand("stay", 0, True, 100, 0, breakdown=_seg(compute=100)),
+             _cand("copy", 0, False, hops=0, reason="no history to copy")],
+            "stay", 0, ["stay"], cost_ns=100)
+        scanned_legacy = dm.DomainScan._scan_decision(
+            legacy, legacy["request_id"], legacy["decision"])
+        self.assertFalse(scanned_legacy["tie_keys_present"])
+        self.assertIsNone(scanned_legacy["tie_cursor"])
+        self.assertIsNone(scanned_legacy["tie_instances"])
+        self.assertFalse(scanned_legacy["tie_rotated"])
+
+
+class TieRotationMirrorParityTests(unittest.TestCase):
+    """v9 轮转镜像 vs 在线单一源的对账钉测（2026-10-20）。
+
+    离线 _joint_tie_rotation_pick_mirror 是在线 joint/
+    joint_scheduler.joint_tie_rotation_pick 的本地镜像（slo_tools 不
+    import joint 模块的既有纪律——运行上下文 sys.path 无 workload 侧
+    包）。本类不引入 joint import：ast 提取在线源文件的
+    joint_tie_rotation_pick 函数源码，在受控命名空间（Sequence/
+    Optional/ActionCandidate 桩——order_key = (instance, 动作秩) 与
+    joint_cost_model.order_key 同构）执行，与离线镜像逐场景对拍；任一
+    侧单改即在此处报错，堵第二套公式漂移（机制同
+    OnlineOfflineLedgerReconciliationTests 的字面值钉测）。
+    """
+
+    ONLINE_JOINT_DIR = (TESTS_DIR.parents[1] / "workload" /
+                        "llama2_7b_inference" / "joint")
+
+    @classmethod
+    def _online_rotation_pick(cls):
+        """ast 提取在线 joint_tie_rotation_pick 并执行（不 import joint）。"""
+        from typing import Optional as _Optional, Sequence as _Sequence
+        path = cls.ONLINE_JOINT_DIR / "joint_scheduler.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"),
+                         filename=str(path))
+        functions = [node for node in tree.body
+                     if isinstance(node, ast.FunctionDef)
+                     and node.name == "joint_tie_rotation_pick"]
+        if len(functions) != 1:
+            raise AssertionError(
+                f"{path} 中 joint_tie_rotation_pick 应有且仅有 1 处模块级"
+                f"定义，实际 {len(functions)} 处——先复核再更新对账钉测")
+        module = ast.Module(body=functions, type_ignores=[])
+        ast.fix_missing_locations(module)
+        action_rank = {"stay": 0, "copy": 1}
+
+        class _CandidateStub:
+            """ActionCandidate 桩（镜像 order_key = (instance, 秩)）。"""
+
+            def __init__(self, instance_index, action, cost_ns):
+                self.instance_index = instance_index
+                self.action = action
+                self.cost_ns = cost_ns
+
+            def order_key(self):
+                return (self.instance_index,
+                        action_rank.get(self.action, len(action_rank)))
+
+        namespace = {
+            "Sequence": _Sequence, "Optional": _Optional,
+            "ActionCandidate": _CandidateStub,
+        }
+        exec(compile(module, filename=str(path), mode="exec"), namespace)
+        return namespace["joint_tie_rotation_pick"], _CandidateStub
+
+    def test_mirror_matches_online_single_source(self):
+        online_pick, stub = self._online_rotation_pick()
+        scenarios = [
+            # (适用候选 (instance, action, cost) 三元组, 实例全集)
+            ([(0, "stay", 100), (0, "copy", 100),
+              (1, "stay", 100), (1, "copy", 100)], [0, 1]),
+            ([(0, "stay", 90), (1, "stay", 100)], [0, 1]),
+            ([(2, "stay", 50), (2, "copy", 50), (4, "copy", 50)],
+             [0, 2, 4, 6]),
+            ([(0, "stay", 100), (2, "copy", 100), (5, "stay", 100)],
+             [0, 2, 5]),
+            ([(3, "stay", 70)], [3]),
+            ([(0, "copy", 30), (1, "stay", 30), (2, "copy", 40)],
+             [0, 1, 2]),
+        ]
+        for triples, universe in scenarios:
+            applicable = [stub(i, a, c) for i, a, c in triples]
+            for cursor in (-1, 0, 1, 2, 3, 4, 5, 6, 7, 100):
+                online_chosen, online_ties = online_pick(
+                    applicable, cursor, universe)
+                action, instance, ties = (
+                    dm._joint_tie_rotation_pick_mirror(
+                        triples, cursor, universe))
+                self.assertEqual(ties, online_ties)
+                if online_chosen is None:
+                    self.assertIsNone(action)
+                    self.assertIsNone(instance)
+                else:
+                    self.assertEqual(action, online_chosen.action)
+                    self.assertEqual(instance,
+                                     online_chosen.instance_index)
 
 
 if __name__ == "__main__":

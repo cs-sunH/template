@@ -19,15 +19,6 @@ Reason closed set (wscllm, phase-1 minimal; written into contract ④):
                         graph granularity per the step 0-4 contract).
   REQUEST_COMPLETE   -- the request's stages are all done (wrap-up / ledger
                         close-out / next-session-arrival scheduling edge).
-  THERMAL_EPOCH      -- a REQUEST-INDEPENDENT periodic thermal event (plan D):
-                        the online main delivers one minimal epoch per
-                        SH_THERMAL_EPOCH_NS of simulated time so the coarse
-                        die runtime can publish its incremental served
-                        activity and receive a fresh capacity cap. It carries
-                        no request identity, no mailbox event and no graph
-                        node; the array carries exactly one empty event so the
-                        frozen reasons[] shape stays a decision-reason list.
-                        This is the ONLY reason not produced by the mailbox.
 There is deliberately NO DECODE_ITERATION_COMPLETE: one decode iteration
 advancing all active requests by one token is ledger/queueing logic inside
 the OnlineScheduler, not a graph-structure event (构图粒度见步骤 1-9).
@@ -74,16 +65,12 @@ Counters (report at run end):
 namespace AstraSim {
 namespace ExecutionDriven {
 
-/// Decision reasons (closed set, phase-1 minimal). THERMAL_EPOCH (plan D,
-/// 2026-10-20) is the request-independent periodic thermal event; it is
-/// appended (value 4) so the existing four values never move -- the frozen
-/// fail-closed reason validation stays exhaustive over this enum.
+/// Decision reasons (closed set, phase-1 minimal).
 enum class DecisionReason : int {
     ARRIVAL = 0,
     PREFILL_DRAIN = 1,
     DECODE_COMPLETION = 2,
     REQUEST_COMPLETE = 3,
-    THERMAL_EPOCH = 4,
 };
 
 /// Per-reason payload (phase-1 minimal; fields documented per reason).

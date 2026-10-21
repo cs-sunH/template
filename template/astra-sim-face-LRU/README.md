@@ -534,6 +534,16 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 #    strict=失败即 runner 非零退出。runner 同时把 per-request manifest
 #    （metrics_manifest.json/manifest.json）拷入 run_dir 根（P2）——run_dir
 #    自包含，与仓还原状态解耦
+# ⑤c 准入活性离线审计（方案一 2026-10-20 风险一）：strategy runner 在
+#    metrics 后处理之后、产物归档之前自动调起
+#    online/verify/admission_liveness_audit.py——扫 run 目录的
+#    online_decision_log.jsonl（bridge/ 或 results/ 自动定位），同一
+#    request 连续 ≥3（--max-blocked-streak 可调）个决策批 admission_blocked
+#    且阻塞行观测字段（kv_free_bytes_by_rank/required_bytes_by_rank，
+#    由调度器在每次容量阻塞时只读写入）显示逐 rank 空闲字节均 >= 需求
+#    字节时 FAIL（"空闲足够却持续阻塞"= 容量释放路径漏发重试信号的
+#    可判定形态），fail-closed 拒绝交付本 run；无增富字段的旧构建日志
+#    明确报 SKIP 不误判；历史 run 可离线重放（独立调用同 CLI）。
 # 对账工具（独立调用，按需执行；--bridge-dir/--manifest 详见其 --help）
 python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py
 
@@ -926,7 +936,9 @@ remote_load/noc_migrate 逐节点 HBM 计费键钉子）与远端恢复会话列
 
 - `astra-sim/workload/execution_driven/`：在线机制层（C++）
 - `sh_test_mesh/workload/llama2_7b_inference/online/`：在线调度器/构图器/服务层（Python）
-- `.../online/verify/`：对账与验证工具
+- `.../online/verify/`：对账与验证工具（ledger_reconcile 对账、
+  admission_liveness_audit 准入活性离线审计——方案一 2026-10-20，
+  runner 自动调用亦可独立重放历史 run）
 - `sh_test_mesh/run_scripts/`：全部 runner 脚本
 - `sh_test_mesh/workload/llama2_7b_inference/traces/`：物化器脚本（数据件由调用方物化，provenance 以物化器 stdout 为准）
 - `sh_test_mesh/slo_tools/`：SLO 离线后处理工具集（slo_stats / load_imbalance / restore_decomposition / kv_cache_adapter / hopbytes + `slo_postprocess_driver.py`（A4 单遍合并驱动，run_slo_postprocess.sh 链内使用；工具 CLI 不变）+ `slo_params_manifest.json`（B 类参数唯一来源，B4 已填推导值）+ tests；纯离线只读，详见目录内 README.md）
@@ -1048,6 +1060,26 @@ DECODE_COMPLETION / REQUEST_COMPLETE + 列车哨兵信号），再处理 drain/�
   镜像正式准入，三态：原选可行零扰动 / 可行集内改选 / 全不可行保持
   原选——绝不 remap 已冻结列车），介入时记 `admission_probe` 决策行供
   对拍剥离；探针零副作用（只读快照/纯函数，不触碰任何 mutation）。
+- 准入阻塞观测与离线活性审计（方案一 2026-10-20 风险一，纯观测零决策
+  参与）：两容量阻塞分支（prefill 的 prepare_history 阻塞 / decode 的
+  move 阻塞）在置 dirty 后另记一条 `admission_blocked` 决策行——只读
+  口径逐 rank 镜像当时空闲（`workspace_fit_remaining_bytes`）与需求
+  （无会话/远端/异实例按全量分片，LOCAL_HBM 同实例按增量 = 目标分片
+  − 已驻留 `local_shard_bytes`，与 P1 过滤器口径一致）字节，供离线
+  审计器判定"空闲足够却持续阻塞"；请求取得进展（prefill/decode 准入
+  成功、decode 完成）即清当前 streak 与 open 登记（max 表保留）。
+  `verify_run_end` 收尾增补三项（fail-closed）：open 登记非空 = 有请求
+  终态仍处阻塞 → raise；请求级最大连续阻塞批数直方图
+  （`admission_blocked_streak_histogram`，summary 行消费）；
+  FL 特有 REMOTE store 推迟分支（纯推迟零 mutation，不属容量阻塞）
+  不产增富行。运行链路由 runner 内嵌
+  `online/verify/admission_liveness_audit.py` 复核（§4 步骤 ⑤c）。
+- workspace 峰值/地板对账（方案一 2026-10-20 风险三，纯观测）：
+  required 模式下交付携带的活跃 workspace 字节逐 rank 记运行最大值
+  （回落不缩），`verify_run_end` 与 prospective certificate 地板对账——
+  任一 rank 峰值超地板即 raise（certificate 失约显影）；否则结算
+  peak/floor/slack 三行（`workspace_floor_reconciliation`，summary 行
+  消费；非 required 保持 None）。
 - 接栅栏与段末屏障：列车发射不做块末恢复/段内清链，per-rank `previous_id`
   无条件接续当前 frontier（per-rank 发行序 = 全局发射序，2026-08-19 四仓
   统一），跨请求 P2P 与集合通信参与序不会反转成环；每趟列车一个共享 TP 组

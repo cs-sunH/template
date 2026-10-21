@@ -42,11 +42,6 @@ Cases:
   T2. callback re-entry guard: a 1 ns endpoint submitted from inside a
      completion callback is not notified in the same dispatch round and
      fires exactly once on the following tick.
-  T3. absolute capacity update through the production bridge: non-finite,
-     negative and out-of-range rates are rejected as invalid_argument before
-     any live state moves; halving HBM0 retimes the completion to the new
-     finish tick (the previously armed completion event is invalidated and
-     re-armed), still firing exactly one terminal.
 
 Build: cmake target
       AstraSim_Analytical_Congestion_Aware_DieExecutionLifecycleTest.
@@ -74,7 +69,6 @@ Exit code 0 on ALL PASS.
 #include <cstring>
 #include <filesystem>
 #include <fstream>
-#include <limits>
 #include <map>
 #include <memory>
 #include <string>
@@ -198,7 +192,7 @@ nlohmann::json kernel_contract_wire() {
         {"projection_abi_version", 1u},
         {"descriptor_version", 1u},
         {"pipeline_protocol_version", 1u},
-        {"model_version", "v8-two-actions-20261015"},
+        {"model_version", "v9-tie-roundrobin-20261020"},
         {"timer_whitelist_version", "timer-whitelist-v1-20261005"},
         {"prediction_config_sha256",
          "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}};
@@ -656,92 +650,6 @@ int main() {
         expect_true(outer_notified == 1 && inner_notified == 1,
                     "T2: teardown publishes no duplicate terminals");
     }
-
-    // ---- Case T3: absolute capacity update through the production bridge ---
-    // A read endpoint on the local HBM edge path serves half its bytes on
-    // HBM0, so HBM0 is the binding resource. Running the same endpoint at the
-    // full rate and at half the rate must terminate at the retimed tick: if
-    // the stale completion event were not invalidated and re-armed, the old
-    // full-rate event would fire early and both runs would share a tick.
-    const auto run_edge_endpoint =
-        [&config_dir](const bool slow_down, bool& rejected_rates) -> uint64_t {
-        Fixture fixture = make_fixture(config_dir, "coarse_system_latency.json");
-        CoarseDieRuntime& bridge = *fixture.sys->coarse_die_runtime;
-        const auto& performance =
-            bridge.hardware().input.at("performance_profile");
-        const double hbm0_peak = bridge.hardware().rates[coarse_die::HBM0];
-        uint64_t notified = 0;
-        uint64_t notify_tick = 0;
-        const coarse_die::Owner owner{35, 35, 35, 1};
-        const nlohmann::json endpoint{
-            {"endpoint_id", 3501},
-            {"transaction_id", 3502},
-            {"owner_kind", "die"},
-            {"direction", "read"},
-            {"physical_bytes", 1000000},
-            {"path_class", "hbm_to_edge"},
-            {"eta_hbm", performance.at("eta_hbm_matrix")},
-            {"route", {{"internal_route", false}}}};
-        const uint64_t handle = bridge.submit_endpoint(
-            endpoint, owner,
-            [&](uint64_t, const coarse_die::TerminalSummary&) {
-                ++notified;
-                notify_tick = Sys::boostedTick();
-            });
-        if (slow_down) {
-            const uint64_t now = Sys::boostedTick();
-            bool negative = false;
-            bool not_a_number = false;
-            bool infinite = false;
-            bool out_of_range = false;
-            try {
-                bridge.update_capacity(coarse_die::HBM0, -1.0, now);
-            } catch (const std::invalid_argument&) {
-                negative = true;
-            }
-            try {
-                bridge.update_capacity(coarse_die::HBM0, std::nan(""), now);
-            } catch (const std::invalid_argument&) {
-                not_a_number = true;
-            }
-            try {
-                bridge.update_capacity(
-                    coarse_die::HBM0,
-                    std::numeric_limits<double>::infinity(), now);
-            } catch (const std::invalid_argument&) {
-                infinite = true;
-            }
-            try {
-                bridge.update_capacity(coarse_die::resource_count, 1.0, now);
-            } catch (const std::invalid_argument&) {
-                out_of_range = true;
-            }
-            rejected_rates =
-                negative && not_a_number && infinite && out_of_range;
-            bridge.update_capacity(coarse_die::HBM0, hbm0_peak / 2.0, now);
-        }
-        drain_queue(fixture.event_queue);
-        expect_true(handle != 0 && notified == 1,
-                    slow_down ? "T3: slowed endpoint terminates exactly once"
-                              : "T3: full-rate endpoint terminates exactly once");
-        fixture.sys.reset();
-        drain_queue(fixture.event_queue);
-        expect_true(notified == 1,
-                    "T3: bridge teardown publishes no extra terminal");
-        return notify_tick;
-    };
-    bool rejected_rates = false;
-    const uint64_t full_rate_tick =
-        run_edge_endpoint(false, rejected_rates);
-    const uint64_t half_rate_tick =
-        run_edge_endpoint(true, rejected_rates);
-    expect_true(rejected_rates,
-                "T3: non-finite, negative and out-of-range rates are rejected "
-                "as invalid_argument without touching live state");
-    expect_true(half_rate_tick > full_rate_tick &&
-                    half_rate_tick >= (3 * full_rate_tick) / 2,
-                "T3: half HBM0 capacity retimes the completion (stale event "
-                "invalidated and re-armed)");
 
     std::error_code ec;
     std::filesystem::remove_all(config_dir, ec);

@@ -473,7 +473,7 @@ def validate_kernel_contract(value: Any, *, expected_sha256: str | None = None) 
     if contract["pipeline_protocol_version"] != 1 or type(contract["pipeline_protocol_version"]) is not int:
         raise AcceptanceError("unsupported pipeline protocol version", EXIT_FAIL,
                               "kernel_contract_mismatch")
-    if contract["model_version"] != "v8-two-actions-20261015":
+    if contract["model_version"] != "v9-tie-roundrobin-20261020":
         raise AcceptanceError("unsupported projection model version", EXIT_FAIL,
                               "kernel_contract_mismatch")
     if contract["timer_whitelist_version"] != "timer-whitelist-v1-20261005":

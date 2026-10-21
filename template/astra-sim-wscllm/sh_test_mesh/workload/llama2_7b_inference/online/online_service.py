@@ -258,6 +258,29 @@ def main(argv=None) -> int:
     # P1 journal recorder:开关 on 时装配(见下方分支)。
     journal_recorder = None
     if config.kv_cache_policy == "session_lru_recompute":
+        from online.wsc_llm_online_scheduler import read_train_max_iter
+        train_max_iter = read_train_max_iter()
+        # 2026-10-20(方案二直接替换):workspace 准入 certificate 推导在此
+        # 处(FL 结构)——required 模式先按新口径(合成 train span 超集 +
+        # train 上限)推导 certificate,把带 proof 的 canonical JSON 落盘
+        # bridge/workspace_envelope_certificate.json,再以 without_proof()
+        # 的不可变 rank 地板注入调度器(构造器内做四重身份 validate)。
+        # auto/off 不推导,certificate 恒 None。推导不传 library_path:本仓
+        # 无 cost_oracle,客户端走仓内 build 发现序。
+        certificate = None
+        if workspace_admission == "required":
+            from online.manifest_workspace_envelope import (
+                derive_manifest_workspace_envelope,
+            )
+            certificate = derive_manifest_workspace_envelope(
+                manifest, config, train_max_iter=train_max_iter)
+            certificate_path = os.path.join(
+                args.bridge_dir, "workspace_envelope_certificate.json")
+            with open(certificate_path, "w", encoding="utf-8") as target:
+                target.write(certificate.canonical_json + "\n")
+            # Retain only the immutable rank margins and identity in the hot path.
+            # The larger proof is recorded once beside the run's bridge evidence.
+            certificate = certificate.without_proof()
         # P1(2026-08-30)权威 HBM delta journal 装配:仅在调度器构造之前
         # install——manager 在构造期捕获全局 recorder 并落权重预载首
         # record。recorder 是纯观测旁路(不改任何决策);KV_DELTA_JOURNAL
@@ -288,6 +311,8 @@ def main(argv=None) -> int:
             online_stats_sink=online_stats_sink,
             ledger_sink=ledger_sink,
             workspace_admission=workspace_admission,
+            train_max_iter=train_max_iter,
+            prospective_workspace_certificate=certificate,
         )
     else:
         raise ValueError(
@@ -295,7 +320,7 @@ def main(argv=None) -> int:
                 config.kv_cache_policy))
     # Scheduler 已提取构造期所需字段；不要让 main() 的局部变量再额外钉住
     # 完整 manifest。
-    del manifest
+    del manifest, certificate
 
     # Official peer is FileDecisionBridge: request files are exactly
     # nlohmann::json::dump() bytes (compact, no trailing newline).
@@ -348,6 +373,11 @@ def main(argv=None) -> int:
     if kv_manager is not None:
         summary_row["kv_deep_gap_events"] = int(
             getattr(kv_manager, "deep_gap_events", 0))
+    # workspace 地板 slack 对账(2026-10-20 方案二):required 且地板非全
+    # 零时调度器 verify_run_end 已产出逐 rank 对账行;其余模式恒 None,
+    # 转录为空 dict(观测项,缺失不阻断)。
+    summary_row["workspace_floor_reconciliation"] = getattr(
+        scheduler, "workspace_floor_reconciliation", None) or {}
     stats_path = os.path.join(args.bridge_dir, ONLINE_STATS_LOG_NAME)
     partial_path = os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME)
 

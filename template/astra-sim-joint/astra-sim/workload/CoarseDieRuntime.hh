@@ -43,12 +43,6 @@ class CoarseDieRuntime final : public Callable {
                              coarse_die::Owner owner,
                              Completion completion);
     void cancel(uint64_t handle, uint64_t now_ns, bool notify = false);
-    // Absolute physical-rate update for one die resource, the production
-    // entry for thermal throttling. The old rate is integrated through
-    // now_ns, the new absolute rate is installed, same-tick terminals are
-    // settled, and the stale completion event is invalidated and re-armed.
-    // Non-finite or negative rates are rejected before any live state moves.
-    void update_capacity(std::size_t resource, double rate, uint64_t now_ns);
     nlohmann::json query_progress(uint64_t handle) const;
     // Read one execution at a requested tick from an isolated Runtime copy.
     // This never advances the live event loop or dispatches Workload callbacks.

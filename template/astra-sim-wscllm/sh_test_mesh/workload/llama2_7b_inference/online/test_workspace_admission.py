@@ -73,6 +73,9 @@ def _scheduler(manager):
         workspace_admission="required",
     )
     scheduler.kv_manager = manager
+    # 2026-10-20 方案二:_apply_delivery_extension 逐 rank 峰值簿记需要
+    # 该属性(生产路径由 WscLlmOnlineScheduler.__init__ 初始化)。
+    scheduler._workspace_peak_bytes_by_rank = {}
     scheduler._workspace_rank_to_instance = {
         rank: snapshot.instance_index
         for snapshot in manager.hbm_snapshots()
@@ -346,6 +349,9 @@ class ExternalWorkspaceManagerTest(unittest.TestCase):
         scheduler.topology = manager.topology
         scheduler.config = SimpleNamespace(model=manager.model)
         scheduler.capacity_epoch = [0, 0]
+        # 2026-10-20 方案二:峰值簿记属性(__init__ 未跑的 __new__ 实例
+        # 手动补齐,与 _scheduler() 同款)。
+        scheduler._workspace_peak_bytes_by_rank = {}
         scheduler._workspace_rank_to_instance = {
             rank: instance.index
             for instance in manager.topology.instances

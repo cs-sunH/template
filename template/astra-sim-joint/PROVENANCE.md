@@ -2,6 +2,75 @@
 
 
 
+## 2026-10-20 joint 主臂平局裁决轮转批（v9-tie-roundrobin，当前最新）
+
+J 主臂（`scheduler_mode=joint`）P 发射点选择的**跨实例平局裁决**由旧固定序
+`(cost, (instance_index, ACTION_ORDER))`——跨实例平局恒坍缩编号最小实例——
+改为**按实例编号全局环序轮转分摊（round-robin）**。行为语义变更登记
+（非开关登记）：**零新增开关**，env/CLI/config 键零增删；成本函数本体/
+copy-stay 判据/动作适用性面零改动。
+
+**动机与证据**（experiment_1020 run J，quota off，168 请求全 stay）：
+空闲期放置确定性堆积实例 0——五会话首放置 4/5 落实例 0（9 实例全平局）、
+selected_instance 分布 {0:146, 1:22}、54 rank 中 42 个零利用；同 run
+`replay_mismatch_at_delta0=0`、δ 三档 flips=0、two_action_counts
+{stay:168, copy:0}——证明成本计算无算术错误、负载项通路正常，缺的只是
+平局分散。证据文件：`experiment_1020/runs/J/manifest.json`、
+`experiment_1020/runs/J/slo_domain_requests.csv`、
+`experiment_1020/runs/J/slo_domain_instances.csv`、
+`experiment_1020/runs/J/slo_domain_summary.json`。
+
+**语义定义**：最优 cost_ns 整数相等且并列实例 ≥ 2 时，自游标起沿实例全集
+升序环序（越最大值回绕）取首个在集实例——裁决内核 =
+`joint_scheduler.joint_tie_rotation_pick` 纯函数；单实例平局/唯一最优
+不读不推游标——行为与旧固定序恒等；实例内 stay/copy 同价并列仍由 `ACTION_ORDER` 终裁；D 边界决策
+（`select_decode_target_and_action`，式 1c 继续优先）永不读不推游标——
+P 放置分摊与 D 继续优先为两层正交平局语义；顺序参照（load-first/
+affinity-first）与 face_static 对照臂固定序不变（事前定义，不按事后输赢
+调整）。
+
+**游标生命周期**：游标 = `Sh30OnlineScheduler._joint_tie_cursor`，
+`__init__` 置 0、run 级生命周期无中途复位；选择入口
+`joint_scheduler.select_instance_and_action` 经 kw-only 纯函数参数
+`tie_cursor` 注入——选择入口不读写调度器状态（L2 批内缓存与 VERIFY 影子
+双跑的正确性前提）。**推进点与判据**：推进点 = P 准入"最终有效选择"处
+（sh30 `_consume_joint_tie_rotation`，强制钩子之后、容量事务之前）；判据 =
+joint 模式 ∧ 非 probe 强制 ∧ 最终候选表上 chosen 为最优价且并列实例 ≥ 2。
+
+**两处镜像同构**：`joint_scheduler.select_instance_and_action` 主臂 ＋
+sh30 `_quota_reselect_feasible` joint 分支（含替身缺省臂）共用同一纯函数
+`joint_scheduler.joint_tie_rotation_pick`。
+
+**决策行披露三键**（joint_admission 成功行/joint_admission_failed 失败
+首行；wait 折叠行无）：`joint_tie_cursor`（本行消费游标值）、
+`joint_tie_instances`（最优价并列实例升序）、`joint_tie_rotated`。
+
+**离线重放口径**（`slo_tools/domain_metrics.py`）：轮转感知镜像（键缺席
+退旧行为）——三键在场且 rotated 时，比较基准 actual_ref = 本行游标＋
+候选表现算的轮转期望；键缺席 = 旧行为逐位不变（旧 run 前向兼容）。
+
+**版本升版**：`joint_config.MODEL_SEMANTICS_VERSION` 由
+`v8-two-actions-20261015` 升 **`v9-tie-roundrobin-20261020`**——v9 起与
+v8 及以前旧实验的选择分布类指标不可比（成本函数未动），正式数据生产须按
+新版本重跑；DECISION_LOG_SCHEMA_VERSION 等其余版本串不动（披露键均为
+additive）。
+
+**影响面摘要**：`joint/joint_scheduler.py`（纯函数 + 主臂选择入口 + 披露
+三键）、`online/sh30_online_scheduler.py`（`_joint_tie_cursor` 成员/
+`_consume_joint_tie_rotation` 推进点/`_quota_reselect_feasible` 镜像）、
+`slo_tools/domain_metrics.py`（轮转感知重放）、`joint/joint_config.py`
+（版本常量与 docstring 沿革）；单测三目录（joint/online/slo_tools——
+`joint/test_d01_selector_stage.py` 等钉测随批更新）；文档两件（README
+§1 J 行/§2 动作语义/§2.9 版本表/§3 J 机制表行；《experiment/仿真各功能
+开关清单.md》§7.0 `JOINT_SCHEDULER_MODE` 行 + v9 非开关行为注记 + D17
+版本史追记）。
+
+**验证证据索引**（2026-10-20 交付实跑）：
+- 单测三目录：joint+online 1610 passed（7 失败均为预存冻结证据漂移——test_acceptance_projection 的 BoundedRealPBoundaryProofTest/CanonicalizeRawFramesStageBTest 钉 2026-10-05 冻结库（已退役 8 键 kernel contract，报 missing key 'window_local_error_ppm'）与 test_joint_accel_acceptance 冻结参考 JSON 的 'regret' case kind，实证与 v8 源同样失败、与本批无关）；slo_tools 213 passed（旧 203 断言零改动全过=键缺席兼容判据）；C++ ctest 37 绿（v9 版本钉夹具同步后）。
+- V1 冒烟（1_100_tracelab 前 10 秒，window_ns=10000000000，TJE）：experiment_1020/runs/Jv9_smoke10s——决策行三键齐备；turn-0 九实例平局 rotated=true 选实例 0、游标推进 0→1；同会话后续 4 请求驻留唯一最优 rotated=false 不推游标；replay_mismatch_at_delta0=0、δ 三档 flips=0、rotation_consistency_mismatches=0、cursor_anomalies=0（slo_domain_summary.json）。
+- V3 缓存/影子臂（同输入短窗）：experiment_1020/runs/Jv9_smoke10s_cache 与 Jv9_smoke10s_cache_verify——选择面（含三键）与缺省臂逐位一致、VERIFY 零 mismatch；三次独立进程同输入同选择面（烟测尺度确定性证据）。
+- **全量对拍（方案 §5 V2/V4：experiment_1020 队列重跑、首放置 0/1/2/3/4 判据、二连跑字节一致）未执行——2026-10-20 用户明示『不要跑全量，赶紧验完』。全量行为判据保持未验状态，正式数据生产前须补跑（单次约 75 分钟，方案文档 experiment_1020/方案_joint平局裁决按编号轮转分摊_2026-10-20.md §5 V2/V4 判据原样适用）。**
+
 ## 2026-10-16 K>1 窗口机制退役批（PROVENANCE 批次三，内部子批 B1-B4，当前最新）
 
 依据《astra-sim-joint窗口K大于1机制退役执行方案.md》（工作区根，技术裁定

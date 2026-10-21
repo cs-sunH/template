@@ -311,6 +311,21 @@ if [[ "${SLO_MODE}" != "0" ]]; then
 fi
 # D1(2026-08-28):成功后产物瘦身归档(失败路径早已 exit 1 全量保留)。
 # SH_ARCHIVE_RUN=0 关闭(调试/对拍需要散装 bridge 文件时)。
+# 归档之前先跑 admission 活性审计(方案二 2026-10-20,镜像 face-LRU
+# 契约):离线扫描 results/online_decision_log.jsonl,"空闲容量足够却持续
+# admission_blocked"的活性违例判 FAIL(FAIL 即 exit 1,不归档不交付);
+# 本仓决策日志 kind 仅 decode/completion/prefill(无 admission_blocked
+# 行)时应 PASS no admission_blocked rows。
+ADMISSION_AUDIT=${SCRIPT_DIR}/../workload/llama2_7b_inference/online/verify/admission_liveness_audit.py
+if [[ -f "${RUN_DIR}/results/online_decision_log.jsonl" ]]; then
+  if ! python3 "${ADMISSION_AUDIT}" "${RUN_DIR}" > "${RUN_DIR}/admission_liveness_audit.log" 2>&1; then
+    echo "[run_online_strategy] FAIL: admission liveness audit exited non-zero; see ${RUN_DIR}/admission_liveness_audit.log" >&2
+    exit 1
+  fi
+  cat "${RUN_DIR}/admission_liveness_audit.log"
+else
+  echo "[run_online_strategy] WARN: no results/online_decision_log.jsonl; admission liveness audit skipped" >&2
+fi
 if [[ "${SH_ARCHIVE_RUN:-1}" != "0" ]]; then
   bash "${SCRIPT_DIR}/archive_run_outputs.sh" "${RUN_DIR}" "${DETAIL}" || exit 1
 fi

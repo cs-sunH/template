@@ -308,120 +308,6 @@ def _install_sigterm_die_model_flush(scheduler) -> None:
     signal.signal(signal.SIGTERM, _flush_and_die)
 
 
-def _effective_thermal_epoch_ns() -> int:
-    """Read the C++ periodic thermal-epoch switch (mirrors ``main_online.cc``).
-
-    Unset / empty = 0 (off).  A non-integer or negative value fails closed,
-    exactly as the C++ side does; the returned value is the epoch in simulated
-    nanoseconds.  ``SH_THERMAL_EPOCH_NS`` > 0 arms the C++ periodic event plus
-    the ``thermal_activity`` provider / ``thermal_cap`` consumer.
-    """
-    raw = os.environ.get("SH_THERMAL_EPOCH_NS")
-    if raw is None or not raw.strip():
-        return 0
-    text = raw.strip()
-    if text.startswith("-"):
-        raise SystemExit(
-            "SH_THERMAL_EPOCH_NS must be a non-negative integer (got "
-            "{!r})".format(raw))
-    try:
-        value = int(text)
-    except ValueError:
-        raise SystemExit(
-            "SH_THERMAL_EPOCH_NS must be a non-negative integer (got "
-            "{!r})".format(raw))
-    if value < 0:
-        raise SystemExit(
-            "SH_THERMAL_EPOCH_NS must be a non-negative integer (got "
-            "{!r})".format(raw))
-    return value
-
-
-def _create_thermal_bridge(args, scheduler):
-    """Create the run-long thermal session according to the joint thermal switch.
-
-    The session is owned by this service for the whole run (never re-created per
-    window, never a CLI subprocess).  Inputs are explicit: the thermal profile,
-    the energy table, the policy and the resolver's hardware/mapping exports.
-
-    Fail-closed capability check:
-
-    * ``closed_loop`` needs a live activity source and a live install path.  Both
-      are now provided by the C++ periodic thermal epoch (``SH_THERMAL_EPOCH_NS``
-      > 0): every epoch the C++ side emits ``thermal_activity`` and consumes the
-      ``thermal_cap`` we return.  When that flag is unset / <= 0 there is no
-      activity and no consumer, so the run refuses to start instead of reporting
-      a loop that could never be closed.
-    * ``shadow`` starts and is fully functional as a monitoring arm; when the
-      epoch is unset it records explicitly that its activity source is
-      unavailable, so the audit cannot be mistaken for real measured activity.
-
-    Returns ``(bridge, status)`` where status is recorded in the run manifest.
-    """
-    joint_config = getattr(scheduler, "joint_config", None)
-    if joint_config is None or not joint_config.thermal_enabled:
-        return None, {"thermal_mode": "off"}
-    from joint.thermal_bridge import (
-        CoarseCapacityInstaller,
-        DelegatedCapacityInstaller,
-        ThermalBridge,
-        load_hardware_and_mapping,
-        load_thermal_run_config,
-    )
-    from joint.thermal_policy import ThermalPolicy, ThermalPolicyConfig
-
-    mode = joint_config.thermal_mode
-    config = load_thermal_run_config(Path(joint_config.thermal_run_config))
-    if config.mode != mode:
-        raise SystemExit(
-            "thermal mode mismatch: JOINT_THERMAL_MODE={!r} but the run "
-            "configuration declares {!r}".format(mode, config.mode))
-    hardware, mapping = load_hardware_and_mapping(config)
-    policy = ThermalPolicy(ThermalPolicyConfig.from_json(
-        json.loads(Path(config.policy_path).read_text())))
-    run_id = os.path.basename(os.path.normpath(args.bridge_dir))
-    audit_dir = Path(args.bridge_dir) / "thermal"
-    epoch_ns = _effective_thermal_epoch_ns()
-    installer = None
-    if mode == "closed_loop":
-        # Capability check, not a blanket refusal: the install path exists only
-        # when the C++ periodic epoch is armed.  Without it the request never
-        # carries thermal_activity and the response's thermal_cap is never
-        # consumed, so a "closed loop" would be a fiction.
-        if epoch_ns <= 0:
-            raise SystemExit(
-                "thermal_mode=closed_loop requires the C++ periodic thermal "
-                "epoch and cap-install path (set SH_THERMAL_EPOCH_NS > 0); "
-                "without it there is no thermal_activity source and no "
-                "thermal_cap consumer, so a closed_loop run is refused rather "
-                "than reporting a loop it cannot close")
-        # Activity and install are owned by C++: Python translates each epoch's
-        # thermal_activity into the thermal_cap on the response and marks the
-        # envelope applied, while the C++ coarse runtime consumes the cap and
-        # performs update_capacity.  The delegated installer performs no local
-        # install (a cap installed twice would be a bug, not a feature).
-        installer = DelegatedCapacityInstaller()
-    # With the periodic epoch armed the coarse runtime served counters are the
-    # measured activity source; otherwise none is wired yet.
-    activity_source = (
-        "coarse_runtime_counters_via_thermal_epoch" if epoch_ns > 0
-        else "unavailable_until_cpp_epoch")
-    bridge = ThermalBridge(
-        run_id=run_id, config=config, hardware=hardware, mapping=mapping,
-        policy=policy, audit_dir=audit_dir, installer=installer)
-    status = {
-        "thermal_mode": mode,
-        "thermal_run_id": run_id,
-        "thermal_hardware_hash": hardware.content_hash,
-        "thermal_mapping_hash": mapping.content_hash,
-        "thermal_activity_source": activity_source,
-        # The effective C++ epoch switch (simulated ns; 0 = no periodic epoch).
-        "thermal_epoch_ns": epoch_ns,
-        "thermal_audit_dir": str(audit_dir),
-    }
-    return bridge, status
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="sh_3.0 online decision service")
     parser.add_argument("--bridge-dir", required=True,
@@ -550,32 +436,6 @@ def main(argv=None) -> int:
     # （=估值缓存落盘），其余死法/台账纪律零变化（见安装函数注释）。
     _install_sigterm_die_model_flush(scheduler)
 
-    # 热协同仿真会话（thermal_joint_integration_plan）：按 JOINT_THERMAL_MODE
-    # 持有单一 run 级热会话；off/未配置时为零行为（不创建、不写审计）。
-    # 其状态并入 run manifest，随 serve 生命周期存续、finally 收尾。
-    thermal_bridge, _thermal_status = _create_thermal_bridge(args, scheduler)
-    # Phase D (Python side): when a thermal session exists, attach the
-    # run-long thermal-epoch service to the scheduler so a request carrying
-    # ``thermal_activity`` gets its ``thermal_cap`` on the response.  off / no
-    # bridge => the service stays None and any activity-bearing request records
-    # a cap absence and continues safely.
-    if thermal_bridge is not None:
-        from joint.thermal_epoch import ThermalEpochService
-
-        scheduler.thermal_epoch_service = ThermalEpochService(thermal_bridge)
-    if _thermal_status.get("thermal_mode", "off") != "off":
-        _manifest_payload_thermal = None
-        try:
-            with open(joint_manifest_path, "r", encoding="utf-8") as source:
-                _manifest_payload_thermal = json.load(source)
-            _manifest_payload_thermal["thermal"] = _thermal_status
-            tmp = joint_manifest_path + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as sink:
-                json.dump(_manifest_payload_thermal, sink, indent=1, sort_keys=True)
-            os.replace(tmp, joint_manifest_path)
-        except Exception:  # noqa: BLE001 -- 诊断通道不得阻断主路径
-            traceback.print_exc()
-
     # Official peer is ShmDecisionBridge: request frame payloads are exactly
     # nlohmann::json::dump() bytes (compact, no trailing newline).
     def _timing_row_source():
@@ -625,22 +485,6 @@ def main(argv=None) -> int:
         scheduler.verify_run_end()
     finally:
         dump_joint_kv_ledgers(scheduler, _ledgers_path)
-        # 热会话收尾：审计落盘 + 释放（异常/结束路径都必须走；off 时为 None）。
-        if thermal_bridge is not None:
-            try:
-                thermal_bridge.write_audit()
-                # Phase D: the per-epoch activity->cap outcome ledger
-                # (thermal_epochs.jsonl) lands beside the thermal audit.
-                _thermal_service = getattr(
-                    scheduler, "thermal_epoch_service", None)
-                if _thermal_service is not None:
-                    _thermal_service.write_audit(
-                        _thermal_status.get("thermal_audit_dir")
-                        or (Path(args.bridge_dir) / "thermal"))
-            except Exception:  # noqa: BLE001 -- 审计通道尽力而为,不掩主异常
-                traceback.print_exc()
-            finally:
-                thermal_bridge.close()
     _service_wall_ns = time.perf_counter_ns() - _service_wall_t0
     # C11 rider：遥测完备性五键回填 manifest 侧车（verify 之后——
     # sticky 事实 run 全程判定；C8-BLOCKED① 收口）。

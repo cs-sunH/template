@@ -283,6 +283,15 @@ else
     echo "[run_online_strategy] WARNING: no [METRIC] lines in cpp.log; postprocess skipped" >&2
   fi
 fi
+# 准入活性审计(2026-10-20 方案二):离线扫描 online_decision_log.jsonl,
+# 判定"实例 KV 空闲足够却连续阻塞"的死端形态(fail-closed)。W/WL 决策
+# 日志无 admission_blocked 行时应报 PASS no admission_blocked rows;审计
+# 不通过即本 runner 非零退出(位于 metrics 后处理之后、归档之前,输入
+# 取 bridge/ 或 results/ 下的决策日志,两阶段均可解析)。
+if ! python3 "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/admission_liveness_audit.py" "${RUN_DIR}"; then
+  echo "[run_online_strategy] FAIL: admission liveness audit rejected ${RUN_DIR} (free-capacity deadlock streak)" >&2
+  exit 1
+fi
 # 阶段 7 §10.5 中间产物生命周期: 最终结果 / 检查点 / 临时产物分目录。
 #  - results/    : 最终结果(审计 jsonl,Python 决策侧写出)。保留规则:每
 #    run 一份,run 目录即版本,不轮转;run 脚本开头 rm -rf 保证有界。

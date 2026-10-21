@@ -187,59 +187,6 @@ struct WorkLedgerWirePayload {
 using WorkLedgerProvider =
     std::function<WorkLedgerWirePayload(const StateDelta&)>;
 
-/// Plan D (request-independent periodic thermal epoch, 2026-10-20): optional
-/// per-delivery top-level `thermal_activity` provider, installed by the
-/// online main when SH_THERMAL_EPOCH_NS > 0. Same additive-sibling
-/// discipline as LinkTelemetryProvider/WorkLedgerProvider (rides beside
-/// ledger_summary, never occupies a snapshot reserved slot; absent = the
-/// thermal feature is off, so the serialized request bytes are identical to
-/// the pre-D wire format). The frozen payload shape (C++ <-> Python):
-///
-///   { "schema_version": 1,
-///     "epoch_ns": <int>,         -- the simulation instant this event takes
-///                                   effect
-///     "window_start_ns": <int>,  -- the previous thermal-epoch instant (0 on
-///                                   the first epoch)
-///     "window_end_ns": <int>,    -- == epoch_ns
-///     "coverage": "measured",
-///     "provenance": "coarse_runtime_counters_delta",
-///     "sources": [ { "source_id": "die<N>.comp", "action_kind": "pe",
-///                    "count": <number> }, ... ] }  // may be empty
-///
-/// The provider runs inside deliver_and_receive on the simulation thread,
-/// exactly once per delivery epoch (1:1 backpressure guarantees no double
-/// sampling), driving the differential of the coarse die runtime's cumulative
-/// served counters. sources may legitimately be empty (nothing served in the
-/// window, or no coarse die runtime on this rank) -- the C++ side never
-/// fabricates activity. The `die<N>` identity is the THERMAL die number, which
-/// only the cooling side's mapping knows; this build has no such map in C++,
-/// so it carries the RANK number as an explicit placeholder (see
-/// main_online.cc compute_thermal_activity) -- Python rewrites it through the
-/// map and never trusts the placeholder as a thermal-die fact.
-using ThermalActivityProvider =
-    std::function<nlohmann::json(const StateDelta&)>;
-
-/// Plan D response consumer: receives the parsed response's `thermal_cap`
-/// member verbatim when the request carried `thermal_activity` and the
-/// Python side answered with a cap. Installed by the online main (which owns
-/// the CoarseDieRuntime objects); the bridge NEVER depends on
-/// CoarseDieRuntime itself (layer decoupling). The frozen payload shape:
-///
-///   { "schema_version": 1,
-///     "resource_epoch": <int>,
-///     "effective_from_ns": <int>,
-///     "events": [ { "resource_index": <int 0..12>,
-///                   "absolute_physical_rate": <number >= 0> } ] }
-///
-/// resource_index is the coarse-die resource-table index (COMPUTE_GATE=0;
-/// see extern/die_model/coarse/src/Hardware.cc and
-/// online/coarse_runtime_client.py RESOURCE_IDS). The consumer is invoked
-/// inside deliver_and_receive after the structural parse, on the simulation
-/// thread. A cap that is absent (the Python peer has no cap yet, or the
-/// decision was a no-op) is simply not delivered -- the bridge records
-/// nothing and continues (never fails closed on absence).
-using ThermalCapConsumer = std::function<void(const nlohmann::json&)>;
-
 /// C4 protocol-2 lifecycle publication hook. The caller assigns the one
 /// run-global logical sequence at the instant this callback is made. The
 /// NodeView is the authoritative committed online record; node_id is its
@@ -424,20 +371,6 @@ class ShmDecisionBridge : public DecisionBridge {
     /// --link-telemetry and carries its own schema versions.
     void set_work_ledger_provider(WorkLedgerProvider provider);
 
-    /// Plan D (periodic thermal epoch): install the top-level `thermal_activity`
-    /// provider. Once installed, every request frame gains the additive
-    /// thermal_activity sibling (see ThermalActivityProvider). Never installed
-    /// (SH_THERMAL_EPOCH_NS == 0, the default) = the field is absent and the
-    /// request bytes are byte-identical to the pre-D wire format. Same
-    /// startup-only contract as the telemetry/ledger providers.
-    void set_thermal_activity_provider(ThermalActivityProvider provider);
-
-    /// Plan D: install the response `thermal_cap` consumer (see
-    /// ThermalCapConsumer). Installed alongside the provider by the online
-    /// main; the bridge itself stays free of CoarseDieRuntime. Same
-    /// startup-only contract.
-    void set_thermal_cap_consumer(ThermalCapConsumer consumer);
-
     /// Phase-6 (方案 §9.1) per-run channel stats. Cumulative across the run;
     /// zero for bridges that never deliver. Measured from the C++ side:
     ///   - roundtrip_count / roundtrip_ns: deliver_and_receive calls and the
@@ -522,10 +455,6 @@ class ShmDecisionBridge : public DecisionBridge {
     LinkTelemetryProvider link_telemetry_provider_;
     // W1 (joint work ledger): empty = ledger off (field omitted).
     WorkLedgerProvider work_ledger_provider_;
-    // Plan D (periodic thermal epoch): empty = thermal off (field omitted).
-    ThermalActivityProvider thermal_activity_provider_;
-    // Plan D: empty = no cap consumer (a delivered cap is then ignored).
-    ThermalCapConsumer thermal_cap_consumer_;
     // v11 §8 shm carrier: three single-slot frame channels + the segment
     // identity (also published to Python via bridge_shm.json).
     uint64_t shm_generation_ = 0;

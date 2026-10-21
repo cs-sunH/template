@@ -371,6 +371,13 @@ def main(argv=None) -> int:
         # D4 (2026-09-05): 被动驱逐深缺口观测。
         "kv_deep_gap_events": int(getattr(
             getattr(scheduler, "kv_manager", None), "deep_gap_events", 0)),
+        # 风险一/风险三收尾观测(2026-10-20 方案一):准入阻塞 streak
+        # 直方图与 workspace 地板对账 slack(verify_run_end 产出;
+        # getattr 防御式取用,夹具直构调度器时缺省空)。
+        "admission_blocked_streak_histogram": getattr(
+            scheduler, "admission_blocked_streak_histogram", None) or {},
+        "workspace_floor_reconciliation": getattr(
+            scheduler, "workspace_floor_reconciliation", None) or {},
     }
     if cost_oracle is not None and getattr(cost_oracle, "coarse", False):
         # Design section 12: preserve the original FACE selector composition

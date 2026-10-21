@@ -375,6 +375,18 @@ def main(argv=None) -> int:
         # D4 (2026-09-05): 被动驱逐深缺口观测。
         "kv_deep_gap_events": int(getattr(
             getattr(scheduler, "kv_manager", None), "deep_gap_events", 0)),
+        # 方案一(2026-10-20)风险一/风险三观测(verify_run_end 结算后
+        # 读取;getattr 防御式——无该簿记的变体/夹具保持缺键语义一致,
+        # 这里统一落 None 而非炸行):
+        #   admission_blocked_streak_histogram 请求级最大连续准入阻塞
+        #       批数直方图({streak: 请求数});空 run 为 {}(零阻塞)。
+        #   workspace_floor_reconciliation 活跃 workspace 峰值 vs
+        #       prospective certificate 地板的对账行(peak/floor/slack
+        #       三键逐 rank);非 required 模式为 None(无证书无对账)。
+        "admission_blocked_streak_histogram": getattr(
+            scheduler, "admission_blocked_streak_histogram", None),
+        "workspace_floor_reconciliation": getattr(
+            scheduler, "workspace_floor_reconciliation", None),
     }
     if cost_oracle is not None and getattr(cost_oracle, "coarse", False):
         # Design section 12: preserve the original FACE selector composition

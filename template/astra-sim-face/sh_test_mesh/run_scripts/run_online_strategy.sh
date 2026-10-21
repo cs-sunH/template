@@ -278,6 +278,14 @@ if grep -q '^\[METRIC\] ' "${RUN_DIR}/cpp.log"; then
 else
   echo "[run_online_strategy] WARNING: no [METRIC] lines in cpp.log; postprocess skipped" >&2
 fi
+# 风险一活性审计(2026-10-20 方案一):离线重放 online_decision_log.jsonl
+# (自动定位 bridge/results 下的决策日志;调度器阻塞行增富字段缺失的旧
+# 构建日志明确 SKIP,不误判)。"空闲足够却持续阻塞"的死端形态即 FAIL,
+# fail-closed 拒绝交付——置于产物归档之前,失败时 bridge 目录完整保留。
+python3 "${PROJECT}/sh_test_mesh/workload/llama2_7b_inference/online/verify/admission_liveness_audit.py" "${RUN_DIR}" || {
+  echo "[run_online_strategy] FAIL: admission liveness audit (see above; bridge retained for debugging)" >&2
+  exit 1
+}
 # 阶段 7 §10.5 中间产物生命周期: 最终结果 / 检查点 / 临时产物分目录。
 #  - results/    : 最终结果(审计 jsonl,Python 决策侧写出)。保留规则:每
 #    run 一份,run 目录即版本,不轮转;run 脚本开头 rm -rf 保证有界。

@@ -27,7 +27,7 @@ class PipelineKernelContract final {
     static constexpr uint32_t kDescriptorVersion = 1;
     static constexpr uint32_t kPipelineProtocolVersion = 1;
     static constexpr const char* kModelVersion =
-        "v8-two-actions-20261015";
+        "v9-tie-roundrobin-20261020";
     static constexpr const char* kTimerWhitelistVersion =
         "timer-whitelist-v1-20261005";
 

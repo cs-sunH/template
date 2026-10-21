@@ -584,6 +584,51 @@ location 对账，决策日志重放为上界/对照列——journal 在场时�
 `request_metrics.csv` 冻结列不动（kv_hit_state 列维持 postprocess 填 NA，真值在
 kv_hit_states.csv）。
 
+### 1.2 workspace 准入 certificate（required 模式；2026-10-20 方案二直接替换）
+
+**推导口径（新）**：`workspace_admission = required`（`SH_WORKSPACE_ADMISSION` 缺省
+`auto`，die 硬件下即 required）时，`online_service` 在调度器构造**之前**经
+`online/manifest_workspace_envelope.py` 的 `derive_manifest_workspace_envelope()`
+编译 capacity-only certificate：对冻结加载的 manifest 请求集，取**合成 train span
+超集**——prefill 队列头单 span（q = min(max_context, prefill_chunk_size ×
+train_max_iter)，kv = max_context）+ 每请求 decode run（q=1、kv_first =
+final_context_tokens、kv_stride=0、count = min(decode_length, train_max_iter)）；
+逐 (op_kind × phase) 经 C ABI（`online/coarse_workspace_envelope.py`，仓内
+`build/.../lib/libcoarse_die_cabi.so` 发现序）`query_capacity_bound`，同 relative TP
+rank 的物理 rank 取 max 得逐 rank 地板。`train_max_iter` 由
+`wsc_llm_online_scheduler.read_train_max_iter()` 读 `SH_TRAIN_MAX_ITER`（缺省 8，
+0 = 不设限），certificate 与实际列车生产共用同一上限读数。
+
+**产物与安装**：带 proof 的 canonical JSON 落盘 `bridge/workspace_envelope_certificate.json`
+（schema `wscllm_manifest_workspace_certificate_v1`、coverage
+`wscllm_train_one_prefill_all_request_decode_superset_v1`，含
+`proof_tasks`/`source_sha256`/`library_sha256`）；随后以 `without_proof()` 的不可变
+逐 rank 地板经 `prospective_workspace_certificate` 注入调度器，构造器内
+`validate_manifest_workspace_certificate()` 做**四重身份校验**（train 上限 / manifest
+sha / config sha / resolved hardware sha），任一不符即 fail-closed 拒构造。
+`SessionKVCacheManager` 把地板装为 `prospective_workspace_bytes_by_rank`：实际
+external workspace 占用与地板取 `max(external, floor)` 合并参与逐出/准入判决，
+地板本身不充 KV（external maps 构造期恒 0；margin 超空 HBM 容量仍在 manager 构造
+期拒绝）。
+
+**对账与审计**：调度器逐交付维护逐 rank external 峰值（运行 max），`verify_run_end`
+末尾做 slack 对账——任一 rank 峰值超过 certificate 地板即 raise（certificate 覆盖
+口径失真）；合法时写 `workspace_floor_reconciliation`（`peak/floor/slack_bytes_by_rank`），
+由 `online_service` 转录进 `online_stats.jsonl` summary 行。runner
+（`run_online_strategy.sh`）在 metrics 后处理后、归档前跑
+`online/verify/admission_liveness_audit.py`（"空闲 KV 足够却连续阻塞"的死端形态
+fail-closed；本仓决策日志无 `admission_blocked` 行时应报 PASS no admission_blocked
+rows）。
+
+**旧口径退役（直接替换，无开关）**：旧推导（调度器构造器内对每请求跑**实发射器**
+`_emit_prefill_stage` + **全量 decode progression**（kv_stride=1、count=decode_length
+无上限），schema `lru_manifest_workspace_certificate_v2`）已整体删除；配套的
+`online/die_workspace_envelope.py` 客户端由 `online/coarse_workspace_envelope.py`
+（astra-sim-face-LRU 回流版，proof 记录含精确 request/response 文本）直接替换。
+**结果影响**：旧口径对 1_100 长上下文 trace 推出 402GB/册 地板，超过 141.7GB 物理
+HBM 容量而拒跑；新口径（train 上限 + 合成超集）地板回到物理容量内，长上下文
+trace 由拒跑转为可跑，短 trace 的地板数值随之变化（prospective 合并语义不变）。
+
 ## 2. 快速开始
 
 ```bash

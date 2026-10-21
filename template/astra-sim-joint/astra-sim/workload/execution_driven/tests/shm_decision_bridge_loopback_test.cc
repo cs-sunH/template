@@ -217,7 +217,7 @@ nlohmann::json make_minimal_response(const uint64_t seq) {
     contract["projection_abi_version"] = 1;
     contract["descriptor_version"] = 1;
     contract["pipeline_protocol_version"] = 1;
-    contract["model_version"] = "v8-two-actions-20261015";
+    contract["model_version"] = "v9-tie-roundrobin-20261020";
     contract["timer_whitelist_version"] = "timer-whitelist-v1-20261005";
     contract["prediction_config_sha256"] =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";

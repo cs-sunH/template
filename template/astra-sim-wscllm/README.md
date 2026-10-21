@@ -1093,3 +1093,49 @@ We appreciate your interest and support in ASTRA-sim!
 
 已知边界：运行时推进路径保留 P8 记载的 O(R²) 活动向量墙（P7-B 遗留项），
 大 R 计划的在线排空 wall 随 R² 增长；估计/编译侧已有 P9 闭式快路径。
+
+## Workspace 准入 certificate（启动 prospective 地板；2026-10-20 方案二）
+
+coarse_die_v2（出厂默认）下 `SH_WORKSPACE_ADMISSION=auto` 解析为 required，
+在线链路在图/KV 准入改写任何状态之前先推导并安装"启动 certificate 地板"：
+
+- **推导（online/manifest_workspace_envelope.py + coarse_workspace_envelope.py，
+  蓝本 face-LRU 同名文件）**：`online_service` 以 manifest/config/train 上限
+  （`read_train_max_iter()`，与实际列车生产共用同一读数）推导
+  `wscllm_manifest_workspace_certificate_v1`——合成 train span 超集
+  （一个 prefill 头 = min(最大上下文, chunk×cap) 查询 + 全部 manifest
+  decode 请求各 min(decode_length, cap) 条 q=1 查询、KV 长度取各自终态
+  上下文）经 C ABI `die_coarse_workspace_capacity_bound_v2` 求
+  workspace_lifetimes_v2 全模板生命周期上界，逐 rank 取最大即地板；
+  带 proof 的 canonical JSON 落盘 `bridge/workspace_envelope_certificate.json`
+  （168 = 6 相对 TP rank × 2 phase × 14 op 证明任务），热路径只保留
+  `without_proof()` 的不可变 rank 地板；调度器构造器对 train 上限/
+  manifest/config/resolved hardware 做四重身份 validate（陈旧即 raise）。
+- **prospective 地板与 max(实际, 地板) 合并（session_kv_manager.py，
+  与 wscllm-LRU 同族实现）**：构造参数 `prospective_workspace_bytes_by_rank`
+  （防御拷贝 MappingProxyType；rank 集合精确相等、逐值 u64、超空实例
+  余量即 raise）；`_fit_remaining` / `ensure_physical_fit` 判定 /
+  `workspace_capacity_snapshot` combined 校验 / `extend_request_capacity`
+  预检一律取 max(实际 external 持有, 地板)——KV 可用容量自此扣除地板，
+  空实例装不下地板余量的请求 fail-closed raise（临时更大持有仍走
+  可重试的 workspace block）。容量快照行保持 protocol v1 口径（不带
+  prospective 注记，与 wscllm-LRU 一致）。
+- **slack 对账（纯观测）**：required 模式下交付流携带的活跃 workspace
+  字节逐 rank 记运行最大值（回落不缩），`verify_run_end` 与 certificate
+  地板对账——任一 rank 峰值超地板即 raise（certificate 失约显影）；
+  否则结算 peak/floor/slack 三行（`workspace_floor_reconciliation`，
+  summary 行转录进 online_stats）。
+- **准入活性离线审计（online/verify/admission_liveness_audit.py）**：
+  strategy runner 在 metrics 后处理之后、归档之前调用；决策日志出现
+  "空闲容量足够却持续 admission_blocked"活性违例即 FAIL exit 1（本仓
+  决策日志 kind 仅 decode/completion/prefill，健康路径恒
+  PASS no admission_blocked rows）。
+
+**结果影响披露**：1_100 全量（train_max_iter=8、chunk=512）certificate
+地板为逐 rank 51.84 GB（36 个 rank）/ 62.20 GB（18 个 rank）——KV 可用
+容量新增该量级的地板扣除，**既有 W 结果与新结果不可直接对比**（准入
+判据的容量口径已变）。实测该负载 KV 峰值驻留未触及扣减后的上限，
+168 请求全部 completed、决策日志与改前基线逐字节一致（e2e_p50
+6797.6 ms / e2e_p99 131637.5 ms / prefill_p50 549.2 ms / decode 总和
+2794.4 s，均与旧基线相同）；但任何更高 KV 压力的负载都可能因地板
+改变逐出/准入序列，对比必须携带本节口径说明。

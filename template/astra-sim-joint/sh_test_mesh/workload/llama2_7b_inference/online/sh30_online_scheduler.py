@@ -151,6 +151,7 @@ from joint.joint_cost_model import (  # noqa: E402
     synthesise_summary_from_reclaimable,
 )
 from joint.joint_scheduler import (  # noqa: E402
+    joint_tie_rotation_pick,
     select_decode_target_and_action,
     select_instance_and_action,
 )
@@ -1478,6 +1479,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # （有界；泄漏审计 verify_run_end）。
         self._joint_settlements = {}
         self._joint_mode = self.joint_config.scheduler_mode
+        # v9（2026-10-20，平局裁决轮转语义）：joint 主臂跨实例平局轮转
+        # 游标——调度器成员状态，选择入口（select_instance_and_action 的
+        # tie_cursor 纯函数参数）只读不写；唯一推进点 = P 准入最终有效
+        # 选择后的 _consume_joint_tie_rotation（D 边界决策永不读不推）。
+        self._joint_tie_cursor = 0
         # no_lb/no_affinity 消融旗标已随 SH30_ABLATION 退役删除：顺序参照
         # 由 scheduler_mode 的 load-first / affinity-first 承担（同一套
         # 候选枚举与计费）。
@@ -5363,7 +5369,12 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
     def _quota_reselect_feasible(self, feasible, session_view, cost_model):
         """配额可行集上的模式一致重选（镜像 joint_scheduler 的选点规则）。
 
-        joint：全候选 (cost_ns, order_key) argmin。顺序模式：先定实例
+        joint：全候选 (cost_ns, order_key) argmin + 跨实例平局轮转
+        镜像（v9，2026-10-20）——与 select_instance_and_action 主臂
+        同判据含轮转：argmin 先定最优价，随后
+        joint_tie_rotation_pick(feasible, 游标, 实例全集) 对并列实例
+        按编号环序自游标分摊；游标本方法只读不推（推进点 =
+        _consume_joint_tie_rotation）。顺序模式：先定实例
         （load-first = 可行实例上 min(total_task_load_ns, index)；
         affinity-first = 可复用 home 优先、缺省回退 load-first），再在该
         实例的可行动作里取 (cost_ns, order_key) 最优——与
@@ -5374,10 +5385,23 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         if (getattr(self, "_joint_mode", SCHEDULER_MODE_JOINT)
                 == SCHEDULER_MODE_JOINT
                 or cost_model is None):
-            return min(
+            chosen = min(
                 feasible,
                 key=lambda candidate: (
                     candidate.cost_ns, candidate.order_key()))
+            # v9 轮转镜像（两臂）：正常臂全集 = cost_model.loads（与
+            # 候选枚举同源）；cost_model is None 替身臂退可行集实例集
+            # （与 select_instance_and_action 主臂同构——可行集缩集时
+            # 沿全集环序取首个在集并列实例）。
+            universe = (
+                sorted({candidate.instance_index for candidate in feasible})
+                if cost_model is None
+                else sorted(cost_model.loads.keys()))
+            rotated, _ties = joint_tie_rotation_pick(
+                feasible, getattr(self, "_joint_tie_cursor", 0), universe)
+            if rotated is not None:
+                chosen = rotated
+            return chosen
         feasible_instances = sorted({
             candidate.instance_index for candidate in feasible})
         home_instance = getattr(session_view, "home_instance", None)
@@ -7528,6 +7552,13 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         （select_decode_target_and_action，带 obligation_resolver）不
         入 L2（方案⑤红线）。
 
+        v9（2026-10-20，平局裁决轮转语义）：joint 主臂轮转游标并入 L2
+        键（`self._joint_tie_cursor` 分量）——游标是选择输入（并列实例
+        的归属随它变），且唯一推进点（_consume_joint_tie_rotation）在
+        本缓存消费方之后：容量失败重试时游标已前移，键不同必须 miss
+        重算，不得复用旧游标下的 SelectionRecord。L1（代价模型缓存）
+        只复用计价面（候选成本与游标无关），键不入游标分量。
+
         SelectionRecord 的消费面核实为纯读（配额过滤/强制钩子经
         _dataclass_replace 换新对象，diagnostics 无写入点），缓存返回
         共享引用安全；候选的 projection_context 已在首次选择的 finally
@@ -7548,6 +7579,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 session=session_view,
                 request=request_view,
                 prep_frontier_by_instance=prep_frontier,
+                tie_cursor=self._joint_tie_cursor,
             )
             return record
         key = (
@@ -7556,6 +7588,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             session_view,
             tuple(sorted(prep_frontier.items())),
             self._joint_mode,
+            self._joint_tie_cursor,
         )
         record = cache.get(key)
         if record is not None:
@@ -7568,6 +7601,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 session=session_view,
                 request=request_view,
                 prep_frontier_by_instance=prep_frontier,
+                tie_cursor=self._joint_tie_cursor,
             )
             cache[key] = record
             while len(cache) > self._ARRIVAL_SELECTION_CACHE_CAPACITY:
@@ -7583,6 +7617,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 session=session_view,
                 request=request_view,
                 prep_frontier_by_instance=prep_frontier,
+                tie_cursor=self._joint_tie_cursor,
             )
             stats["verify_checks"] += 1
             if not self._arrival_records_equal(record, shadow_record):
@@ -8250,6 +8285,79 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         }
         return _dataclass_replace(record, chosen=best), forced_note
 
+    @staticmethod
+    def _joint_tie_disclosure(record):
+        """v9（2026-10-20）决策行三键的重算面：由最终候选表（配额过滤/
+        强制钩子后——与最终有效选择同面）现算 ``(tie_instances,
+        rotated)``。
+
+        公式与 ``joint.joint_scheduler.joint_tie_rotation_pick`` 的
+        ``tie_instances`` 分量一致：适用候选中最优 ``cost_ns``（整数 ns
+        完全相等，无容差）并列实例的去重升序元组；``rotated`` =
+        并列实例 ≥ 2 且 ``record.chosen.cost_ns`` 等于最优适用价（即
+        最终选择落在并列面上——轮转/argmin 都满足；强制钩子命中并列
+        面外的更贵候选时为 False，如实披露）。游标值不经本方法——
+        由调用方传决策起点捕获值（成功行/失败首行的披露口径一致）。
+        """
+        applicable = [
+            candidate for candidate in record.candidates
+            if candidate.applicable and candidate.cost_ns is not None]
+        if not applicable:
+            return (), False
+        best_cost = min(candidate.cost_ns for candidate in applicable)
+        tie_instances = tuple(sorted({
+            candidate.instance_index for candidate in applicable
+            if candidate.cost_ns == best_cost}))
+        rotated = (len(tie_instances) >= 2
+                   and record.chosen.cost_ns == best_cost)
+        return tie_instances, rotated
+
+    def _consume_joint_tie_rotation(self, record, forced: bool) -> None:
+        """v9（2026-10-20，平局裁决轮转语义）：joint 主臂轮转游标的
+        **唯一推进点**——P 准入最终有效选择之后、容量事务之前调用。
+
+        推进判据（全部同时成立才推进，任一不满足即原样返回）：
+
+        * 调度模式 = joint（``_joint_mode``；load-first/affinity-first/
+          face_static 顺序参照与对照臂不轮转——固定确定序）；
+        * ``not forced``（probe 强制钩子命中绕过轮转裁决，仪器不得
+          消费游标——否则一次强制会污染后续自然选择的分摊起点）；
+        * 由 ``record.candidates``（最终候选表，配额过滤后）现算的
+          适用最优价并列实例集 ``|T| >= 2`` 且 ``record.chosen.cost_ns``
+          == 最优适用价（单实例平局/唯一最优不是放置争用，不推进；
+          强制钩子把选择顶到并列面外时不推进——选择未消费轮转）。
+
+        推进 = 游标移到实例全集环序中紧随 ``chosen.instance_index`` 的
+        下一元素（升序、越最大值回绕到首元素）。全集 =
+        ``sorted({c.instance_index for c in record.candidates})``——
+        已核实 ``_quota_filter_candidates`` 对候选表只做逐候选
+        applicable 改写（filtered 列表逐候选 append，实例集不缩）、
+        ``_apply_forced_entry_choice`` 不动 candidates、
+        ``select_instance_and_action`` 按全集实例枚举，故候选表实例集
+        == 计价全集（无需 cost_model 派生）。D 边界决策
+        （``select_decode_target_and_action`` 路径）永不读不推游标。
+        """
+        if (getattr(self, "_joint_mode", SCHEDULER_MODE_JOINT)
+                != SCHEDULER_MODE_JOINT):
+            return
+        if forced:
+            return
+        tie_instances, rotated = self._joint_tie_disclosure(record)
+        if not rotated:
+            return
+        universe = sorted({
+            candidate.instance_index for candidate in record.candidates})
+        if not universe:
+            return
+        chosen_instance = record.chosen.instance_index
+        for position, instance_index in enumerate(universe):
+            if instance_index == chosen_instance:
+                # 环序推进：越最大值回绕到首元素（模长取下一）。
+                self._joint_tie_cursor = universe[
+                    (position + 1) % len(universe)]
+                return
+        # chosen 不在候选表实例集（状态不一致的防御分支）：不动游标。
+
     def _prep_frontier_by_instance(self) -> dict:
         """D03 修复轮二（2026-09-27）：逐实例"准备腿最早发射时刻"（相
         对决策 tick ns；空闲 = 0）。
@@ -8358,6 +8466,11 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 配额判据 → 选择）墙时——事务/登记段不计（那是执行提交，非
         # 决策增量）；30s 尺度实测归档、不取性能结论。
         decision_wall_start = time.perf_counter_ns()
+        # v9（2026-10-20）：决策起点的轮转游标快照——本次准入全部选择
+        # 调用（直构/L2）与决策行三键都用该值；游标推进
+        # （_consume_joint_tie_rotation）发生在最终有效选择之后，落盘
+        # 时成员现值可能已前移，不得直接读 self._joint_tie_cursor。
+        tie_cursor_at_decision = getattr(self, "_joint_tie_cursor", 0)
 
         session_view = self._joint_session_view(runtime.session_id)
         # W9（§7.4 披露）：distributed 会话的来源面枚举（区间数/位置数
@@ -8422,6 +8535,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                       # 列车剩余估计；空闲 = 0 = 旧口径）——构图事实对齐。
                       prep_frontier_by_instance=(
                           self._prep_frontier_by_instance()),
+                      # v9：决策起点游标快照（L2 路径在函数体内读同刻
+                      # 成员值——两次准入之间游标只经推进点前移）。
+                      tie_cursor=tie_cursor_at_decision,
                   ))
         _admission_enum_elapsed = (
             time.perf_counter_ns() - _admission_enum_t0)
@@ -8496,6 +8612,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             self, "_joint_last_probe_causal_prestate", None)
         chosen = record.chosen
         selected = chosen.instance_index
+        # v9（2026-10-20）：P 准入最终有效选择已定（配额可行集重选 +
+        # 强制钩子之后）——轮转游标唯一推进点。容量事务（reserve/
+        # prepare）之前推进：容量失败重试在同 tick 或后续 tick 重选时
+        # 游标已前移（L2 键含游标分量 ⇒ 必 miss 重算，不复用旧游标选择）。
+        # forced 命中（probe 仪器绕过 argmin/轮转）不推进；quota-deferred
+        # 提前 return 的路径在强制钩子之前，天然不经本点。
+        self._consume_joint_tie_rotation(
+            record, forced=(forced_probe_note is not None))
         self._account_decision_wall(
             decision_wall_start, candidates=len(record.candidates))
         self._note_action_selection(chosen.action, record.candidates,
@@ -8538,7 +8662,10 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
             self._release_orphan_reservation(runtime.request_id)
             self._log_admission_failure(
                 runtime, now_ns, record, str(exc), "capacity_deferred",
-                cost_model=cost_model)
+                cost_model=cost_model,
+                # v9：容量失败首行披露决策起点游标（此时成员可能已推进
+                # ——本路径游标已消费，捕获值才是选择所见的值）。
+                tie_cursor=tie_cursor_at_decision)
             # N6+F3+M2（kimi 复审）：失败键 = KV 纪元 ⊕ **失败候选集**
             # 实例（选中实例 ∪ 本次候选表中 applicable 实例，冻结于失败
             # 时刻）的纪元。规格 R2.5 原文"上次判定不可行的选中/失败候
@@ -8669,6 +8796,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         # 审计扩展字段——selected_action/适用动作集/
         # 负载视图/流表快照/port_snapshot + 逐候选 hop 与 breakdown
         # 全 11 字段，可重建"每决策 × 每候选 × 每字段"）。
+        # v9（2026-10-20）三键：决策起点游标快照 + 最终候选表（配额
+        # 过滤/强制钩子后，与有效选择同面）现算的并列实例集与轮转标记。
+        tie_instances, tie_rotated = self._joint_tie_disclosure(record)
         self.log_decision(
             {"kind": "joint_admission", "request_id": runtime.request_id,
              "priority": 0},
@@ -8678,6 +8808,9 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "joint_action": chosen.action,
                 "joint_instance_index": selected,
                 "joint_cost_ns": chosen.cost_ns,
+                "joint_tie_cursor": tie_cursor_at_decision,
+                "joint_tie_instances": list(tie_instances),
+                "joint_tie_rotated": tie_rotated,
                 "origin_home_instance": runtime.origin_home_instance,
                 "horizon_source": horizon_source,
                 "estimated_decode_tokens": int(estimated_decode),
@@ -9030,7 +9163,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
 
     def _log_admission_failure(
         self, runtime, now_ns, record, reason: str, failure_class: str,
-        *, cost_model=None,
+        *, cost_model=None, tie_cursor=None,
     ) -> None:
         """R2.6（D5/P4）：失败也落盘——首条失败分类带全候选表；同请求
         同分类的后续失败折叠为紧凑计数行（防深尾部"延迟 × 纪元重试"
@@ -9039,7 +9172,14 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         C11：wait 行携带 wait_reason ∈ {capacity, quota_link,
         quota_port} 分列（C9 冻结枚举）——capacity = SH 既有容量等待，
         quota_link/quota_port = 配额判据分列；等待计入从请求到达到完成
-        的延迟（deferred 驻留时长另入 run 末指标行）。"""
+        的延迟（deferred 驻留时长另入 run 末指标行）。
+
+        v9（2026-10-20）：``tie_cursor`` 非 None 时失败首行
+        （joint_admission_failed）随行轮转三键——游标 = 调用方捕获的
+        决策起点值（容量失败路径游标已推进，成员现值不是选择所见值）、
+        并列实例集/轮转标记由 record 最终候选表现算（成功行同口径，
+        _joint_tie_disclosure）；None（缺省/折叠 wait 行/quota-deferred
+        调用点）省略三键——wait 折叠行恒不带。"""
         cost_diagnostics = self._joint_decision_cost_diagnostics(cost_model)
         wait_reason = (
             WAIT_QUOTA_LINK if failure_class == "quota_deferred_quota_link"
@@ -9067,6 +9207,17 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
         session_view = self._joint_session_view(runtime.session_id)
         structural, detail = self._classify_physical_feasibility(
             runtime, session_view)
+        # v9 三键（失败首行）：tie_cursor 给定才落——并列面由最终候选
+        # 表现算（与成功行同公式），游标取捕获值非成员现值。
+        if tie_cursor is not None:
+            tie_instances, tie_rotated = self._joint_tie_disclosure(record)
+            tie_disclosure = {
+                "joint_tie_cursor": tie_cursor,
+                "joint_tie_instances": list(tie_instances),
+                "joint_tie_rotated": tie_rotated,
+            }
+        else:
+            tie_disclosure = {}
         self.log_decision(
             {"kind": "joint_admission_failed",
              "request_id": runtime.request_id, "priority": 0},
@@ -9079,6 +9230,7 @@ class Sh30OnlineScheduler(OnlineSchedulerBase):
                 "feasibility_detail": detail[:16],
                 "chosen_instance": record.chosen.instance_index,
                 "chosen_action": record.chosen.action,
+                **tie_disclosure,
                 **cost_diagnostics,
                 "candidates": [
                     {

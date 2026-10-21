@@ -272,6 +272,19 @@ class JointDecisionSchemaFullPathTest(unittest.TestCase):
         for key in ("joint_mode", "joint_action", "joint_instance_index",
                     "joint_cost_ns", "candidates", "contention_coverage"):
             self.assertIn(key, decision)
+        # v9（2026-10-20 平局裁决轮转语义）：P 准入成功行恒携轮转三键
+        # ——游标 = 决策起点捕获值（int；推进点在有效选择之后，落盘时
+        # 成员可能已前移）、并列实例集（list，可空）、轮转标记（bool；
+        # 单实例平局/唯一最优 = False）。成功行与 wait 折叠行的分界钉
+        # 测（wait 行无三键）在 test_joint_tie_rotation_wiring.py。
+        self.assertIn("joint_tie_cursor", decision)
+        self.assertIn("joint_tie_instances", decision)
+        self.assertIn("joint_tie_rotated", decision)
+        self.assertIsInstance(decision["joint_tie_cursor"], int)
+        self.assertIsInstance(decision["joint_tie_instances"], list)
+        self.assertIsInstance(decision["joint_tie_rotated"], bool)
+        self.assertEqual(decision["joint_tie_instances"],
+                         sorted(decision["joint_tie_instances"]))
         # D17：公式版本 + 决策阶段/纪元 + 两阶段配对随行披露。
         self.assertEqual(decision["model_semantics_version"],
                          MODEL_SEMANTICS_VERSION)

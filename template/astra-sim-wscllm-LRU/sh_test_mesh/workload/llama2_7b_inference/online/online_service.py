@@ -261,6 +261,29 @@ def main(argv=None) -> int:
     # P1 journal recorder:开关 on 时装配(见下方分支)。
     journal_recorder = None
     if config.kv_cache_policy == "session_lru_tiered":
+        from online.wsc_llm_online_scheduler import read_train_max_iter
+        train_max_iter = read_train_max_iter()
+        # 2026-10-20(方案二直接替换):workspace certificate 推导从调度器
+        # 构造器迁到此处(FL 结构)——required 模式先按新口径(合成 train
+        # span 超集 + train 上限)推导 certificate,把带 proof 的 canonical
+        # JSON 落盘 bridge/workspace_envelope_certificate.json,再以
+        # without_proof() 的不可变 rank 地板注入调度器(构造器内做四重
+        # 身份 validate)。auto/off 不推导,certificate 恒 None。推导不传
+        # library_path:本仓无 cost_oracle,客户端走仓内 build 发现序。
+        certificate = None
+        if workspace_admission == "required":
+            from online.manifest_workspace_envelope import (
+                derive_manifest_workspace_envelope,
+            )
+            certificate = derive_manifest_workspace_envelope(
+                manifest, config, train_max_iter=train_max_iter)
+            certificate_path = os.path.join(
+                args.bridge_dir, "workspace_envelope_certificate.json")
+            with open(certificate_path, "w", encoding="utf-8") as target:
+                target.write(certificate.canonical_json + "\n")
+            # Retain only the immutable rank margins and identity in the hot path.
+            # The larger proof is recorded once beside the run's bridge evidence.
+            certificate = certificate.without_proof()
         # P1(2026-08-30)权威 HBM delta journal 装配:仅在调度器构造之前
         # install——manager 在构造期捕获全局 recorder 并落权重预载首
         # record。recorder 是纯观测旁路(不改任何决策);KV_DELTA_JOURNAL
@@ -291,23 +314,16 @@ def main(argv=None) -> int:
             online_stats_sink=online_stats_sink,
             ledger_sink=ledger_sink,
             workspace_admission=workspace_admission,
+            train_max_iter=train_max_iter,
+            prospective_workspace_certificate=certificate,
         )
     else:
         raise ValueError(
             "strategy 模式不支持 kv_cache_policy {!r}".format(
                 config.kv_cache_policy))
-    certificate = scheduler.workspace_envelope_certificate
-    if certificate is not None:
-        certificate_path = os.path.join(args.bridge_dir, "workspace_envelope_certificate.json")
-        with open(certificate_path, "w", encoding="utf-8") as target:
-            target.write(certificate.canonical_json + "\n")
-        # Retain only the immutable rank margins and identity in the hot path.
-        # The larger proof is recorded once beside the run's bridge evidence.
-        scheduler.workspace_envelope_certificate = certificate.without_proof()
-        del certificate
     # Scheduler 已提取构造期所需字段；不要让 main() 的局部变量再额外钉住
     # 完整 manifest。
-    del manifest
+    del manifest, certificate
 
     # 退出信号监听(G6-7,2026-09-26):SIGTERM/SIGINT/SIGHUP 此前走默认
     # 处置=立即终止,serve 循环的 finally(桥 fd/审计流关闭)与结束校验
@@ -378,6 +394,11 @@ def main(argv=None) -> int:
     # 本段自称的 fail-closed 语义相悖,已按注释语义修正)。
     summary_row["kv_deep_gap_events"] = int(
         scheduler.kv_manager.deep_gap_events)
+    # 2026-10-20(方案二):workspace 地板 slack 对账行——verify_run_end 在
+    # required 模式下写入(逐 rank 峰值 vs certificate 地板),其余模式为
+    # 空 dict;getattr 兜底仅覆盖无该属性的旁路构造方(缺省 {})。
+    summary_row["workspace_floor_reconciliation"] = getattr(
+        scheduler, "workspace_floor_reconciliation", None) or {}
     stats_path = os.path.join(args.bridge_dir, ONLINE_STATS_LOG_NAME)
     partial_path = os.path.join(args.bridge_dir, ONLINE_STATS_PARTIAL_NAME)
 

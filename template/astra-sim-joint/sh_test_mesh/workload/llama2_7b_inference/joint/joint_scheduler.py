@@ -35,8 +35,16 @@
   joint_config 构造点），以量静态掩码自身的两侧误差。**joint 主臂
   永不掩码**——本臂是本模块唯一的实例掩码分支。
 
-平局与 tie 序：固定 ``(instance_index, ACTION_ORDER)`` 确定序（事前
-定义，不按事后输赢调整）。
+平局与 tie 序（v9，2026-10-20）：joint 主臂跨实例平局 = 按实例编号
+环序轮转分摊（round-robin）——最优价并列实例 ≥ 2 时，自游标起沿实例
+全集环序（升序、越最大值回绕）取首个在集实例；游标是在线调度器
+``Sh30OnlineScheduler`` 的成员状态，经 ``select_instance_and_action``
+的 ``tie_cursor`` 纯函数参数注入（选择入口不读写调度器状态——L2 批内
+缓存与 VERIFY 影子双跑的正确性前提）。实例内 stay/copy 同价并列、
+顺序参照（load-first/affinity-first）与 face_static 对照臂仍为固定
+``(instance_index, ACTION_ORDER)`` 确定序（事前定义，不按事后输赢
+调整）；D 边界式(1c)平局键（继续优先）不变——P 放置分摊与 D 继续
+优先是两层正交的平局语义。
 动作掩码 ``JOINT_ALLOWED_ACTIONS``（M2，2026-09-26 消融矩阵前置）是
 **候选集上限不是强制**：命中掩码的动作在进入本模块前已由 JCM
 ``applicable_actions`` 尾部剔除（掩码命中且原本可用 ⇒ "action
@@ -71,9 +79,10 @@ P + 默认 D 延续 π0 的整轮，**不做全 D 搜索**）与
 
 D01（2026-09-26，阶段扩展收口）：上述两入口即估价器"阶段参数与
 当前布局参数"的落点（P：布局 = 到达时 SessionKVView；D：布局 =
-PDBoundaryView→BoundaryKVLayout）；初始 argmin 与初始平局序
-``(cost, (instance_index, ACTION_ORDER))`` **保留不变**（C07 现状
-即无组合搜索，不引入新优化器），D 边界单独用式(1c) 平局键；两阶段
+PDBoundaryView→BoundaryKVLayout）；初始遍历保持全实例×二动作 argmin
+（C07 现状即无组合搜索，不引入新优化器），joint 主臂跨实例平局自
+v9（2026-10-20）起按编号环序轮转分摊（``joint_tie_rotation_pick``，
+单实例平局/唯一最优仍走旧确定序），D 边界单独用式(1c) 平局键；两阶段
 SelectionRecord 的 ``diagnostics["decision_stage"]``（"P"/"D"）与
 候选 notes 的 ``decision_stage=`` 键自描述决策阶段——两个时刻的
 全部实例×动作审计项逐候选可辨阶段（v2.0 §22 验收）。
@@ -193,6 +202,59 @@ def _best_at_instance(
     return best, note
 
 
+def joint_tie_rotation_pick(
+        applicable: Sequence[ActionCandidate],
+        tie_cursor: int,
+        instance_universe: Sequence[int],
+) -> tuple[Optional[ActionCandidate], tuple[int, ...]]:
+    """joint 主臂跨实例平局裁决（P 入口与配额可行集重选共用，纯函数；
+    v9 轮转语义，2026-10-20）。
+
+    返回 ``(rotation_chosen_or_None, tie_instances)``：
+
+    - ``tie_instances`` = 适用候选中最优 ``cost_ns``（整数 ns 完全相等，
+      无容差）并列实例的去重升序元组；
+    - ``|tie_instances| >= 2`` 时按**全局实例环序**裁决：自 ``tie_cursor``
+      起沿 ``instance_universe`` 升序（越最大值回绕到首元素）取首个在集
+      实例，返回该实例上最优价并列候选中 ``order_key`` 最小者（实例内
+      stay/copy 同价并列由 ACTION_ORDER 终裁，与旧序数学等价）；
+    - ``|tie_instances| < 2``（唯一最优实例）返回 ``None``——单实例动作
+      平局不是放置争用，不轮转，行为与旧实现恒等。
+
+    ``instance_universe`` 由调用方传入，与候选枚举同源（升序实例列表）；
+    ``tie_cursor`` 不在全集内时自首个大于游标的元素起算（回绕保证恒取到
+    在集成员）。并列集与全集无交（调用方状态不一致的防御分支）时取
+    ``tie_instances`` 首元素。本函数不读写任何调度器状态——选择 =
+    (候选集, 游标值) 的纯函数，L2 批内缓存与 VERIFY 影子双跑的前提。
+    """
+    best_cost = min(candidate.cost_ns for candidate in applicable)
+    tie_instances = tuple(sorted({
+        candidate.instance_index for candidate in applicable
+        if candidate.cost_ns == best_cost}))
+    if len(tie_instances) < 2:
+        return None, tie_instances
+    tie_set = set(tie_instances)
+    universe = sorted(set(instance_universe))
+    start = 0
+    for position, instance_index in enumerate(universe):
+        if instance_index >= tie_cursor:
+            start = position
+            break
+    # 游标大于全集最大值：环序回绕到首元素（start 保持 0）。
+    picked_instance = tie_instances[0]  # 防御默认（并列集 ⊆ 全集时不可达）
+    for offset in range(len(universe)):
+        candidate_instance = universe[(start + offset) % len(universe)]
+        if candidate_instance in tie_set:
+            picked_instance = candidate_instance
+            break
+    chosen = min(
+        (candidate for candidate in applicable
+         if candidate.instance_index == picked_instance
+         and candidate.cost_ns == best_cost),
+        key=lambda candidate: candidate.order_key())
+    return chosen, tie_instances
+
+
 def _static_ball_radius(cost_model: JointCostModel) -> tuple[float, int]:
     """静态距离球半径 = floor(rho_eff)（C17；逐配置硬件派生）。
 
@@ -225,6 +287,7 @@ def select_instance_and_action(
     session: SessionKVView,
     request,
     prep_frontier_by_instance=None,
+    tie_cursor: int = 0,
 ) -> SelectionRecord:
     """发射点选择：枚举全候选 -> 按模式选择 -> 返回完整记录。
 
@@ -232,9 +295,16 @@ def select_instance_and_action(
     decode_length/final_context_tokens）。枚举阶段对每个 (instance,
     action) 调用 ``estimate_P_with_continuation``（只读，不修改任何账本或事件队列）。
 
-    D01（2026-09-26）：全实例×二动作枚举与初始平局序
-    ``(cost, (instance_index, ACTION_ORDER))`` 保留不变（joint 主臂
-    argmin，C07 现状）；记录 ``diagnostics["decision_stage"]="P"``。
+    D01（2026-09-26，v9 修订 2026-10-20）：全实例×二动作枚举保留
+    （joint 主臂 argmin，C07 现状即无组合搜索）；初始平局序由固定
+    ``(instance_index, ACTION_ORDER)`` 改为跨实例平局按编号环序轮转
+    （``joint_tie_rotation_pick``；单实例平局/唯一最优仍走旧确定序）；
+    记录 ``diagnostics["decision_stage"]="P"``。
+
+    v9（2026-10-20）：``tie_cursor`` = joint 主臂轮转游标（kw-only，
+    缺省 0 = 环起点；顺序参照/face_static 分支不读该参数）。本入口是
+    纯函数——不推进游标，推进义务在在线调度器"最终有效选择"处
+    （sh30_online_scheduler 的 ``_consume_joint_tie_rotation``）。
 
     D03 修复轮二（2026-09-27）：``prep_frontier_by_instance`` = 逐目标
     实例的准备腿最早发射时刻（决策相对 ns；缺省 None = 全部空闲 0，
@@ -282,22 +352,44 @@ def select_instance_and_action(
                 applicable,
                 key=lambda candidate: (
                     candidate.cost_ns, candidate.order_key()))
-            ties = [
+            # v9（2026-10-20）：跨实例平局裁决 = 按编号环序轮转分摊——
+            # argmin 先定最优价，轮转只重排并列实例的归属；单实例平局/
+            # 唯一最优时 rotated=None，选择与旧序恒等。
+            rotated, tie_instances = joint_tie_rotation_pick(
+                applicable, int(tie_cursor), instance_indices)
+            if rotated is not None:
+                best = rotated
+            tied_candidates = [
                 candidate for candidate in applicable
-                if candidate.cost_ns == best.cost_ns
-                and candidate.order_key() != best.order_key()
-            ]
+                if candidate.cost_ns == best.cost_ns]
+            if len(tie_instances) >= 2:
+                tie_note = (
+                    f"tie among {len(tied_candidates)} at cost "
+                    f"{best.cost_ns}ns on instances "
+                    f"{list(tie_instances)} -> round-robin from cursor "
+                    f"{int(tie_cursor)}")
+            elif len(tied_candidates) > 1:
+                tie_note = (
+                    f"tie among {len(tied_candidates)} at cost "
+                    f"{best.cost_ns}ns -> (instance_index, action order)")
+            else:
+                tie_note = ""
             return SelectionRecord(
                 mode=mode,
                 chosen=best,
                 candidates=tuple(candidates),
                 instance_rule_note="joint instance x action argmin",
-                tie_break_note=(
-                    f"tie among {len(ties) + 1} at cost {best.cost_ns}ns -> "
-                    "(instance_index, action order)" if ties else ""),
+                tie_break_note=tie_note,
                 # D01（2026-09-26）：决策阶段自描述（P 初始时刻；与 D 边界
-                # 记录的 "D" 对称）。
-                diagnostics={"decision_stage": "P"},
+                # 记录的 "D" 对称）。v9 轮转披露三键：本次消费的游标值、
+                # 最优价并列实例元组、是否轮转裁决（False = 单实例平局/
+                # 唯一最优，行为与旧序恒等）。
+                diagnostics={
+                    "decision_stage": "P",
+                    "joint_tie_cursor": int(tie_cursor),
+                    "joint_tie_instances": tie_instances,
+                    "joint_tie_rotated": rotated is not None,
+                },
             )
 
         # ---- 逐模式 instance 规则（顺序参照 + face_static 对照臂）：先定
@@ -351,7 +443,8 @@ def select_instance_and_action(
                     f"radius={radius_hops}); anchor must be an in-view "
                     "instance at hop 0")
             # 掩码内 _best_at_instance：逐实例取最优动作，再按
-            # (cost_ns, order_key) 择优实例（与 joint 同 tie 序）。
+            # (cost_ns, order_key) 择优实例（固定确定序——joint 主臂
+            # 跨实例平局自 v9 起轮转，本对照臂不轮转、行为不变）。
             chosen_instance = None
             chosen_key: Optional[tuple] = None
             for index in masked:

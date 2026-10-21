@@ -460,7 +460,7 @@ class BoundedRealPBoundaryProofTest(unittest.TestCase):
             ["context_tokens", "generator_inputs", "horizon_tokens"])
         self.assertEqual(
             generator["identity"],
-            "no-exogenous-generator/v8-two-actions-20261015")
+            "no-exogenous-generator/v9-tie-roundrobin-20261020")
         self.assertEqual(generator["causal_inputs"]["generator_inputs"], {})
         self.assertIsInstance(dto["selected_id"], str)
         for row in dto["candidates"]:
@@ -827,7 +827,7 @@ def _raw_result(frames, *, p_instance="ins0", p_action="stay",
         "kernel_contract": {
             "projection_abi_version": 1, "descriptor_version": 1,
             "pipeline_protocol_version": 1,
-            "model_version": "v8-two-actions-20261015",
+            "model_version": "v9-tie-roundrobin-20261020",
             "timer_whitelist_version": "timer-whitelist-v1-20261005",
             "prediction_config_sha256": "b" * 64},
         "status": "PASS",

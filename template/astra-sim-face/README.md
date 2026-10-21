@@ -413,6 +413,23 @@ bash sh_test_mesh/run_scripts/run_metrics_postprocess.sh <run_dir>/cpp.log
 #    strict=失败即 runner 非零退出。runner 同时把 per-request manifest
 #    （metrics_manifest.json/manifest.json）拷入 run_dir 根（P2）——run_dir
 #    自包含，与仓还原状态解耦
+# ⑤c 准入活性离线审计（2026-10-20 方案一风险一）：在线 runner 在
+#    metrics 后处理之后、产物归档之前自动调起
+#    sh_test_mesh/workload/llama2_7b_inference/online/verify/
+#    admission_liveness_audit.py "<run_dir>"——重放 online_decision_log.jsonl
+#    （自动定位 bridge/results 下副本），同一请求连续 >=3 个决策批处于
+#    admission_blocked 且阻塞行观测字段（kv_free_bytes_by_rank/
+#    required_bytes_by_rank，调度器阻塞时写入）显示实例 KV 空闲逐 rank
+#    都够用时判 FAIL，fail-closed（runner 非零退出、bridge 目录保留）；
+#    无阻塞行/短 streak/真缺容量均 PASS，增富字段缺失的旧构建日志明确
+#    SKIP 不误判。亦支持对任意历史 run 目录离线重放（--max-blocked-
+#    streak 可覆盖阈值）。同批（方案一）在线侧收尾观测：调度器
+#    verify_run_end 增补"run 结束仍挂起准入阻塞即 fail-closed"终检；
+#    online_stats.jsonl 的 summary 行新增两键——
+#    admission_blocked_streak_histogram（逐请求历史最大连续阻塞批数
+#    直方图）与 workspace_floor_reconciliation（required 模式下 workspace
+#    逐 rank 峰值 vs prospective 证书地板的对账，越地板即 run 失败，
+#    峰值内给出 peak/floor/slack 三字典；非 required 保持空）。
 python3 sh_test_mesh/workload/llama2_7b_inference/online/verify/ledger_reconcile.py（--bridge-dir/--manifest，详见其 --help）
 #    （对账前置，2026-10-01 补记：对账的 R2b 批级摘要对平以
 #    graph_batch_digests.jsonl 为数据源，该文件是 env SH_GRAPH_DIGESTS 的

@@ -86,13 +86,20 @@ FAMILY_EVICTION = "eviction"
 KINDS_MAIN = ("prefill", "decode", "completion")
 KINDS_ADMISSION_PROBE = ("decode_admission_probe",
                          "prefill_admission_probe")
+# 方案一(2026-10-20 风险一)：调度器容量阻塞分支新增的 admission_blocked
+# 观测行（只读空闲/需求字节 + streak 记账，离线活性审计器
+# online/verify/admission_liveness_audit.py 消费）——同样无迁移/逐出
+# 载荷，与 admission_probe 同型"跳过但计数留痕"；生产方新增 kind 须
+# 同步扩本登记清单（上方闸的既载纪律）。
+KINDS_ADMISSION_BLOCKED = ("admission_blocked",)
 
 
 def _fail_unknown_kind(kind: Any, record: dict) -> None:
     """未知 kind 的统一 fail-closed 报错（列出 kind/request/seq）。"""
     fail(f"decision log 行未知 kind={kind!r}（request="
          f"{record.get('request_id')!r}，seq={record.get('seq', '?')}）——"
-         f"合法 kind 全集：{KINDS_MAIN + KINDS_ADMISSION_PROBE}"
+         f"合法 kind 全集："
+         f"{KINDS_MAIN + KINDS_ADMISSION_PROBE + KINDS_ADMISSION_BLOCKED}"
          f"（生产方 face_online_scheduler log_decision）；未知 kind 双侧"
          f"静默跳过会让 --reconcile 恒 pass，生产方新增 kind 需扩登记清单"
          f"与映射，禁止猜测")
@@ -586,7 +593,7 @@ class AdapterState:
     """
 
     __slots__ = ("events", "hit_states", "shard_sum_violations",
-                 "skipped_admission_probe")
+                 "skipped_admission_probe", "skipped_admission_blocked")
 
     def __init__(self) -> None:
         self.events: list[tuple] = []
@@ -595,6 +602,9 @@ class AdapterState:
         # KINDS_ADMISSION_PROBE 观测行计数（adapter_emit 打印审计行 +
         # 计入 summary，不静默；与 hbm_watermark 同型）。
         self.skipped_admission_probe = 0
+        # 方案一(2026-10-20 风险一):跳过的 admission_blocked 容量阻塞
+        # 观测行计数(独立计数,adapter_emit 打印审计行,不静默)。
+        self.skipped_admission_blocked = 0
 
 
 def adapter_prepare(repo_variant: str, manifest: dict
@@ -615,6 +625,11 @@ def adapter_consume(record: dict, variant: dict, turns: dict[str, int],
         # 观测性行：跳过不消费（无映射负载），但计数留痕（B5，与
         # hbm_watermark 的 skipped_admission_probe 同型）。
         state.skipped_admission_probe += 1
+        return
+    if kind in KINDS_ADMISSION_BLOCKED:
+        # 方案一(2026-10-20 风险一):容量阻塞观测行,无映射负载——与
+        # admission_probe 同型跳过计数(独立计数器,审计行区分两类)。
+        state.skipped_admission_blocked += 1
         return
     if kind not in KINDS_MAIN:
         _fail_unknown_kind(kind, record)
@@ -719,6 +734,8 @@ def adapter_emit(args: argparse.Namespace, repo_variant: str, variant: dict,
             len(hit_states) - sum(1 for r in manifest_ids if r in hit_states)),
         "shard_sum_violations": shard_sum_violations,
         "n_skipped_admission_probe_rows": skipped_admission_probe,
+        # 方案一(2026-10-20 风险一)：容量阻塞观测行跳过留痕（独立计数）。
+        "n_skipped_admission_blocked_rows": adapter_state.skipped_admission_blocked,
     }
     n_orphan_decisions = summary["n_decision_rows_without_manifest_entry"]
     if n_orphan_decisions:
@@ -738,6 +755,13 @@ def adapter_emit(args: argparse.Namespace, repo_variant: str, variant: dict,
         print(f"[kv-cache-adapter] 跳过 {skipped_admission_probe} 条 "
               f"admission_probe 观测行（decode/prefill 选择期容量预检"
               f"介入记录，无映射负载）", file=sys.stderr)
+    if adapter_state.skipped_admission_blocked:
+        # 方案一(2026-10-20 风险一)：容量阻塞观测行 stderr 留痕（行数
+        # 应与决策日志 admission_blocked 行数一致）。
+        print(f"[kv-cache-adapter] 跳过 "
+              f"{adapter_state.skipped_admission_blocked} 条 "
+              f"admission_blocked 观测行（无迁移/逐出载荷，纯活性观测）",
+              file=sys.stderr)
 
     out_path = None
     if args.output == "-":
@@ -809,6 +833,10 @@ def reconcile(run_dir: Path, repo_variant: str,
         kind = record.get("kind")
         if kind in KINDS_ADMISSION_PROBE:
             # 观测性行：与 canonical 侧（adapter_consume）同口径跳过。
+            continue
+        if kind in KINDS_ADMISSION_BLOCKED:
+            # 方案一(2026-10-20 风险一)：native 侧重放同口径跳过容量
+            # 阻塞观测行（双侧不得同盲的闸纪律不变）。
             continue
         if kind not in KINDS_MAIN:
             # B5：native 侧重放与 canonical 侧共用同一 kind 闸，未知

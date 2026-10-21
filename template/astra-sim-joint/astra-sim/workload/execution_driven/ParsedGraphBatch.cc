@@ -16,7 +16,6 @@ GraphBatchCommitter and consume the typed fields.
 #include "astra-sim/workload/execution_driven/ParsedGraphBatch.hh"
 
 #include <algorithm>
-#include <cmath>
 #include <limits>
 #include <string>
 #include <vector>
@@ -686,75 +685,12 @@ std::vector<WorkspaceCapacityRank> parse_workspace_capacity_snapshot(
     return parsed;
 }
 
-// Plan D (periodic thermal epoch): validate the optional response thermal_cap
-// member. Shape frozen by DecisionBridge.hh (ThermalCapConsumer): the C++
-// consumer iterates events[] and calls CoarseDieRuntime::update_capacity per
-// event. A structurally malformed cap fail-closes in the same family as every
-// other response rule, so garbage can never reach the runtime; ABSENCE is
-// handled by the caller (a legal, non-violating shape -- no throttling
-// decision this epoch) and never reaches here.
-nlohmann::json parse_thermal_cap(const nlohmann::json& cap) {
-    const std::string where = "thermal_cap";
-    if (!cap.is_object()) {
-        fail(where + " is not an object");
-    }
-    // check_key_set(obj, allowed, required, where): ``applied`` is allowed but
-    // optional (absent = legacy installing peer), so it only widens `allowed`.
-    check_key_set(cap,
-                  {"schema_version", "resource_epoch", "effective_from_ns",
-                   "events", "applied"},
-                  {"schema_version", "resource_epoch", "effective_from_ns",
-                   "events"},
-                  where);
-    if (get_uint(cap["schema_version"], "schema_version", where) != 1) {
-        fail(where + ": schema_version mismatch");
-    }
-    (void)get_uint(cap["resource_epoch"], "resource_epoch", where);
-    (void)get_uint(cap["effective_from_ns"], "effective_from_ns", where);
-    // Optional ``applied`` flag: shadow proposes the cap (applied=false) and the
-    // consumer must not install it, so the control arm stays physically equal to
-    // off. Absent = legacy applied=true (an installing peer).
-    if (cap.contains("applied") && !cap["applied"].is_boolean()) {
-        fail(where + ".applied must be a boolean when present");
-    }
-    const auto& events = cap["events"];
-    if (!events.is_array()) {
-        fail(where + ".events is not an array");
-    }
-    for (size_t i = 0; i < events.size(); ++i) {
-        const std::string event_where =
-            where + ".events[" + std::to_string(i) + "]";
-        const auto& event = events[i];
-        if (!event.is_object()) {
-            fail(event_where + " is not an object");
-        }
-        check_key_set(event, {"resource_index", "absolute_physical_rate"},
-                      {"resource_index", "absolute_physical_rate"},
-                      event_where);
-        const int64_t resource =
-            get_int64(event["resource_index"], "resource_index", event_where);
-        if (resource < 0 || resource > 12) {
-            fail(event_where +
-                 ": resource_index is out of the coarse-die domain [0,12]");
-        }
-        const auto& rate = event["absolute_physical_rate"];
-        if (!rate.is_number() || !std::isfinite(rate.get<double>()) ||
-            rate.get<double>() < 0.0) {
-            fail(event_where +
-                 ": absolute_physical_rate must be a finite non-negative "
-                 "number");
-        }
-    }
-    return cap;
-}
-
 }  // namespace
 
 ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
                                    const int num_ranks,
                                    const std::vector<WorkspaceRankState>&
-                                       expected_workspace_state,
-                                   const bool request_has_thermal_activity) {
+                                       expected_workspace_state) {
     if (!resp.is_object()) {
         fail("response is not an object (rule T0)");
     }
@@ -770,16 +706,6 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
     if (!expected_workspace_state.empty()) {
         allowed_keys.push_back("workspace_capacity_snapshot");
         required_keys.push_back("workspace_capacity_snapshot");
-    }
-    if (request_has_thermal_activity) {
-        // Plan D (periodic thermal epoch): same conditional-allow precedent as
-        // workspace_capacity_snapshot above -- the response may carry
-        // thermal_cap ONLY when the request carried the thermal_activity
-        // sibling, so the T6 unknown-key gate stays fail-closed on every
-        // thermal-off run (thermal_cap then remains an unknown key). The key is
-        // OPTIONAL here (absent = no throttling decision this epoch), so it is
-        // never added to required_keys.
-        allowed_keys.push_back("thermal_cap");
     }
     check_key_set(resp, allowed_keys, required_keys, "response");
 
@@ -799,10 +725,6 @@ ParsedGraphBatch parse_graph_batch(const nlohmann::json& resp,
             resp["workspace_capacity_snapshot"], num_ranks,
             expected_workspace_state);
         batch.has_workspace_capacity_snapshot = true;
-    }
-    if (resp.contains("thermal_cap")) {
-        batch.thermal_cap = parse_thermal_cap(resp["thermal_cap"]);
-        batch.has_thermal_cap = true;
     }
     if (resp.contains("batch_id")) {
         batch.batch_id = get_uint(resp["batch_id"], "batch_id", "response");

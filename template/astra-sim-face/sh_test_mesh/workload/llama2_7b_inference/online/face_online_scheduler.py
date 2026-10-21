@@ -515,6 +515,19 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         self.completed_requests = 0
         # kv 事件水位:kv_actions 流(阶段 2 对照 kv_cache_events.csv 基线)。
         self._kv_events_emitted = 0
+        # ---- 风险一/风险三收尾观测(2026-10-20 方案一,纯观测簿记) ----
+        # 准入阻塞 streak 账本:current = 请求当前连续阻塞批数,max = 历史
+        # 峰值(verify_run_end 直方图素材),open = 仍阻塞未进展的
+        # (stage, tick) 挂起登记(run 结束仍非空 = 活性违例,fail-closed)。
+        # workspace 逐 rank 峰值(_apply_delivery_extension 采集;地板对账
+        # 在 verify_run_end 与 prospective 证书下限比对)。两公开属性在
+        # verify_run_end 产出,summary 行透传;不进任何策略判据。
+        self._admission_blocked_streak = {}
+        self._admission_blocked_streak_max = {}
+        self._admission_blocked_open = {}
+        self._workspace_peak_bytes_by_rank = {}
+        self.admission_blocked_streak_histogram = None
+        self.workspace_floor_reconciliation = None
 
     def close(self) -> None:
         """阶段 D:释放调度器**自有**的 die oracle(直连构造路径从基类
@@ -532,6 +545,13 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             return
         revision_by_rank, bytes_by_rank = self._workspace_state_maps(
             delta["workspace_state"])
+        # 风险三观测(2026-10-20 方案一):逐 rank workspace 峰值采集——
+        # 仅维护运行最大值(纯观测,不进判据);verify_run_end 末尾与
+        # prospective 证书下限做地板对账。本方法已 required 早退,天然
+        # 只在 required 模式采集。
+        for rank, active_bytes in bytes_by_rank.items():
+            if active_bytes > self._workspace_peak_bytes_by_rank.get(rank, 0):
+                self._workspace_peak_bytes_by_rank[rank] = active_bytes
         changed_ranks = self.kv_manager.set_external_workspace_view(
             revision_by_rank, bytes_by_rank)
         if changed_ranks:
@@ -1241,6 +1261,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
         runtime = self.runtime_by_request_id[request_id]
         state = self.instances[runtime.decode_instance_index]
         self.completed_requests += 1
+        # 风险一观测(2026-10-20 方案一):完成即最终进展,清当前阻塞
+        # streak 与挂起登记(历史最大值保留,verify_run_end 直方图素材)。
+        self._clear_admission_blocked_progress(runtime.request_id)
         runtime.completion_evictions = self.kv_manager.mark_complete(
             runtime.session_id,
             tick,
@@ -1435,6 +1458,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
             # P0-1)。阻塞即置 dirty,下一个决策边界(任一交付的
             # _admit_pass -> _plan_and_emit_trains -> 本方法)必然重试。
             self.prefill_admission_dirty.add(target_instance)
+            # 风险一观测(2026-10-20 方案一):阻塞行增富 + streak 簿记
+            # (纯观测,不影响上方任何阻塞/重试决策)。
+            self._record_admission_blocked(
+                runtime, "prefill", target_instance, now_ns)
             return False
         runtime.history_action = decision.action
         runtime.history_source_instance_index = decision.source_instance_index
@@ -1467,6 +1494,9 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
               for record in decision.evictions),
             *(record.victim_instance_index for record in growth.evictions),
         )
+        # 风险一观测(2026-10-20 方案一):prefill 准入成功即进展,
+        # 清当前阻塞 streak(历史最大值保留)。
+        self._clear_admission_blocked_progress(runtime.request_id)
         return True
 
     def _try_admit_waiting_decodes(self, now_ns: int) -> None:
@@ -1526,6 +1556,10 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     # => 下一个决策边界(任一交付的 _admit_pass)必然重试
                     # 本实例队列;残余环由 P0-2 fail-loud 兜底(总文档 §4)。
                     self.decode_admission_dirty.add(target_instance)
+                    # 风险一观测(2026-10-20 方案一):阻塞行增富 + streak 簿记
+                    # (纯观测,不影响上方任何阻塞/重试决策)。
+                    self._record_admission_blocked(
+                        runtime, "decode", target_instance, now_ns)
                     queue.append(runtime)  # 离线同款(阻塞重排队,face 语义)
                     continue
                 runtime.prefill_decode_transfer = move.transfer
@@ -1608,6 +1642,74 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                     *(record.victim_instance_index
                       for record in growth.evictions),
                 )
+                # 风险一观测(2026-10-20 方案一):decode 准入成功即进展,
+                # 清当前阻塞 streak(历史最大值保留)。
+                self._clear_admission_blocked_progress(runtime.request_id)
+
+    # ------------------------------------------------- 风险一阻塞观测 --
+
+    def _record_admission_blocked(self, runtime, stage: str,
+                                  instance_index: int, tick: int) -> None:
+        """风险一观测(2026-10-20 方案一):准入阻塞时刻的决策日志增富
+        + streak 簿记。纯观测——只读 KV 账本(不触碰任何 mutation,红线
+        同 _probe_instance_capacity),不改任何准入/调度决策。
+
+        只读口径:kv_free = 目标实例逐 rank 的 workspace_fit_remaining_
+        bytes(required 模式扣除 workspace 租约后的 KV 余量;off 模式与
+        hbm 快照 remaining_bytes 同值)。需求口径镜像选择期过滤器
+        (_filter_prefill_selection/_filter_decode_selection)的只读版:
+        prefill 段按 prefill_context_tokens、decode 段按 final_context_
+        tokens 的全上下文分片;会话 RESIDENT 且已在本实例时按增量
+        (full - 已驻留 shard_bytes),否则全量。离线活性审计器
+        (online/verify/admission_liveness_audit.py)按"逐 rank free >=
+        required 却持续阻塞"判死端,fail-closed。"""
+        kv_free = {
+            rank: self.kv_manager.workspace_fit_remaining_bytes(rank)
+            for rank in self.topology.instances[instance_index].ranks
+        }
+        context_tokens = (
+            runtime.prefill_context_tokens if stage == "prefill"
+            else runtime.final_context_tokens)
+        full_shards = kv_cache_shard_bytes_for_tokens(
+            self.config.model, context_tokens, self.kv_manager.tp_degree)
+        session_shards = self.kv_manager.session_snapshot(
+            runtime.session_id)
+        have_shards = (
+            session_shards.shard_bytes
+            if (session_shards is not None
+                and session_shards.state == RESIDENT
+                and session_shards.instance_index == instance_index)
+            else (0,) * len(full_shards))
+        required_by_rank = {
+            rank: full - have
+            for rank, full, have in zip(
+                self.topology.instances[instance_index].ranks,
+                full_shards, have_shards)}
+        self.log_decision(
+            {"kind": "admission_blocked", "request_id": runtime.request_id,
+             "priority": 0},
+            tick,
+            decision={
+                "stage": stage,
+                "instance_index": instance_index,
+                "capacity_epoch": self.capacity_epoch[instance_index],
+                "kv_free_bytes_by_rank": kv_free,
+                "required_bytes_by_rank": required_by_rank,
+            },
+        )
+        request_id = runtime.request_id
+        streak = self._admission_blocked_streak.get(request_id, 0) + 1
+        self._admission_blocked_streak[request_id] = streak
+        if streak > self._admission_blocked_streak_max.get(request_id, 0):
+            self._admission_blocked_streak_max[request_id] = streak
+        self._admission_blocked_open[request_id] = (stage, tick)
+
+    def _clear_admission_blocked_progress(self, request_id: str) -> None:
+        """风险一观测:进展清账——请求取得准入进展或完成时清除其当前
+        streak 与挂起登记(历史最大值表保留,verify_run_end 直方图素材)。
+        纯观测簿记,三个调用点均为既有成功路径的原位追加。"""
+        self._admission_blocked_streak.pop(request_id, None)
+        self._admission_blocked_open.pop(request_id, None)
 
     # ------------------------------------------------------------- 发射 --
 
@@ -2001,3 +2103,49 @@ class FaceOnlineScheduler(OnlineSchedulerBase):
                 "strategy run ended with unretired completion gates: {!r}"
                 .format(sorted(self.graph.completion_gates)))
         self.kv_manager.assert_final_state()
+        # ---- 风险一/风险三收尾观测(2026-10-20 方案一,纯观测) ----
+        # 活性终检:run 结束仍挂起的准入阻塞(无进展登记)= 活性违例,
+        # fail-closed(离线审计器 admission_liveness_audit.py 的在线侧
+        # 对偶;明细按 request_id 排序保证可复现)。
+        if self._admission_blocked_open:
+            raise RuntimeError(
+                "run ended with requests still admission-blocked without "
+                "progress: " + repr(sorted(
+                    (request_id, stage, tick)
+                    for request_id, (stage, tick)
+                    in self._admission_blocked_open.items())))
+        histogram = {}
+        for streak in self._admission_blocked_streak_max.values():
+            key = str(streak)
+            histogram[key] = histogram.get(key, 0) + 1
+        self.admission_blocked_streak_histogram = histogram
+        # 风险三最小对账:workspace 峰值 vs prospective 证书地板(仅
+        # required 模式且证书非全零;其余保持 None)。峰值越地板即
+        # 证书失守,fail-closed;否则产出逐 rank slack 字典(summary 行
+        # 透传,rank 升序)。
+        certificate_floor = getattr(
+            self.kv_manager, "prospective_workspace_bytes_by_rank", None)
+        if (self.workspace_admission == "required"
+                and certificate_floor
+                and any(value for value in certificate_floor.values())):
+            peak = self._workspace_peak_bytes_by_rank
+            exceeded = {
+                rank: (peak.get(rank, 0), floor)
+                for rank, floor in certificate_floor.items()
+                if peak.get(rank, 0) > floor}
+            if exceeded:
+                raise RuntimeError(
+                    "workspace peak exceeded prospective certificate "
+                    "floor (rank: (peak, floor)): "
+                    + repr(dict(sorted(exceeded.items()))))
+            self.workspace_floor_reconciliation = {
+                "peak_bytes_by_rank": {
+                    str(rank): peak.get(rank, 0)
+                    for rank in sorted(certificate_floor)},
+                "floor_bytes_by_rank": {
+                    str(rank): certificate_floor[rank]
+                    for rank in sorted(certificate_floor)},
+                "slack_bytes_by_rank": {
+                    str(rank): certificate_floor[rank] - peak.get(rank, 0)
+                    for rank in sorted(certificate_floor)},
+            }

@@ -714,6 +714,26 @@ class JointSelectionTest(unittest.TestCase):
                   for r in records]
         self.assertEqual(len(set(chosen)), 1)
 
+    def test_tie_rotation_same_cursor_same_choice_distinct_cursor_distinct(self):
+        # v9（2026-10-20）：跨实例平局 = 按实例编号环序轮转分摊——
+        # 选择是 (候选集, 游标值) 的纯函数：同游标 ⇒ 同选择（确定性
+        # 不因轮转受损），异游标 ⇒ 分摊到不同并列实例。
+        loads = {0: _load(0, 0), 1: _load(1, 0)}
+        fresh = SessionKVView(
+            session_id="s", home_instance=None, resident_instance=None,
+            location="none", history_tokens=0, resident_prefix_layers=0,
+            history_bytes_by_tp_rank=(0, 0), missing_bytes_by_tp_rank=(0, 0))
+
+        def _chosen_instance(cursor):
+            return select_instance_and_action(
+                mode="joint", cost_model=_cost_model(loads),
+                session=fresh, request=_request(),
+                tie_cursor=cursor).chosen.instance_index
+
+        self.assertEqual(_chosen_instance(0), 0)
+        self.assertEqual(_chosen_instance(0), 0)   # 同游标同选择
+        self.assertEqual(_chosen_instance(1), 1)   # 异游标异选择
+
 
 # ================================================== M2 动作掩码 ==
 

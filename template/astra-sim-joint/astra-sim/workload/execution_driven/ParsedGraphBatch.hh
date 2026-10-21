@@ -216,14 +216,6 @@ struct ParsedGraphBatch {
     std::string error;  // non-empty => decision failure (bridge aborts)
     std::vector<WorkspaceCapacityRank> workspace_capacity_snapshot;
     bool has_workspace_capacity_snapshot = false;
-    // Plan D (periodic thermal epoch): the parsed thermal_cap object, present
-    // ONLY when the request carried the thermal_activity sibling (rule T6
-    // conditional allow) and the Python side answered with a cap. Carried
-    // opaquely (the bridge's consumer owns the semantics); absent = the
-    // thermal peer produced no throttling decision this epoch -- a legal,
-    // non-violating shape (the bridge continues).
-    nlohmann::json thermal_cap;
-    bool has_thermal_cap = false;
 };
 
 /// Single bridge/GraphBatch wire version shared by the file bridge and the
@@ -237,17 +229,11 @@ inline constexpr int kGraphBatchSchemaVersion = 3;
 /// nonempty expected_workspace_state selects the coarse_die_v2 extension and
 /// requires an exact full-rank capacity snapshot; an empty state preserves
 /// the frozen schema-v3 response contract.
-/// request_has_thermal_activity (Plan D) mirrors the request-side condition
-/// exactly: when true the request carried the additive thermal_activity
-/// sibling, so the response MAY carry thermal_cap (rule T6 conditional
-/// allow) -- and when false thermal_cap is an unknown key and fails closed.
-/// The cap itself is optional (absent = no throttling decision this epoch).
 /// Throws ParseError on any structural violation; constructs nothing shared
 /// (pure function, exception-safe).
 ParsedGraphBatch parse_graph_batch(
     const nlohmann::json& resp, int num_ranks,
-    const std::vector<WorkspaceRankState>& expected_workspace_state = {},
-    bool request_has_thermal_activity = false);
+    const std::vector<WorkspaceRankState>& expected_workspace_state = {});
 
 }  // namespace ExecutionDriven
 }  // namespace AstraSim

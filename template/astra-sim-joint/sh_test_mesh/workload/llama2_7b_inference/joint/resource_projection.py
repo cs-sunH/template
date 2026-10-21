@@ -647,49 +647,6 @@ class CoarseCancelEvent:
                 "coarse cancel event leg_id must be non-empty")
 
 
-#: coarse-die resource table size (Hardware.cc `resources`/`resourceJson`);
-#: C++ rejects a `resource_index` >= this count.
-COARSE_DIE_RESOURCE_COUNT = 13
-
-
-@dataclass(frozen=True)
-class CoarseCapacityEvent:
-    """Frozen absolute physical-rate change of one coarse resource at a tick.
-
-    ``resource_index`` is the coarse-die resource id (COMPUTE_GATE = 0), not a
-    thermal block index; ``absolute_physical_rate`` is the *absolute* rate in
-    the resource's own unit (the thermal envelope's throughput fraction is
-    multiplied by the resource peak by the caller, never here).  The native
-    projection already consumes exactly these four wire keys, so this type only
-    freezes what the joint side commits.
-    """
-
-    time_ns: int
-    resource_key: str
-    resource_index: int
-    absolute_physical_rate: float
-
-    def __post_init__(self) -> None:
-        if type(self.time_ns) is not int or self.time_ns < 0:
-            raise ResourceProjectionError(
-                "coarse capacity event time_ns must be an integer >= 0")
-        if not isinstance(self.resource_key, str) or not self.resource_key.strip():
-            raise ResourceProjectionError(
-                "coarse capacity event resource_key must be non-empty")
-        if (type(self.resource_index) is not int
-                or not 0 <= self.resource_index < COARSE_DIE_RESOURCE_COUNT):
-            raise ResourceProjectionError(
-                f"coarse capacity event resource_index must be an integer in "
-                f"[0, {COARSE_DIE_RESOURCE_COUNT})")
-        if (not isinstance(self.absolute_physical_rate, (int, float))
-                or isinstance(self.absolute_physical_rate, bool)
-                or not math.isfinite(float(self.absolute_physical_rate))
-                or float(self.absolute_physical_rate) < 0.0):
-            raise ResourceProjectionError(
-                "coarse capacity event absolute_physical_rate must be finite "
-                "and nonnegative")
-
-
 @dataclass(frozen=True)
 class ProjectionInput:
     """冻结前推输入（背景账本 + 硬件 + 焦点；候选经 ``with_candidate`` 叠加）。
@@ -717,10 +674,6 @@ class ProjectionInput:
     # Native projection applies these frozen coarse Runtime cancels after
     # same-tick physical completion and before ready/arrival/capacity events.
     coarse_cancel_events: Tuple[CoarseCancelEvent, ...] = ()
-    # Absolute coarse resource-rate changes (the thermal cap install path). The
-    # native projection consumes them in (time, input order) order, after
-    # same-tick terminals and cancels, and records `capacity_events_processed`.
-    coarse_capacity_events: Tuple[CoarseCapacityEvent, ...] = ()
 
     def __post_init__(self) -> None:
         if (isinstance(self.now_ns, bool)
@@ -827,20 +780,6 @@ class ProjectionInput:
                     or event.leg_id in signaller_ids):
                 raise ResourceProjectionError(
                     f"coarse cancel target {event.leg_id!r} has unsupported gate/barrier effects")
-        if not isinstance(self.coarse_capacity_events, tuple):
-            raise ResourceProjectionError(
-                "coarse_capacity_events must be a frozen tuple")
-        for index, event in enumerate(self.coarse_capacity_events):
-            if not isinstance(event, CoarseCapacityEvent):
-                raise ResourceProjectionError(
-                    f"coarse_capacity_events[{index}] must be CoarseCapacityEvent")
-            if event.time_ns < self.now_ns:
-                raise ResourceProjectionError(
-                    f"coarse_capacity_events[{index}].time_ns must be >= now_ns")
-            if event.resource_key not in domain_keys:
-                raise ResourceProjectionError(
-                    f"coarse capacity event names an unknown frozen physical "
-                    f"domain {event.resource_key!r}")
 
     def with_candidate(
         self, candidates: Sequence[WorkItem],
@@ -875,7 +814,6 @@ class ProjectionInput:
                 self.forecast_arrival_placeholders_ns),
             coarse_die_domains=self.coarse_die_domains,
             coarse_cancel_events=self.coarse_cancel_events,
-            coarse_capacity_events=self.coarse_capacity_events,
         )
 
 

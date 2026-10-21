@@ -63,6 +63,9 @@ def gate_scheduler():
         rank: instance.index for instance in manager.topology.instances
         for rank in instance.ranks}
     scheduler.capacity_epoch = [0] * len(manager.topology.instances)
+    # 借用的 _apply_delivery_extension(2026-10-20 方案一风险三)新增
+    # 峰值簿记容器,聚焦装配同款手工初始化。
+    scheduler._workspace_peak_bytes_by_rank = {}
     scheduler.policy_calls = 0
     return scheduler
 

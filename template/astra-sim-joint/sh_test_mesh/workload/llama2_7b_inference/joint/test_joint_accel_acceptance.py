@@ -655,7 +655,7 @@ class ColdFixtureContractTests(unittest.TestCase):
         contract = {
             "projection_abi_version": 1, "descriptor_version": 1,
             "pipeline_protocol_version": 1,
-            "model_version": "v8-two-actions-20261015",
+            "model_version": "v9-tie-roundrobin-20261020",
             "timer_whitelist_version": "timer-whitelist-v1-20261005",
             "prediction_config_sha256": "a" * 64,
         }
@@ -719,7 +719,7 @@ class ColdFixtureContractTests(unittest.TestCase):
                                "inherited_obligation_ids": []}
             forecast_inputs = {"context_tokens": 128, "horizon_tokens": 1,
                                "generator_inputs": {}}
-            forecast_identity = "no-exogenous-generator/v8-two-actions-20261015"
+            forecast_identity = "no-exogenous-generator/v9-tie-roundrobin-20261020"
             planner_state = {
                 "version": acceptance.PLANNER_STATE_VERSION,
                 "stage_input": stage_input,
@@ -1189,7 +1189,7 @@ class TraceAndContractTests(unittest.TestCase):
         contract = {
             "projection_abi_version": 1, "descriptor_version": 1,
             "pipeline_protocol_version": 1,
-            "model_version": "v8-two-actions-20261015",
+            "model_version": "v9-tie-roundrobin-20261020",
             "timer_whitelist_version": "timer-whitelist-v1-20261005",
             "prediction_config_sha256": "b" * 64,
         }
@@ -1356,7 +1356,7 @@ class AccuracyAndPerformanceTests(unittest.TestCase):
             "selected_id": selected,
             "library_sha256": "a" * 64, "prediction_config_sha256": "b" * 64,
             # D12：生产 DTO 的信息性键（比较器必需接受）。
-            "model_semantics_version": "v8-two-actions-20261015",
+            "model_semantics_version": "v9-tie-roundrobin-20261020",
             "world_source_status": "replayed",
         }
 

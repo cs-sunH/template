@@ -27,6 +27,7 @@ runner 冒烟覆盖,见执行文档批次3)。KV 状态一律经与真实准入�
 运行:cd sh_test_mesh/workload/llama2_7b_inference &&
       python3 online/test_admission_liveness.py   （或 pytest 同路径）
 """
+import json
 import os
 import sys
 import unittest
@@ -135,6 +136,14 @@ def _make_scheduler():
     scheduler.online_log_rows = []
     scheduler.ledger_admitted = {}
     scheduler.p_chunk = P_CHUNK
+    # 方案一(2026-10-20)风险一/风险三观测簿记(镜像生产构造器;观测
+    # 方法另有 getattr 惰性建账兜底,这里显式装配保持夹具与生产同构)。
+    scheduler._admission_blocked_streak = {}
+    scheduler._admission_blocked_streak_max = {}
+    scheduler._admission_blocked_open = {}
+    scheduler._workspace_peak_bytes_by_rank = {}
+    scheduler.admission_blocked_streak_histogram = None
+    scheduler.workspace_floor_reconciliation = None
     face_online_scheduler._P_CHUNK_HOLDER[0] = P_CHUNK
     return scheduler
 
@@ -693,6 +702,498 @@ class TieredRestoreAdmissionTest(_PChunkHolderReset, unittest.TestCase):
         runtime.prefill_attempt_epoch = -1  # 强制重开纪元门(dirty 亦可)
         self.assertTrue(scheduler._try_admit_prefill(runtime, 121))
         self.assertEqual(runtime.history_action, "REMOTE_RESTORE")
+
+
+def _verify_ready_scheduler(scheduler):
+    """方案一(2026-10-20)测试辅助:在 __new__ 夹具上补齐 verify_run_end
+    全部前置断言所需的账本(健康空跑终态:零交付/零在飞/零排队/实例
+    空闲/graph 收尾表全空),使收尾观测段可直达。返回同一调度器。"""
+    scheduler.runtime_by_request_id = {}
+    scheduler._runtime_index = {}
+    scheduler.runtimes = []
+    scheduler.completed_requests = 0
+    scheduler.expected_request_count = 0
+    scheduler.arrival_heap = []
+    scheduler._pending_first_steps = {}
+    scheduler.graph = SimpleNamespace(
+        sync_pending_history_after_evictions=lambda transfers: None,
+        emit_eviction_actions=lambda plan, transfers: None,
+        has_pending_store_decision=lambda session_id: False,
+        note_request_complete=(
+            lambda session_id, following, location: None),
+        retire_request_state=lambda request_id: None,
+        retire_completion_gate=lambda session_id: None,
+        pending_store_tails={}, pending_store_decisions={},
+        completion_gates={})
+    scheduler.ack_count = 0
+    scheduler.delivery_count = 0
+    scheduler.last_applied_sequence = -1
+    scheduler._delivery_reply_cache = None
+    scheduler.in_flight = set()
+    scheduler.arrived_request_count = 0
+    scheduler.completed_request_count = 0
+    scheduler.unseen_request_ids = set()
+    scheduler._emitted_by_delivery = {}
+    scheduler._acked_through = -1
+    scheduler._acked_out_of_order = set()
+    scheduler._provisional_kv_actions = {}
+    scheduler.sensing_enabled = False
+    return scheduler
+
+
+class AdmissionBlockedEnrichmentTest(_PChunkHolderReset, unittest.TestCase):
+    """方案一(2026-10-20)风险一:admission_blocked 决策行增富——两 stage
+    (prefill/decode)× 两形态(无会话全量;LOCAL_HBM 同实例增量)的
+    字段与数值;streak 三表记账与进展清账(max 保留)。数值全部由
+    kv_cache_shard_bytes_for_tokens / workspace_fit_remaining_bytes /
+    session_snapshot 在测试内独立复算(阻塞行只读口径的红线校验)。"""
+
+    _RANKS = (0, 1)  # 实例 0 的 rank 序(topology.instances[0].ranks)
+
+    def _blocked_rows(self, scheduler):
+        return [row for row in scheduler.online_log_rows
+                if row["kind"] == "admission_blocked"]
+
+    def _assert_row_shape(self, row, request_id, stage, instance_index,
+                          tick, expected_free, expected_required):
+        self.assertEqual(row["request_id"], request_id)
+        self.assertEqual(row["tick"], tick)
+        self.assertEqual(row["priority"], 0)
+        self.assertEqual(row["kind"], "admission_blocked")
+        decision = row["decision"]
+        self.assertEqual(set(decision), {
+            "stage", "instance_index", "capacity_epoch",
+            "kv_free_bytes_by_rank", "required_bytes_by_rank"})
+        self.assertEqual(decision["stage"], stage)
+        self.assertEqual(decision["instance_index"], instance_index)
+        self.assertEqual(
+            decision["kv_free_bytes_by_rank"], expected_free)
+        self.assertEqual(
+            decision["required_bytes_by_rank"], expected_required)
+
+    def test_prefill_stage_full_requirement_row(self):
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        avail = _occupancy_bytes(manager)
+        # 无会话 + ACTIVE sy 占满目标实例(超量需求会被管理器对空实例
+        # fail-closed 拒绝,故用"空实例可容纳、当前不可容纳"形态):
+        # required = 全量分片(无增量信用)。
+        tokens_p = _tokens_for_bytes(int(avail * 0.6))
+        tokens_y = _tokens_for_bytes(
+            avail - _shard_per_rank(tokens_p) + 1)
+        _kv_admit_prefill(manager, "sy", 1, tokens_y, 100, "ry")
+        expected_free = {
+            rank: manager.workspace_fit_remaining_bytes(rank)
+            for rank in (2, 3)}  # 实例 1 的 rank 序
+        expected_required = dict(zip(
+            (2, 3),
+            kv_cache_shard_bytes_for_tokens(MODEL, tokens_p, TP)))
+        runtime = _make_runtime("rx", "sx", prefill_context_tokens=tokens_p)
+        runtime.prefill_instance_index = 1
+        self.assertFalse(scheduler._try_admit_prefill(runtime, 1000))
+        rows = self._blocked_rows(scheduler)
+        self.assertEqual(len(rows), 1)
+        self._assert_row_shape(rows[0], "rx", "prefill", 1, 1000,
+                               expected_free, expected_required)
+        self.assertEqual(scheduler._admission_blocked_streak, {"rx": 1})
+        self.assertEqual(scheduler._admission_blocked_streak_max, {"rx": 1})
+        self.assertEqual(
+            scheduler._admission_blocked_open["rx"]["stage"], "prefill")
+
+    def test_prefill_stage_incremental_requirement_row(self):
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        avail = _occupancy_bytes(manager)
+        # 会话本地驻留(inactive)在目标实例 0 上:required = 增量
+        # (prefill_context 分片 − 已驻留 local_shard_bytes)。
+        tokens_s = _tokens_for_bytes(int(avail * 0.4))
+        _kv_admit_prefill(manager, "sx", 0, tokens_s, 100, "rx")
+        manager.mark_complete("sx", 110, "rx")
+        tokens_y = _tokens_for_bytes(
+            int((avail - _shard_per_rank(tokens_s)) * 0.9))
+        _kv_admit_prefill(manager, "sy", 0, tokens_y, 120, "ry")
+        tokens_f = _tokens_for_bytes(avail + 100)
+        snapshot = manager.session_snapshot("sx")
+        self.assertEqual(snapshot.location, LOCAL_HBM)
+        self.assertEqual(snapshot.instance_index, 0)
+        full_shards = kv_cache_shard_bytes_for_tokens(MODEL, tokens_f, TP)
+        expected_required = {
+            rank: want - have for rank, want, have in zip(
+                self._RANKS, full_shards, snapshot.local_shard_bytes)}
+        expected_free = {
+            rank: manager.workspace_fit_remaining_bytes(rank)
+            for rank in self._RANKS}
+        runtime = _make_runtime(
+            "rx1", "sx", turn=1, prefill_context_tokens=tokens_f,
+            final_context_tokens=tokens_f, prefill_length=tokens_f - tokens_s,
+            history_tokens_before=tokens_s)
+        runtime.prefill_instance_index = 0
+        self.assertFalse(scheduler._try_admit_prefill(runtime, 200))
+        rows = self._blocked_rows(scheduler)
+        self.assertEqual(len(rows), 1)
+        self._assert_row_shape(rows[0], "rx1", "prefill", 0, 200,
+                               expected_free, expected_required)
+
+    def test_decode_stage_full_requirement_row(self):
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        avail = _occupancy_bytes(manager)
+        # 会话 ACTIVE 驻留实例 0,decode target = 实例 1(ACTIVE sy 占
+        # 满):required = 全量(双驻留口径,不给源副本信用)。
+        tokens_x = _tokens_for_bytes(int(avail * 0.6))
+        tokens_y = _tokens_for_bytes(
+            avail - _shard_per_rank(tokens_x) + 1)
+        _kv_admit_prefill(manager, "sx", 0, tokens_x, 100, "rx")
+        _kv_admit_prefill(manager, "sy", 1, tokens_y, 100, "ry")
+        expected_free = {
+            rank: manager.workspace_fit_remaining_bytes(rank)
+            for rank in (2, 3)}  # 实例 1 的 rank 序
+        expected_required = dict(zip(
+            (2, 3),
+            kv_cache_shard_bytes_for_tokens(MODEL, tokens_x, TP)))
+        runtime = _make_runtime(
+            "rx", "sx", prefill_context_tokens=tokens_x,
+            final_context_tokens=tokens_x)
+        runtime.prefill_instance_index = 0
+        runtime.decode_instance_index = 1
+        runtime.waiting_decode_admission = True
+        scheduler.waiting_decode_admissions[1].append(runtime)
+        scheduler._try_admit_waiting_decodes(1000)
+        rows = self._blocked_rows(scheduler)
+        self.assertEqual(len(rows), 1)
+        self._assert_row_shape(rows[0], "rx", "decode", 1, 1000,
+                               expected_free, expected_required)
+
+    def test_decode_stage_incremental_requirement_row(self):
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        avail = _occupancy_bytes(manager)
+        # 会话 ACTIVE 驻留实例 0 且 decode target = 实例 0(同实例):
+        # required = 增量(final 分片 − 已驻留 local_shard_bytes)。
+        tokens_s = _tokens_for_bytes(int(avail * 0.4))
+        _kv_admit_prefill(manager, "sx", 0, tokens_s, 100, "rx")
+        tokens_y = _tokens_for_bytes(
+            int((avail - _shard_per_rank(tokens_s)) * 0.9))
+        _kv_admit_prefill(manager, "sy", 0, tokens_y, 100, "ry")
+        tokens_f = _tokens_for_bytes(avail + 100)
+        snapshot = manager.session_snapshot("sx")
+        full_shards = kv_cache_shard_bytes_for_tokens(MODEL, tokens_f, TP)
+        expected_required = {
+            rank: want - have for rank, want, have in zip(
+                self._RANKS, full_shards, snapshot.local_shard_bytes)}
+        expected_free = {
+            rank: manager.workspace_fit_remaining_bytes(rank)
+            for rank in self._RANKS}
+        runtime = _make_runtime(
+            "rx", "sx", prefill_context_tokens=tokens_s,
+            final_context_tokens=tokens_f)
+        runtime.prefill_instance_index = 0
+        runtime.decode_instance_index = 0
+        runtime.waiting_decode_admission = True
+        scheduler.waiting_decode_admissions[0].append(runtime)
+        scheduler._try_admit_waiting_decodes(1000)
+        rows = self._blocked_rows(scheduler)
+        self.assertEqual(len(rows), 1)
+        self._assert_row_shape(rows[0], "rx", "decode", 0, 1000,
+                               expected_free, expected_required)
+
+    def test_streak_tables_progress_clears_current_keeps_max(self):
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        avail = _occupancy_bytes(manager)
+        tokens_p = _tokens_for_bytes(int(avail * 0.6))
+        tokens_y = _tokens_for_bytes(
+            avail - _shard_per_rank(tokens_p) + 1)
+        _kv_admit_prefill(manager, "sy", 1, tokens_y, 100, "ry")
+        runtime = _make_runtime("rx", "sx", prefill_context_tokens=tokens_p)
+        runtime.prefill_instance_index = 1
+        scheduler._try_admit_prefill(runtime, 1000)
+        scheduler._try_admit_prefill(runtime, 1001)  # dirty 门重试,再阻塞
+        self.assertEqual(scheduler._admission_blocked_streak, {"rx": 2})
+        self.assertEqual(scheduler._admission_blocked_streak_max, {"rx": 2})
+        # 进展清账(_try_admit_prefill 成功路径):当前 streak 与 open
+        # 登记弹出,max 保留(供 verify_run_end 直方图)。
+        scheduler._clear_admission_blocked_progress("rx")
+        self.assertEqual(scheduler._admission_blocked_streak, {})
+        self.assertEqual(scheduler._admission_blocked_open, {})
+        self.assertEqual(scheduler._admission_blocked_streak_max, {"rx": 2})
+        # 再阻塞再清:max 单调不回落。
+        scheduler._try_admit_prefill(runtime, 1002)
+        self.assertEqual(scheduler._admission_blocked_streak, {"rx": 1})
+        scheduler._clear_admission_blocked_progress("rx")
+        self.assertEqual(scheduler._admission_blocked_streak_max, {"rx": 2})
+
+
+class AdmissionBlockedVerifyEndTest(_PChunkHolderReset, unittest.TestCase):
+    """方案一(2026-10-20)风险一:verify_run_end 增补——open 登记残留
+    即 raise(fail-closed);请求级 max streak 直方图结算。"""
+
+    def test_open_registry_leak_raises(self):
+        scheduler = _verify_ready_scheduler(_make_scheduler())
+        # 模拟进展清账链断裂:请求已不在任何排队容器(健康终态),但
+        # open 登记残留 -> 收尾观测段显影即 raise。
+        scheduler._admission_blocked_open = {
+            "rx": {"stage": "decode", "instance_index": 1,
+                   "tick": 900, "streak": 2}}
+        with self.assertRaises(RuntimeError) as raised:
+            scheduler.verify_run_end()
+        self.assertIn("still admission-blocked without progress",
+                      str(raised.exception))
+        self.assertIn("rx", str(raised.exception))
+
+    def test_histogram_settled_from_max_table(self):
+        scheduler = _verify_ready_scheduler(_make_scheduler())
+        scheduler._admission_blocked_streak_max = {"ra": 2, "rb": 2, "rc": 5}
+        scheduler.verify_run_end()
+        self.assertEqual(
+            scheduler.admission_blocked_streak_histogram, {"2": 2, "5": 1})
+        # 健康零阻塞 run:空直方图(而非 None——结算已发生)。
+        clean = _verify_ready_scheduler(_make_scheduler())
+        clean.verify_run_end()
+        self.assertEqual(clean.admission_blocked_streak_histogram, {})
+
+
+class WorkspaceFloorReconciliationTest(_PChunkHolderReset,
+                                       unittest.TestCase):
+    """方案一(2026-10-20)风险三:workspace 峰值采集(逐 rank 运行最大
+    值,回落不缩)+ verify_run_end 地板对账(slack 结算 / 超限 raise /
+    非 required 保持 None);外部视图回落信号(epoch 推进)一并钉测
+    (审计表 #1)。"""
+
+    _FLOOR = 5000
+
+    def _required_scheduler(self, prospective=None):
+        from session_kv_manager import SessionKVCacheManager
+        scheduler = _verify_ready_scheduler(_make_scheduler())
+        topology = scheduler.topology
+        floor = (prospective if prospective is not None else {
+            rank: self._FLOOR
+            for instance in topology.instances
+            for rank in instance.ranks})
+        scheduler.kv_manager = SessionKVCacheManager(
+            topology, MODEL, prospective_workspace_bytes_by_rank=floor)
+        scheduler.workspace_admission = "required"
+        scheduler._workspace_rank_to_instance = {
+            rank: instance.index
+            for instance in topology.instances
+            for rank in instance.ranks}
+        return scheduler, sorted(floor)
+
+    @staticmethod
+    def _delta(sequence, active_by_rank, ranks):
+        return {
+            "schema_version": 2, "delivery_sequence": sequence,
+            "delivery_epoch": sequence, "tick": sequence,
+            "deferred_from_tick": sequence, "reasons": ["TICK"],
+            "arrivals": [], "completed_groups": [], "completed_nodes": [],
+            "affected_ranks": [],
+            "snapshot_handle": {"epoch": sequence, "tick": sequence},
+            "workspace_state": {
+                "protocol_version": 1,
+                "ranks": [
+                    {"rank": rank, "workspace_revision": sequence + 1,
+                     "active_workspace_bytes": active_by_rank[rank]}
+                    for rank in ranks]}}
+
+    def test_peak_tracking_and_slack_reconciliation(self):
+        scheduler, ranks = self._required_scheduler()
+        scheduler._apply_delivery_extension(
+            self._delta(0, {rank: 3000 for rank in ranks}, ranks))
+        epoch_after_first = list(scheduler.capacity_epoch)
+        # 回落交付:峰值保持运行最大值(不随回落缩),视图变化仍推进
+        # 所属实例纪元(审计表 #1:外部 workspace 视图回落必有信号)。
+        scheduler._apply_delivery_extension(
+            self._delta(1, {rank: 1200 for rank in ranks}, ranks))
+        self.assertEqual(
+            scheduler._workspace_peak_bytes_by_rank,
+            {rank: 3000 for rank in ranks})
+        self.assertEqual(
+            scheduler.capacity_epoch,
+            [value + 1 for value in epoch_after_first])
+        scheduler.verify_run_end()
+        self.assertEqual(scheduler.workspace_floor_reconciliation, {
+            "peak_bytes_by_rank": {str(rank): 3000 for rank in ranks},
+            "floor_bytes_by_rank": {
+                str(rank): self._FLOOR for rank in ranks},
+            "slack_bytes_by_rank": {str(rank): 2000 for rank in ranks},
+        })
+
+    def test_peak_above_floor_raises(self):
+        scheduler, ranks = self._required_scheduler()
+        scheduler._apply_delivery_extension(
+            self._delta(0, {rank: self._FLOOR + 1 for rank in ranks}, ranks))
+        with self.assertRaises(RuntimeError) as raised:
+            scheduler.verify_run_end()
+        self.assertIn(
+            "workspace peak exceeded prospective certificate floor",
+            str(raised.exception))
+        self.assertIn("rank {}".format(ranks[0]), str(raised.exception))
+
+    def test_not_required_stays_none(self):
+        # 非 required 模式:无证书即无对账对象,公开属性保持 None;
+        # _apply_delivery_extension 早退不采集峰值。
+        scheduler = _verify_ready_scheduler(_make_scheduler())
+        scheduler.verify_run_end()
+        self.assertIsNone(scheduler.workspace_floor_reconciliation)
+        self.assertEqual(scheduler._workspace_peak_bytes_by_rank, {})
+
+
+class CapacityReleaseSignalTest(_PChunkHolderReset, unittest.TestCase):
+    """方案一(2026-10-20)信号触点审计表钉测:每条容量释放路径后必
+    有重试信号(epoch note 或 dirty 门)。审计结论零缺口,本组把
+    结论钉进回归(逐出完成 / terminal retirement / REMOTE store 推迟)。
+    外部视图回落信号在 WorkspaceFloorReconciliationTest;阻塞-逐出-
+    重试-准入(drain 准入族)由本组逐出用例与既有用例 A/C 共同覆盖。"""
+
+    def test_blocked_attempt_with_eviction_notes_capacity_then_readmits(
+            self):
+        """审计表 #5/#7:阻塞 attempt 的逐出是真实 mutation——即使最终
+        阻塞,逐出 victim 的容量释放也必须推进纪元(否则纪元门对本
+        实例永久关闭);释放后小请求重试即准入。"""
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        avail = _occupancy_bytes(manager)
+        # 实例 1:冷会话 sy(完成后可逐出,占 ~0.5)+ ACTIVE sz(占
+        # ~0.3);需求 ~0.9(空实例可容纳,不触管理器 fail-closed)——
+        # 逐出 sy 后仍不足 -> 带 evictions 的阻塞分支。
+        tokens_sy = _tokens_for_bytes(int(avail * 0.5))
+        tokens_sz = _tokens_for_bytes(int(avail * 0.3))
+        _kv_admit_prefill(manager, "sy", 1, tokens_sy, 100, "ry")
+        manager.mark_complete("sy", 110, "ry")
+        _kv_admit_prefill(manager, "sz", 1, tokens_sz, 120, "rz0")
+        tokens_p = _tokens_for_bytes(int(avail * 0.9))
+        runtime = _make_runtime("rx", "sx", prefill_context_tokens=tokens_p)
+        runtime.prefill_instance_index = 1
+        self.assertFalse(scheduler._try_admit_prefill(runtime, 200))
+        # 逐出已发生(真实 mutation,REMOTE 化)且纪元被推进。
+        evicted = manager.session_snapshot("sy")
+        self.assertEqual(evicted.location, "remote_memory")
+        self.assertGreater(scheduler.capacity_epoch[1], 0)
+        self.assertIn(1, scheduler.prefill_admission_dirty)
+        # 阻塞行在场(增富);释放后的重试对小请求放行(drain 准入)。
+        self.assertTrue(any(row["kind"] == "admission_blocked"
+                            for row in scheduler.online_log_rows))
+        small = _make_runtime(
+            "rw", "sw", prefill_context_tokens=_tokens_for_bytes(1))
+        small.prefill_instance_index = 1
+        self.assertTrue(scheduler._try_admit_prefill(small, 300))
+
+    def test_terminal_retirement_notes_capacity(self):
+        """审计表 #3:terminal 会话回收释放本地 HBM(含 reservation 经
+        内部 release_request_capacity 的释放)——released 实例纪元必须
+        推进,字节实减可复核。"""
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        tokens = _tokens_for_bytes(int(_occupancy_bytes(manager) * 0.3))
+        _kv_admit_prefill(manager, "sx", 0, tokens, 100, "rx")
+        manager.mark_complete("sx", 110, "rx")
+        before_free = manager.hbm_snapshots(0)[0].remaining_bytes
+        runtime = _make_runtime(
+            "rx", "sx", prefill_context_tokens=tokens,
+            final_context_tokens=tokens)
+        runtime.kv_state_after_completion = LOCAL_HBM
+        scheduler.runtime_by_request_id = {"rx": runtime}
+        scheduler._runtime_index = {"rx": 0}
+        scheduler.runtimes = [runtime]
+        scheduler.next_request = [None]
+        scheduler.completed_requests = 1
+        scheduler._on_request_complete("rx", 200)
+        self.assertIsNone(manager.session_snapshot("sx"))
+        self.assertGreater(
+            manager.hbm_snapshots(0)[0].remaining_bytes, before_free)
+        self.assertEqual(scheduler.capacity_epoch[0], 1)
+        self.assertNotIn("rx", scheduler.runtime_by_request_id)
+
+    def test_remote_store_postpone_dirty_without_blocked_row(self):
+        """审计表 #9(FL 特有):REMOTE store 推迟是纯推迟(零 mutation),
+        信号 = dirty 门(store 发射后必然重试);该分支不属于容量阻塞,
+        不产 admission_blocked 行(增富只覆盖两容量阻塞分支)。"""
+        scheduler = _make_scheduler()
+        manager = scheduler.kv_manager
+        _kv_admit_prefill(manager, "sy", 0, 100, 100, "ry")
+        manager.mark_complete("sy", 100, "ry")
+        manager._evict_session(
+            manager._sessions["sy"], now_ns=110, phase="decode",
+            reason="decode_target_capacity", trigger_request_id="probe")
+        scheduler.graph.has_pending_store_decision = (
+            lambda session_id: True)
+        runtime = _make_runtime(
+            "ry1", "sy", turn=1,
+            prefill_context_tokens=120, final_context_tokens=120,
+            prefill_length=20, history_tokens_before=100)
+        runtime.prefill_instance_index = 0
+        self.assertFalse(scheduler._try_admit_prefill(runtime, 120))
+        self.assertIn(0, scheduler.prefill_admission_dirty)
+        self.assertEqual(scheduler._admission_blocked_streak, {})
+        self.assertEqual(scheduler._admission_blocked_open, {})
+        self.assertFalse(any(row["kind"] == "admission_blocked"
+                             for row in scheduler.online_log_rows))
+
+
+class AdmissionLivenessAuditToolTest(unittest.TestCase):
+    """方案一(2026-10-20)风险一:离线活性审计器四态单测(PASS 无阻塞
+    行 / PASS 短 streak 或不可行 / FAIL 连续可行 / SKIP 字段缺失)。
+    审计器为仓内既有工具(主 agent 预放,四仓同 md5),此处只测行为。
+    """
+
+    @staticmethod
+    def _row(seq, kind, request_id, decision=None):
+        return {"seq": seq, "tick": seq * 10, "priority": 0,
+                "kind": kind, "request_id": request_id,
+                "decision": decision if decision is not None else {}}
+
+    @staticmethod
+    def _blocked(seq, request_id, free, required):
+        return AdmissionLivenessAuditToolTest._row(
+            seq, "admission_blocked", request_id,
+            {"stage": "decode", "instance_index": 0, "capacity_epoch": 0,
+             "kv_free_bytes_by_rank": {"0": free},
+             "required_bytes_by_rank": {"0": required}})
+
+    def _audit(self, rows):
+        import tempfile
+        from pathlib import Path
+        from online.verify.admission_liveness_audit import main
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "online_decision_log.jsonl"
+            with path.open("w", encoding="utf-8") as sink:
+                for row in rows:
+                    sink.write(json.dumps(row) + "\n")
+            return main([str(path)])
+
+    def test_pass_no_blocked_rows(self):
+        rows = [self._row(1, "prefill", "ra"),
+                self._row(2, "decode", "ra"),
+                self._row(3, "completion", "ra")]
+        self.assertEqual(self._audit(rows), 0)
+
+    def test_pass_short_or_infeasible_streak(self):
+        # 不可行阻塞(free < required)再长也不违例:容量确实不够。
+        infeasible = [self._blocked(i, "ra", 100, 200) for i in range(1, 5)]
+        self.assertEqual(self._audit(infeasible), 0)
+        # 短 streak(2 < 缺省 3)即使可行也不判 FAIL。
+        short = [self._blocked(1, "rb", 300, 200),
+                 self._blocked(2, "rb", 300, 200)]
+        self.assertEqual(self._audit(short), 0)
+        # 进展行(prefill/decode/completion)切断计数:2+2 被切断不连续。
+        cut = [self._blocked(1, "rc", 300, 200),
+               self._blocked(2, "rc", 300, 200),
+               self._row(3, "decode", "rc"),
+               self._blocked(4, "rc", 300, 200),
+               self._blocked(5, "rc", 300, 200)]
+        self.assertEqual(self._audit(cut), 0)
+
+    def test_fail_consecutive_feasible_streak(self):
+        rows = [self._blocked(1, "ra", 300, 200),
+                self._blocked(2, "ra", 300, 200),
+                self._blocked(3, "ra", 300, 200)]
+        self.assertEqual(self._audit(rows), 1)
+
+    def test_skip_missing_enrichment_fields(self):
+        # 旧构建的阻塞行无增富字段:明确跳过(不误判),退出码 0。
+        rows = [self._row(i, "admission_blocked", "ra")
+                for i in range(1, 4)]
+        self.assertEqual(self._audit(rows), 0)
 
 
 if __name__ == "__main__":

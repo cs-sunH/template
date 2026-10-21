@@ -1756,6 +1756,9 @@ class WatermarkScan:
         # P0-1/P1(2026-08-31 修复;收尾批 2026-09-01 工具适配):跳过的
         # admission_probe 观测行计数(finish 打印审计行,不静默)。
         self.skipped_admission_probe = 0
+        # 方案一(2026-10-20 风险一):跳过的 admission_blocked 容量阻塞
+        # 观测行计数(独立计数,finish 打印审计行,不静默)。
+        self.skipped_admission_blocked = 0
 
     def consume(self, record: dict) -> None:
         replay = self.replay
@@ -1772,6 +1775,13 @@ class WatermarkScan:
             # 跳过而非消费。仅枚举这两类已交付修复的 kind,其余未知 kind
             # 依旧 fail-closed(不改变既有 kind 的任何校验/重放语义)。
             self.skipped_admission_probe += 1
+            return
+        if kind == "admission_blocked":
+            # 方案一(2026-10-20 风险一)观测性行:容量阻塞分支的只读
+            # 空闲/需求字节记录(离线活性审计器消费),无重放负载——与
+            # admission_probe 同型跳过计数,不改变既有 kind 的任何
+            # 校验/重放语义。
+            self.skipped_admission_blocked += 1
             return
         if kind not in ("prefill", "decode", "completion"):
             fail(f"{where}: 未知 kind={kind!r}")
@@ -1861,6 +1871,13 @@ class WatermarkScan:
             print(f"[hbm-watermark] 跳过 {self.skipped_admission_probe} 条 "
                   f"admission_probe 观测行（decode/prefill 选择期容量预检"
                   f"介入记录，无重放负载）", file=sys.stderr)
+        if self.skipped_admission_blocked:
+            # 方案一(2026-10-20 风险一)审计行(不静默):跳过的容量阻塞
+            # 观测行数量如实报告(应与决策日志 admission_blocked 行数
+            # 一致;这些行由离线活性审计器另行判定)。
+            print(f"[hbm-watermark] 跳过 {self.skipped_admission_blocked} 条 "
+                  f"admission_blocked 观测行（容量阻塞只读记录，无重放"
+                  f"负载）", file=sys.stderr)
         tokens = self.tokens
         missing = []
         for request_id in tokens["requests"]:

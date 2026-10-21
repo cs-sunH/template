@@ -339,8 +339,9 @@ class FaceStaticSelectionTest(unittest.TestCase):
         self.assertEqual(len(face.candidates), 6 * 2)  # 枚举不变，只换选择
 
     def test_ball_winner_is_argmin_within_ball(self):
-        """球内选择 = 掩码集上的 (cost_ns, order_key) argmin（与 joint
-        同 tie 序）：胜者代价 = 球内全部候选最小值。"""
+        """球内选择 = 掩码集上的 (cost_ns, order_key) argmin——固定
+        (instance_index, ACTION_ORDER) 确定序（joint 主臂跨实例平局
+        自 v9 起轮转，本臂不轮转）：胜者代价 = 球内全部候选最小值。"""
         model, session = self._loaded_model()
         record = select_instance_and_action(
             mode=SCHEDULER_MODE_FACE_STATIC, cost_model=model,

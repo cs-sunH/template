@@ -1,2 +1,0 @@
-session_id,turn_index,request_id,prefill_length,decode_length,session_arrival_time_ns,inter_request_interval_ns,next_trigger_type,description
-session_0,0,session_0_request_0,15659,202,94835000,,tool,compute_20 first-0.094835-seconds window; turn-0 prefix folded into prefill_length (recompute caliber)
